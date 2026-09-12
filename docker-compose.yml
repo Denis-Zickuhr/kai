@@ -1,0 +1,71 @@
+# =============================================================================
+#  docker-compose.yml — Orquestra os builds de distribuição do Kai.
+#
+#  Cada serviço builda sua imagem, monta o código-fonte (bind mount somente
+#  leitura) e escreve os artefatos finais em ./dist no host.
+#
+#  Uso:
+#    docker compose build                 # constrói as duas imagens
+#    docker compose run --rm build-linux  # gera artefatos Linux em ./dist
+#    docker compose run --rm build-windows# gera artefatos Windows em ./dist
+#    docker compose up                    # roda os dois em sequência/paralelo
+#
+#  Os artefatos aparecem em:
+#    ./dist/Kai-x86_64.AppImage  (ou ./dist/kai-linux/  como fallback)
+#    ./dist/kai-windows/         (kai.exe + DLLs + plugins + assets)
+# =============================================================================
+services:
+  build-linux:
+    build:
+      context: .
+      dockerfile: packaging/docker/Dockerfile.linux
+    image: kai-build-linux
+    volumes:
+      - ./:/src:ro
+      - ./dist:/out
+
+  build-windows:
+    build:
+      context: .
+      dockerfile: packaging/docker/Dockerfile.windows
+    image: kai-build-windows
+    # wine (cross-compile) precisa mapear memória compartilhada; sob
+    # WSL2/Docker o seccomp padrão bloqueia isso ("failed to map the shared
+    # user data: c0000018"). Desabilitar o seccomp libera a syscall.
+    security_opt:
+      - seccomp=unconfined
+    # CONTROLE DE DISCO E MEMÓRIA (o build estava esgotando o disco do host).
+    # O diretório de build e o ccache vivem em volumes NOMEADOS e com tamanho
+    # limitado, em vez de na camada de escrita do container:
+    #  - a camada do container é descartada a cada run, então o build era
+    #    refeito do zero e reescrevia ~1,5 GB por execução;
+    #  - sob WSL2, essa escrita infla o vhdx do Docker, que NUNCA encolhe.
+    # Com volumes nomeados o build é INCREMENTAL e o espaço fica estável e
+    # inspecionável (docker volume ls / docker system df).
+    volumes:
+      - ./:/src:ro
+      - ./dist:/out
+      - kai-win-build:/home/user/build
+      - kai-win-ccache:/ccache
+    environment:
+      # Teto do ccache (o próprio ccache faz o LRU e nunca passa disso).
+      CCACHE_MAXSIZE: 2G
+      CCACHE_DIR: /ccache
+      # Build incremental por padrão. KAI_CLEAN_BUILD=1 força começar limpo.
+      KAI_CLEAN_BUILD: "${KAI_CLEAN_BUILD:-0}"
+      # Instalador via wine é OPT-IN (o oficial é gerado com NSIS no host).
+      KAI_BUILD_INSTALLER: "${KAI_BUILD_INSTALLER:-0}"
+    # Evita que o build consuma a máquina inteira (o -j$(nproc) do Ninja com
+    # muitos núcleos também multiplica o pico de I/O e de memória).
+    cpus: "4"
+    mem_limit: 6g
+    # A imagem base (stateoftheartio/qt6:*-mingw-aqt) roda como usuário
+    # 'user'; ./dist precisa ser gravável por ele. Se houver problema de
+    # permissão, rode: chmod 777 dist  (ou ajuste o owner).
+
+# Volumes de BUILD: persistem entre execuções para o build ser incremental.
+# Para liberar o espaço deles quando quiser:
+#   docker volume rm kai-win-build kai-win-ccache
+volumes:
+  kai-win-build:
+  kai-win-ccache:

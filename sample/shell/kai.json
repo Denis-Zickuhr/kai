@@ -1,0 +1,119 @@
+{
+  "project_name": "Kai Shell & Controls Demo",
+  "icon": "terminal",
+  "env_vars": {
+    "APP_NAME": "KaiShell",
+    "ENVIRONMENT": "development",
+    "SECRET_TOKEN": "tok_live_9988776655"
+  },
+  "commands": [
+    {
+      "name": "1. Hello World (Env Vars)",
+      "type": "shell",
+      "command": "echo \"Executando {{APP_NAME}} no ambiente: {{ENVIRONMENT}}\""
+    },
+    {
+      "name": "2. Loop com Progresso (Saída em Tempo Real)",
+      "type": "shell",
+      "command": "for i in 1 2 3 4 5; do echo \"[Kai] Processando passo $i de 5...\"; sleep 1; done"
+    },
+    {
+      "name": "3. Leitura Interativa (STDIN / PTY Test)",
+      "type": "shell",
+      "command": "printf 'Digite seu nome: ' && read NOME && echo \"Olá, $NOME!\" && printf 'Confirmar operação? (s/n): ' && read CONF && echo \"Resposta: $CONF\""
+    },
+    {
+      "name": "4. Todos os Tipos de Parâmetros",
+      "type": "shell",
+      "command": "echo \"Texto={{TEXTO}} | Env={{AMBIENTE_SEL}} | Forçar={{FORCAR}} | Arquivo={{ARQUIVO}}\"",
+      "params": [
+        {
+          "name": "TEXTO",
+          "label": "Texto Livre",
+          "type": "text",
+          "default": "meu-subdominio"
+        },
+        {
+          "name": "AMBIENTE_SEL",
+          "label": "Ambiente Alvo",
+          "type": "select",
+          "default": "dev",
+          "options": ["dev", "staging", "production"]
+        },
+        {
+          "name": "FORCAR",
+          "label": "Forçar Recompilação",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "ARQUIVO",
+          "label": "Selecione o Certificado",
+          "type": "file",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "name": "5. Variáveis Dinâmicas & Faker",
+      "type": "shell",
+      "command": "echo \"UUID={{$uuid}} | Timestamp={{$timestamp}} | ISO={{$isoTimestamp}} | Random={{$randomInt}}\""
+    },
+    {
+      "name": "6. Secret Var (Mascarada)",
+      "type": "shell",
+      "command": "echo \"Token de acesso (mascarado na UI): {{SECRET_TOKEN}}\""
+    },
+    {
+      "name": "7. Working Directory Customizado",
+      "type": "shell",
+      "command": "echo \"Diretório de execução atual: $(pwd)\"",
+      "working_dir": "{{PROJECT_PATH}}"
+    },
+    {
+      "name": "8. Processo em Background (Daemon)",
+      "type": "shell",
+      "command": "for i in $(seq 1 60); do echo \"[Background Job] Tick $i...\"; sleep 2; done",
+      "is_background": true
+    },
+    {
+      "name": "9. Saudar Cliente (Puxando de Coleção)",
+      "type": "shell",
+      "command": "echo \"Enviando notificação para {{cliente.nome}} <{{cliente.email}}> (Plano: {{cliente.plano}})\"",
+      "params": [
+        {
+          "name": "cliente",
+          "label": "Selecione o Cliente",
+          "type": "select",
+          "collection": "Clientes",
+          "collection_display_field": "nome"
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "Clientes",
+      "icon": "users",
+      "schema": [
+        { "name": "nome", "label": "Nome", "type": "text" },
+        { "name": "email", "label": "E-mail", "type": "text" },
+        { "name": "plano", "label": "Plano", "type": "text" }
+      ],
+      "entries": [
+        {
+          "id": "cli_1",
+          "values": { "nome": "Ana Souza", "email": "ana@exemplo.dev", "plano": "pro" },
+          "tags": ["vip"],
+          "favorite": true
+        },
+        {
+          "id": "cli_2",
+          "values": { "nome": "Bruno Lima", "email": "bruno@exemplo.dev", "plano": "free" },
+          "tags": [],
+          "favorite": false
+        }
+      ]
+    }
+  ]
+}

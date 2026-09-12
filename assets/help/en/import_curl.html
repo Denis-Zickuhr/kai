@@ -1,0 +1,4 @@
+<h2>Import from cURL</h2>
+<p>In the command editor, <b>HTTP</b> tab, click <b>Import cURL</b> and paste a <code>curl</code> command. Kai recognizes:</p><table><tr><td><code>-X/--request</code></td><td>method</td></tr><tr><td><code>-H/--header</code></td><td>headers</td></tr><tr><td><code>-d/--data*</code></td><td>body (infers POST)</td></tr><tr><td><code>-u/--user</code></td><td>becomes an Authorization Basic header</td></tr></table><pre>curl -X POST https://api.x.com/login \
+  -H 'Content-Type: application/json' \
+  -d '{"user":"admin"}'</pre>

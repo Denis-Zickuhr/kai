@@ -1,0 +1,11 @@
+# Mantém o contexto de build do Docker enxuto: nada de artefatos locais,
+# build trees ou metadados de VCS entram na imagem.
+build/
+build-*/
+build-docker-linux/
+build-docker-windows/
+dist/
+.git/
+*.o
+*.user
+.DS_Store

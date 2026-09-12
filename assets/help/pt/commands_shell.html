@@ -1,0 +1,22 @@
+<h2>Comandos Shell</h2>
+<p>Um comando <b>Shell</b> roda uma linha (ou script) no seu shell.</p>
+<h3>Como criar</h3>
+<p>Menu <b>Item → Novo comando</b>, aba <b>Shell</b>. Preencha o comando e, opcionalmente, o <b>diretório de trabalho</b>.</p>
+<pre>npm run dev</pre>
+<h3>Variáveis</h3>
+<p>Use <code>{{VAR}}</code> para interpolar variáveis do ambiente ativo:</p>
+<pre>echo "Subindo na porta {{PORT}} ({{NODE_ENV}})"</pre>
+<h3>Background</h3>
+<p>Marque <b>Executar em background</b> para processos longos (ex.: um dev server). O Kai mantém o processo vivo e mostra o status; pare quando quiser.</p>
+<div class='tip'>Comandos interativos com <code>read</code> aceitam entrada direto no campo de entrada do painel de saída.</div>
+<h3>Terminal interativo (configurações avançadas)</h3>
+<p>Para apps de tela cheia que desenham via cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, um Claude Code aninhado — ative <b>Terminal interativo (TUI)</b>. A saída vira uma grade de terminal de verdade em vez de um log em texto puro, então redesenho, cores e teclado se comportam como um terminal real:</p>
+<pre>htop</pre>
+<h3>Ignorar código de saída (configurações avançadas)</h3>
+<p>Alguns programas retornam um código de saída diferente de zero mesmo funcionando perfeitamente — o caso clássico é o <code>explorer.exe</code> chamado do WSL para abrir uma pasta no Windows. Ative <b>Ignorar código de saída</b> e o Kai sempre trata o comando como sucesso; um crash de processo de verdade (sinal/segfault) continua sendo reportado normalmente:</p>
+<pre>explorer.exe .</pre>
+<h3>Ocultar o Kai ao executar (configurações avançadas)</h3>
+<p>Para um comando que abre outro app ou janela e o Kai só estorvaria — ex.: um editor de código:</p>
+<pre>code .</pre>
+<h3>Alvos de terminal (WSL, containers, ...)</h3>
+<p>Escolha um alvo em <b>Alvo de Terminal</b> para rodar o comando através de um wrapper — veja <a href='help://terminal_targets'>Alvos de Terminal & WSL</a>.</p>

@@ -1,0 +1,22 @@
+<h2>Shell Commands</h2>
+<p>A <b>Shell</b> command runs a line (or script) in your shell.</p>
+<h3>How to create</h3>
+<p>Menu <b>Item → New command</b>, <b>Shell</b> tab. Fill in the command and, optionally, the <b>working directory</b>.</p>
+<pre>npm run dev</pre>
+<h3>Variables</h3>
+<p>Use <code>{{VAR}}</code> to interpolate variables from the active environment:</p>
+<pre>echo "Starting on port {{PORT}} ({{NODE_ENV}})"</pre>
+<h3>Background</h3>
+<p>Check <b>Run in background</b> for long-running processes (e.g. a dev server). Kai keeps the process alive and shows its status; stop it whenever you want.</p>
+<div class='tip'>Interactive commands using <code>read</code> accept input directly in the output panel's input field.</div>
+<h3>Interactive terminal (advanced settings)</h3>
+<p>For full-screen apps that draw with a cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, a nested Claude Code — turn on <b>Interactive terminal (TUI)</b>. The output becomes a real terminal grid instead of a plain-text log, so redraws, colors and keyboard input all behave like a real terminal:</p>
+<pre>htop</pre>
+<h3>Ignore exit code (advanced settings)</h3>
+<p>Some tools return a non-zero exit code even when they worked fine — the classic case is <code>explorer.exe</code> called from WSL to open a folder in Windows. Turn on <b>Ignore exit code</b> and Kai always treats the command as a success; a real process crash (signal/segfault) is still reported normally:</p>
+<pre>explorer.exe .</pre>
+<h3>Hide Kai while running (advanced settings)</h3>
+<p>For a command that opens another app or window and Kai would just be in the way — e.g. a code editor:</p>
+<pre>code .</pre>
+<h3>Terminal targets (WSL, containers, ...)</h3>
+<p>Pick a target under <b>Terminal Target</b> to run the command through a wrapper — see <a href='help://terminal_targets'>Terminal Targets & WSL</a>.</p>

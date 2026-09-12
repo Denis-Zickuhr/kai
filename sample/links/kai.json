@@ -1,0 +1,76 @@
+{
+  "project_name": "Kai Web Shortcuts",
+  "icon": "external-link",
+  "env_vars": {
+    "DEFAULT_SEARCH_ENGINE": "https://www.google.com/search?q="
+  },
+  "commands": [
+    {
+      "name": "1. Pesquisa na Web (Navegador Padrão)",
+      "type": "shell",
+      "command": "URL=\"{{DEFAULT_SEARCH_ENGINE}}{{TERMO_BUSCA}}\"; xdg-open \"$URL\" 2>/dev/null || open \"$URL\" 2>/dev/null || start \"\" \"$URL\"",
+      "is_background": true,
+      "params": [
+        {
+          "name": "TERMO_BUSCA",
+          "label": "Termo para pesquisar",
+          "type": "text",
+          "default": "Qt6 C++ documentation"
+        }
+      ]
+    },
+    {
+      "name": "2. Abrir Documentação da API do Projeto",
+      "type": "shell",
+      "command": "URL=\"https://{{endpoint.domain}}/docs/v1\"; xdg-open \"$URL\" 2>/dev/null || open \"$URL\" 2>/dev/null || start \"\" \"$URL\"",
+      "is_background": true,
+      "params": [
+        {
+          "name": "endpoint",
+          "label": "Ambiente de Documentação",
+          "type": "select",
+          "collection": "Servidores",
+          "collection_display_field": "ambiente"
+        }
+      ]
+    },
+    {
+      "name": "3. Web App Mode (Chromium / Chrome)",
+      "type": "shell",
+      "command": "chromium --app=\"{{URL_APP}}\" --window-size=1200,800 2>/dev/null || google-chrome --app=\"{{URL_APP}}\" --window-size=1200,800 2>/dev/null || msedge --app=\"{{URL_APP}}\" --window-size=1200,800",
+      "is_background": true,
+      "params": [
+        {
+          "name": "URL_APP",
+          "label": "URL da Aplicação Web",
+          "type": "text",
+          "default": "https://httpbin.org"
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "Servidores",
+      "icon": "globe",
+      "schema": [
+        { "name": "ambiente", "label": "Ambiente", "type": "text" },
+        { "name": "domain", "label": "Domínio", "type": "text" }
+      ],
+      "entries": [
+        {
+          "id": "srv_1",
+          "values": { "ambiente": "Staging", "domain": "staging.api.exemplo.dev" },
+          "tags": ["internal"],
+          "favorite": true
+        },
+        {
+          "id": "srv_2",
+          "values": { "ambiente": "Production", "domain": "api.exemplo.dev" },
+          "tags": ["production"],
+          "favorite": false
+        }
+      ]
+    }
+  ]
+}

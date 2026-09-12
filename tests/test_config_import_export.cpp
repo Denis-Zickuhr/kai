@@ -1,0 +1,310 @@
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QTemporaryDir>
+#include <QTest>
+#include <memory>
+
+#include "core/config-manager.h"
+#include "core/models.h"
+
+using namespace kai::core;
+
+// Cobre as novas funcionalidades de dados: import/export de configuração
+// (global/pasta/comando) e a serialização de terminalTarget/lastParamValues
+// no Command e de TerminalProfile nas Settings.
+class TestConfigImportExport : public QObject {
+    Q_OBJECT
+
+private:
+    static CommandsData sampleData()
+    {
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Root");
+
+        Folder sub;
+        sub.id = QStringLiteral("f_sub");
+        sub.name = QStringLiteral("Sub");
+        sub.parentId = QStringLiteral("f_root");
+
+        Command c1;
+        c1.id = QStringLiteral("c1");
+        c1.name = QStringLiteral("Build");
+        c1.folderId = QStringLiteral("f_root");
+        c1.command = QStringLiteral("make");
+        c1.terminalTarget = QStringLiteral("WSL");
+        c1.lastParamValues.insert(QStringLiteral("env"), QStringLiteral("prod"));
+
+        Command c2;
+        c2.id = QStringLiteral("c2");
+        c2.name = QStringLiteral("Test");
+        c2.folderId = QStringLiteral("f_sub");
+        c2.command = QStringLiteral("ctest");
+
+        return {{root, sub}, {c1, c2}};
+    }
+
+private slots:
+    void commandSerializesTerminalProfileAndLastParams()
+    {
+        Command c = sampleData().commands.at(0);
+        const Command roundTrip = Command::fromJson(c.toJson());
+        QCOMPARE(roundTrip.terminalTarget, QStringLiteral("WSL"));
+        QCOMPARE(roundTrip.lastParamValues.value(QStringLiteral("env")), QStringLiteral("prod"));
+    }
+
+    void exportCommandContainsOnlyThatCommand()
+    {
+        const QString json = ConfigManager::exportCommand(QStringLiteral("c1"), sampleData());
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(json);
+        QVERIFY(r.ok);
+        QCOMPARE(r.scope, QStringLiteral("command"));
+        QCOMPARE(r.commands.size(), 1);
+        QCOMPARE(r.commands.at(0).id, QStringLiteral("c1"));
+        QCOMPARE(r.folders.size(), 0);
+    }
+
+    void exportFolderIncludesSubtreeAndCommands()
+    {
+        const QString json = ConfigManager::exportFolder(QStringLiteral("f_root"), sampleData());
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(json);
+        QVERIFY(r.ok);
+        QCOMPARE(r.scope, QStringLiteral("folder"));
+        // Deve incluir a pasta raiz + subpasta.
+        QCOMPARE(r.folders.size(), 2);
+        // E os dois comandos (um na raiz, um na subpasta).
+        QCOMPARE(r.commands.size(), 2);
+    }
+
+    void exportGlobalIncludesSettings()
+    {
+        SettingsData settings;
+        settings.language = QStringLiteral("pt");
+        settings.globalEnvVars.insert(QStringLiteral("PORT"), QStringLiteral("8080"));
+        TerminalProfile wsl;
+        wsl.name = QStringLiteral("WSL");
+        wsl.commandTemplate = QStringLiteral("wsl -d Ubuntu -- bash -lc '{{command}}'");
+        settings.terminalProfiles.append(wsl);
+
+        const QString json = ConfigManager::exportGlobal(settings, sampleData());
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(json);
+        QVERIFY(r.ok);
+        QCOMPARE(r.scope, QStringLiteral("global"));
+        QVERIFY(r.hasSettings);
+        QCOMPARE(r.settings.language, QStringLiteral("pt"));
+        QCOMPARE(r.settings.globalEnvVars.value(QStringLiteral("PORT")), QStringLiteral("8080"));
+        QCOMPARE(r.settings.terminalProfiles.size(), 1);
+        QCOMPARE(r.settings.terminalProfiles.at(0).commandTemplate,
+                 QStringLiteral("wsl -d Ubuntu -- bash -lc '{{command}}'"));
+    }
+
+    void importRejectsNonKaiJson()
+    {
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(QStringLiteral("{\"foo\": 1}"));
+        QVERIFY(!r.ok);
+        QVERIFY(!r.errorMessage.isEmpty());
+    }
+
+    void importRejectsInvalidJson()
+    {
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(QStringLiteral("not json at all"));
+        QVERIFY(!r.ok);
+    }
+
+    // EXPORTAÇÃO SELETIVA (pedido do usuário): o form com checkboxes decide o
+    // que sai. E COLEÇÕES passam a ser incluídas — antes o export "global"
+    // simplesmente as ignorava, então nenhum backup era completo.
+    void selectiveExportIncludesOnlyCheckedSections()
+    {
+        SettingsData settings;
+        settings.activeTheme = QStringLiteral("kai-dark");
+
+        CommandsData data;
+        Folder f;
+        f.id = QStringLiteral("f1");
+        f.name = QStringLiteral("Pasta");
+        data.folders.append(f);
+        Command c;
+        c.id = QStringLiteral("c1");
+        c.name = QStringLiteral("Cmd");
+        c.type = CommandType::Shell;
+        c.command = QStringLiteral("echo oi");
+        data.commands.append(c);
+
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.name = QStringLiteral("Clientes");
+        CollectionEntry e;
+        e.values.insert(QStringLiteral("key"), QStringLiteral("acme-corp"));
+        col.entries.append(e);
+        QVector<Collection> collections{col};
+
+        // (a) TUDO marcado: coleções e registros presentes.
+        ConfigManager::ExportSelection all;
+        const QJsonObject full = QJsonDocument::fromJson(
+            ConfigManager::exportSelective(all, settings, data, collections).toUtf8()).object();
+        QVERIFY(full.contains(QStringLiteral("settings")));
+        QVERIFY(full.contains(QStringLiteral("commands")));
+        QVERIFY2(full.contains(QStringLiteral("collections")),
+                 "coleções deveriam estar no export completo");
+        QCOMPARE(full.value(QStringLiteral("collections")).toArray().size(), 1);
+
+        // (b) só coleções SEM registros: estrutura sai, entries vazias.
+        ConfigManager::ExportSelection structureOnly;
+        structureOnly.settings = false;
+        structureOnly.commands = false;
+        structureOnly.environments = false;
+        structureOnly.collections = true;
+        structureOnly.collectionEntries = false;
+        const QJsonObject partial = QJsonDocument::fromJson(
+            ConfigManager::exportSelective(structureOnly, settings, data, collections).toUtf8()).object();
+        QVERIFY2(!partial.contains(QStringLiteral("commands")), "comandos não deveriam sair");
+        QVERIFY(partial.contains(QStringLiteral("collections")));
+        const QJsonObject exportedCol =
+            partial.value(QStringLiteral("collections")).toArray().at(0).toObject();
+        QCOMPARE(exportedCol.value(QStringLiteral("name")).toString(), QStringLiteral("Clientes"));
+        QVERIFY2(exportedCol.value(QStringLiteral("entries")).toArray().isEmpty(),
+                 "registros NÃO deveriam sair quando 'dados' está desmarcado");
+
+        // (c) round-trip: a importação enxerga as coleções.
+        const ConfigManager::ImportResult imported =
+            ConfigManager::importFromJson(
+                ConfigManager::exportSelective(all, settings, data, collections));
+        QVERIFY(imported.ok);
+        QVERIFY2(imported.hasCollections, "importação deveria trazer as coleções");
+        QCOMPARE(imported.collections.size(), 1);
+        QCOMPARE(imported.collections.at(0).name, QStringLiteral("Clientes"));
+        QCOMPARE(imported.collections.at(0).entries.size(), 1);
+    }
+
+    // AUDITORIA (achado real): exportGlobal() nunca escrevia Environments —
+    // um "backup completo" perdia todos os pacotes de ambiente (nomes/vars/
+    // segredos). Cobre o round-trip export -> import.
+    void exportGlobalRoundTripsEnvironmentsAndSecrets()
+    {
+        SettingsData settings;
+        Environment env;
+        env.id = QStringLiteral("env_prod");
+        env.name = QStringLiteral("Produção");
+        env.vars.insert(QStringLiteral("API_KEY"), QStringLiteral("shh"));
+        env.secretKeys.insert(QStringLiteral("API_KEY"));
+        settings.environments = {env};
+        settings.activeEnvironmentId = QStringLiteral("env_prod");
+
+        const QString json = ConfigManager::exportGlobal(settings, sampleData());
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(json);
+        QVERIFY(r.ok);
+        QVERIFY2(r.hasEnvironments, "pacote com Environments deveria marcar hasEnvironments");
+        QCOMPARE(r.settings.environments.size(), 1);
+        QCOMPARE(r.settings.environments.at(0).id, QStringLiteral("env_prod"));
+        QCOMPARE(r.settings.environments.at(0).vars.value(QStringLiteral("API_KEY")), QStringLiteral("shh"));
+        QVERIFY(r.settings.environments.at(0).secretKeys.contains(QStringLiteral("API_KEY")));
+        QCOMPARE(r.settings.activeEnvironmentId, QStringLiteral("env_prod"));
+    }
+
+    // AUDITORIA: exportGlobal gravava use_pty/is_default/shell/icon do
+    // TerminalProfile, mas a importação só lia name/command_template — os
+    // outros 4 campos eram silenciosamente descartados num reimport.
+    void terminalProfileRoundTripsAllFields()
+    {
+        SettingsData settings;
+        TerminalProfile wsl;
+        wsl.name = QStringLiteral("WSL");
+        wsl.commandTemplate = QStringLiteral("wsl -- {{command}}");
+        wsl.usePty = false;
+        wsl.isDefault = true;
+        wsl.shell = ShellFlavor::Posix;
+        wsl.icon = QStringLiteral("terminal");
+        settings.terminalProfiles.append(wsl);
+
+        const ConfigManager::ImportResult r = ConfigManager::importFromJson(
+            ConfigManager::exportGlobal(settings, sampleData()));
+        QVERIFY(r.ok);
+        QCOMPARE(r.settings.terminalProfiles.size(), 1);
+        const TerminalProfile &t = r.settings.terminalProfiles.at(0);
+        QCOMPARE(t.usePty, false);
+        QCOMPARE(t.isDefault, true);
+        QCOMPARE(t.shell, ShellFlavor::Posix);
+        QCOMPARE(t.icon, QStringLiteral("terminal"));
+    }
+
+    // AUDITORIA (achado real, o mais grave): mergeImportResult() só aplicava
+    // activeTheme + terminalProfiles do pacote importado — todo o resto das
+    // preferências gerais (densidade, posicionamento, janela, efeitos
+    // visuais...) era descartado antes de chegar em saveSettings(). Precisa
+    // de um ConfigManager de verdade (isola em XDG_CONFIG_HOME temporário).
+    void mergeImportResultAppliesFullSettingsSnapshot()
+    {
+        auto tempDir = std::make_unique<QTemporaryDir>();
+        QVERIFY(tempDir->isValid());
+        qputenv("XDG_CONFIG_HOME", tempDir->path().toUtf8());
+
+        ConfigManager manager;
+        SettingsData before = manager.loadSettings();
+        before.uiDensity = QStringLiteral("compact");
+        QVERIFY(manager.saveSettings(before));
+
+        SettingsData imported;
+        imported.activeTheme = QStringLiteral("kai-light");
+        imported.uiDensity = QStringLiteral("comfortable");
+        imported.outputCompact = true;
+        imported.windowMode = QStringLiteral("maximized");
+
+        ConfigManager::ImportResult result;
+        result.ok = true;
+        result.hasSettings = true;
+        result.settings = imported;
+
+        QVERIFY(manager.mergeImportResult(result));
+
+        const SettingsData after = manager.loadSettings();
+        QCOMPARE(after.activeTheme, QStringLiteral("kai-light"));
+        QCOMPARE(after.uiDensity, QStringLiteral("comfortable"));
+        QCOMPARE(after.outputCompact, true);
+        QCOMPARE(after.windowMode, QStringLiteral("maximized"));
+    }
+
+    // AUDITORIA: Environments deve ser MESCLADO por id (reimportar um backup
+    // não pode apagar pacotes criados localmente depois daquele backup).
+    void mergeImportResultMergesEnvironmentsById()
+    {
+        auto tempDir = std::make_unique<QTemporaryDir>();
+        QVERIFY(tempDir->isValid());
+        qputenv("XDG_CONFIG_HOME", tempDir->path().toUtf8());
+
+        ConfigManager manager;
+        SettingsData before = manager.loadSettings();
+        Environment local;
+        local.id = QStringLiteral("env_local");
+        local.name = QStringLiteral("Local (criado depois do backup)");
+        before.environments.append(local);
+        QVERIFY(manager.saveSettings(before));
+
+        Environment imported;
+        imported.id = QStringLiteral("env_prod");
+        imported.name = QStringLiteral("Produção");
+        imported.vars.insert(QStringLiteral("HOST"), QStringLiteral("prod.example.com"));
+
+        ConfigManager::ImportResult result;
+        result.ok = true;
+        result.hasEnvironments = true;
+        result.settings.environments = {imported};
+
+        QVERIFY(manager.mergeImportResult(result));
+
+        const SettingsData after = manager.loadSettings();
+        // Os dois devem coexistir: o local (preservado) + o importado (novo).
+        bool hasLocal = false;
+        bool hasImported = false;
+        for (const Environment &e : after.environments) {
+            if (e.id == QStringLiteral("env_local")) hasLocal = true;
+            if (e.id == QStringLiteral("env_prod")) hasImported = true;
+        }
+        QVERIFY2(hasLocal, "Environment local não deveria ser apagado pela importação");
+        QVERIFY2(hasImported, "Environment importado deveria ter sido adicionado");
+    }
+};
+
+QTEST_MAIN(TestConfigImportExport)
+#include "test_config_import_export.moc"

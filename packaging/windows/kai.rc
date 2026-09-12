@@ -1,0 +1,55 @@
+// Recursos Windows do Kai.
+//
+// Além do ícone, este arquivo declara VERSIONINFO e embute um MANIFEST.
+// Motivo (não é cosmético): um executável nao assinado, SEM informação de
+// versão e SEM manifest é um dos perfis que o Windows Defender pontua como
+// suspeito na análise heurística/reputacional — foi o caso reportado do
+// kai.exe sendo "moído" pelo Defender. Metadados completos e um manifest
+// explícito com `asInvoker` (o app não pede elevação) reduzem esse escore.
+// O manifest também declara DPI awareness, o que corrige a interface
+// borrada em telas HiDPI.
+
+#include <windows.h>
+
+// IDI_ICON1 = 1 é o índice que o Windows usa como ícone principal do app.
+IDI_ICON1 ICON "kai.ico"
+
+// O manifest da aplicação (ID 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID).
+1 RT_MANIFEST "kai.manifest"
+
+#ifndef KAI_VERSION_CSV
+#define KAI_VERSION_CSV 0,0,1,0
+#endif
+#ifndef KAI_VERSION_STR
+#define KAI_VERSION_STR "0.0.1.0"
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     KAI_VERSION_CSV
+PRODUCTVERSION  KAI_VERSION_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0409 = en-US, 04B0 = Unicode
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Kai"
+            VALUE "FileDescription",  "Kai - developer command runner and API workspace"
+            VALUE "FileVersion",      KAI_VERSION_STR
+            VALUE "InternalName",     "kai"
+            VALUE "LegalCopyright",   "Copyright (C) 2026"
+            VALUE "OriginalFilename", "kai.exe"
+            VALUE "ProductName",      "Kai"
+            VALUE "ProductVersion",   KAI_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

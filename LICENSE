@@ -1,0 +1,38 @@
+Copyright (c) 2026 Denis Zickuhr. All rights reserved.
+
+PROPRIETARY SOFTWARE
+
+This software and its source code are the property of the copyright holder
+above. No license to use, copy, modify, distribute, or create derivative
+works is granted, whether express or implied, except by prior written
+permission of the copyright holder.
+
+The code is published for reference and transparency purposes. Publication
+does not imply the grant of a license. In particular, you may not:
+
+  - use the software, in whole or in part, in products or services;
+  - redistribute the software or its binaries;
+  - create derivative works based on this code;
+  - remove or alter copyright notices.
+
+Operations that the hosting platform allows under its own terms of
+service — such as viewing the repository or forking it within the
+platform — do not expand the rights above.
+
+THIRD-PARTY COMPONENTS
+
+This software uses third-party components under their respective licenses,
+which remain valid and are not affected by this notice. Copyright notices
+and license texts are in THIRD-PARTY-NOTICES.md, including Qt 6 (LGPLv3),
+QHotkey (BSD 3-Clause), libvterm (MIT) and Lucide Icons (ISC and MIT).
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Licensing inquiries: coringatheboss@gmail.com

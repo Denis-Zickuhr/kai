@@ -1,0 +1,30 @@
+<h2>Hooks (pre/post/cleanup) & Execution Conditions</h2>
+<p>A command can trigger others <b>before</b> (pre), <b>after</b> (post), and whenever it <b>finishes</b> (cleanup):</p>
+<pre>[Pre-Hooks]  →  [Main command]  →  [Post-Hooks]  →  (always) [Cleanup]</pre>
+<p>If a pre-hook fails (exit≠0 or HTTP≥400), the pipeline aborts and the main command never runs. If a post-hook fails, the pipeline is marked unsuccessful. <b>Cleanup</b> hooks always run — success, failure, manual stop, or reset.</p>
+<h3>Classic case</h3>
+<p>An HTTP pre-hook authenticates and extracts the token (Env Extractor) → the main command uses <code>{{AUTH_TOKEN}}</code>.</p>
+<h3>Cleanup example</h3>
+<p>A dev server that also started a tunnel via a pre-hook can tear it down on cleanup:</p>
+<pre>{
+  "name": "Dev Server",
+  "type": "shell",
+  "command": "npm run dev",
+  "is_background": true,
+  "hooks": { "pre": ["Start tunnel"], "post": [], "cleanup": ["Stop tunnel"] }
+}</pre>
+<h3>Folder inheritance</h3>
+<p>Commands from <b>ancestor folders</b> appear as available hooks in subfolders (marked with <code>⤴ folder</code>). This way a utility at the root serves all commands below it.</p>
+<h3>Execution conditions</h3>
+<p>A command or hook can also carry an <b>execution condition</b> — a guard deciding whether it actually runs, based on comparing interpolated values. Runs only if the token is missing or expired:</p>
+<pre>{
+  "name": "Login",
+  "type": "shell",
+  "command": "gh auth login",
+  "execution_conditions": [
+    { "name": "Token missing", "left": "{{TOKEN}}", "op": "not_exists" },
+    { "name": "Token expired", "left": "{{EXPIRES_AT}}", "op": "lt", "right": "{{$timestamp}}" }
+  ],
+  "condition_combinator": "or"
+}</pre>
+<p>Operators: <code>exists</code>, <code>not_exists</code>, <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>ge</code>, <code>lt</code>, <code>le</code>, <code>contains</code>, <code>not_contains</code>. Combine multiple conditions with <b>AND</b> or <b>OR</b>. When a guard doesn't pass, choose whether that's a silent skip (still a success) or a real failure.</p>

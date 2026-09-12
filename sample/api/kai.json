@@ -1,0 +1,85 @@
+{
+  "project_name": "Kai API Tester",
+  "icon": "globe",
+  "env_vars": {
+    "API_BASE": "https://httpbin.org",
+    "APP_NAME": "KaiAPI"
+  },
+  "commands": [
+    {
+      "name": "1. HTTP GET — Health Check",
+      "type": "http",
+      "http_config": {
+        "method": "GET",
+        "url": "{{API_BASE}}/get?app={{APP_NAME}}&env=dev",
+        "headers": {
+          "Accept": "application/json",
+          "User-Agent": "Kai-Client/1.0"
+        },
+        "body": "",
+        "env_extractors": []
+      }
+    },
+    {
+      "name": "2. HTTP POST — Autenticar e Extrair Token/Headers",
+      "type": "http",
+      "http_config": {
+        "method": "POST",
+        "url": "{{API_BASE}}/post",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-Id": "{{$uuid}}"
+        },
+        "body": "{\n  \"app\": \"{{APP_NAME}}\",\n  \"nonce\": \"{{$randomInt}}\",\n  \"service\": \"{{servico.nome}}\"\n}",
+        "env_extractors": [
+          {
+            "json_path": "json.app",
+            "env_var": "EXTRACTED_APP_NAME"
+          },
+          {
+            "json_path": "headers.X-Request-Id",
+            "env_var": "EXTRACTED_REQ_ID"
+          }
+        ]
+      },
+      "params": [
+        {
+          "name": "servico",
+          "label": "Microserviço Alvo",
+          "type": "select",
+          "collection": "Endpoints",
+          "collection_display_field": "nome"
+        }
+      ]
+    },
+    {
+      "name": "3. Validar Variáveis Extraídas (Shell)",
+      "type": "shell",
+      "command": "echo \"Variável EXTRACTED_APP_NAME: {{EXTRACTED_APP_NAME}} | EXTRACTED_REQ_ID: {{EXTRACTED_REQ_ID}}\""
+    }
+  ],
+  "collections": [
+    {
+      "name": "Endpoints",
+      "icon": "server",
+      "schema": [
+        { "name": "nome", "label": "Nome do Serviço", "type": "text" },
+        { "name": "url", "label": "URL Base", "type": "text" }
+      ],
+      "entries": [
+        {
+          "id": "ep_1",
+          "values": { "nome": "Auth Service", "url": "https://auth.exemplo.dev" },
+          "tags": ["core"],
+          "favorite": true
+        },
+        {
+          "id": "ep_2",
+          "values": { "nome": "Payment Gateway", "url": "https://pay.exemplo.dev" },
+          "tags": ["finance"],
+          "favorite": false
+        }
+      ]
+    }
+  ]
+}

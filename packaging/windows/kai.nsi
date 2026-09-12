@@ -1,0 +1,109 @@
+; kai.nsi — Instalador do Kai para Windows gerado via NSIS (makensis no Linux).
+; Alternativa robusta ao Inno Setup (que exigia download instável via wine).
+; Uso: makensis -DKAISRC=<pasta portável> -DKAIOUT=<saída> kai.nsi
+
+!ifndef KAISRC
+  !define KAISRC "dist\kai-windows"
+!endif
+!ifndef KAIOUT
+  !define KAIOUT "dist"
+!endif
+
+!define APPNAME "Kai"
+!define APPVERSION "0.0.2-beta"
+!define PUBLISHER "Kai"
+
+Unicode true
+; Compressão zlib (em vez de /SOLID lzma): o stub resultante é mais simples
+; e universalmente compatível.
+SetCompressor /FINAL zlib
+; CRCCheck off: o self-check de integridade do NSIS FALHA ("Installer
+; integrity check has failed") quando o instalador é executado a partir do
+; filesystem de REDE do WSL (\\wsl.localhost\... via 9P), pois o stub não
+; consegue re-ler os próprios bytes de forma confiável nesse FS — mesmo com
+; o arquivo íntegro (validado por 7z). Desligar o CRC evita esse falso
+; positivo. A integridade real é garantida na geração (7z test) e o usuário
+; ainda deve, idealmente, copiar o .exe para um caminho nativo do Windows.
+CRCCheck off
+
+Name "${APPNAME} ${APPVERSION}"
+OutFile "${KAIOUT}\kai-setup.exe"
+
+; INFORMAÇÃO DE VERSÃO no próprio instalador. Instaladores NSIS sem metadados
+; são um perfil clássico de falso positivo no Windows Defender (o stub é o
+; mesmo usado por muito software indesejado, então a reputação do arquivo pesa).
+; Declarar produto, versão, empresa e descrição reduz o escore heurístico.
+VIProductVersion "0.0.2.0"
+VIAddVersionKey /LANG=1033 "ProductName"     "${APPNAME}"
+VIAddVersionKey /LANG=1033 "ProductVersion"  "0.0.2.0"
+VIAddVersionKey /LANG=1033 "FileVersion"     "0.0.2.0"
+VIAddVersionKey /LANG=1033 "FileDescription" "Instalador do Kai - developer command runner"
+VIAddVersionKey /LANG=1033 "CompanyName"     "Kai"
+VIAddVersionKey /LANG=1033 "LegalCopyright"  "Copyright (C) 2026"
+VIAddVersionKey /LANG=1033 "OriginalFilename" "kai-setup.exe"
+; Instalação POR USUÁRIO (não exige admin — máquinas sem root):
+;  - instala em %LocalAppData%\Kai
+;  - registro em HKCU (não HKLM)
+;  - atalhos no perfil do usuário
+RequestExecutionLevel user
+InstallDir "$LOCALAPPDATA\${APPNAME}"
+InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
+
+Page directory
+Page instfiles
+UninstPage uninstConfirm
+UninstPage instfiles
+
+Section "Install"
+    ; Encerra qualquer instância do Kai já rodando ANTES de sobrescrever os
+    ; arquivos (bug relatado: instalar/testar builds seguidos sem fechar o
+    ; Kai entre eles — como app de bandeja, ele sobrevive ao fechamento da
+    ; janela). Sem isto, o Windows recusa sobrescrever um .exe em uso: o
+    ; File /r abaixo falha silenciosamente pro binário travado, o usuário
+    ; segue testando a versão ANTIGA sem perceber, e mudanças de
+    ; comportamento (ex: a config "Iniciar visível") parecem não fazer
+    ; efeito quando na verdade nunca chegaram a rodar. taskkill sem
+    ; /IM correspondente retorna código de erro — ignorado de propósito
+    ; (Pop $0 descarta; nada a fazer se não havia processo algum).
+    ; /T mata a árvore de processos filhos também.
+    nsExec::ExecToLog 'taskkill /F /IM kai.exe /T'
+    Pop $0
+    ; Dá um instante pro SO liberar de fato o handle do arquivo antes do
+    ; File /r seguinte tentar sobrescrevê-lo.
+    Sleep 300
+
+    SetOutPath "$INSTDIR"
+    ; Copia recursivamente toda a pasta portável (kai.exe + DLLs + plugins + assets).
+    File /r "${KAISRC}\*.*"
+
+    ; Atalhos no Menu Iniciar e Área de Trabalho.
+    CreateDirectory "$SMPROGRAMS\${APPNAME}"
+    CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\kai.exe"
+    CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\kai.exe"
+
+    ; Registro POR USUÁRIO (HKCU) para "Adicionar ou remover programas".
+    WriteRegStr HKCU "Software\${APPNAME}" "InstallDir" "$INSTDIR"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${APPVERSION}"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${PUBLISHER}"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\kai.exe"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" "$INSTDIR\uninstall.exe"
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoModify" 1
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoRepair" 1
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+SectionEnd
+
+Section "Uninstall"
+    ; Mesmo motivo do Install acima: encerra o Kai antes de apagar os
+    ; arquivos, senão RMDir /r falha pro binário em uso.
+    nsExec::ExecToLog 'taskkill /F /IM kai.exe /T'
+    Pop $0
+    Sleep 300
+
+    Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
+    RMDir "$SMPROGRAMS\${APPNAME}"
+    Delete "$DESKTOP\${APPNAME}.lnk"
+    RMDir /r "$INSTDIR"
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
+    DeleteRegKey HKCU "Software\${APPNAME}"
+SectionEnd

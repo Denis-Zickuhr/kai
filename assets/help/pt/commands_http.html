@@ -1,0 +1,23 @@
+<h2>Comandos HTTP</h2>
+<p>Um comando <b>HTTP</b> faz uma requisição e mostra a resposta formatada (JSON com árvore navegável).</p>
+<h3>Campos</h3>
+<table><tr><td><b>Método</b></td><td>GET/POST/PUT/PATCH/DELETE</td></tr><tr><td><b>URL</b></td><td>aceita variáveis: <code>{{BASE_URL}}/users</code></td></tr><tr><td><b>Headers</b></td><td>pares chave/valor (também interpolados)</td></tr><tr><td><b>Body</b></td><td>JSON (o botão <i>Formatar JSON</i> embeleza)</td></tr></table>
+<h3>Exemplo</h3>
+<pre>{
+  "name": "Autenticar",
+  "type": "http",
+  "http_config": {
+    "method": "POST",
+    "url": "{{BASE_URL}}/auth/login",
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"user\":\"{{USER}}\",\"pass\":\"{{PASS}}\"}",
+    "env_extractors": [ { "json_path": "token", "env_var": "AUTH_TOKEN" } ]
+  }
+}</pre>
+<h3>Extrair um valor para uma variável</h3>
+<p>Configure um <b>Env Extractor</b> pra pegar um campo do JSON de resposta e guardar numa variável dinâmica (ex.: <code>data.token → AUTH_TOKEN</code>), usada pelos próximos comandos:</p>
+<pre>Authorization: Bearer {{AUTH_TOKEN}}</pre>
+<h3>Importar de cURL</h3>
+<p>Botão <b>Importar cURL</b>: cole um comando <code>curl</code> e o Kai preenche método/url/headers/body. Veja <a href='help://import_curl'>Importar cURL</a>.</p>
+<h3>Abas Resposta, Requisição e Headers</h3>
+<p>A aba <b>Resposta</b> mostra o JSON retornado como árvore colapsável, com botões <b>Copiar</b> e <b>Destacar</b>. A aba <b>Requisição</b> mostra exatamente o que foi enviado — método, URL, headers, body — útil depois que a chamada já rodou. <b>Headers</b> mostra os headers da resposta.</p>

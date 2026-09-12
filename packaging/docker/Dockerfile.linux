@@ -1,0 +1,50 @@
+# =============================================================================
+#  Dockerfile.linux — Ambiente de build nativo do Kai para Linux.
+#
+#  Produz o binário ELF (build/bin/kai) e, quando possível, um AppImage
+#  portável em /out. Usa Qt 6 do repositório do Ubuntu 24.04 (inclui o
+#  módulo Svg, necessário desde a migração dos ícones para Lucide/SVG).
+#
+#  Build da imagem + artefatos (ver docker-compose.yml para o fluxo pronto):
+#    docker build -f packaging/docker/Dockerfile.linux -t kai-build-linux .
+#    docker run --rm -v "$PWD/dist:/out" kai-build-linux
+# =============================================================================
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Toolchain C++20 + CMake + Qt 6 (Core/Gui/Widgets/Network/Svg/Test) e as
+# libs de runtime X11/EGL que o Qt Widgets precisa em tempo de link.
+# libqt6svg6-dev é obrigatório: os ícones Lucide são renderizados via
+# QSvgRenderer. curl/file/fuse são para o empacotamento AppImage.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        git \
+        ca-certificates \
+        curl \
+        file \
+        fuse \
+        libfuse2 \
+        patchelf \
+        qt6-base-dev \
+        qt6-svg-dev \
+        qt6-base-dev-tools \
+        libqt6svg6 \
+        libgl1-mesa-dev \
+        libxkbcommon-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# O código-fonte é montado como volume em runtime (bind mount do repo),
+# mantendo a imagem enxuta e reutilizável entre builds. O script de
+# empacotamento fica embutido na imagem.
+COPY packaging/docker/build-linux-entrypoint.sh /usr/local/bin/build-linux
+RUN chmod +x /usr/local/bin/build-linux
+
+# Diretório onde os artefatos finais são copiados (monte um volume aqui).
+VOLUME ["/out"]
+
+ENTRYPOINT ["/usr/local/bin/build-linux"]

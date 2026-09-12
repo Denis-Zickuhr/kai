@@ -1,0 +1,68 @@
+# =============================================================================
+#  Dockerfile.windows — Cross-compila o Kai para Windows (x86_64) a partir
+#  do Linux usando a imagem oficial stateoftheartio/qt6 (MinGW + Qt6 via
+#  aqtinstall, com wine para rodar windeployqt).
+#
+#  Projeto base (verificado): https://github.com/state-of-the-art/qt6-docker
+#  Docker Hub: https://hub.docker.com/r/stateoftheartio/qt6
+#  Tag usada: 6.6-mingw-aqt  (Windows 64 MinGW toolchain).
+#
+#  A imagem traz qt-cmake (wrapper do CMake com o toolchain Qt já
+#  configurado), Ninja e windeployqt. O Kai precisa do módulo Qt Svg
+#  (ícones Lucide), instalado dinamicamente via aqt no entrypoint.
+#
+#  Fluxo pronto: use o docker-compose.yml (serviço build-windows) ou os
+#  comandos manuais no packaging/docker/README.md.
+# =============================================================================
+FROM stateoftheartio/qt6:6.6-mingw-aqt
+
+# O entrypoint faz: instala módulos Qt extras (svg) via aqt, cross-compila
+# com qt-cmake e empacota com windeployqt. Copiado para um caminho no PATH.
+COPY packaging/docker/build-windows-entrypoint.sh /usr/local/bin/build-windows
+
+USER root
+RUN chmod +x /usr/local/bin/build-windows
+# git é necessário para clonar o QHotkey/libvterm. PORÉM, no cross-build o
+# CMake que roda é o do Qt via wine (Windows), que NÃO enxerga o git do
+# Linux — por isso o FetchContent falha com "could not find git". Solução:
+# pré-clonamos as duas aqui (git do Linux) em diretórios fixos e, no
+# entrypoint, apontamos o FetchContent para essas cópias locais via
+# FETCHCONTENT_SOURCE_DIR_QHOTKEY/LIBVTERM — assim o CMake do wine não
+# precisa de git. libvterm (emulador de terminal do terminal interativo,
+# ver PtyTerminalWidget) é pinado no MESMO commit do CMakeLists.txt raiz,
+# pra o build Windows não divergir do Linux.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates ccache nsis \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 --branch 1.5.0 https://github.com/Skycoder42/QHotkey.git /opt/qhotkey \
+    && chmod -R a+rX /opt/qhotkey \
+    && git clone https://github.com/neovim/libvterm.git /opt/libvterm \
+    && git -C /opt/libvterm checkout 934bc2fbf21800ac3458a499df8820ca5fb45fd3 \
+    && chmod -R a+rX /opt/libvterm
+# Volta para o usuário não-privilegiado padrão da imagem (user), usado nos
+# workflows de build.
+USER user
+
+# NOTA: o módulo Qt Svg JÁ VEM na imagem base (verificado:
+# ~/.wine/drive_c/Qt/6.6.1/mingw_64/bin/Qt6Svg.dll). O entrypoint antigo
+# rodava `aqt install-qt -m qtsvg` a cada build sem necessidade — removido do
+# caminho quente. O entrypoint mantém um fallback caso a imagem mude.
+
+# ccache para o cross-compile: builds incrementais reaproveitam objetos em vez
+# de recompilar as ~227 unidades do zero, reduzindo drasticamente a ESCRITA em
+# disco por build (a causa do consumo reportado).
+ENV CCACHE_DIR=/ccache
+ENV CCACHE_MAXSIZE=2G
+USER root
+# Os diretórios montados como VOLUME NOMEADO precisam existir na imagem com o
+# dono correto: ao criar um volume novo, o Docker herda conteúdo e permissões do
+# caminho na imagem. Sem isto o volume nasce pertencendo ao root e o build (que
+# roda como 'user') falha com "Unable to (re)create the private pkgRedirects
+# directory".
+RUN mkdir -p /ccache /home/user/build \
+    && chown -R user:user /ccache /home/user/build
+USER user
+
+WORKDIR /home/user
+
+ENTRYPOINT ["/usr/local/bin/build-windows"]

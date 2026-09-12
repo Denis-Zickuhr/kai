@@ -1,0 +1,27 @@
+build/
+.bin/
+dist/
+.kiro/
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+*.bak*
+*.tmp
+.DS_Store
+*:Zone.Identifier
+release/
+
+# CONFIGURAÇÃO REAL DO USUÁRIO. Estes arquivos moram em ~/.config/kai, não aqui —
+# mas copiar um deles para a raiz do projeto para depurar é comum, e o
+# collections.json de um uso real chega a milhares de entradas com dados de
+# cliente. Ignorar de antemão evita que uma cópia temporária vire commit público.
+/settings.json
+/commands.json
+/collections.json
+/runs.json
+/recents.json
+.env
+.env.*
+!.env.example

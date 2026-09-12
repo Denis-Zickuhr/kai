@@ -1,0 +1,89 @@
+<h2>Arquivo kai.json (por projeto)</h2>
+<p>Coloque um <code>kai.json</code> na raiz do projeto e importe via <b>Arquivo → Importar Projeto</b>. O Kai cria uma pasta com seus comandos, coleções e variáveis.</p>
+<h3>Exemplo mínimo</h3>
+<pre>{
+  "project_name": "Meu Projeto",
+  "env_vars": { "PORT": "8080" },
+  "commands": [
+    { "name": "Dev Server", "type": "shell", "command": "npm run dev", "is_background": true }
+  ]
+}</pre>
+<h3>Pastas</h3>
+<p>Coloque um comando ou coleção numa subpasta com <code>folder</code> — use <code>/</code> pra aninhar mais fundo (não existe uma seção "folders" separada; as subpastas são criadas sob demanda):</p>
+<pre>{ "name": "Deploy", "type": "shell", "folder": "Integrações/Shopee", "command": "./deploy.sh shopee" }</pre>
+<h3>Comando HTTP</h3>
+<pre>{
+  "name": "Autenticar",
+  "type": "http",
+  "http_config": {
+    "method": "POST",
+    "url": "{{BASE_URL}}/auth/login",
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"user\":\"{{USER}}\",\"pass\":\"{{PASS}}\"}",
+    "env_extractors": [ { "json_path": "token", "env_var": "AUTH_TOKEN" } ]
+  }
+}</pre>
+<h3>Cada flag de comando, um exemplo cada</h3>
+<p><code>hidden</code> — fica fora da árvore até "Mostrar ocultos" ser ativado:</p>
+<pre>{ "name": "Utilitário interno", "type": "shell", "command": "./helper.sh", "hidden": true }</pre>
+<p><code>hide_on_run</code> — esconde a janela do Kai enquanto este comando roda:</p>
+<pre>{ "name": "Abrir editor", "type": "shell", "command": "code .", "hide_on_run": true }</pre>
+<p><code>capture_env</code> — quando usado como hook, captura o ambiente que ele exporta como variáveis dinâmicas (ex: um login que exporta um token):</p>
+<pre>{ "name": "gh auth login", "type": "shell", "command": "gh auth login", "capture_env": true }</pre>
+<p><code>open_last_link</code> — abre a última URL <code>http(s)://</code> impressa na saída quando o comando termina com sucesso:</p>
+<pre>{ "name": "Subir túnel", "type": "shell", "command": "ngrok http 3000", "open_last_link": true }</pre>
+<p><code>interactive_terminal</code> — renderiza um terminal de verdade em vez de um log em texto puro, para apps de tela cheia:</p>
+<pre>{ "name": "htop", "type": "shell", "command": "htop", "interactive_terminal": true }</pre>
+<p><code>terminal_target</code> — roda o comando através de um Alvo de Terminal nomeado (Configurações → Alvos de Terminal), ex: dentro do WSL:</p>
+<pre>{ "name": "Listar arquivos (WSL)", "type": "shell", "command": "ls -la", "terminal_target": "WSL" }</pre>
+<p><code>compact_output</code> — colapsa linhas em branco repetidas e apara espaços à direita:</p>
+<pre>{ "name": "Build verboso", "type": "shell", "command": "make -j4", "compact_output": true }</pre>
+<p><code>ignore_exit_code</code> — trata o comando sempre como sucesso, para programas que retornam código != 0 mesmo funcionando (ex: <code>explorer.exe</code> do WSL):</p>
+<pre>{ "name": "Abrir pasta", "type": "shell", "command": "explorer.exe .", "ignore_exit_code": true }</pre>
+<p><code>auto_run</code> / <code>auto_run_delay_sec</code> — dispara automaticamente quando o Kai inicia:</p>
+<pre>{ "name": "Iniciar sync em background", "type": "shell", "command": "./sync.sh", "is_background": true, "auto_run": true, "auto_run_delay_sec": 5 }</pre>
+<h3>Auto-responsores</h3>
+<p>Responde um prompt da saída automaticamente (regex → texto enviado ao stdin):</p>
+<pre>{
+  "name": "Resetar BD",
+  "type": "shell",
+  "command": "npm run db:reset",
+  "responders": [ { "name": "Confirmar", "pattern": "\\[y/N\\]", "response": "y" } ]
+}</pre>
+<h3>Condição de Execução</h3>
+<p>Só roda quando uma condição passa — aqui, só se <code>TOKEN</code> estiver vazio ou <code>EXPIRES_AT</code> já tiver passado:</p>
+<pre>{
+  "name": "Login",
+  "type": "shell",
+  "command": "gh auth login",
+  "execution_conditions": [
+    { "name": "Token ausente", "left": "{{TOKEN}}", "op": "not_exists" },
+    { "name": "Token expirado", "left": "{{EXPIRES_AT}}", "op": "lt", "right": "{{$timestamp}}" }
+  ],
+  "condition_combinator": "or"
+}</pre>
+<h3>Hooks</h3>
+<p>Referenciam outros comandos do mesmo arquivo <b>pelo nome</b> — <code>pre</code>/<code>post</code> rodam antes/depois do comando principal, <code>cleanup</code> sempre roda (sucesso, falha, parada manual ou reset):</p>
+<pre>{
+  "name": "Dev Server",
+  "type": "shell",
+  "command": "npm run dev",
+  "is_background": true,
+  "hooks": { "pre": ["Login"], "post": [], "cleanup": ["Parar túnel"] }
+}</pre>
+<h3>Coleções</h3>
+<p>Uma fonte de dados tabular, versionada junto do projeto, referenciada por um parâmetro <code>select</code> pelo nome:</p>
+<pre>{
+  "commands": [{
+    "name": "Saudar", "type": "shell", "command": "echo {{cliente.value}}",
+    "params": [{ "name": "cliente", "type": "select", "collection": "Clientes", "collection_display_field": "value" }]
+  }],
+  "collections": [{
+    "name": "Clientes",
+    "schema": [ { "name": "key", "label": "ID", "type": "key" }, { "name": "value", "label": "Nome", "type": "value" } ],
+    "entries": [ { "values": { "key": "1", "value": "Alice" }, "favorite": true } ]
+  }]
+}</pre>
+<h3>Ainda não tem kai.json?</h3>
+<p>Ative <b>"Detectar definições genéricas"</b> no diálogo de Importar Projeto — o Kai reconhece <code>package.json</code>, <code>docker-compose.yml</code>, <code>requirements.txt</code>/<code>pyproject.toml</code>/<code>manage.py</code>, <code>composer.json</code> e um <code>Makefile</code>, sugerindo comandos prontos a partir deles.</p>
+<div class='tip'>Referência completa de campos, todos os tipos de parâmetro, e um checklist de geração para modelos de IA: <code>docs/manifesto/kai-json-manifesto.md</code> no repositório.</div>

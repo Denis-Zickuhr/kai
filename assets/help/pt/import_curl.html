@@ -1,0 +1,4 @@
+<h2>Importar de cURL</h2>
+<p>No editor de comando, aba <b>HTTP</b>, clique <b>Importar cURL</b> e cole um comando <code>curl</code>. O Kai reconhece:</p><table><tr><td><code>-X/--request</code></td><td>método</td></tr><tr><td><code>-H/--header</code></td><td>headers</td></tr><tr><td><code>-d/--data*</code></td><td>body (infere POST)</td></tr><tr><td><code>-u/--user</code></td><td>vira header Authorization Basic</td></tr></table><pre>curl -X POST https://api.x.com/login \
+  -H 'Content-Type: application/json' \
+  -d '{"user":"admin"}'</pre>

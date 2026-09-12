@@ -1,0 +1,8 @@
+<h2>Terminal targets & WSL</h2>
+<p>A Shell command can run through a <b>terminal target</b> — a template that wraps the command. Classic case: running on <b>WSL</b> from Kai on Windows.</p>
+<h3>Default WSL target (Settings → Terminal Targets)</h3>
+<pre>wsl.exe -- bash -lic 'eval "$(echo "$1" | base64 -d)"' kai {{command_b64}}</pre>
+<p>Placeholders: <code>{{command}}</code> (with safe quote escaping) and <code>{{command_b64}}</code> — crash-proof base64 injection, used by the default target above.</p>
+<div class='tip'><code>-lic</code>, not just <code>-lc</code>: a login shell alone doesn't read <code>~/.bashrc</code> (a stock Ubuntu <code>.bashrc</code> exits early for non-interactive shells). Adding <code>-i</code> makes your aliases and functions actually load.</div>
+<h3>working_dir via WSL</h3>
+<p>Kai injects a <code>cd</code> inside the shell so the working directory applies within WSL (the Windows process's own CWD never crosses that boundary).</p>

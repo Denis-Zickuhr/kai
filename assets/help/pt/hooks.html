@@ -1,0 +1,30 @@
+<h2>Hooks (pre/post/cleanup) & Condição de Execução</h2>
+<p>Um comando pode disparar outros <b>antes</b> (pre), <b>depois</b> (post), e sempre que <b>termina</b> (cleanup):</p>
+<pre>[Pre-Hooks]  →  [Comando principal]  →  [Post-Hooks]  →  (sempre) [Cleanup]</pre>
+<p>Se um pre-hook falhar (exit≠0 ou HTTP≥400), o pipeline aborta e o comando principal nunca roda. Se um post-hook falhar, o pipeline é marcado como sem sucesso. Hooks de <b>cleanup</b> sempre rodam — sucesso, falha, parada manual ou reset.</p>
+<h3>Caso clássico</h3>
+<p>Um pre-hook HTTP autentica e extrai o token (Env Extractor) → o comando principal usa <code>{{AUTH_TOKEN}}</code>.</p>
+<h3>Exemplo de cleanup</h3>
+<p>Um dev server que também subiu um túnel via pre-hook pode derrubá-lo no cleanup:</p>
+<pre>{
+  "name": "Dev Server",
+  "type": "shell",
+  "command": "npm run dev",
+  "is_background": true,
+  "hooks": { "pre": ["Subir túnel"], "post": [], "cleanup": ["Parar túnel"] }
+}</pre>
+<h3>Herança por pasta</h3>
+<p>Comandos de <b>pastas ancestrais</b> aparecem como hooks disponíveis nas subpastas (marcados com <code>⤴ pasta</code>). Assim um utilitário na raiz serve a todos os comandos abaixo.</p>
+<h3>Condição de Execução</h3>
+<p>Um comando ou hook também pode ter uma <b>condição de execução</b> — uma guarda que decide se ele roda de verdade, baseada em comparar valores interpolados. Roda só se o token estiver ausente ou expirado:</p>
+<pre>{
+  "name": "Login",
+  "type": "shell",
+  "command": "gh auth login",
+  "execution_conditions": [
+    { "name": "Token ausente", "left": "{{TOKEN}}", "op": "not_exists" },
+    { "name": "Token expirado", "left": "{{EXPIRES_AT}}", "op": "lt", "right": "{{$timestamp}}" }
+  ],
+  "condition_combinator": "or"
+}</pre>
+<p>Operadores: <code>exists</code>, <code>not_exists</code>, <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>ge</code>, <code>lt</code>, <code>le</code>, <code>contains</code>, <code>not_contains</code>. Combine várias condições com <b>E</b> ou <b>OU</b>. Quando a condição não passa, escolha entre pular silenciosamente (ainda conta como sucesso) ou falhar de verdade.</p>

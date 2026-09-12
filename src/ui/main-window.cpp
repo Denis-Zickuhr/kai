@@ -343,14 +343,40 @@ void MainWindow::setupUi()
         // Guarda o resultado estruturado para reaplicar ao reselecionar o
         // comando (Headers/JSON não somem ao trocar de aba/comando).
         m_lastHttpResult.insert(commandId, result);
+        // Um resultado de verdade chegou: a marca de "pulado" de uma
+        // rodada anterior não vale mais (ver m_skippedReason).
+        m_skippedReason.remove(commandId);
         if (m_connectedTerminalCommandId == commandId) {
+            m_terminalDrawer->setSkipped(false);
             m_terminalDrawer->setHttpResult(result);
-            m_terminalDrawer->setEnvironment(m_envManager.resolvedEnv());
         }
         if (m_terminalDrawer->hasDetachedWindow()
             && m_terminalDrawer->detachedCommandId() == commandId) {
             m_terminalDrawer->setDetachedHttpResult(result);
-            m_terminalDrawer->setDetachedEnvironment(m_envManager.resolvedEnv());
+        }
+    });
+    // Comando HTTP pulado por Execution Condition (ver
+    // ExecutionPipeline::commandSkippedByCondition) — badge âmbar "Pulado"
+    // + painel "Requisição não executada" em vez do resultado em cache de
+    // uma execução anterior (bug relatado: parecia sucesso de verdade).
+    connect(m_pipeline, &engine::ExecutionPipeline::commandSkippedByCondition, this,
+            [this](const QString &commandId, const QString &reasonLabel) {
+        m_skippedReason.insert(commandId, reasonLabel);
+        if (m_connectedTerminalCommandId == commandId) {
+            m_terminalDrawer->setSkipped(true, reasonLabel);
+            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Skipped);
+        }
+    });
+    // EnvExtractor::persist == true (feedback do usuário: refresh token/API
+    // key não deveria exigir reautenticar a cada boot) — grava write-through
+    // em dynamic-vars.json. Arquivo pequeno e evento raro (só extractors
+    // marcados persist), então regravar tudo a cada chamada é seguro/simples.
+    connect(m_pipeline, &engine::ExecutionPipeline::dynamicVarPersistRequested, this,
+            [this](const QString &scopeKey, const QString &name, const QString &value) {
+        QMap<QString, QMap<QString, QString>> all = m_configManager.loadPersistedDynamicVars();
+        all[scopeKey][name] = value;
+        if (!m_configManager.savePersistedDynamicVars(all)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Falha ao persistir variável dinâmica '%1'.").arg(name));
         }
     });
     connect(m_terminalDrawer, &TerminalDrawer::closeRequested, this, &MainWindow::handleTerminalCloseRequested);
@@ -1343,6 +1369,9 @@ void MainWindow::loadConfig()
     // As variáveis globais agora vêm do environment (pacote) ATIVO — o
     // globalEnvVars legado já foi migrado para um pacote no loadSettings.
     applyActiveEnvironment();
+    // Restaura dinâmicas marcadas EnvExtractor::persist == true na sessão
+    // anterior (dynamic-vars.json) — ANTES de qualquer comando poder rodar.
+    m_envManager.seedPersistedDynamicVars(m_configManager.loadPersistedDynamicVars());
 
     // Restaura o estado colapsado do terminal salvo na sessão anterior
     //. Como setExpanded emite expandedChanged (que persiste),
@@ -1371,16 +1400,9 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
 {
     m_connectedTerminalCommandId = commandId;
     m_terminalDrawer->setCurrentCommandId(commandId);
-    // LIMPA PRIMEIRO: reseta as abas (JSON/Headers/Envs) e a saída ANTES de
-    // repopular. Antes o clear() vinha DEPOIS do setEnvironment abaixo, então
-    // ele apagava a aba Envs recém-criada — as abas só apareciam certas na
-    // 2ª execução e não resetavam ao trocar de um comando de 4 abas para um
-    // de 1 (bugs relatados). Agora a ordem é: limpar -> popular.
+    // LIMPA PRIMEIRO: reseta as abas (JSON/Headers) e a saída ANTES de
+    // repopular. Agora a ordem é: limpar -> popular.
     m_terminalDrawer->clear();
-    // Aba Envs: variáveis EFETIVAS da execução (global -> environment ->
-    // pasta -> dinâmicas). Vale para shell também, não só HTTP — pedido do
-    // usuário ("envs vale pro terminal tbm").
-    m_terminalDrawer->setEnvironment(m_envManager.resolvedEnv());
     // Prompt "user@<caminho>": mostra o diretório de execução do comando
     // conectado (pedido do usuário). Cai para o diretório do projeto ativo
     // e, por fim, para o CWD, quando o comando não define um.
@@ -1444,7 +1466,13 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // elas sumiam ao trocar de aba/comando e voltar (relatado), pois só eram
     // populadas ao vivo. Vem DEPOIS do clear/appendRawText para reconstruir
     // as abas em cima do estado limpo.
-    if (m_lastHttpResult.contains(commandId)) {
+    // Última execução foi pulada por condição? Painel "não executada" em
+    // vez do resultado em cache (mesmo se existir um de uma rodada MAIS
+    // ANTIGA — a condição decidiu que esta rodada não representa mais o
+    // estado atual do comando).
+    if (m_skippedReason.contains(commandId)) {
+        m_terminalDrawer->setSkipped(true, m_skippedReason.value(commandId));
+    } else if (m_lastHttpResult.contains(commandId)) {
         m_terminalDrawer->setHttpResult(m_lastHttpResult.value(commandId));
     }
 
@@ -1477,8 +1505,14 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // que já concluiu).
     if (runningInPipeline) {
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Running);
+    } else if (stillRunning) {
+        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Background);
+    } else if (m_skippedReason.contains(commandId)) {
+        // Última execução deste comando foi pulada por Execution Condition
+        // — badge âmbar, não o verde de sucesso (ver commandSkippedByCondition).
+        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Skipped);
     } else {
-        m_terminalDrawer->setExecutionStatus(stillRunning ? ExecutionStatus::Background : ExecutionStatus::Success);
+        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Success);
     }
 }
 
@@ -2096,6 +2130,19 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
             }
         }
         m_envManager.setFolderVars(mergedVars);
+
+        // Escopo das variáveis DINÂMICAS (ver EnvironmentManager::
+        // setDynamicVarScope): a pasta-projeto (Folder::isProject) MAIS
+        // PRÓXIMA na MESMA cadeia já montada acima — folha primeiro, então
+        // percorre de trás pra frente. Nenhum ancestral marcado -> Global.
+        QString dynamicScope;
+        for (auto it = chain.crbegin(); it != chain.crend(); ++it) {
+            if (it->isProject) {
+                dynamicScope = it->id;
+                break;
+            }
+        }
+        m_envManager.setDynamicVarScope(dynamicScope);
     }
 
     // Parâmetros do formulário têm a precedência mais alta.
@@ -2248,10 +2295,6 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
     if (m_connectedTerminalCommandId.isEmpty()) {
         m_connectedTerminalCommandId = commandId;
     m_terminalDrawer->setCurrentCommandId(commandId);
-    // Aba Envs: variáveis EFETIVAS da execução (global -> environment ->
-    // pasta -> dinâmicas). Vale para shell também, não só HTTP — pedido do
-    // usuário ("envs vale pro terminal tbm").
-    m_terminalDrawer->setEnvironment(m_envManager.resolvedEnv());
     // Prompt "user@<caminho>": mostra o diretório de execução do comando
     // conectado (pedido do usuário). Cai para o diretório do projeto ativo
     // e, por fim, para o CWD, quando o comando não define um.
@@ -2927,6 +2970,28 @@ void MainWindow::handleImportProjectRequested()
         importResult.folder.parentId = parentFolderId;
     }
 
+    // ID ÚNICO da pasta-raiz importada (bug relatado: 2 pastas com o MESMO
+    // NOME geravam o MESMO id, colidindo em qualquer lookup por id e
+    // fazendo uma "carregar" o conteúdo da outra — ver uniqueFolderId).
+    // Reimportar um projeto cujo nome já existe como pasta é exatamente
+    // esse caso. Subpastas/comandos referenciam o id ANTIGO da raiz
+    // (gerado dentro de ProjectSelector), então o troco é remapeado aqui.
+    const QString oldRootId = importResult.folder.id;
+    const QString newRootId = uniqueFolderId(oldRootId);
+    if (newRootId != oldRootId) {
+        importResult.folder.id = newRootId;
+        for (core::Folder &sub : importResult.subFolders) {
+            if (sub.parentId == oldRootId) {
+                sub.parentId = newRootId;
+            }
+        }
+        for (core::Command &command : importResult.commands) {
+            if (command.folderId == oldRootId) {
+                command.folderId = newRootId;
+            }
+        }
+    }
+
     m_commandsData.folders << importResult.folder;
     // Subpastas do projeto (feedback do usuário: organizar em várias pastas
     // — suporte base a pastas em projetos). Cada "folder" declarado no
@@ -3083,21 +3148,7 @@ void MainWindow::handleImportOpenApiRequested()
     // Cria uma pasta com o título da API e um comando HTTP por endpoint.
     core::Folder folder;
     folder.name = parsed.apiTitle;
-    folder.id = FolderEditorDialog::generateFolderId(parsed.apiTitle);
-    // Garante id de pasta único.
-    {
-        QString baseId = folder.id;
-        int suffix = 2;
-        auto exists = [this](const QString &fid) {
-            for (const core::Folder &f : m_commandsData.folders) {
-                if (f.id == fid) return true;
-            }
-            return false;
-        };
-        while (exists(folder.id)) {
-            folder.id = baseId + QStringLiteral("_%1").arg(suffix++);
-        }
-    }
+    folder.id = uniqueFolderId(FolderEditorDialog::generateFolderId(parsed.apiTitle));
     m_commandsData.folders.append(folder);
 
     QSet<QString> usedIds;
@@ -3292,6 +3343,29 @@ QString MainWindow::resolveTargetFolderId() const
     return QString();
 }
 
+QString MainWindow::uniqueFolderId(const QString &candidate) const
+{
+    auto idExists = [this](const QString &id) {
+        for (const core::Folder &f : m_commandsData.folders) {
+            if (f.id == id) return true;
+        }
+        return false;
+    };
+    if (!idExists(candidate)) {
+        return candidate;
+    }
+    int n = 2;
+    QString unique = QStringLiteral("%1_%2").arg(candidate).arg(n);
+    while (idExists(unique)) {
+        ++n;
+        unique = QStringLiteral("%1_%2").arg(candidate).arg(n);
+    }
+    utils::Logger::warning(kLogTag,
+        QStringLiteral("ID de pasta '%1' já existe; usando '%2' para evitar colisão.")
+            .arg(candidate, unique));
+    return unique;
+}
+
 void MainWindow::handleNewFolderRequested()
 {
     // Pré-preenche a pasta pai sugerida com base na seleção/aba atual
@@ -3309,6 +3383,7 @@ void MainWindow::handleNewFolderRequested()
         QMessageBox::warning(this, utils::tr(QStringLiteral("folder.title.new")), utils::tr(QStringLiteral("mainwindow.folder.name_required")));
         return;
     }
+    folder.id = uniqueFolderId(folder.id);
 
     m_commandsData.folders << folder;
     persistCommands();
@@ -3338,6 +3413,7 @@ void MainWindow::handleNewCommandRequested()
             QMessageBox::warning(this, utils::tr(QStringLiteral("folder.title.new")), utils::tr(QStringLiteral("mainwindow.folder.name_required")));
             return;
         }
+        newFolder.id = uniqueFolderId(newFolder.id);
 
         m_commandsData.folders << newFolder;
         persistCommands();
@@ -3387,6 +3463,7 @@ void MainWindow::handleNewCommandRequested()
                                        hasDraft ? &draft : nullptr, settings.terminalProfiles,
                                        m_commandsData.commands);
             dialog.setAvailableCollections(m_collections);
+            dialog.setAvailableDynamicVarNames(availableDynamicVarNames());
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
             }
@@ -3539,6 +3616,7 @@ void MainWindow::handleEditRequested(const QString &itemId, bool isFolder)
                                        m_commandsData.folders, this, &working, settings.terminalProfiles,
                                        m_commandsData.commands);
             dialog.setAvailableCollections(m_collections);
+            dialog.setAvailableDynamicVarNames(availableDynamicVarNames());
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
             }
@@ -4228,10 +4306,24 @@ void MainWindow::handleEnvironmentSelected(const QString &environmentId)
         QStringLiteral("Environment ativo alterado para '%1'.").arg(environmentId));
 }
 
+QStringList MainWindow::availableDynamicVarNames() const
+{
+    QStringList names;
+    const QMap<QString, QMap<QString, QString>> all = m_envManager.allDynamicVars();
+    for (auto scopeIt = all.constBegin(); scopeIt != all.constEnd(); ++scopeIt) {
+        names += scopeIt.value().keys();
+    }
+    names.removeDuplicates();
+    return names;
+}
+
 void MainWindow::handleManageEnvironmentsRequested()
 {
     core::SettingsData settings = m_configManager.loadSettings();
-    EnvironmentManagerDialog dialog(settings.environments, settings.activeEnvironmentId, this);
+    EnvironmentManagerDialog dialog(settings.environments, settings.activeEnvironmentId, this,
+        &m_envManager, m_commandsData.folders,
+        [this]() { return m_configManager.loadPersistedDynamicVars(); },
+        [this](const QMap<QString, QMap<QString, QString>> &data) { return m_configManager.savePersistedDynamicVars(data); });
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }

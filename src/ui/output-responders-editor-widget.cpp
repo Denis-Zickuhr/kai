@@ -60,6 +60,11 @@ void OutputRespondersEditorWidget::setupUi()
 
 void OutputRespondersEditorWidget::rebuildTable()
 {
+    // ZERA antes de repopular — ver comentário equivalente em
+    // ParameterEditorWidget::rebuildTable (causa real do ícone fantasma:
+    // setCellWidget não solta de vez o widget antigo quando a contagem de
+    // linhas não muda entre chamadas).
+    m_table->setRowCount(0);
     m_table->setRowCount(m_responders.size());
     for (int row = 0; row < m_responders.size(); ++row) {
         const core::OutputResponder &r = m_responders.at(row);

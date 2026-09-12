@@ -129,7 +129,11 @@ private slots:
         ProjectSelector selector;
         const ProjectImportResult result = selector.importFromDirectory(directory.path());
         QVERIFY(result.success);
-        QVERIFY(!result.folder.isProject);
+        // Todo projeto importado já nasce marcado como projeto (fronteira de
+        // escopo de variáveis dinâmicas) — não afeta a renderização da aba,
+        // que continua uma aba normal (ver EnvironmentManager::
+        // setDynamicVarScope e o teste abaixo com isProject=true manual).
+        QVERIFY(result.folder.isProject);
         QCOMPARE(result.folder.projectPath.value(), directory.path());
         QCOMPARE(result.commands.size(), 1);
     }

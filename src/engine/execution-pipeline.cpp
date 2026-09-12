@@ -627,25 +627,40 @@ ExecutionPipeline::ConditionEvalResult ExecutionPipeline::evaluateConditions(con
     }
     const bool isAnd = command.conditionCombinator != QStringLiteral("or");
     if (isAnd) {
-        // E: a PRIMEIRA condição que falhar já é a responsável pelo pulo —
-        // as demais nem precisam ser avaliadas.
+        // E: a PRIMEIRA condição HABILITADA que falhar já é a responsável
+        // pelo pulo — as demais nem precisam ser avaliadas. Uma condição
+        // desabilitada (ExecutionCondition::enabled == false — feedback do
+        // usuário: "a flag de habilitar/desabilitar era por condição, não
+        // pelo total") é IGNORADA, como se não estivesse na lista.
         for (const core::ExecutionCondition &c : command.executionConditions) {
+            if (!c.enabled) {
+                continue;
+            }
             if (!m_envManager->evaluateCondition(c.left, c.op, c.right)) {
                 result.passed = false;
                 result.decidingConditionLabel = conditionLabel(c);
                 return result;
             }
         }
-        return result; // todas passaram
+        return result; // todas as habilitadas passaram (ou nenhuma estava habilitada)
     }
-    // OU: só falha se NENHUMA passar — a mensagem então lista todas (não dá
-    // pra apontar "a" responsável, já que o pulo é resultado do conjunto).
+    // OU: só falha se NENHUMA condição HABILITADA passar — a mensagem então
+    // lista todas as habilitadas (não dá pra apontar "a" responsável, já
+    // que o pulo é resultado do conjunto).
     QStringList labels;
+    bool anyEnabled = false;
     for (const core::ExecutionCondition &c : command.executionConditions) {
+        if (!c.enabled) {
+            continue;
+        }
+        anyEnabled = true;
         if (m_envManager->evaluateCondition(c.left, c.op, c.right)) {
             return result; // passed = true
         }
         labels << conditionLabel(c);
+    }
+    if (!anyEnabled) {
+        return result; // nenhuma condição habilitada = sem guarda, sempre roda
     }
     result.passed = false;
     result.decidingConditionLabel = labels.join(QStringLiteral(", "));
@@ -671,6 +686,13 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
             onDone(false, utils::tr(QStringLiteral("execution_pipeline.condition_failed"))
                 .arg(commandLabel, conditionResult.decidingConditionLabel));
         } else {
+            // "success" (padrão): sem isto a UI não tinha como distinguir
+            // isto de uma execução real — via httpResultReady (ver
+            // comentário do sinal) só pra HTTP, que é quem tem abas
+            // Resposta/Headers/Request que ficavam com dado velho em cache.
+            if (command.type == core::CommandType::Http) {
+                emit commandSkippedByCondition(command.id, conditionResult.decidingConditionLabel);
+            }
             onDone(true, QString());
         }
         return;
@@ -688,6 +710,10 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
 
         connect(rawRunner, &HttpRunner::logMessage, this, [this, id = command.id](const QString &text, bool isError) {
             emit logMessage(id, text, isError);
+        });
+        connect(rawRunner, &HttpRunner::dynamicVarPersistRequested, this,
+            [this](const QString &scopeKey, const QString &name, const QString &value) {
+            emit dynamicVarPersistRequested(scopeKey, name, value);
         });
 
         connect(rawRunner, &HttpRunner::finished, this,

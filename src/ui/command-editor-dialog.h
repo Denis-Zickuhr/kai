@@ -25,6 +25,7 @@ class ParameterEditorWidget;
 class OutputRespondersEditorWidget;
 class HooksEditorWidget;
 class ExecutionConditionsEditorWidget;
+class EnvExtractorsEditorWidget;
 class IconPickerWidget;
 class CollapsibleSectionCard;
 
@@ -63,6 +64,13 @@ public:
     // Coleções disponíveis para ligar a parâmetros Select (fonte de dados).
     // Deve ser chamada logo após construir o diálogo (antes de exec()).
     void setAvailableCollections(const QVector<core::Collection> &collections);
+
+    // Nomes das variáveis DINÂMICAS atualmente capturadas (qualquer escopo —
+    // feedback do usuário: "adicione ENVS temporárias na interpolação do
+    // autocomplete") — entram na mesma listinha de {{var}} dos campos que
+    // suportam interpolação neste diálogo. Chamar logo após construir
+    // (antes de exec()), mesmo padrão de setAvailableCollections.
+    void setAvailableDynamicVarNames(const QStringList &names) { m_availableDynamicVarNames = names; }
 
     // Item 8 (toggle simples<->avançado): true quando o usuário clicou no
     // botão "Modo avançado" no topo. O chamador (MainWindow), ao ver isto
@@ -153,6 +161,7 @@ private:
     // escondido em modo HTTP (ver setExecutionMode).
     QWidget *m_terminalProfileFieldWrapper = nullptr;
     ParameterEditorWidget *m_paramsEditor = nullptr;
+    QStringList m_availableDynamicVarNames; // ver setAvailableDynamicVarNames
     OutputRespondersEditorWidget *m_respondersEditor = nullptr;
     QCheckBox *m_autoRunField = nullptr;
     QSpinBox *m_autoRunDelayField = nullptr;
@@ -174,7 +183,7 @@ private:
     CollapsibleSectionCard *m_headersCard = nullptr;
     KeyValueEditorWidget *m_headersEditor = nullptr;
     CollapsibleSectionCard *m_extractorsCard = nullptr;
-    KeyValueEditorWidget *m_envExtractorsEditor = nullptr; // json_path -> env_var
+    EnvExtractorsEditorWidget *m_envExtractorsEditor = nullptr;
 };
 
 } // namespace kai::ui

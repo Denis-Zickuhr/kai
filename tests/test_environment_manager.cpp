@@ -2,8 +2,10 @@
 #include <QTest>
 #include <QMap>
 #include <QString>
+#include <QJsonObject>
 
 #include "core/environment-manager.h"
+#include "core/models.h"
 
 using namespace kai::core;
 
@@ -30,7 +32,7 @@ private slots:
         EnvironmentManager env;
         env.setGlobalVars({{"TOKEN", "global-token"}});
         env.setFolderVars({{"TOKEN", "folder-token"}});
-        env.setDynamicVars({{"TOKEN", "dynamic-token"}});
+        env.setDynamicVar("TOKEN", "dynamic-token");
 
         QCOMPARE(env.value("TOKEN"), QStringLiteral("dynamic-token"));
     }
@@ -40,7 +42,7 @@ private slots:
         EnvironmentManager env;
         env.setGlobalVars({{"ENV_TARGET", "global"}});
         env.setFolderVars({{"ENV_TARGET", "folder"}});
-        env.setDynamicVars({{"ENV_TARGET", "dynamic"}});
+        env.setDynamicVar("ENV_TARGET", "dynamic");
         env.setParamVars({{"ENV_TARGET", "param"}});
 
         QCOMPARE(env.value("ENV_TARGET"), QStringLiteral("param"));
@@ -77,6 +79,124 @@ private slots:
 
         const QString output = env.interpolate(QStringLiteral("Bearer Token: {{AUTH_TOKEN}}"));
         QCOMPARE(output, QStringLiteral("Bearer Token: secret_jwt_xyz123"));
+    }
+
+    // Escopo por pasta-projeto (Folder::isProject): dois projetos usando o
+    // MESMO nome de variável dinâmica não podem se sobrescrever.
+    void dynamicVarsAreIsolatedPerScope()
+    {
+        EnvironmentManager env;
+        env.setDynamicVarScope("project-a");
+        env.setDynamicVar("TOKEN", "token-a");
+        env.setDynamicVarScope("project-b");
+        env.setDynamicVar("TOKEN", "token-b");
+
+        env.setDynamicVarScope("project-a");
+        QCOMPARE(env.value("TOKEN"), QStringLiteral("token-a"));
+        env.setDynamicVarScope("project-b");
+        QCOMPARE(env.value("TOKEN"), QStringLiteral("token-b"));
+
+        // Escopo Global ("") não vê NENHUM dos dois — escopos não herdam
+        // entre si (feedback do usuário: evitar ambiguidade).
+        env.setDynamicVarScope(QString());
+        QVERIFY(!env.contains("TOKEN"));
+    }
+
+    void clearDynamicVarsOnlyAffectsThatScope()
+    {
+        EnvironmentManager env;
+        env.setDynamicVarScope("project-a");
+        env.setDynamicVar("TOKEN", "token-a");
+        env.setDynamicVarScope("project-b");
+        env.setDynamicVar("TOKEN", "token-b");
+
+        env.clearDynamicVars("project-a");
+
+        env.setDynamicVarScope("project-a");
+        QVERIFY(!env.contains("TOKEN"));
+        env.setDynamicVarScope("project-b");
+        QCOMPARE(env.value("TOKEN"), QStringLiteral("token-b"));
+    }
+
+    void clearAllDynamicVarsWipesEveryScope()
+    {
+        EnvironmentManager env;
+        env.setDynamicVarScope("project-a");
+        env.setDynamicVar("TOKEN", "token-a");
+        env.setDynamicVarScope(QString());
+        env.setDynamicVar("GLOBAL_TOKEN", "g");
+
+        env.clearAllDynamicVars();
+
+        QVERIFY(env.allDynamicVars().isEmpty());
+        env.setDynamicVarScope("project-a");
+        QVERIFY(!env.contains("TOKEN"));
+    }
+
+    void allDynamicVarsListsEveryScopeForInspection()
+    {
+        EnvironmentManager env;
+        env.setDynamicVarScope("project-a");
+        env.setDynamicVar("TOKEN", "token-a");
+        env.setDynamicVarScope(QString());
+        env.setDynamicVar("GLOBAL_TOKEN", "g");
+
+        const QMap<QString, QMap<QString, QString>> all = env.allDynamicVars();
+        QCOMPARE(all.value("project-a").value("TOKEN"), QStringLiteral("token-a"));
+        QCOMPARE(all.value(QString()).value("GLOBAL_TOKEN"), QStringLiteral("g"));
+    }
+
+    // EnvExtractor::persist (feedback do usuário: refresh token/API key não
+    // deveria exigir reautenticar a cada boot) — round-trip JSON.
+    void envExtractorPersistRoundTripsThroughJson()
+    {
+        EnvExtractor e;
+        e.jsonPath = "data.token";
+        e.envVar = "AUTH_TOKEN";
+        e.persist = true;
+        const EnvExtractor back = EnvExtractor::fromJson(e.toJson());
+        QCOMPARE(back.jsonPath, e.jsonPath);
+        QCOMPARE(back.envVar, e.envVar);
+        QCOMPARE(back.persist, true);
+    }
+
+    // ExecutionCondition::enabled — round-trip JSON e default true pra
+    // kai.json antigos sem o campo (feedback do usuário: toggle por linha).
+    void executionConditionEnabledRoundTripsThroughJson()
+    {
+        ExecutionCondition c;
+        c.left = "{{TOKEN}}";
+        c.op = "exists";
+        c.enabled = false;
+        const ExecutionCondition back = ExecutionCondition::fromJson(c.toJson());
+        QCOMPARE(back.enabled, false);
+
+        QJsonObject legacy;
+        legacy["left"] = "{{TOKEN}}";
+        legacy["op"] = "exists";
+        const ExecutionCondition fromLegacy = ExecutionCondition::fromJson(legacy);
+        QCOMPARE(fromLegacy.enabled, true);
+    }
+
+    // kai.json antigos (sem o campo "persist") continuam efêmeros.
+    void envExtractorPersistDefaultsFalseWhenMissingFromJson()
+    {
+        QJsonObject obj;
+        obj["json_path"] = "data.token";
+        obj["env_var"] = "AUTH_TOKEN";
+        const EnvExtractor e = EnvExtractor::fromJson(obj);
+        QCOMPARE(e.persist, false);
+    }
+
+    void seedPersistedDynamicVarsRestoresAtBoot()
+    {
+        EnvironmentManager env;
+        QMap<QString, QMap<QString, QString>> persisted;
+        persisted["project-a"] = {{"REFRESH_TOKEN", "restored-value"}};
+        env.seedPersistedDynamicVars(persisted);
+
+        env.setDynamicVarScope("project-a");
+        QCOMPARE(env.value("REFRESH_TOKEN"), QStringLiteral("restored-value"));
     }
 
     // Coleções como parâmetro: o replace aceita nomes com ponto,

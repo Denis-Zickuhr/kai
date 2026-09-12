@@ -75,9 +75,12 @@ private slots:
         for (QToolButton *b : editor.findChildren<QToolButton *>()) {
             QVERIFY2(table->isAncestorOf(b), "não deveria haver botões fora da tabela");
         }
-        // A última coluna da linha (ações) tem um cell widget com pelo
-        // menos 2 ícones (lápis + lixeira).
-        QWidget *actionsCell = table->cellWidget(0, table->columnCount() - 1);
+        // Coluna de Ações (índice 1 — logo após Nome, ADJACENTE de
+        // propósito: ver comentário de kColActions em
+        // parameter-editor-widget.cpp sobre o bug do "fantasma" visual
+        // quando havia colunas ocultas entre Nome e Ações) tem um cell
+        // widget com pelo menos 2 ícones (lápis + lixeira).
+        QWidget *actionsCell = table->cellWidget(0, 1);
         QVERIFY(actionsCell != nullptr);
         QCOMPARE(actionsCell->findChildren<QToolButton *>().size(), 2);
         // Round-trip do modelo preserva o parâmetro.

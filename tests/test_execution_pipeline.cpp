@@ -879,6 +879,85 @@ private slots:
     // executionConditions): "not_exists" numa var vazia barra o comando
     // principal — nunca deve rodar de verdade — e (skip_behavior=success,
     // o padrão) o pipeline ainda termina com sucesso.
+    // executionConditionsEnabled = false (feedback do usuário: "adicione
+    // uma flag pra desabilitar as condições") — a guarda configurada é
+    // IGNORADA por completo, comando roda como se não tivesse condição
+    // nenhuma, sem precisar apagar a lista configurada.
+    // ExecutionCondition::enabled = false (feedback do usuário: "a flag de
+    // habilitar/desabilitar era por condição, não pelo total") — a linha
+    // desabilitada é IGNORADA, como se não estivesse na lista, mesmo que
+    // ela sozinha bloquearia o comando se estivesse ligada.
+    void disabledConditionIsIgnoredEvenIfItWouldFail()
+    {
+        Command main;
+        main.id = "guarded_disabled";
+        main.type = CommandType::Shell;
+        main.command = "echo DEVERIA_RODAR";
+        ExecutionCondition blocked;
+        blocked.left = "{{TOKEN}}";
+        blocked.op = "exists";
+        blocked.enabled = false;
+        main.executionConditions = {blocked};
+
+        QMap<QString, Command> allCommands;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env; // TOKEN nunca definido -> bloquearia se a condição estivesse ligada
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+
+        bool mainCommandRan = false;
+        for (const QList<QVariant> &call : logSpy) {
+            if (call.at(1).toString().contains(QStringLiteral("DEVERIA_RODAR"))) {
+                mainCommandRan = true;
+            }
+        }
+        QVERIFY(mainCommandRan);
+    }
+
+    // Uma condição desabilitada NÃO conta pro combinador E: a habilitada
+    // continua valendo normalmente.
+    void disabledConditionDoesNotCountTowardAndCombinator()
+    {
+        Command main;
+        main.id = "guarded_mixed";
+        main.type = CommandType::Shell;
+        main.command = "echo NAO_DEVERIA_RODAR";
+        ExecutionCondition disabled;
+        disabled.left = "1";
+        disabled.op = "exists"; // passaria, mas está desligada — irrelevante
+        disabled.enabled = false;
+        ExecutionCondition activeBlocking;
+        activeBlocking.left = "{{TOKEN}}";
+        activeBlocking.op = "exists"; // TOKEN não existe -> bloqueia de verdade
+        main.executionConditions = {disabled, activeBlocking};
+
+        QMap<QString, Command> allCommands;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        if (finishedSpy.isEmpty()) {
+            QVERIFY(finishedSpy.wait(5000));
+        }
+
+        bool mainCommandRan = false;
+        for (const QList<QVariant> &call : logSpy) {
+            if (call.at(1).toString().contains(QStringLiteral("NAO_DEVERIA_RODAR"))) {
+                mainCommandRan = true;
+            }
+        }
+        QVERIFY(!mainCommandRan);
+    }
+
     void executionConditionSkipsMainCommandAsSuccessByDefault()
     {
         Command main;
@@ -916,6 +995,87 @@ private slots:
             }
         }
         QVERIFY(!mainCommandRan);
+    }
+
+    // commandSkippedByCondition (feedback do usuário: "perco o feedback
+    // visual que isso ocorreu, e perco acesso as abas gerais do comando" —
+    // só pra HTTP, que é quem tem abas Resposta/Headers ficando com dado
+    // velho em cache; Shell não emite este sinal).
+    void commandSkippedByConditionEmittedOnlyForHttpWithSuccessSkip()
+    {
+        Command httpCmd;
+        httpCmd.id = "guarded_http";
+        httpCmd.type = CommandType::Http;
+        httpCmd.executionConditions = {ExecutionCondition{"Token ausente", "{{TOKEN}}", "exists", QString()}};
+
+        QMap<QString, Command> allCommands;
+        allCommands[httpCmd.id] = httpCmd;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy skippedSpy(&pipeline, &ExecutionPipeline::commandSkippedByCondition);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(httpCmd, allCommands, env);
+        if (finishedSpy.isEmpty()) {
+            QVERIFY(finishedSpy.wait(5000));
+        }
+
+        QCOMPARE(skippedSpy.count(), 1);
+        QCOMPARE(skippedSpy.at(0).at(0).toString(), QStringLiteral("guarded_http"));
+        QCOMPARE(skippedSpy.at(0).at(1).toString(), QStringLiteral("Token ausente"));
+    }
+
+    void commandSkippedByConditionNotEmittedForShell()
+    {
+        Command shellCmd;
+        shellCmd.id = "guarded_shell";
+        shellCmd.type = CommandType::Shell;
+        shellCmd.command = "echo NAO_DEVERIA_RODAR";
+        shellCmd.executionConditions = {ExecutionCondition{QString(), "{{TOKEN}}", "exists", QString()}};
+
+        QMap<QString, Command> allCommands;
+        allCommands[shellCmd.id] = shellCmd;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy skippedSpy(&pipeline, &ExecutionPipeline::commandSkippedByCondition);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(shellCmd, allCommands, env);
+        if (finishedSpy.isEmpty()) {
+            QVERIFY(finishedSpy.wait(5000));
+        }
+
+        QCOMPARE(skippedSpy.count(), 0);
+    }
+
+    // conditionSkipBehavior="failure": não é o caso ambíguo (já vira erro
+    // de verdade, com sua própria UI de falha) — sem o sinal de "pulado".
+    void commandSkippedByConditionNotEmittedWhenSkipBehaviorIsFailure()
+    {
+        Command httpCmd;
+        httpCmd.id = "guarded_http_fail";
+        httpCmd.type = CommandType::Http;
+        httpCmd.executionConditions = {ExecutionCondition{QString(), "{{TOKEN}}", "exists", QString()}};
+        httpCmd.conditionSkipBehavior = "failure";
+
+        QMap<QString, Command> allCommands;
+        allCommands[httpCmd.id] = httpCmd;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy skippedSpy(&pipeline, &ExecutionPipeline::commandSkippedByCondition);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(httpCmd, allCommands, env);
+        if (finishedSpy.isEmpty()) {
+            QVERIFY(finishedSpy.wait(5000));
+        }
+
+        QCOMPARE(skippedSpy.count(), 0);
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
     }
 
     // NOME da condição (pedido do usuário: "a msg de erro ou PULO deve

@@ -10,7 +10,7 @@
 !endif
 
 !define APPNAME "Kai"
-!define APPVERSION "0.0.2-beta"
+!define APPVERSION "1.0.0"
 !define PUBLISHER "Kai"
 
 Unicode true
@@ -33,10 +33,10 @@ OutFile "${KAIOUT}\kai-setup.exe"
 ; são um perfil clássico de falso positivo no Windows Defender (o stub é o
 ; mesmo usado por muito software indesejado, então a reputação do arquivo pesa).
 ; Declarar produto, versão, empresa e descrição reduz o escore heurístico.
-VIProductVersion "0.0.2.0"
+VIProductVersion "1.0.0.0"
 VIAddVersionKey /LANG=1033 "ProductName"     "${APPNAME}"
-VIAddVersionKey /LANG=1033 "ProductVersion"  "0.0.2.0"
-VIAddVersionKey /LANG=1033 "FileVersion"     "0.0.2.0"
+VIAddVersionKey /LANG=1033 "ProductVersion"  "1.0.0.0"
+VIAddVersionKey /LANG=1033 "FileVersion"     "1.0.0.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Instalador do Kai - developer command runner"
 VIAddVersionKey /LANG=1033 "CompanyName"     "Kai"
 VIAddVersionKey /LANG=1033 "LegalCopyright"  "Copyright (C) 2026"

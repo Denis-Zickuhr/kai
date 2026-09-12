@@ -149,14 +149,14 @@
       "name": "Ver release atual (assets publicados)",
       "folder": "Release",
       "type": "shell",
-      "command": "gh release view v0.0.2-beta --json tagName,assets",
+      "command": "gh release view v1.0.0 --json tagName,assets",
       "working_dir": "{{PROJECT_PATH}}"
     },
     {
       "name": "Publicar artefatos na release (substitui os atuais)",
       "folder": "Release",
       "type": "shell",
-      "command": "gh release upload v0.0.2-beta dist/kai-0.0.2-beta-linux-x86_64.AppImage dist/kai-0.0.2-beta-setup.exe dist/kai-0.0.2-beta-windows-x86_64.zip --clobber",
+      "command": "gh release upload v1.0.0 dist/kai-1.0.0-linux-x86_64.AppImage dist/kai-1.0.0-setup.exe dist/kai-1.0.0-windows-x86_64.zip --clobber",
       "working_dir": "{{PROJECT_PATH}}"
     }
   ]

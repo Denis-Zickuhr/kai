@@ -55,7 +55,8 @@ public:
 private:
     void setupUi(const QVector<core::Parameter> &params);
     void handleBrowseFileClicked(QLineEdit *targetField, const QString &initialDir = QString(),
-                                 const QString &pathFormat = QStringLiteral("native"));
+                                 const QString &pathFormat = QStringLiteral("native"),
+                                 bool pickFolder = false);
 
     QVector<core::Parameter> m_params;
     QMap<QString, QString> m_lastValues;

@@ -1,0 +1,189 @@
+#include "ui/env-extractors-editor-widget.h"
+
+#include "ui/table-utils.h"
+#include "ui/dialog-utils.h"
+#include "utils/design-tokens.h"
+#include "utils/translation-manager.h"
+
+#include <QVBoxLayout>
+#include <QFormLayout>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QHeaderView>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QAbstractItemView>
+
+namespace kai::ui {
+namespace tk = utils::tokens;
+
+namespace {
+// Tabela SOMENTE-LEITURA. 0=Resumo ("json.path -> ENV_VAR", com um cadeado
+// no final se persist==true), 1=Ações (lápis/lixeira inline).
+constexpr int kColSummary = 0;
+constexpr int kColActions = 1;
+constexpr int kColumnCount = 2;
+} // namespace
+
+EnvExtractorsEditorWidget::EnvExtractorsEditorWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    setupUi();
+}
+
+void EnvExtractorsEditorWidget::setupUi()
+{
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(tk::space(2));
+
+    m_table = new QTableWidget(0, kColumnCount, this);
+    configureTable(m_table, {
+        {utils::tr(QStringLiteral("env_extractor.col.summary")), 320, true},
+        {QString(), rowActionsColumnWidth(), false},
+    });
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->horizontalHeader()->setVisible(false);
+    // stretchLastSection (ligado por configureTable) + Stretch explícito
+    // aqui competiam pelo espaço sobrando noutro widget irmão
+    // (ParameterEditorWidget — bug confirmado com screenshot: a coluna de
+    // Ações ficava com metade da largura). Desligando por precaução, ainda
+    // que aqui não tenha se manifestado visivelmente.
+    m_table->horizontalHeader()->setStretchLastSection(false);
+    m_table->horizontalHeader()->setSectionResizeMode(kColSummary, QHeaderView::Stretch);
+    connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (row >= 0 && row < m_extractors.size() && editRowViaForm(row)) {
+            rebuildTable();
+        }
+    });
+    layout->addWidget(m_table);
+}
+
+void EnvExtractorsEditorWidget::rebuildTable()
+{
+    // ZERA antes de repopular — ver comentário equivalente em
+    // ParameterEditorWidget::rebuildTable (causa real do ícone fantasma:
+    // setCellWidget não solta de vez o widget antigo quando a contagem de
+    // linhas não muda entre chamadas).
+    m_table->setRowCount(0);
+    m_table->setRowCount(m_extractors.size());
+    for (int row = 0; row < m_extractors.size(); ++row) {
+        const core::EnvExtractor &e = m_extractors.at(row);
+        auto *item = new QTableWidgetItem(summaryFor(e));
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        m_table->setItem(row, kColSummary, item);
+
+        m_table->setCellWidget(row, kColActions, makeRowActionsCell(m_table,
+            [this, row]() { if (editRowViaForm(row)) rebuildTable(); },
+            [this, row]() { removeExtractorAt(row); }));
+    }
+    emit changed();
+}
+
+QString EnvExtractorsEditorWidget::summaryFor(const core::EnvExtractor &e) const
+{
+    // NOME (feedback do usuário: "adicionar nome para os extratores, eg:
+    // extrai token") — identifica a linha melhor que o resumo bruto quando
+    // há vários extractors. Sem nome, cai no resumo automático de sempre.
+    const QString base = e.name.trimmed().isEmpty()
+        ? QStringLiteral("%1  →  %2").arg(e.jsonPath, e.envVar)
+        : e.name;
+    // 🔒 sinaliza persistência entre sessões (feedback do usuário) — mesmo
+    // glifo usado noutros pontos do app pra "isto sobrevive a reiniciar".
+    return e.persist ? base + QStringLiteral("  🔒") : base;
+}
+
+void EnvExtractorsEditorWidget::removeExtractorAt(int row)
+{
+    if (row < 0 || row >= m_extractors.size()) {
+        return;
+    }
+    m_extractors.remove(row);
+    rebuildTable();
+}
+
+void EnvExtractorsEditorWidget::setExtractors(const QVector<core::EnvExtractor> &extractors)
+{
+    m_extractors = extractors;
+    rebuildTable();
+}
+
+void EnvExtractorsEditorWidget::handleAddRowClicked()
+{
+    m_extractors.append(core::EnvExtractor{});
+    const int row = m_extractors.size() - 1;
+    if (editRowViaForm(row)) {
+        rebuildTable();
+    } else {
+        m_extractors.remove(row);
+    }
+}
+
+bool EnvExtractorsEditorWidget::editRowViaForm(int row)
+{
+    if (row < 0 || row >= m_extractors.size()) {
+        return false;
+    }
+    const core::EnvExtractor &e = m_extractors.at(row);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(utils::tr(QStringLiteral("env_extractor.edit_row")));
+    dialog.setSizeGripEnabled(true);
+
+    auto *outer = new QVBoxLayout(&dialog);
+    outer->setContentsMargins(16, 16, 16, 12);
+    outer->setSpacing(10);
+
+    auto *form = new QFormLayout();
+    form->setSpacing(8);
+    outer->addLayout(form);
+
+    auto *nameField = new QLineEdit(e.name, &dialog);
+    nameField->setPlaceholderText(utils::tr(QStringLiteral("env_extractor.field.name.placeholder")));
+    form->addRow(utils::tr(QStringLiteral("env_extractor.field.name")), nameField);
+
+    auto *jsonPathField = new QLineEdit(e.jsonPath, &dialog);
+    jsonPathField->setPlaceholderText(utils::tr(QStringLiteral("env_extractor.field.json_path.placeholder")));
+    jsonPathField->setToolTip(utils::tr(QStringLiteral("env_extractor.field.json_path.tip")));
+    form->addRow(utils::tr(QStringLiteral("env_extractor.field.json_path")), jsonPathField);
+
+    auto *envVarField = new QLineEdit(e.envVar, &dialog);
+    envVarField->setPlaceholderText(utils::tr(QStringLiteral("env_extractor.field.env_var.placeholder")));
+    form->addRow(utils::tr(QStringLiteral("env_extractor.field.env_var")), envVarField);
+
+    // Persistir entre sessões (feedback do usuário): tokens de vida longa
+    // (refresh token, API key) não deveriam exigir reautenticar a cada boot
+    // do app — ao contrário de um token de sessão comum, que continua
+    // efêmero por padrão (checkbox desmarcado).
+    auto *persistField = new QCheckBox(utils::tr(QStringLiteral("env_extractor.field.persist")), &dialog);
+    persistField->setChecked(e.persist);
+    persistField->setToolTip(utils::tr(QStringLiteral("env_extractor.field.persist.tip")));
+    form->addRow(QString(), persistField);
+
+    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    stripDialogButtonIcons(box);
+    connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    outer->addWidget(box);
+
+    dialog.setMinimumWidth(420);
+    centerOnParent(&dialog);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    core::EnvExtractor updated;
+    updated.name = nameField->text().trimmed();
+    updated.jsonPath = jsonPathField->text().trimmed();
+    updated.envVar = envVarField->text().trimmed();
+    updated.persist = persistField->isChecked();
+    m_extractors[row] = updated;
+    return true;
+}
+
+} // namespace kai::ui

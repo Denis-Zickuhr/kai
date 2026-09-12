@@ -8,6 +8,7 @@
 #include "utils/translation-manager.h"
 
 #include <QSpinBox>
+#include <QCheckBox>
 #include <QGridLayout>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -55,30 +56,6 @@ QSet<QString> collectDescendantIds(const QVector<core::Folder> &allFolders, cons
     return descendants;
 }
 
-// Calcula a profundidade de uma pasta na hierarquia, seguindo parent_id
-// até chegar a uma pasta raiz (parent_id == null). Protegido contra ciclos
-// acidentais em dados corrompidos via limite de profundidade.
-int depthOf(const QVector<core::Folder> &allFolders, const QString &folderId)
-{
-    int depth = 0;
-    QString currentId = folderId;
-
-    for (int guard = 0; guard < 64; ++guard) {
-        const core::Folder *current = nullptr;
-        for (const core::Folder &f : allFolders) {
-            if (f.id == currentId) {
-                current = &f;
-                break;
-            }
-        }
-        if (!current || !current->parentId.has_value()) {
-            break;
-        }
-        currentId = current->parentId.value();
-        ++depth;
-    }
-    return depth;
-}
 }
 
 FolderEditorDialog::FolderEditorDialog(const QVector<core::Folder> &allFolders, QWidget *parent,
@@ -173,6 +150,7 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("command.field.icon")), m_iconPicker), 0, 1);
 
     m_parentField = new QComboBox(identityCard);
+    capComboBoxWidth(m_parentField);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("folder.field.parent")), m_parentField), 1, 0);
 
     // Campo "Ordem" (decisão do usuário: substitui o drag&drop de itens
@@ -194,6 +172,17 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     identityGrid->addWidget(wrapWithLabel(identityCard,
         utils::tr(QStringLiteral("profile.field.label")), m_profileField), 2, 0, 1, 2);
 
+    // "Marcar como projeto": fronteira de escopo das variáveis DINÂMICAS
+    // (extraídas por HTTP env_extractor / captura de env de hook) — a
+    // pasta-projeto mais PRÓXIMA na cadeia de um comando isola suas
+    // dinâmicas das de outros projetos (feedback do usuário: uma pasta
+    // "API/" com vários projetos dentro, cada extractor usando nomes como
+    // "TOKEN" sem colidir entre si).
+    m_isProjectField = new QCheckBox(utils::tr(QStringLiteral("folder.is_project")), identityCard);
+    m_isProjectField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_isProjectField->setToolTip(utils::tr(QStringLiteral("folder.is_project.tip")));
+    identityGrid->addWidget(m_isProjectField, 3, 0, 1, 2);
+
     mainLayout->addWidget(identityCard);
 
     m_existingId = existingFolder ? existingFolder->id : QString();
@@ -204,6 +193,7 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     if (existingFolder) {
         m_nameField->setText(existingFolder->name);
         m_iconPicker->setSelectedIconName(existingFolder->icon);
+        m_isProjectField->setChecked(existingFolder->isProject);
 
         const QString targetParentId = existingFolder->parentId.value_or(QString());
         for (int i = 0; i < m_parentField->count(); ++i) {
@@ -325,9 +315,7 @@ void FolderEditorDialog::populateParentCombo(const QVector<core::Folder> &allFol
         if (forbiddenIds.contains(folder.id)) {
             continue;
         }
-        const int depth = depthOf(allFolders, folder.id);
-        const QString indent = QString(QStringLiteral("    ")).repeated(depth);
-        m_parentField->addItem(indent + folder.name);
+        m_parentField->addItem(folderComboLabel(allFolders, folder.id));
         m_parentField->setItemData(m_parentField->count() - 1, folder.id, kParentIdRole);
     }
     makeSearchableCombo(m_parentField); // busca no seletor de pasta-pai
@@ -378,7 +366,7 @@ core::Folder FolderEditorDialog::buildFromForm() const
     const QString parentId = m_parentField->currentData(kParentIdRole).toString();
     folder.parentId = parentId.isEmpty() ? std::nullopt : std::make_optional(parentId);
 
-    folder.isProject = false;
+    folder.isProject = m_isProjectField && m_isProjectField->isChecked();
     folder.envVars = m_envVarsEditor->values();
     folder.icon = m_iconPicker->selectedIconName();
     // Perfil de terminal da pasta (vazio=local, nome=perfil, "@parent"=herda).

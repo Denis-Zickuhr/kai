@@ -12,6 +12,7 @@
 #include "ui/output-responders-editor-widget.h"
 #include "ui/hooks-editor-widget.h"
 #include "ui/execution-conditions-editor-widget.h"
+#include "ui/env-extractors-editor-widget.h"
 #include "ui/collapsible-section-card.h"
 #include "ui/icon-picker-widget.h"
 #include "ui/lucide-icons.h"
@@ -64,31 +65,6 @@ QIcon documentIcon()
 // wrapWithLabel/makeSurfaceCard foram EXTRAÍDAS para dialog-utils.h
 // (reaproveitadas agora por FolderEditorDialog também — ver comentário lá).
 
-// Profundidade de uma pasta na hierarquia via parent_id (combo
-// de pasta destino com indentação visual, mesmo padrão de
-// FolderEditorDialog::populateParentCombo). Protegido contra ciclos
-// acidentais em dados corrompidos via limite de profundidade.
-int depthOf(const QVector<core::Folder> &allFolders, const QString &folderId)
-{
-    int depth = 0;
-    QString currentId = folderId;
-
-    for (int guard = 0; guard < 64; ++guard) {
-        const core::Folder *current = nullptr;
-        for (const core::Folder &f : allFolders) {
-            if (f.id == currentId) {
-                current = &f;
-                break;
-            }
-        }
-        if (!current || !current->parentId.has_value()) {
-            break;
-        }
-        currentId = current->parentId.value();
-        ++depth;
-    }
-    return depth;
-}
 }
 
 CommandEditorDialog::CommandEditorDialog(const QString &folderId,
@@ -257,6 +233,7 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     // indentação por profundidade, mesmo padrão visual do combo de pasta
     // pai em FolderEditorDialog.
     m_folderField = new QComboBox(identityCard);
+    capComboBoxWidth(m_folderField);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("command.field.folder")), m_folderField), 1, 0);
 
     // Campo "Ordem" (decisão do usuário: substitui o drag&drop de itens
@@ -422,13 +399,14 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     m_extractorsCard = new CollapsibleSectionCard(utils::tr(QStringLiteral("command.group.extractors")), content);
     m_extractorsCard->setEmptyStateText(utils::tr(QStringLiteral("command_editor.extractors.empty_state")));
     m_extractorsCard->setActionButtonText(utils::tr(QStringLiteral("keyvalue.add")));
-    m_envExtractorsEditor = new KeyValueEditorWidget(m_extractorsCard, QStringLiteral("json_path"), QStringLiteral("env_var"));
-    m_envExtractorsEditor->setShowOwnAddButton(false);
+    // Widget dedicado (não mais KeyValueEditorWidget genérico) — o campo
+    // "persist" não cabe num QMap<QString,QString> simples.
+    m_envExtractorsEditor = new EnvExtractorsEditorWidget(m_extractorsCard);
     m_extractorsCard->setBody(m_envExtractorsEditor);
     connect(m_extractorsCard, &CollapsibleSectionCard::actionTriggered,
-            m_envExtractorsEditor, &KeyValueEditorWidget::handleAddRowClicked);
-    connect(m_envExtractorsEditor, &KeyValueEditorWidget::changed, this, [this]() {
-        m_extractorsCard->setCount(m_envExtractorsEditor->values().size());
+            m_envExtractorsEditor, &EnvExtractorsEditorWidget::handleAddRowClicked);
+    connect(m_envExtractorsEditor, &EnvExtractorsEditorWidget::changed, this, [this]() {
+        m_extractorsCard->setCount(m_envExtractorsEditor->totalCount());
     });
     m_extractorsCard->setCount(0);
     mainLayout->addWidget(m_extractorsCard);
@@ -539,6 +517,13 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
                 }
             }
         }
+        // ENVs temporárias/dinâmicas (extraídas por HTTP env_extractor ou
+        // captura de env de hook) — feedback do usuário: "adicione ENVS
+        // temporárias na interpolação do autocomplete". Vem de TODOS os
+        // escopos (ver setAvailableDynamicVarNames) — o escopo real só é
+        // decidido ao rodar o comando, então sugerir todas é melhor que
+        // não sugerir nenhuma.
+        names += m_availableDynamicVarNames;
         names.removeDuplicates();
         return names;
     };
@@ -637,9 +622,7 @@ void CommandEditorDialog::populateFolderCombo(const QVector<core::Folder> &allFo
     m_folderField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
 
     for (const core::Folder &folder : allFolders) {
-        const int depth = depthOf(allFolders, folder.id);
-        const QString indent = QString(QStringLiteral("    ")).repeated(depth);
-        m_folderField->addItem(indent + folder.name, folder.id);
+        m_folderField->addItem(folderComboLabel(allFolders, folder.id), folder.id);
     }
 
     const int selectedIndex = m_folderField->findData(selectedFolderId);
@@ -1229,24 +1212,12 @@ QWidget *CommandEditorDialog::buildHttpTab()
 
 void CommandEditorDialog::populateEnvExtractorsEditor(const QVector<core::EnvExtractor> &extractors)
 {
-    QMap<QString, QString> asMap;
-    for (const core::EnvExtractor &extractor : extractors) {
-        asMap[extractor.jsonPath] = extractor.envVar;
-    }
-    m_envExtractorsEditor->setValues(asMap);
+    m_envExtractorsEditor->setExtractors(extractors);
 }
 
 QVector<core::EnvExtractor> CommandEditorDialog::readEnvExtractors() const
 {
-    QVector<core::EnvExtractor> result;
-    const QMap<QString, QString> asMap = m_envExtractorsEditor->values();
-    for (auto it = asMap.constBegin(); it != asMap.constEnd(); ++it) {
-        core::EnvExtractor extractor;
-        extractor.jsonPath = it.key();
-        extractor.envVar = it.value();
-        result << extractor;
-    }
-    return result;
+    return m_envExtractorsEditor->extractors();
 }
 
 void CommandEditorDialog::setAvailableCollections(const QVector<core::Collection> &collections)

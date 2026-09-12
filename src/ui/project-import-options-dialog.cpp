@@ -15,32 +15,6 @@
 namespace kai::ui {
 namespace tk = utils::tokens;
 
-namespace {
-// Profundidade de uma pasta na hierarquia via parent_id, pra indentação
-// visual no combo — mesma lógica de CommandEditorDialog::depthOf/
-// FolderEditorDialog::depthOf (não compartilhada num header comum; réplica
-// pequena o bastante pra não justificar extrair um utilitário só por isso).
-int depthOf(const QVector<core::Folder> &allFolders, const QString &folderId)
-{
-    int depth = 0;
-    QString currentId = folderId;
-    for (int guard = 0; guard < 64; ++guard) {
-        const core::Folder *current = nullptr;
-        for (const core::Folder &f : allFolders) {
-            if (f.id == currentId) {
-                current = &f;
-                break;
-            }
-        }
-        if (!current || !current->parentId.has_value()) {
-            break;
-        }
-        currentId = current->parentId.value();
-        ++depth;
-    }
-    return depth;
-}
-} // namespace
 
 ProjectImportOptionsDialog::ProjectImportOptionsDialog(const QString &initialDirectory,
                                                         const QVector<core::Folder> &allFolders,
@@ -72,11 +46,10 @@ ProjectImportOptionsDialog::ProjectImportOptionsDialog(const QString &initialDir
     // Comando/Coleção, populado com as pastas que já existem. Default =
     // raiz (índice 0, comportamento antigo).
     m_parentFolderField = new QComboBox(this);
+    capComboBoxWidth(m_parentFolderField);
     m_parentFolderField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
     for (const core::Folder &folder : allFolders) {
-        const int depth = depthOf(allFolders, folder.id);
-        const QString indent = QString(QStringLiteral("    ")).repeated(depth);
-        m_parentFolderField->addItem(indent + folder.name, folder.id);
+        m_parentFolderField->addItem(folderComboLabel(allFolders, folder.id), folder.id);
     }
     makeSearchableCombo(m_parentFolderField);
     outer->addWidget(layout_helpers::wrapWithLabel(this,

@@ -33,19 +33,23 @@
 namespace kai::ui {
 
 namespace {
-// A tabela é SOMENTE-LEITURA: exibe os parâmetros. Colunas de exibição:
-// 0=Nome, 1=Label, 2=Tipo, 3=Default, 4=Opções/Fonte, 5=Ações (lápis/lixeira
-// inline — novo padrão visual, mockup enviado pelo usuário: substitui a
-// antiga coluna de checkbox + barra de adicionar/editar/remover ABAIXO da
-// tabela, que exigia selecionar uma linha primeiro. "Adicionar" migrou pro
-// botão do cabeçalho do CollapsibleSectionCard que envolve este widget).
+// A tabela é SOMENTE-LEITURA: exibe os parâmetros. SÓ 2 colunas — 0=Nome
+// (puro, sem resumo extra — feedback do usuário: "deve apenas exibir o
+// nome"), 1=Ações (lápis/lixeira inline). Label/Tipo/Default/Fonte NUNCA
+// foram lidos de volta de lugar nenhum (editParameter() lê de m_params,
+// não da tabela) — eram só colunas ESCONDIDAS sem função real, removidas.
+// HISTÓRICO DO BUG (ícones duplicados, 3 rodadas de print): 1ª tentativa
+// só desligou stretchLastSection; 2ª reordenou as colunas ocultas pra
+// ficarem adjacentes; nenhuma bastou. A causa real nem era a ordem —
+// era ter configuração de resize DIFERENTE de EnvExtractorsEditorWidget
+// (que nunca teve o bug): esta tabela mexia explicitamente em
+// setStretchLastSection/ResizeToContents da coluna de Ações, enquanto lá
+// só a coluna de dado tem resize mode explícito (Ações fica no Interactive
+// + largura fixa que o próprio configureTable já aplica). Copiado
+// byte a byte agora — mesma configuração, mesmo resultado sem bug.
 constexpr int kColName = 0;
-constexpr int kColLabel = 1;
-constexpr int kColType = 2;
-constexpr int kColDefault = 3;
-constexpr int kColExtra = 4;
-constexpr int kColActions = 5;
-constexpr int kColumnCount = 6;
+constexpr int kColActions = 1;
+constexpr int kColumnCount = 2;
 
 // Carrega opções de um CSV para a string "rótulo:valor, valor, ...".
 QString loadOptionsCsv(QWidget *parent)
@@ -232,6 +236,16 @@ public:
         m_filePathFormatLabel = new QLabel(utils::tr(QStringLiteral("params.path_format.label")), this);
         form->addRow(m_filePathFormatLabel, m_filePathFormat);
 
+        // PASTA em vez de arquivo (feedback do usuário: "às vezes o param é
+        // uma pasta") — troca o seletor de arquivo por getExistingDirectory
+        // no formulário de execução, sem virar um ParameterType novo.
+        m_pickFolder = new QCheckBox(utils::tr(QStringLiteral("params.pick_folder")), this);
+        m_pickFolder->setProperty("kaiRole", QStringLiteral("switch"));
+        m_pickFolder->setToolTip(utils::tr(QStringLiteral("params.pick_folder.tip")));
+        m_pickFolder->setChecked(param.pickFolder);
+        m_pickFolderLabel = new QLabel(QString(), this);
+        form->addRow(m_pickFolderLabel, m_pickFolder);
+
         auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
         stripDialogButtonIcons(box);
         connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -275,6 +289,8 @@ public:
             m_initialDir->parentWidget()->setVisible(isFile);
             m_filePathFormatLabel->setVisible(isFile);
             m_filePathFormat->setVisible(isFile);
+            m_pickFolderLabel->setVisible(isFile);
+            m_pickFolder->setVisible(isFile);
         };
         applyTypeVisibility();
         connect(m_type, &QComboBox::currentTextChanged, this, [applyTypeVisibility](const QString &) {
@@ -304,6 +320,7 @@ public:
                         && m_multiSelect->isChecked();
         p.initialDir = m_initialDir->text().trimmed();
         p.filePathFormat = m_filePathFormat->currentData().toString();
+        p.pickFolder = m_pickFolder->isChecked();
         return p;
     }
 
@@ -334,42 +351,10 @@ private:
     QLabel *m_filePathFormatLabel = nullptr;
     QCheckBox *m_multiSelect = nullptr;
     QLabel *m_multiSelectLabel = nullptr;
+    QCheckBox *m_pickFolder = nullptr;
+    QLabel *m_pickFolderLabel = nullptr;
 };
 
-// Achata um default possivelmente MULTI-LINHA (Textarea/Json) numa prévia de
-// uma linha só — sem isto um default de várias linhas infla a altura da
-// linha da tabela (QTableWidgetItem quebra em várias linhas visuais mesmo
-// com word-wrap desligado, feio na tabela densa desta tela).
-QString singleLineDefaultPreview(const QString &value)
-{
-    if (!value.contains(QLatin1Char('\n'))) {
-        return value;
-    }
-    QString flat = value;
-    flat.replace(QLatin1Char('\n'), QStringLiteral(" ⏎ ")); // ⏎ marca a quebra
-    constexpr int kMaxPreviewLen = 60;
-    if (flat.size() > kMaxPreviewLen) {
-        flat = flat.left(kMaxPreviewLen) + QStringLiteral("…");
-    }
-    return flat;
-}
-
-QString extraSummary(const core::Parameter &p)
-{
-    // Coluna-resumo read-only: mostra o que é relevante ao tipo.
-    switch (p.type) {
-    case core::ParameterType::Select:
-        if (!p.collectionId.isEmpty()) {
-            return utils::tr(QStringLiteral("params.extra.collection_prefix")).arg(p.collectionDisplayField.isEmpty()
-                ? p.collectionId : p.collectionDisplayField);
-        }
-        return p.options.join(QStringLiteral(", "));
-    case core::ParameterType::File:
-        return p.initialDir;
-    default:
-        return QString();
-    }
-}
 } // namespace
 
 ParameterEditorWidget::ParameterEditorWidget(QWidget *parent)
@@ -385,38 +370,30 @@ void ParameterEditorWidget::setupUi()
 
     m_table = new QTableWidget(0, kColumnCount, this);
     configureTable(m_table, {
-        {utils::tr(QStringLiteral("field.label.name")),   120, false},
-        {utils::tr(QStringLiteral("field.label.label")),  150, false},
-        {utils::tr(QStringLiteral("field.label.type")),   90,  false},
-        {utils::tr(QStringLiteral("field.label.default")),130, false},
-        {utils::tr(QStringLiteral("params.col.source_options")), 220, true},
+        {utils::tr(QStringLiteral("field.label.name")), 320, true},
         {QString(), rowActionsColumnWidth(), false},
     });
-    // Só a coluna Nome + Ações ficam visíveis por padrão (feedback do
-    // usuário) — o resto (label/tipo/default/fonte) é editado no formulário
-    // contextual.
-    m_table->setColumnHidden(kColLabel, true);
-    m_table->setColumnHidden(kColType, true);
-    m_table->setColumnHidden(kColDefault, true);
-    m_table->setColumnHidden(kColExtra, true);
-    m_table->horizontalHeader()->setSectionResizeMode(kColName, QHeaderView::Stretch);
-    // A coluna de AÇÕES (última) dimensiona pelo conteúdo e NÃO estica: o
-    // configureTable liga stretchLastSection, o que — com o Nome também em
-    // Stretch — fazia a barra de ações duplicar/duplicar visualmente por
-    // linha (relatado). Desligamos o stretch da última e fixamos a coluna
-    // de ações ao conteúdo.
-    m_table->horizontalHeader()->setStretchLastSection(false);
-    m_table->horizontalHeader()->setSectionResizeMode(kColActions, QHeaderView::ResizeToContents);
-    // Sem header nem coluna de seleção (mockup enviado pelo usuário: só uma
-    // coluna de dado + ações inline, sem "Actions" escrito em lugar nenhum).
-    m_table->horizontalHeader()->setVisible(false);
-    m_table->verticalHeader()->setVisible(false);
-    m_table->verticalHeader()->setDefaultSectionSize(standardRowHeight());
-    // Tabela SOMENTE-LEITURA: a edição é pelo formulário contextual (lápis
-    // inline na própria linha ou duplo-clique). Sem editor de célula nativo.
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // MESMA configuração, byte a byte, de EnvExtractorsEditorWidget/
+    // ExecutionConditionsEditorWidget (widgets sem o bug de ícone
+    // duplicado, confirmado no print) — só a coluna de dado em Stretch;
+    // Ações fica no Interactive+largura fixa que o próprio configureTable
+    // já aplica, sem setStretchLastSection nem ResizeToContents extras
+    // (2 tentativas anteriores mexendo nisso não resolveram; esta 3ª
+    // elimina a diferença em vez de ajustar mais parâmetros de resize).
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->horizontalHeader()->setVisible(false);
+    // stretchLastSection (ligado por configureTable) + Stretch explícito no
+    // Nome faziam as DUAS colunas competirem pelo espaço sobrando — Qt
+    // dividia ~metade/metade em vez de Ações ficar pequena (confirmado
+    // com screenshot do widget renderizado isolado, sem tema: a coluna de
+    // Ações ocupava metade da largura, com o pencil/trash centralizados
+    // longe da borda). Desligar aqui faz só o Nome esticar de verdade.
+    m_table->horizontalHeader()->setStretchLastSection(false);
+    m_table->horizontalHeader()->setSectionResizeMode(kColName, QHeaderView::Stretch);
+    m_table->verticalHeader()->setVisible(false);
+    m_table->verticalHeader()->setDefaultSectionSize(standardRowHeight());
     m_table->setMinimumHeight(120);
     // Duplo-clique numa linha abre o formulário daquela linha.
     connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
@@ -430,20 +407,25 @@ void ParameterEditorWidget::setupUi()
 
 void ParameterEditorWidget::rebuildTable()
 {
+    // ZERA antes de repopular (causa real do ícone fantasma, confirmada
+    // reproduzindo o widget isolado offscreen): rebuildTable() é chamado
+    // MAIS DE UMA VEZ pro mesmo widget vivo (CommandEditorDialog chama
+    // setParameters() no construtor E de novo em setAvailableCollections).
+    // Com a contagem de linhas IGUAL nas duas vezes, setRowCount(N) não
+    // muda nada e o setCellWidget() da 2ª chamada, embora devesse
+    // substituir o widget antigo, deixava um "fantasma" dele sobrando —
+    // setRowCount(0) força o Qt a soltar de vez os cell widgets de toda
+    // linha antes de recriá-las do zero.
+    m_table->setRowCount(0);
     m_table->setRowCount(m_params.size());
     for (int row = 0; row < m_params.size(); ++row) {
         const core::Parameter &p = m_params.at(row);
 
-        auto makeItem = [](const QString &text) {
-            auto *item = new QTableWidgetItem(text);
-            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-            return item;
-        };
-        m_table->setItem(row, kColName, makeItem(p.name));
-        m_table->setItem(row, kColLabel, makeItem(p.label));
-        m_table->setItem(row, kColType, makeItem(core::parameterTypeToString(p.type)));
-        m_table->setItem(row, kColDefault, makeItem(singleLineDefaultPreview(p.defaultValue)));
-        m_table->setItem(row, kColExtra, makeItem(extraSummary(p)));
+        // SÓ o nome (feedback do usuário: "deve apenas exibir o nome") —
+        // sem resumo extra embutido.
+        auto *nameItem = new QTableWidgetItem(p.name);
+        nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
+        m_table->setItem(row, kColName, nameItem);
 
         // Ações inline (lápis/lixeira) — cada linha já sabe seu próprio
         // índice, sem precisar de seleção prévia (mockup enviado pelo

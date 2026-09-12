@@ -50,6 +50,9 @@ QJsonObject Parameter::toJson() const
     if (filePathFormat != QStringLiteral("native")) {
         obj["file_path_format"] = filePathFormat;
     }
+    if (pickFolder) {
+        obj["pick_folder"] = true;
+    }
     return obj;
 }
 
@@ -70,22 +73,28 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     p.collectionDisplayField = obj.value("collection_display_field").toString();
     p.initialDir = obj.value("initial_dir").toString();
     p.filePathFormat = obj.value("file_path_format").toString(QStringLiteral("native"));
+    p.pickFolder = obj.value("pick_folder").toBool(false);
     return p;
 }
 
 QJsonObject EnvExtractor::toJson() const
 {
     QJsonObject obj;
+    obj["name"] = name;
     obj["json_path"] = jsonPath;
     obj["env_var"] = envVar;
+    obj["persist"] = persist;
     return obj;
 }
 
 EnvExtractor EnvExtractor::fromJson(const QJsonObject &obj)
 {
     EnvExtractor e;
+    e.name = obj.value("name").toString();
     e.jsonPath = obj.value("json_path").toString();
     e.envVar = obj.value("env_var").toString();
+    // default false — kai.json antigos sem o campo continuam efêmeros.
+    e.persist = obj.value("persist").toBool(false);
     return e;
 }
 
@@ -184,6 +193,7 @@ QJsonObject ExecutionCondition::toJson() const
     obj["left"] = left;
     obj["op"] = op;
     obj["right"] = right;
+    obj["enabled"] = enabled;
     return obj;
 }
 
@@ -194,6 +204,7 @@ ExecutionCondition ExecutionCondition::fromJson(const QJsonObject &obj)
     c.left = obj.value("left").toString();
     c.op = obj.value("op").toString(QStringLiteral("exists"));
     c.right = obj.value("right").toString();
+    c.enabled = obj.value("enabled").toBool(true);
     return c;
 }
 

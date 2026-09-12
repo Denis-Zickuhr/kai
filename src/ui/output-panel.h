@@ -26,7 +26,9 @@ namespace kai::ui {
 class JsonViewerWidget;
 
 // Estado de execução refletido no badge do painel.
-enum class OutputStatus { Idle, Running, Success, Error };
+// Skipped: comando HTTP pulado por Execution Condition (não é sucesso nem
+// erro real — ver setSkipped). Badge âmbar, distinto dos dois.
+enum class OutputStatus { Idle, Running, Success, Error, Skipped };
 
 // ============================================================================
 // SAÍDA V2 — painel de saída reutilizável com abas
@@ -42,7 +44,6 @@ enum class OutputStatus { Idle, Running, Success, Error };
 //   • Saída   — stdout/stderr com cores ANSI, números de linha opcionais
 //   • JSON    — árvore navegável estilo Insomnia (só para respostas JSON)
 //   • Headers — headers da resposta HTTP em tabela
-//   • Envs    — variáveis de ambiente efetivas da execução (vale para shell)
 //
 // O seletor de abas (barra) só é exibido quando há MAIS DE UMA aba visível
 // (pedido do usuário) — ver OutputPanel::updateTabVisibility.
@@ -88,8 +89,6 @@ public:
 
     // Alimenta as abas de resposta HTTP (aba JSON/Headers/Raw).
     void setHttpResult(const engine::HttpResult &result);
-    // Alimenta a aba Envs (vale para comandos shell também).
-    void setEnvironment(const QMap<QString, QString> &env);
     // Detecta JSON em saída de texto (comandos shell que imprimem JSON).
     void detectJsonInText(const QString &text);
 
@@ -132,12 +131,23 @@ public:
 
     // --- Terminal interativo (Command::interactiveTerminal) -----------------
     // Troca o CORPO do painel entre o modo normal (abas Resposta/Saída/
-    // Headers/Envs) e o terminal de verdade (PtyTerminalWidget). As abas
+    // Headers) e o terminal de verdade (PtyTerminalWidget). As abas
     // somem no modo interativo (não fazem sentido pra uma sessão de TTY
     // cru) — o cabeçalho (ícones de limpar/opções/detach/colapsar)
     // continua igual nos dois modos.
     void setInteractiveMode(bool interactive);
     bool interactiveMode() const { return m_interactiveMode; }
+
+    // Comando HTTP pulado por Execution Condition (feedback do usuário:
+    // "perco o feedback visual que isso ocorreu, e perco acesso as abas
+    // gerais do comando" — o resultado HTTP anterior, em cache, ficava
+    // mostrando abas Resposta/Headers com dado VELHO como se a requisição
+    // tivesse rodado agora). true troca o CORPO pra um painel dedicado
+    // "Requisição não executada" com a(s) condição(ões) que bloquearam —
+    // mesmo mecanismo de troca de m_bodyStack que setInteractiveMode usa.
+    // false volta ao normal (abas de novo).
+    void setSkipped(bool skipped, const QString &reasonLabel = QString());
+    bool isSkipped() const { return m_skipped; }
     // Alimenta o terminal com bytes/texto recém-chegados do processo.
     void feedInteractive(const QString &text);
     // Reconstrói a tela do zero a partir do log bruto já acumulado do
@@ -194,6 +204,12 @@ private:
     // setInputShortcutHint) conforme o campo está habilitado ou não.
     void refreshInputPlaceholder();
     void updateTabVisibility();
+    // Decide qual página de m_bodyStack mostrar a partir de m_interactiveMode
+    // e m_skipped juntos (em vez de cada setter mexer direto no índice) —
+    // os dois nunca deveriam ser true ao mesmo tempo na prática (interativo
+    // é só Shell, skipped é só HTTP), mas centralizar evita um dos dois
+    // pisar no outro se algum dia coincidirem. Interativo tem prioridade.
+    void updateBodyStackPage();
     void appendChunkNow(const QString &rawText, bool isError);
     // Aplica a compactação (colapsa linhas vazias, apara espaços).
     QString compactText(const QString &input);
@@ -234,7 +250,7 @@ private:
     // (não são removidas dele), mas a m_tabBar só mostra as abas visíveis —
     // então o índice da aba não bate com o índice da página no stack.
     QVector<QWidget *> m_tabPages;
-    // Ordem CANÔNICA das abas (Resposta, Saída, Headers, Envs): addTabPage
+    // Ordem CANÔNICA das abas (Resposta, Saída, Headers): addTabPage
     // insere a página nova na posição correta desta ordem, em vez de sempre
     // no fim — sem isto, colapsar/reexibir uma aba (updateTabVisibility)
     // fazia ela reaparecer no FIM de m_tabPages/m_tabBar em vez de na
@@ -250,12 +266,15 @@ private:
     QStackedWidget *m_bodyStack = nullptr;
     QWidget *m_normalBody = nullptr;
     PtyTerminalWidget *m_ptyTerminal = nullptr;
+    // 3ª página de m_bodyStack — ver setSkipped.
+    QWidget *m_skippedPanel = nullptr;
+    QLabel *m_skippedReasonLabel = nullptr;
+    bool m_skipped = false;
     bool m_interactiveMode = false;
 
     CodeOutputView *m_outputView = nullptr;
     JsonViewerWidget *m_jsonView = nullptr;
     QTableWidget *m_headersView = nullptr;
-    QTableWidget *m_envsView = nullptr;
     // Aba "Requisição" (feedback do usuário: "a aba de saída é meio inútil
     // pra requests http, podemos ver o que foi enviado?") — mostra
     // método+URL, headers e corpo REALMENTE enviados (já interpolados),
@@ -271,7 +290,6 @@ private:
     QString m_workingDirectory;
     bool m_hasJson = false;
     bool m_hasHeaders = false;
-    bool m_hasEnvs = false;
     bool m_stdoutTabEnabled = true; // ver setStdoutTabVisible
     bool m_hasRequest = false;
     bool m_atLineStart = true;

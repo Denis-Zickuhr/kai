@@ -21,6 +21,7 @@ constexpr const char *kLogTag = "ConfigManager";
 constexpr const char *kCommandsFileName = "commands.json";
 constexpr const char *kSettingsFileName = "settings.json";
 constexpr const char *kCollectionsFileName = "collections.json";
+constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
 
 QString shellFlavorToString(ShellFlavor s)
 {
@@ -86,6 +87,46 @@ QString ConfigManager::settingsFilePath() const
 QString ConfigManager::collectionsFilePath() const
 {
     return QDir(configDirPath()).filePath(QString::fromLatin1(kCollectionsFileName));
+}
+
+QString ConfigManager::dynamicVarsFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kDynamicVarsFileName));
+}
+
+QMap<QString, QMap<QString, QString>> ConfigManager::loadPersistedDynamicVars()
+{
+    QMap<QString, QMap<QString, QString>> result;
+    if (!QFile::exists(dynamicVarsFilePath())) {
+        return result; // primeira execução / nada persistido ainda — normal.
+    }
+    const QJsonObject root = readJsonWithRecovery(dynamicVarsFilePath());
+    for (auto scopeIt = root.constBegin(); scopeIt != root.constEnd(); ++scopeIt) {
+        const QJsonObject scopeObj = scopeIt.value().toObject();
+        QMap<QString, QString> vars;
+        for (auto varIt = scopeObj.constBegin(); varIt != scopeObj.constEnd(); ++varIt) {
+            vars[varIt.key()] = varIt.value().toString();
+        }
+        // "" (escopo Global) vira a chave literal "__global__" no JSON —
+        // QJsonObject não aceita bem uma chave vazia em todo backend.
+        const QString scopeKey = (scopeIt.key() == QLatin1String("__global__")) ? QString() : scopeIt.key();
+        result[scopeKey] = vars;
+    }
+    return result;
+}
+
+bool ConfigManager::savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data)
+{
+    QJsonObject root;
+    for (auto scopeIt = data.constBegin(); scopeIt != data.constEnd(); ++scopeIt) {
+        QJsonObject scopeObj;
+        for (auto varIt = scopeIt.value().constBegin(); varIt != scopeIt.value().constEnd(); ++varIt) {
+            scopeObj[varIt.key()] = varIt.value();
+        }
+        const QString jsonKey = scopeIt.key().isEmpty() ? QStringLiteral("__global__") : scopeIt.key();
+        root[jsonKey] = scopeObj;
+    }
+    return writeJsonAtomic(dynamicVarsFilePath(), QJsonDocument(root));
 }
 
 QString ConfigManager::backupCorruptedFile(const QString &filePath)

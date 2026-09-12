@@ -9,6 +9,7 @@
 class QLineEdit;
 class QComboBox;
 class QSpinBox;
+class QCheckBox;
 
 namespace kai::ui {
 
@@ -69,6 +70,12 @@ private:
     QComboBox *m_parentField = nullptr;
     QComboBox *m_profileField = nullptr;
     QSpinBox *m_orderField = nullptr;
+    // Marca esta pasta como fronteira de ESCOPO das variáveis DINÂMICAS
+    // (extraídas por HTTP env_extractor / captura de env de hook) — ver
+    // EnvironmentManager::setDynamicVarScope. Campo Folder::isProject já
+    // existia no modelo/JSON (reservado, nunca ligado a nada); esta é a
+    // primeira UI que de fato o liga a um comportamento.
+    QCheckBox *m_isProjectField = nullptr;
     QVector<core::TerminalProfile> m_terminalProfiles;
     KeyValueEditorWidget *m_envVarsEditor = nullptr;
     CollapsibleSectionCard *m_envVarsCard = nullptr;

@@ -76,6 +76,11 @@ public:
 signals:
     void finished(const HttpResult &result);
     void logMessage(const QString &text, bool isError);
+    // Um EnvExtractor com persist == true acabou de gravar um valor — o
+    // chamador (MainWindow) é quem tem o ConfigManager, então é ele quem
+    // grava em dynamic-vars.json; o HttpRunner só avisa o quê e onde
+    // (scopeKey vem de EnvironmentManager::currentDynamicVarScope()).
+    void dynamicVarPersistRequested(const QString &scopeKey, const QString &name, const QString &value);
 
 private:
     void handleReplyFinished(QNetworkReply *reply, const core::HttpConfig &config, core::EnvironmentManager *envManager);

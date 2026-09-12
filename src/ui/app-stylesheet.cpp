@@ -456,6 +456,13 @@ QString buildModernStylesheet()
         // embaixo) — ver comentário acima da regra.
         .arg(tk::controlHeight() - 4);
 
+    // Badge "Pulado" (Execution Condition não atendida — ver
+    // OutputStatus::Skipped): regra própria, em vez de espremida na cadeia
+    // %N acima, pra não ter que renumerar os ~18 argumentos existentes.
+    qss += QStringLiteral(
+        "#outputStatusBadge[kaiState=\"skipped\"] { background-color: %1; }\n")
+        .arg(hex(shiftToward(QColor(bg), QColor(tk::warningFg()), 0.38)));
+
     // --- Navegação lateral (Settings em blocos): item selecionado com faixa
     //     de accent à esquerda, estilo painel de preferências moderno. ---
     qss += QStringLiteral(

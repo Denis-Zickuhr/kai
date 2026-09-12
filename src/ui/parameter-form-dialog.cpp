@@ -503,8 +503,13 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // QToolButton cru com texto "..." e chrome padrão do SO, destoando
             // da borda arredondada/tema do QLineEdit ao lado (bug relatado).
             // Agora colado ao campo, com só um separador fino entre os dois.
-            auto *browseButton = makeIconButton(container, QStringLiteral("file"),
-                utils::tr(QStringLiteral("params.file.browse")), QColor(utils::tokens::accent()));
+            // Ícone/tooltip refletem PASTA quando param.pickFolder (feedback
+            // do usuário: "às vezes o param é uma pasta").
+            auto *browseButton = makeIconButton(container,
+                param.pickFolder ? QStringLiteral("folder") : QStringLiteral("file"),
+                utils::tr(param.pickFolder ? QStringLiteral("params.folder.browse")
+                                            : QStringLiteral("params.file.browse")),
+                QColor(utils::tokens::accent()));
             browseButton->setStyleSheet(QStringLiteral(
                 "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
                 " border-radius: 0px; }")
@@ -515,8 +520,9 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // processo visitou — na primeira vez, a pasta de instalação do Kai.
             const QString startDir = param.initialDir;
             const QString pathFormat = param.filePathFormat;
-            connect(browseButton, &QToolButton::clicked, this, [this, field, startDir, pathFormat]() {
-                handleBrowseFileClicked(field, startDir, pathFormat);
+            const bool pickFolder = param.pickFolder;
+            connect(browseButton, &QToolButton::clicked, this, [this, field, startDir, pathFormat, pickFolder]() {
+                handleBrowseFileClicked(field, startDir, pathFormat, pickFolder);
             });
 
             rowLayout->addWidget(field, 1);
@@ -652,7 +658,7 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
 }
 
 void ParameterFormDialog::handleBrowseFileClicked(QLineEdit *targetField, const QString &initialDir,
-                                                  const QString &pathFormat)
+                                                  const QString &pathFormat, bool pickFolder)
 {
     // ONDE ABRIR. Ordem de precedência:
     //  1) a pasta do arquivo JÁ escolhido no campo (continuar de onde parou);
@@ -680,10 +686,15 @@ void ParameterFormDialog::handleBrowseFileClicked(QLineEdit *targetField, const 
     }
 
     // Sempre o diálogo nativo do sistema operacional (feedback
-    // do usuário): QFileDialog::getOpenFileName sem a opção
-    // QFileDialog::DontUseNativeDialog usa o backend nativo por padrão.
-    const QString path = QFileDialog::getOpenFileName(
-        this, utils::tr(QStringLiteral("params.select_file")), startDir);
+    // do usuário): QFileDialog::getOpenFileName/getExistingDirectory sem a
+    // opção QFileDialog::DontUseNativeDialog usa o backend nativo por padrão.
+    // PASTA em vez de arquivo (feedback do usuário: "às vezes o param é uma
+    // pasta") — mesmo startDir/pathFormat, só troca o seletor.
+    const QString path = pickFolder
+        ? QFileDialog::getExistingDirectory(
+              this, utils::tr(QStringLiteral("params.select_folder")), startDir)
+        : QFileDialog::getOpenFileName(
+              this, utils::tr(QStringLiteral("params.select_file")), startDir);
     if (!path.isEmpty()) {
         // Formato do path pedido no parâmetro (pedido do usuário: o
         // diálogo nativo devolve no formato do SO do Kai — sob WSLg isso

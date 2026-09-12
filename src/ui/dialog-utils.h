@@ -21,14 +21,80 @@
 #include <QHBoxLayout>
 #include <QString>
 #include <QMessageBox>
+#include <QVector>
+#include <QStringList>
 
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
 #include "utils/action-shortcuts.h"
 #include "core/config-manager.h"
+#include "core/models.h"
 #include "ui/lucide-icons.h"
 
 namespace kai::ui {
+
+// Caminho completo (raiz -> pasta), um nome por segmento, na ordem em que
+// aparecem na hierarquia — feedback do usuário: "os campos de seletor de
+// pastas precisam exibir o PATH completo, ao ter pastas com o mesmo nome
+// fica ruim de ver" (bug relacionado: duas pastas podiam ter o MESMO NOME
+// em ramos diferentes da árvore, e um combo só com "Nome" — ou indentado —
+// não dava pra saber QUAL das duas era). Protegido contra ciclos
+// acidentais em dados corrompidos via limite de profundidade — mesmo
+// guard já usado por depthOf() nos 3 lugares que tinham cópia própria
+// dessa lógica (FolderEditorDialog/CommandEditorDialog/
+// ProjectImportOptionsDialog), agora unificada aqui.
+inline QStringList folderPathSegments(const QVector<core::Folder> &allFolders, const QString &folderId)
+{
+    QStringList segments;
+    QString currentId = folderId;
+    for (int guard = 0; guard < 64 && !currentId.isEmpty(); ++guard) {
+        const core::Folder *current = nullptr;
+        for (const core::Folder &f : allFolders) {
+            if (f.id == currentId) {
+                current = &f;
+                break;
+            }
+        }
+        if (!current) {
+            break;
+        }
+        segments.prepend(current->name);
+        currentId = current->parentId.value_or(QString());
+    }
+    return segments;
+}
+
+// Texto pronto pra um item de combo: indentação por profundidade (mostra a
+// hierarquia de forma compacta na lista) + o NOME + o caminho completo como
+// hint entre parênteses (só quando há ancestrais — uma pasta raiz não
+// precisa repetir o próprio nome). Ex: "    Sub   (API / Projeto A / Sub)".
+inline QString folderComboLabel(const QVector<core::Folder> &allFolders, const QString &folderId)
+{
+    const QStringList segments = folderPathSegments(allFolders, folderId);
+    if (segments.isEmpty()) {
+        return QString();
+    }
+    const QString indent = QStringLiteral("    ").repeated(segments.size() - 1);
+    const QString name = segments.last();
+    if (segments.size() == 1) {
+        return indent + name;
+    }
+    return QStringLiteral("%1%2   (%3)").arg(indent, name, segments.join(QStringLiteral(" / ")));
+}
+
+// Trava a largura do combo FECHADO num nº de caracteres, em vez de deixar
+// o Qt calcular o sizeHint pelo item MAIS LARGO da lista (padrão do
+// QComboBox) — bug relatado: com folderComboLabel() incluindo o caminho
+// completo, uma pasta bem aninhada inflava esse sizeHint e o diálogo
+// inteiro abria enorme ("abrindo muito grande... só aparece o de pasta e
+// nome"). O texto selecionado ainda elide com "..." quando não cabe; o
+// dropdown ABERTO continua largo o bastante pra mostrar o item inteiro
+// (AdjustToMinimumContentsLengthWithIcon só limita o BOTÃO fechado).
+inline void capComboBoxWidth(QComboBox *combo, int chars = 26)
+{
+    combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    combo->setMinimumContentsLength(chars);
+}
 
 // Sub-namespace deliberado (em vez de despejar direto em kai::ui): o
 // ParameterFormDialog (arquivo de OUTRA tarefa em andamento na mesma

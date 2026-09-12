@@ -287,11 +287,23 @@ void HttpRunner::applyExtractors(const QJsonDocument &doc, const QVector<core::E
     const QJsonValue root = doc.isObject() ? QJsonValue(doc.object()) : QJsonValue(doc.array());
 
     for (const core::EnvExtractor &extractor : extractors) {
-        const QJsonValue value = resolveJsonPath(root, extractor.jsonPath);
+        // Sintaxe OU (feedback do usuário: "extratores tem que suportar
+        // sintaxe de OU") — "data.token || token" tenta cada caminho em
+        // ordem, usa o primeiro que existir. Útil quando a mesma info vem
+        // em campos diferentes conforme a API/versão respondendo.
+        const QStringList candidatePaths = extractor.jsonPath.split(
+            QStringLiteral("||"), Qt::SkipEmptyParts);
+        QJsonValue value(QJsonValue::Undefined);
+        for (const QString &candidate : candidatePaths) {
+            value = resolveJsonPath(root, candidate.trimmed());
+            if (!value.isUndefined()) {
+                break;
+            }
+        }
 
         if (value.isUndefined()) {
-            // json_path não existe: loga aviso e NÃO sobrescreve o valor
-            // anterior da variável.
+            // Nenhum dos caminhos (OU nenhum, se só havia 1) existe: loga
+            // aviso e NÃO sobrescreve o valor anterior da variável.
             utils::Logger::warning(kLogTag,
                 QStringLiteral("json_path '%1' não encontrado na resposta. Variável '%2' mantida.")
                     .arg(extractor.jsonPath, extractor.envVar));
@@ -314,6 +326,9 @@ void HttpRunner::applyExtractors(const QJsonDocument &doc, const QVector<core::E
         envManager.setDynamicVar(extractor.envVar, finalValue);
         utils::Logger::info(kLogTag,
             QStringLiteral("Extraído '%1' -> variável '%2'.").arg(extractor.jsonPath, extractor.envVar));
+        if (extractor.persist) {
+            emit dynamicVarPersistRequested(envManager.currentDynamicVarScope(), extractor.envVar, finalValue);
+        }
     }
 }
 

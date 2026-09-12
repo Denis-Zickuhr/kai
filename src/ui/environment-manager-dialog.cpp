@@ -18,8 +18,10 @@
 #include <QFrame>
 #include <QAbstractItemView>
 #include <QStyle>
+#include <QStackedWidget>
 
 #include "ui/key-value-editor-widget.h"
+#include "ui/dynamic-vars-inspector-widget.h"
 #include "ui/collapsible-section-card.h"
 #include "ui/dialog-utils.h"
 #include "ui/lucide-icons.h"
@@ -115,10 +117,18 @@ QPushButton *makeIconTextButton(QWidget *parent, const QString &iconName, const 
 
 EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environment> &environments,
                                                    const QString &activeEnvironmentId,
-                                                   QWidget *parent)
+                                                   QWidget *parent,
+                                                   core::EnvironmentManager *envManager,
+                                                   const QVector<core::Folder> &allFolders,
+                                                   std::function<QMap<QString, QMap<QString, QString>>()> loadPersisted,
+                                                   std::function<bool(const QMap<QString, QMap<QString, QString>> &)> savePersisted)
     : QDialog(parent)
     , m_environments(environments)
     , m_activeEnvironmentId(activeEnvironmentId)
+    , m_envManager(envManager)
+    , m_allFolders(allFolders)
+    , m_loadPersisted(std::move(loadPersisted))
+    , m_savePersisted(std::move(savePersisted))
 {
     setWindowTitle(utils::tr(QStringLiteral("env.manage.title")));
     setupUi();
@@ -138,8 +148,87 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
 void EnvironmentManagerDialog::setupUi()
 {
     auto *outer = new QVBoxLayout(this);
-    auto *body = new QHBoxLayout();
-    outer->addLayout(body, 1);
+
+    // A 2ª aba ("Variáveis Dinâmicas") só existe quando quem chama passou um
+    // EnvironmentManager — feedback do usuário: aba isolada dos PACOTES
+    // (diferente de misturar as dinâmicas na tabela de variáveis de um
+    // pacote — ver discussão de design: mistura config estática autorada
+    // com estado efêmero/computado, invalidando export/import limpo).
+    // Sem envManager (chamador antigo que não passou), o diálogo continua
+    // exatamente como antes: sem QTabWidget, corpo direto no diálogo.
+    QWidget *packagesHost = this;
+    if (m_envManager) {
+        // Segmented control (pills), NÃO QTabWidget/QTabBar — mesmo padrão
+        // já comprovado em CommandEditorDialog (comentário lá: "substitui
+        // as abas tradicionais do QTabWidget, cujo sublinhado cortava a
+        // caixa"). 1ª tentativa aqui usou QTabWidget com QSS local e ainda
+        // saiu como pill nativa do SO (feedback do usuário, print) — troca
+        // definitiva pro mecanismo que já funciona no resto do app, em vez
+        // de insistir num 2º QSS pra QTabBar.
+        auto *switcher = new QWidget(this);
+        switcher->setObjectName(QStringLiteral("envTabSwitcher"));
+        switcher->setAttribute(Qt::WA_StyledBackground, true);
+        switcher->setStyleSheet(QStringLiteral(
+            "QWidget#envTabSwitcher { background-color: %1; border-radius: %2px; }")
+            .arg(tk::bg()).arg(tk::radiusMd()));
+        auto *switcherLayout = new QHBoxLayout(switcher);
+        switcherLayout->setContentsMargins(2, 2, 2, 2);
+        switcherLayout->setSpacing(2);
+        const QString segmentCss = QStringLiteral(
+            "QPushButton { border: none; border-radius: %1px; padding: %2px %3px; font-weight: 600;"
+            " background: transparent; color: %4; }"
+            "QPushButton:checked { background-color: %5; color: %6; }")
+            .arg(tk::radiusSm()).arg(tk::space(1)).arg(tk::space(3))
+            .arg(tk::mutedFg()).arg(tk::accent()).arg(tk::bg());
+        auto *packagesButton = new QPushButton(utils::tr(QStringLiteral("env.tab.packages")), switcher);
+        auto *dynamicVarsButton = new QPushButton(utils::tr(QStringLiteral("env.tab.dynamic_vars")), switcher);
+        for (QPushButton *btn : {packagesButton, dynamicVarsButton}) {
+            btn->setCheckable(true);
+            btn->setCursor(Qt::PointingHandCursor);
+            btn->setStyleSheet(segmentCss);
+        }
+        packagesButton->setChecked(true);
+        switcherLayout->addWidget(packagesButton);
+        switcherLayout->addWidget(dynamicVarsButton);
+        // Não estica pra ocupar a largura do diálogo inteiro (pedido do
+        // usuário: "cuidado com o espaçamento horizontal") — largura pelo
+        // conteúdo dos 2 botões, alinhado à esquerda.
+        auto *switcherRow = new QHBoxLayout();
+        switcherRow->addWidget(switcher, 0, Qt::AlignLeft);
+        switcherRow->addStretch();
+        outer->addLayout(switcherRow);
+
+        auto *pages = new QStackedWidget(this);
+        outer->addWidget(pages, 1);
+
+        packagesHost = new QWidget(pages);
+        pages->addWidget(packagesHost);
+
+        m_dynamicVarsInspector = new DynamicVarsInspectorWidget(
+            *m_envManager, m_allFolders, m_loadPersisted, m_savePersisted, pages);
+        pages->addWidget(m_dynamicVarsInspector);
+
+        connect(packagesButton, &QPushButton::clicked, this, [dynamicVarsButton, pages, packagesHost](bool) {
+            dynamicVarsButton->setChecked(false);
+            pages->setCurrentWidget(packagesHost);
+        });
+        connect(dynamicVarsButton, &QPushButton::clicked, this,
+                [this, packagesButton, pages]() {
+            packagesButton->setChecked(false);
+            pages->setCurrentWidget(m_dynamicVarsInspector);
+            // As dinâmicas podem ter mudado desde a abertura do diálogo (um
+            // comando rodou antes desta aba ser vista pela 1ª vez).
+            m_dynamicVarsInspector->refresh();
+        });
+    }
+
+    QHBoxLayout *body = nullptr;
+    if (m_envManager) {
+        body = new QHBoxLayout(packagesHost); // packagesHost = página "Pacotes" do QStackedWidget
+    } else {
+        body = new QHBoxLayout();
+        outer->addLayout(body, 1); // sem switcher: corpo direto no diálogo, como antes
+    }
 
     // --- Coluna esquerda: cabeçalho + lista de cartões + ações ---
     auto *leftCol = new QVBoxLayout();

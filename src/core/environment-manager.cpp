@@ -23,24 +23,59 @@ void EnvironmentManager::setFolderVars(const QMap<QString, QString> &vars)
     m_folderVars = vars;
 }
 
-void EnvironmentManager::setDynamicVars(const QMap<QString, QString> &vars)
-{
-    m_dynamicVars = vars;
-}
-
 void EnvironmentManager::setParamVars(const QMap<QString, QString> &vars)
 {
     m_paramVars = vars;
 }
 
-void EnvironmentManager::setDynamicVar(const QString &name, const QString &value)
+void EnvironmentManager::setDynamicVarScope(const QString &scopeKey)
 {
-    m_dynamicVars[name] = value;
+    m_currentDynamicScope = scopeKey;
 }
 
-void EnvironmentManager::clearDynamicVars()
+void EnvironmentManager::setDynamicVar(const QString &name, const QString &value)
 {
-    m_dynamicVars.clear();
+    m_dynamicVarsByScope[m_currentDynamicScope][name] = value;
+}
+
+void EnvironmentManager::setDynamicVarInScope(const QString &scopeKey, const QString &name, const QString &value)
+{
+    m_dynamicVarsByScope[scopeKey][name] = value;
+}
+
+void EnvironmentManager::seedPersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data)
+{
+    // Funde (não substitui) — chamado 1x no boot, antes de qualquer
+    // comando rodar, então na prática é só uma atribuição, mas fundir é
+    // seguro caso um dia seja chamado de novo em runtime.
+    for (auto scopeIt = data.constBegin(); scopeIt != data.constEnd(); ++scopeIt) {
+        QMap<QString, QString> &target = m_dynamicVarsByScope[scopeIt.key()];
+        for (auto varIt = scopeIt.value().constBegin(); varIt != scopeIt.value().constEnd(); ++varIt) {
+            target[varIt.key()] = varIt.value();
+        }
+    }
+}
+
+void EnvironmentManager::removeDynamicVar(const QString &scopeKey, const QString &name)
+{
+    auto it = m_dynamicVarsByScope.find(scopeKey);
+    if (it == m_dynamicVarsByScope.end()) {
+        return;
+    }
+    it.value().remove(name);
+    if (it.value().isEmpty()) {
+        m_dynamicVarsByScope.erase(it);
+    }
+}
+
+void EnvironmentManager::clearDynamicVars(const QString &scopeKey)
+{
+    m_dynamicVarsByScope.remove(scopeKey);
+}
+
+void EnvironmentManager::clearAllDynamicVars()
+{
+    m_dynamicVarsByScope.clear();
 }
 
 void EnvironmentManager::clearParamVars()
@@ -58,7 +93,10 @@ QMap<QString, QString> EnvironmentManager::resolvedEnv() const
     for (auto it = m_folderVars.constBegin(); it != m_folderVars.constEnd(); ++it) {
         resolved[it.key()] = it.value();
     }
-    for (auto it = m_dynamicVars.constBegin(); it != m_dynamicVars.constEnd(); ++it) {
+    // Só o escopo ATUAL (ver setDynamicVarScope) — dinâmicas de outro
+    // projeto/escopo NUNCA vazam pra cá, mesmo que tenham rodado antes.
+    const QMap<QString, QString> scopedDynamic = m_dynamicVarsByScope.value(m_currentDynamicScope);
+    for (auto it = scopedDynamic.constBegin(); it != scopedDynamic.constEnd(); ++it) {
         resolved[it.key()] = it.value();
     }
     for (auto it = m_paramVars.constBegin(); it != m_paramVars.constEnd(); ++it) {
@@ -71,7 +109,8 @@ QMap<QString, QString> EnvironmentManager::resolvedEnv() const
 bool EnvironmentManager::contains(const QString &name) const
 {
     return m_globalVars.contains(name) || m_folderVars.contains(name) ||
-           m_dynamicVars.contains(name) || m_paramVars.contains(name);
+           m_dynamicVarsByScope.value(m_currentDynamicScope).contains(name) ||
+           m_paramVars.contains(name);
 }
 
 QString EnvironmentManager::value(const QString &name) const

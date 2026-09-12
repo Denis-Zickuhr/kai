@@ -1,9 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
-project(kai VERSION 0.0.2 LANGUAGES CXX C)
+project(kai VERSION 1.0.0 LANGUAGES CXX C)
 
-# Versão exibida na Ajuda (aba "Versão"). Deriva da versão do project(); o
-# sufixo de canal (beta) é fixo aqui para casar com os artefatos de release.
-set(KAI_VERSION_STRING "${PROJECT_VERSION}-beta")
+# Versão exibida na Ajuda (aba "Versão"). Deriva da versão do project().
+set(KAI_VERSION_STRING "${PROJECT_VERSION}")
 add_compile_definitions(KAI_VERSION_STRING="${KAI_VERSION_STRING}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -170,6 +169,10 @@ add_library(kai-ui STATIC
     src/ui/hooks-editor-widget.cpp
     src/ui/execution-conditions-editor-widget.h
     src/ui/execution-conditions-editor-widget.cpp
+    src/ui/env-extractors-editor-widget.h
+    src/ui/env-extractors-editor-widget.cpp
+    src/ui/dynamic-vars-inspector-widget.h
+    src/ui/dynamic-vars-inspector-widget.cpp
     src/ui/project-detection-strategy.h
     src/ui/project-detection-strategy.cpp
     src/ui/folder-editor-dialog.h

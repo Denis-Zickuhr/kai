@@ -380,7 +380,6 @@ void OutputPanel::setupUi()
 
     m_jsonView = new JsonViewerWidget(m_pages);
     m_headersView = makeKeyValueTable(m_pages, utils::tr(QStringLiteral("output.headers.key")), utils::tr(QStringLiteral("output.headers.value")));
-    m_envsView = makeKeyValueTable(m_pages, utils::tr(QStringLiteral("output.envs.key")), utils::tr(QStringLiteral("output.envs.value")));
     {
         const RequestViewWidgets rv = makeRequestView(m_pages);
         m_requestView = rv.page;
@@ -390,10 +389,10 @@ void OutputPanel::setupUi()
     }
 
     // ORDEM CANÔNICA das abas (pedido do usuário): Resposta, Requisição,
-    // Saída, Headers, Envs. Definida ANTES do primeiro addTabPage — é ela
+    // Saída, Headers. Definida ANTES do primeiro addTabPage — é ela
     // que decide em qual posição uma aba reaparece ao ser reexibida (ver
     // addTabPage).
-    m_tabOrder = {m_jsonView, m_requestView, m_outputView, m_headersView, m_envsView};
+    m_tabOrder = {m_jsonView, m_requestView, m_outputView, m_headersView};
 
     // "JSON" virou "Resposta" (pedido do usuário) — chave de i18n mantida
     // (output.tab.json), só o texto traduzido mudou.
@@ -405,7 +404,6 @@ void OutputPanel::setupUi()
     addTabPage(m_outputView, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
                QStringLiteral("terminal"));
     addTabPage(m_headersView, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
-    addTabPage(m_envsView, utils::tr(QStringLiteral("output.tab.envs")), QStringLiteral("variable"));
 
     // ---------------- Entrada (stdin) ----------------
     m_inputField = new QLineEdit(this);
@@ -440,9 +438,38 @@ void OutputPanel::setupUi()
     connect(m_ptyTerminal, &PtyTerminalWidget::rawInputBytes, this, &OutputPanel::rawTerminalInput);
     connect(m_ptyTerminal, &PtyTerminalWidget::sizeChanged, this, &OutputPanel::terminalSizeChanged);
 
+    // "Requisição não executada" (ver setSkipped) — painel dedicado em vez
+    // de deixar as abas Resposta/Headers com o resultado da execução
+    // ANTERIOR em cache (bug relatado: parecia um sucesso de verdade).
+    m_skippedPanel = new QWidget(this);
+    {
+        auto *skippedLayout = new QVBoxLayout(m_skippedPanel);
+        skippedLayout->setAlignment(Qt::AlignCenter);
+        skippedLayout->setSpacing(tk::space(2));
+        auto *icon = new QLabel(m_skippedPanel);
+        icon->setPixmap(LucideIcons::icon(QStringLiteral("triangle-alert"),
+            QColor(utils::tokens::warningFg()), 32).pixmap(32, 32));
+        icon->setAlignment(Qt::AlignCenter);
+        skippedLayout->addWidget(icon);
+        auto *title = new QLabel(utils::tr(QStringLiteral("output.skipped.title")), m_skippedPanel);
+        QFont titleFont = title->font();
+        titleFont.setBold(true);
+        titleFont.setPointSize(titleFont.pointSize() + 1);
+        title->setFont(titleFont);
+        title->setAlignment(Qt::AlignCenter);
+        skippedLayout->addWidget(title);
+        m_skippedReasonLabel = new QLabel(m_skippedPanel);
+        m_skippedReasonLabel->setAlignment(Qt::AlignCenter);
+        m_skippedReasonLabel->setWordWrap(true);
+        m_skippedReasonLabel->setStyleSheet(QStringLiteral("color: %1;").arg(utils::tokens::mutedFg()));
+        m_skippedReasonLabel->setMaximumWidth(420);
+        skippedLayout->addWidget(m_skippedReasonLabel);
+    }
+
     m_bodyStack = new QStackedWidget(this);
     m_bodyStack->addWidget(m_normalBody);
     m_bodyStack->addWidget(m_ptyTerminal);
+    m_bodyStack->addWidget(m_skippedPanel);
     root->addWidget(m_bodyStack, 1);
     // Stretch final com peso 0: some no rateio normal (m_bodyStack, peso 1,
     // fica com TODO o espaço extra, como sempre). Mas quando m_bodyStack
@@ -975,17 +1002,6 @@ void OutputPanel::setHttpResult(const engine::HttpResult &result)
     updateTabVisibility();
 }
 
-void OutputPanel::setEnvironment(const QMap<QString, QString> &env)
-{
-    QList<QPair<QString, QString>> rows;
-    for (auto it = env.constBegin(); it != env.constEnd(); ++it) {
-        rows.append({it.key(), it.value()});
-    }
-    fillKeyValueTable(m_envsView, rows);
-    m_hasEnvs = !rows.isEmpty();
-    updateTabVisibility();
-}
-
 // Abas só aparecem quando têm conteúdo — evita abas vazias enganando o usuário
 // (o botão "Ver JSON" antigo abria árvore vazia por falso positivo).
 void OutputPanel::updateTabVisibility()
@@ -1009,14 +1025,13 @@ void OutputPanel::updateTabVisibility()
     setVisible(m_outputView, m_stdoutTabEnabled, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
                QStringLiteral("terminal"));
     setVisible(m_headersView, m_hasHeaders, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
-    setVisible(m_envsView, m_hasEnvs, utils::tr(QStringLiteral("output.tab.envs")), QStringLiteral("variable"));
 
     // A barra de abas (dentro da própria "caixinha") aparece sempre que o
     // corpo está visível — inclusive com UMA aba (pedido do usuário: trazer
     // a caixinha de volta mesmo com uma saída só). Respeita o colapso E o
     // modo interativo: abas de tipo de dado (Resposta/Saída/Headers/Envs)
     // não fazem sentido numa sessão de terminal cru.
-    const bool tabsShouldShow = m_bodyVisible && !m_interactiveMode && m_tabBar->count() >= 1;
+    const bool tabsShouldShow = m_bodyVisible && !m_interactiveMode && !m_skipped && m_tabBar->count() >= 1;
     m_tabBar->setVisible(tabsShouldShow);
     if (m_tabsBox) {
         m_tabsBox->setVisible(tabsShouldShow);
@@ -1027,7 +1042,6 @@ void OutputPanel::clearAll()
 {
     m_outputView->clear();
     m_headersView->setRowCount(0);
-    m_envsView->setRowCount(0);
     m_requestHeadersView->setRowCount(0);
     m_requestBodyView->clear();
     m_requestLineLabel->clear();
@@ -1035,10 +1049,15 @@ void OutputPanel::clearAll()
     m_metricsLabel->clear();
     m_hasJson = false;
     m_hasHeaders = false;
-    m_hasEnvs = false;
     m_hasRequest = false;
     m_atLineStart = true;
     m_lastLineWasBlank = false;
+    // Nova execução começa sem o estado "pulado" da rodada anterior —
+    // reaparece de novo se o pipeline sinalizar outro pulo desta vez.
+    if (m_skipped) {
+        m_skipped = false;
+        updateBodyStackPage();
+    }
     updateTabVisibility();
     // Página padrão: Saída pra shell; Resposta (vazia, esperando a
     // requisição terminar) pra HTTP — NÃO Requisição (feedback do
@@ -1112,9 +1131,7 @@ void OutputPanel::setInteractiveMode(bool interactive)
     // execução do MESMO comando interativo (ou de outro, em seguida)
     // precisa — sem isto, resyncSize() nunca rodava de novo nesse caso.
     m_interactiveMode = interactive;
-    if (m_bodyStack) {
-        m_bodyStack->setCurrentIndex(interactive ? 1 : 0);
-    }
+    updateBodyStackPage();
     if (interactive && m_ptyTerminal) {
         // Reforça o tamanho real do PTY ao (re)conectar: o widget pode ter
         // recebido resizeEvents intermediários enquanto ficava na página
@@ -1141,6 +1158,30 @@ void OutputPanel::setInteractiveMode(bool interactive)
     // m_interactiveMode) em vez de mexer em m_tabsBox/m_tabBar direto
     // aqui — evita duas fontes de verdade divergindo.
     updateTabVisibility();
+}
+
+void OutputPanel::setSkipped(bool skipped, const QString &reasonLabel)
+{
+    m_skipped = skipped;
+    if (m_skippedReasonLabel) {
+        m_skippedReasonLabel->setText(reasonLabel);
+    }
+    updateBodyStackPage();
+    updateTabVisibility();
+}
+
+void OutputPanel::updateBodyStackPage()
+{
+    if (!m_bodyStack) {
+        return;
+    }
+    if (m_interactiveMode) {
+        m_bodyStack->setCurrentIndex(1);
+    } else if (m_skipped) {
+        m_bodyStack->setCurrentIndex(2);
+    } else {
+        m_bodyStack->setCurrentIndex(0);
+    }
 }
 
 void OutputPanel::feedInteractive(const QString &text)
@@ -1305,6 +1346,7 @@ void OutputPanel::setStatus(OutputStatus status)
     case OutputStatus::Success: label = utils::tr(QStringLiteral("output.status.success")); state = QStringLiteral("success"); break;
     case OutputStatus::Error:   label = utils::tr(QStringLiteral("output.status.error"));   state = QStringLiteral("error");   break;
     case OutputStatus::Idle:    label = utils::tr(QStringLiteral("output.status.idle"));    state = QStringLiteral("idle");    break;
+    case OutputStatus::Skipped: label = utils::tr(QStringLiteral("output.status.skipped")); state = QStringLiteral("skipped"); break;
     }
     // Bolinha de status: um QLabel circular pintado com background-color na
     // cor do estado (sólida, centrada de verdade) — o glifo "●" ficava mais
@@ -1315,6 +1357,7 @@ void OutputPanel::setStatus(OutputStatus status)
     case OutputStatus::Success: dotColor = QColor(utils::tokens::successFg()); break;
     case OutputStatus::Error:   dotColor = QColor(utils::tokens::errorFg());   break;
     case OutputStatus::Idle:    dotColor = QColor(utils::tokens::mutedFg());   break;
+    case OutputStatus::Skipped: dotColor = QColor(utils::tokens::warningFg()); break;
     }
     m_statusDot->setStyleSheet(QStringLiteral(
         "background-color: %1; border-radius: 4px;").arg(dotColor.name()));

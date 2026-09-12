@@ -35,6 +35,7 @@ OutputStatus toOutputStatus(ExecutionStatus status)
     case ExecutionStatus::Background: return OutputStatus::Running;
     case ExecutionStatus::Success:    return OutputStatus::Success;
     case ExecutionStatus::Failed:     return OutputStatus::Error;
+    case ExecutionStatus::Skipped:    return OutputStatus::Skipped;
     case ExecutionStatus::Idle:
     default:                          return OutputStatus::Idle;
     }
@@ -429,11 +430,6 @@ void TerminalDrawer::setHttpResult(const engine::HttpResult &result)
     m_panel->setHttpResult(result);
 }
 
-void TerminalDrawer::setEnvironment(const QMap<QString, QString> &env)
-{
-    m_panel->setEnvironment(env);
-}
-
 void TerminalDrawer::setInteractiveMode(bool interactive)
 {
     m_panel->setInteractiveMode(interactive);
@@ -462,6 +458,11 @@ void TerminalDrawer::setInteractiveAcceptingInput(bool accepting)
 void TerminalDrawer::focusInteractiveTerminal()
 {
     m_panel->focusInteractiveTerminal();
+}
+
+void TerminalDrawer::setSkipped(bool skipped, const QString &reasonLabel)
+{
+    m_panel->setSkipped(skipped, reasonLabel);
 }
 
 void TerminalDrawer::applyThemeVariables(const QMap<QString, QString> &variables)
@@ -545,13 +546,6 @@ void TerminalDrawer::setDetachedHttpResult(const engine::HttpResult &result)
 {
     if (m_detachedPanel) {
         m_detachedPanel->setHttpResult(result);
-    }
-}
-
-void TerminalDrawer::setDetachedEnvironment(const QMap<QString, QString> &env)
-{
-    if (m_detachedPanel) {
-        m_detachedPanel->setEnvironment(env);
     }
 }
 

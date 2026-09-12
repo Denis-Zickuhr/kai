@@ -12,6 +12,7 @@
 #include <QTableWidgetItem>
 #include <QHeaderView>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QLineEdit>
 #include <QLabel>
 #include <QDialog>
@@ -112,6 +113,10 @@ void ExecutionConditionsEditorWidget::setupUi()
     // Sem header nem coluna de seleção — mesmo padrão de
     // OutputRespondersEditorWidget/ParameterEditorWidget.
     m_table->horizontalHeader()->setVisible(false);
+    // Ver comentário equivalente em EnvExtractorsEditorWidget/
+    // ParameterEditorWidget — stretchLastSection + Stretch explícito
+    // competindo pelo espaço sobrando.
+    m_table->horizontalHeader()->setStretchLastSection(false);
     m_table->horizontalHeader()->setSectionResizeMode(kColSummary, QHeaderView::Stretch);
     connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         if (row >= 0 && row < m_conditions.size() && editRowViaForm(row)) {
@@ -123,6 +128,11 @@ void ExecutionConditionsEditorWidget::setupUi()
 
 void ExecutionConditionsEditorWidget::rebuildTable()
 {
+    // ZERA antes de repopular — ver comentário equivalente em
+    // ParameterEditorWidget::rebuildTable (causa real do ícone fantasma:
+    // setCellWidget não solta de vez o widget antigo quando a contagem de
+    // linhas não muda entre chamadas).
+    m_table->setRowCount(0);
     m_table->setRowCount(m_conditions.size());
     for (int row = 0; row < m_conditions.size(); ++row) {
         const core::ExecutionCondition &c = m_conditions.at(row);
@@ -144,13 +154,15 @@ QString ExecutionConditionsEditorWidget::summaryFor(const core::ExecutionConditi
     // aparece na mensagem de pulo/falha do pipeline (ver
     // ExecutionPipeline::evaluateConditions), útil pra debugar qual condição
     // decidiu o resultado. Sem nome, cai no resumo automático de sempre.
-    if (!c.name.trimmed().isEmpty()) {
-        return c.name;
-    }
-    if (!operatorNeedsRight(c.op)) {
-        return QStringLiteral("%1  —  %2").arg(c.left, operatorLabel(c.op));
-    }
-    return QStringLiteral("%1  %2  %3").arg(c.left, operatorLabel(c.op), c.right);
+    const QString base = c.name.trimmed().isEmpty()
+        ? (operatorNeedsRight(c.op)
+              ? QStringLiteral("%1  %2  %3").arg(c.left, operatorLabel(c.op), c.right)
+              : QStringLiteral("%1  —  %2").arg(c.left, operatorLabel(c.op)))
+        : c.name;
+    // Desabilitada (feedback do usuário: toggle por CONDIÇÃO, não pro
+    // comando inteiro) — sinaliza na própria linha, mesmo glifo/convenção
+    // de "recurso desligado" usado noutros pontos do app.
+    return c.enabled ? base : base + utils::tr(QStringLiteral("conditions.row.disabled_suffix"));
 }
 
 void ExecutionConditionsEditorWidget::removeConditionAt(int row)
@@ -286,6 +298,16 @@ bool ExecutionConditionsEditorWidget::editRowViaForm(int row)
     attachEnvVarAutocomplete(leftField, varsProvider);
     attachEnvVarAutocomplete(rightField, varsProvider);
 
+    // Liga/desliga SÓ ESTA condição sem apagá-la (feedback do usuário:
+    // testar rápido com/sem, por linha — não um toggle pro comando
+    // inteiro). Desabilitada, o pipeline ignora esta linha por completo
+    // (ver ExecutionPipeline::evaluateConditions), como se não existisse.
+    auto *enabledField = new QCheckBox(utils::tr(QStringLiteral("conditions.field.enabled")), &dialog);
+    enabledField->setProperty("kaiRole", QStringLiteral("switch"));
+    enabledField->setToolTip(utils::tr(QStringLiteral("conditions.field.enabled.tip")));
+    enabledField->setChecked(c.enabled);
+    form->addRow(QString(), enabledField);
+
     auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     stripDialogButtonIcons(box);
     connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -304,6 +326,7 @@ bool ExecutionConditionsEditorWidget::editRowViaForm(int row)
     updated.left = leftField->text();
     updated.op = opField->currentData().toString();
     updated.right = rightField->text();
+    updated.enabled = enabledField->isChecked();
     m_conditions[row] = updated;
     return true;
 }

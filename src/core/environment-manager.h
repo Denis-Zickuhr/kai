@@ -17,14 +17,48 @@ public:
 
     void setGlobalVars(const QMap<QString, QString> &vars);
     void setFolderVars(const QMap<QString, QString> &vars);
-    void setDynamicVars(const QMap<QString, QString> &vars);
     void setParamVars(const QMap<QString, QString> &vars);
 
-    // Define/atualiza uma única variável dinâmica (ex: resultado de um
-    // env_extractor de HTTP), sem afetar as demais.
-    void setDynamicVar(const QString &name, const QString &value);
+    // ESCOPO das variáveis DINÂMICAS (extraídas via HTTP env_extractor ou
+    // captura de env de hook): cada pasta marcada Folder::isProject == true
+    // vira uma fronteira — "" (vazio) é o escopo Global, usado quando
+    // nenhum ancestral do comando é um projeto. Chamado 1x por execução,
+    // junto de setFolderVars, com a pasta-projeto MAIS PRÓXIMA na cadeia
+    // (feedback do usuário: pasta "API/" com vários projetos dentro —
+    // sem isto, dois projetos usando o mesmo nome de var em extractors
+    // se sobrescreviam, por ser um único QMap achatado pro app inteiro).
+    void setDynamicVarScope(const QString &scopeKey);
+    QString currentDynamicVarScope() const { return m_currentDynamicScope; }
 
-    void clearDynamicVars();
+    // Define/atualiza uma única variável dinâmica no escopo ATUAL (ex:
+    // resultado de um env_extractor de HTTP), sem afetar as demais.
+    void setDynamicVar(const QString &name, const QString &value);
+    // Mesma coisa, mas num escopo EXPLÍCITO, sem tocar m_currentDynamicScope
+    // — para quem já sabe o escopo-alvo (ex: DynamicVarsInspectorWidget
+    // editando uma linha) e não deveria mexer no escopo "ativo" de uma
+    // execução em andamento (setDynamicVar sozinho é ambíguo/perigoso fora
+    // do fluxo normal de runSelectedCommand -> setDynamicVarScope -> HTTP
+    // assíncrono, já que m_currentDynamicScope é estado único compartilhado).
+    void setDynamicVarInScope(const QString &scopeKey, const QString &name, const QString &value);
+
+    // Restaura, no boot, as dinâmicas marcadas EnvExtractor::persist ==
+    // true na sessão anterior (ConfigManager::loadPersistedDynamicVars).
+    void seedPersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
+
+    // Todas as dinâmicas de TODOS os escopos (scopeKey -> {var: valor}) —
+    // pra tela de inspeção, que lista tudo independente do que rodou por
+    // último (diferente de resolvedEnv(), que só reflete o escopo ATUAL).
+    QMap<QString, QMap<QString, QString>> allDynamicVars() const { return m_dynamicVarsByScope; }
+
+    // Reset de UMA variável específica num escopo (ação por linha da
+    // tabela de inspeção) — diferente de clearDynamicVars(scopeKey), que
+    // apaga o escopo INTEIRO.
+    void removeDynamicVar(const QString &scopeKey, const QString &name);
+
+    // Reset de só 1 escopo (botão "resetar este projeto" da inspeção).
+    void clearDynamicVars(const QString &scopeKey);
+    // Reset geral — todos os escopos (botão "resetar tudo").
+    void clearAllDynamicVars();
     void clearParamVars();
 
     // Retorna o mapa resolvido final, já aplicando a precedência.
@@ -95,7 +129,9 @@ private:
 
     QMap<QString, QString> m_globalVars;
     QMap<QString, QString> m_folderVars;
-    QMap<QString, QString> m_dynamicVars;
+    // scopeKey -> {var: valor}. "" = Global. Ver setDynamicVarScope.
+    QMap<QString, QMap<QString, QString>> m_dynamicVarsByScope;
+    QString m_currentDynamicScope;
     QMap<QString, QString> m_paramVars;
 };
 

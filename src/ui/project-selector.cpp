@@ -115,7 +115,10 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     folder.id = generateFolderId(projectName);
     folder.name = projectName;
     folder.icon = root.value("icon").toString();
-    folder.isProject = false;
+    // Todo projeto IMPORTADO já é, por definição, um "projeto" — vira
+    // fronteira de escopo de variáveis DINÂMICAS de cara, sem precisar
+    // marcar manualmente (ver EnvironmentManager::setDynamicVarScope).
+    folder.isProject = true;
     folder.projectPath = savedProjectPath;
 
     const QJsonObject envVarsObj = root.value("env_vars").toObject();

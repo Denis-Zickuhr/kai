@@ -30,7 +30,12 @@ enum class ExecutionStatus {
     Running,
     Success,
     Failed,
-    Background
+    Background,
+    // Comando HTTP pulado por Execution Condition (conditionSkipBehavior ==
+    // "success") — distinto de Success pra não parecer que a requisição
+    // rodou de verdade (feedback do usuário: badge verde igual a um
+    // sucesso real mascarava o pulo). Ver TerminalDrawer::setSkipped.
+    Skipped
 };
 
 // Painel inferior expansível/colapsável com suporte a cores ANSI para logs
@@ -150,8 +155,6 @@ public:
     // SAÍDA V2: alimenta as abas Headers/JSON/Raw com o resultado HTTP
     // estruturado (status, headers, latência, corpo, request enviada).
     void setHttpResult(const engine::HttpResult &result);
-    // Alimenta a aba Envs — vale para comandos shell também.
-    void setEnvironment(const QMap<QString, QString> &env);
 
     // --- Terminal interativo (Command::interactiveTerminal) — repassa 1:1
     // para o OutputPanel embutido (ver OutputPanel::setInteractiveMode e
@@ -165,10 +168,14 @@ public:
     void resetInteractiveAndReplay(const QString &rawLog);
     void setInteractiveAcceptingInput(bool accepting);
     void focusInteractiveTerminal();
+    // Ver OutputPanel::setSkipped — repassa 1:1 ao painel embutido (a
+    // janela destacada é um monitor fixo de um comando específico; não
+    // precisa deste estado, o pulo já não gera nenhum log/resultado novo
+    // pra ela espelhar).
+    void setSkipped(bool skipped, const QString &reasonLabel = QString());
 
     // Espelhos para a janela destacada (mantida fixa no comando de origem).
     void setDetachedHttpResult(const engine::HttpResult &result);
-    void setDetachedEnvironment(const QMap<QString, QString> &env);
     void setDetachedStatus(ExecutionStatus status);
 
 public slots:

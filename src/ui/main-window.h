@@ -95,6 +95,10 @@ public:
     // app). Reabrir com a opção desligada continua possível via ícone de
     // bandeja ou `kai show` (CLI/IPC), que não dependem do atalho.
     bool shouldStartVisible();
+    // Nomes de TODAS as variáveis dinâmicas capturadas, em qualquer escopo —
+    // alimenta o autocomplete {{var}} do CommandEditorDialog (feedback do
+    // usuário: "adicione ENVS temporárias na interpolação do autocomplete").
+    QStringList availableDynamicVarNames() const;
 
     // --- API de processos para o IPC/CLI (kai ps/attach/kill) ---
     // Lista os processos em execução: linhas "nome | pid | status".
@@ -303,6 +307,14 @@ private:
     void appendToCommandLog(const QString &commandId, const QString &text);
     QStringList availableThemeNames() const;
     QString resolveTargetFolderId() const;
+    // Garante ID ÚNICO pra uma pasta nova (bug relatado: 2 pastas com o
+    // MESMO NOME geravam o MESMO id via FolderEditorDialog::
+    // generateFolderId — puro slug do nome, sem desambiguação — colidindo
+    // em qualquer lookup por id (árvore, chain de herança de env_vars,
+    // etc.) e fazendo uma pasta "carregar" o conteúdo da outra). Mesmo
+    // padrão já usado pra comandos (ver handleSaveOrUpdateCommand): se o
+    // id já existe, anexa um sufixo numérico até achar um livre.
+    QString uniqueFolderId(const QString &candidate) const;
     QVector<core::Command> commandsInFolder(const QString &folderId) const;
     // Bloqueia nomes duplicados de Command/Collection DENTRO DA MESMA pasta
     // (feedback do usuário: pastas diferentes podem repetir nome livremente,
@@ -328,6 +340,13 @@ private:
     // aba/comando e voltar (relatado). Guardamos aqui para REAPLICAR no
     // reconnect, mantendo Headers/JSON ao reselecionar um comando HTTP.
     QMap<QString, engine::HttpResult> m_lastHttpResult;
+    // Comandos HTTP cuja ÚLTIMA execução foi pulada por Execution Condition
+    // (conditionSkipBehavior == "success") — ver ExecutionPipeline::
+    // commandSkippedByCondition. ausência = última execução real (ou nunca
+    // rodou). Um resultado HTTP de verdade (httpResultReady) sempre remove
+    // a entrada — um resultado novo nunca pode conviver com o marcador de
+    // pulo de uma rodada anterior.
+    QMap<QString, QString> m_skippedReason;
     QString m_connectedTerminalCommandId;
     // Id do comando de EXECUÇÃO ÚNICA atualmente rodando no ExecutionPipeline
     // (não background, portanto NÃO rastreado pelo m_processManager). Usado

@@ -312,6 +312,15 @@ public:
     QString settingsFilePath() const;
     // Arquivo separado das coleções (não fica no commands.json).
     QString collectionsFilePath() const;
+    // Arquivo separado das variáveis dinâmicas PERSISTENTES (EnvExtractor::
+    // persist == true) — NÃO é config estática autorada pelo usuário como
+    // environments.json, é o VALOR capturado em runtime, então fica à parte.
+    QString dynamicVarsFilePath() const;
+
+    // scopeKey -> {var: valor}. Arquivo ausente/corrompido -> mapa vazio
+    // (nunca falha o boot do app por causa disto).
+    QMap<QString, QMap<QString, QString>> loadPersistedDynamicVars();
+    bool savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
 
     // Carrega commands.json. Em caso de corrupção, faz backup do arquivo
     // inválido, restaura um estado vazio seguro e emite configRecovered().

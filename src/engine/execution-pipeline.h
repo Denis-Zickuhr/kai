@@ -117,6 +117,17 @@ signals:
     // corpo, request enviada) para a interface montar as abas Corpo/Headers/
     // Raw. O logMessage continua existindo para o texto do terminal.
     void httpResultReady(const QString &commandId, const engine::HttpResult &result);
+    // Comando HTTP pulado por Execution Condition, com conditionSkipBehavior
+    // == "success" (o caso "failure" já usa o fluxo normal de erro — a UI
+    // de pulo/painel só existe pro caso ambíguo "sucesso silencioso", que é
+    // o que mascarava resultado antigo em cache — feedback do usuário:
+    // "perco o feedback visual que isso ocorreu, e perco acesso as abas
+    // gerais do comando"). Só emitido pra HTTP (Shell não tem esse problema
+    // de abas — sem Resposta/Headers/Request pra ficarem com dado velho).
+    void commandSkippedByCondition(const QString &commandId, const QString &reasonLabel);
+    // Repassa HttpRunner::dynamicVarPersistRequested — o MainWindow (dono
+    // do ConfigManager) grava em dynamic-vars.json. Ver EnvExtractor::persist.
+    void dynamicVarPersistRequested(const QString &scopeKey, const QString &name, const QString &value);
     void stageStarted(const QString &commandId, PipelineStage stage);
     void pipelineFinished(const PipelineResult &result);
 

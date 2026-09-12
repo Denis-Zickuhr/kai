@@ -80,6 +80,14 @@ struct Parameter {
     // Ver utils::convertFilePathFormat / ParameterFormDialog::handleBrowseFileClicked.
     QString filePathFormat = QStringLiteral("native");
 
+    // PASTA em vez de arquivo (usado quando type == File — feedback do
+    // usuário: "às vezes o param é uma pasta"). true troca o seletor de
+    // QFileDialog::getOpenFileName por getExistingDirectory — mesmo
+    // initialDir/filePathFormat continuam valendo, só muda o QUE se
+    // escolhe. Continua sendo type == File (não um ParameterType novo):
+    // é uma variação do mesmo campo, não um tipo de parâmetro à parte.
+    bool pickFolder = false;
+
     // Fonte de dados de COLEÇÃO (feature "Coleções"): quando
     // preenchido, um parâmetro Select puxa suas opções das entradas da
     // coleção com este id, em vez de `options`. `collectionDisplayField` é
@@ -94,8 +102,23 @@ struct Parameter {
 
 // Extrator de valor de payload JSON -> variável de ambiente.
 struct EnvExtractor {
+    // Opcional (feedback do usuário: "adicionar nome para os extratores, eg:
+    // extrai token") — identifica a linha na tabela em vez do resumo bruto
+    // "json.path -> ENV_VAR" quando há vários extractors. Em branco, cai
+    // pro resumo automático (mesmo padrão de ExecutionCondition::name).
+    QString name;
+    // json_path aceita ALTERNATIVAS separadas por "||" (feedback do
+    // usuário: "extratores tem que suportar a sintaxe de OU") — tenta cada
+    // caminho em ordem, usa o primeiro que existir na resposta. Útil
+    // quando APIs diferentes (ou versões da mesma API) devolvem o mesmo
+    // dado em campos com nomes diferentes. Ex: "data.token || token".
     QString jsonPath;
     QString envVar;
+    // Sobrevive a reiniciar o app (feedback do usuário: refresh token/API
+    // key de longa duração não deveriam exigir reautenticar a cada boot).
+    // Persistido em dynamic-vars.json (ConfigManager), NÃO em kai.json —
+    // é o VALOR capturado que persiste, não esta flag em si por comando.
+    bool persist = false;
 
     QJsonObject toJson() const;
     static EnvExtractor fromJson(const QJsonObject &obj);
@@ -186,6 +209,14 @@ struct ExecutionCondition {
     QString left;
     QString op = QStringLiteral("exists");
     QString right;
+    // Liga/desliga ESTA condição sem apagá-la da lista (feedback do
+    // usuário: "a flag de habilitar/desabilitar era por condição, não
+    // pelo total" — corrigindo uma 1ª tentativa que era um único toggle
+    // pro Command inteiro). false = ExecutionPipeline::evaluateConditions
+    // IGNORA esta linha por completo, como se não existisse na lista
+    // (não conta pro E nem pro OU). Default true — kai.json antigos
+    // continuam se comportando igual.
+    bool enabled = true;
 
     QJsonObject toJson() const;
     static ExecutionCondition fromJson(const QJsonObject &obj);

@@ -7,6 +7,10 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
+      # Diagnóstico da "primeira letra comida": registra teclas e ativações de janela no kai.log (KeyTrace).
+      - KAI_TRACE_KEYS=${KAI_TRACE_KEYS:-1}
+      # Chave do provedor Anthropic para testar o chat de IA (perfil com api_key_env); vazia = sem chave.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ..:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

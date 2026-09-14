@@ -6,20 +6,16 @@ class QWidget;
 
 namespace kai::ui {
 
-// ============================================================================
-// CAMADA VISUAL MODERNA
-// ----------------------------------------------------------------------------
-// O QSS do tema é gerado no kai-core (ThemeManager::buildQss), que não pode
-// depender de QtGui. Esta camada é aplicada DEPOIS dele e, por ter a mesma
-// especificidade, sobrescreve o que precisa — sem reescrever o core.
-//
-// Tudo aqui sai dos design tokens (utils/design-tokens.h): raio, espaçamento,
-// escala tipográfica, elevação. Assim uma repaginação é uma mudança de token,
-// não uma caçada a 45 setStyleSheet espalhados.
-// ============================================================================
+// Camada visual moderna aplicada DEPOIS do QSS do tema do kai-core (ThemeManager::buildQss, sem dependência de QtGui);
+// mesma especificidade, então sobrescreve o que precisa. Tudo sai dos design tokens (utils/design-tokens.h): raio,
+// espaçamento, escala tipográfica, elevação.
 
 // QSS moderno completo, derivado dos tokens ativos.
 QString buildModernStylesheet();
+
+// A folha completa de um tema: o QSS do núcleo (`theme.qss`, que ainda traz `@RADIUS_MD@`/`@RADIUS_SM@` no lugar dos raios) com
+// os cantos da preferência do usuário (tokens) no lugar, mais a camada moderna. É o que vai para `setStyleSheet`.
+QString themeStyleSheet(const QString &themeQss);
 
 // Aplica sombra (elevação) num painel/diálogo, se o efeito estiver ligado.
 // Nível 1 = painel embutido, 2 = popover, 3 = diálogo modal.

@@ -8,20 +8,15 @@
 
 using namespace kai::engine;
 
-// Cobre o crash real reportado: comando background finalizado via stop()
-// (SIGTERM) causava segfault ao emitir statusChanged() de forma síncrona
-// dentro do próprio stack de sinais do ProcessRunner::finished, levando a
-// UI (MainWindow -> ProcessListDialog) a destruir widgets/reentrar durante
-// a notificação. Corrigido com QMetaObject::invokeMethod(Qt::QueuedConnection).
+// Regressão: comando background finalizado via stop() (SIGTERM) dava segfault ao emitir statusChanged() de forma
+// síncrona na pilha de ProcessRunner::finished, e a UI (MainWindow -> ProcessListDialog) reentrava durante a
+// notificação. Corrigido com QMetaObject::invokeMethod(Qt::QueuedConnection).
 class TestProcessManager : public QObject {
     Q_OBJECT
 
 private slots:
-    // Reproduz o cenário exato do log do usuário: processo background
-    // iniciado, depois encerrado via stop() (SIGTERM), gerando
-    // exitCode != 0 / crashed=true (comportamento esperado do Qt para
-    // término via sinal). Deve emitir statusChanged sem crashar o processo
-    // do Kai, mesmo com múltiplos listeners reagindo à mudança de estado.
+    // Background iniciado e encerrado via stop() (SIGTERM) gera exitCode != 0 / crashed=true; deve emitir
+    // statusChanged sem crashar, mesmo com vários listeners reagindo.
     void backgroundProcessTerminatedViaStopDoesNotCrash()
     {
         ProcessManager manager;
@@ -30,14 +25,12 @@ private slots:
         auto runner = std::make_unique<ProcessRunner>();
         ProcessRunner *rawRunner = runner.get();
 
-        // Simula reentrância: um listener de statusChanged que consulta o
-        // ProcessManager de volta (mesmo padrão do MainWindow ->
+        // Simula reentrância: um listener de statusChanged consulta o ProcessManager de volta (como
         // ProcessListDialog::refreshProcessList).
         int reentrantCallCount = 0;
         connect(&manager, &ProcessManager::statusChanged, &manager,
                 [&manager, &reentrantCallCount](const QString &commandId, ProcessStatus) {
                     ++reentrantCallCount;
-                    // Consulta reentrante, como refreshProcessList faz.
                     manager.trackedCommandIds();
                     manager.statusOf(commandId);
                 });
@@ -47,15 +40,12 @@ private slots:
         rawRunner->start(QStringLiteral("sleep 10"), QString(), {});
         QVERIFY(rawRunner->isRunning());
 
-        rawRunner->stop(); // SIGTERM -> exitStatus=CrashExit no Qt
+        rawRunner->stop();
 
-        // Aguarda o processo finalizar E o evento assíncrono de
-        // statusChanged ser processado (QueuedConnection precisa do
-        // event loop rodando).
+        // Espera o processo finalizar e o evento assíncrono de statusChanged (QueuedConnection precisa do event loop).
         QTest::qWait(3000);
         QCoreApplication::processEvents();
 
-        // Se chegamos até aqui sem segfault, a correção funcionou.
         QVERIFY(statusSpy.count() >= 1);
         QVERIFY(reentrantCallCount >= 1);
         QCOMPARE(manager.statusOf(QStringLiteral("cmd_bg")), ProcessStatus::Error);
@@ -69,8 +59,7 @@ private slots:
         auto runner = std::make_unique<ProcessRunner>();
         manager.track(QStringLiteral("cmd_x"), std::move(runner));
 
-        // Emissão é assíncrona (QueuedConnection): não deve estar
-        // disponível imediatamente, só após o event loop processar.
+        // A emissão é assíncrona (QueuedConnection): só chega após o event loop processar.
         QCOMPARE(statusSpy.count(), 0);
 
         QCoreApplication::processEvents();
@@ -78,18 +67,10 @@ private slots:
         QCOMPARE(qvariant_cast<ProcessStatus>(statusSpy.at(0).at(1)), ProcessStatus::Running);
     }
 
-    // Reprodução real do bug reportado: "não consigo mais rodar/rebootar
-    // um comando" depois de pará-lo via Stop/SIGKILL. O ProcessManager
-    // mantém o histórico do último processo daquele commandId até uma
-    // nova execução chamar track() de novo (permitindo consultar o status
-    // final Success/Error na UI); o bug real estava em
-    // MainWindow::handleCommandActivated, que checava apenas isTracked()
-    // sem considerar se o status real ainda era Running — bloqueando
-    // permanentemente uma nova execução depois da primeira parada. Este
-    // teste cobre a parte do ProcessManager: track() de um novo
-    // ProcessRunner para o mesmo commandId depois do anterior ter
-    // terminado deve funcionar normalmente (statusOf reflete o novo
-    // processo, não o antigo).
+    // Regressão: não dava para rodar/rebootar um comando depois de pará-lo. O ProcessManager guarda o último processo
+    // do commandId até um novo track(); o bug estava em MainWindow::handleCommandActivated, que checava só isTracked()
+    // sem ver se o status ainda era Running. Aqui: track() de um novo ProcessRunner para o mesmo commandId, depois do
+    // anterior ter terminado, reflete o novo processo em statusOf.
     void retrackingSameCommandIdAfterStopWorksCorrectly()
     {
         ProcessManager manager;
@@ -109,9 +90,7 @@ private slots:
         QVERIFY(manager.isTracked(QStringLiteral("cmd_restart")));
         QCOMPARE(manager.statusOf(QStringLiteral("cmd_restart")), ProcessStatus::Error);
 
-        // "Reboot": nova execução do mesmo comando, novo ProcessRunner
-        // rastreado sob o mesmo commandId. Deve substituir a entrada
-        // antiga sem crashar e refletir o novo processo em execução.
+        // "Reboot": novo ProcessRunner sob o mesmo commandId substitui a entrada antiga.
         auto secondRunner = std::make_unique<ProcessRunner>();
         ProcessRunner *rawSecondRunner = secondRunner.get();
         manager.track(QStringLiteral("cmd_restart"), std::move(secondRunner));
@@ -125,11 +104,8 @@ private slots:
         QTest::qWait(3000);
     }
 
-    // Reprodução real do bug reportado: "o SIGKILL tá meio fraco" — matar
-    // apenas o PID do bash usado para interpretar o comando não encerrava
-    // processos filhos gerados pelo script. Simula esse cenário real:
-    // bash gera um processo filho (outro `sleep`, em background dentro do
-    // próprio script) e verifica que stop() encerra AMBOS.
+    // Regressão: matar só o PID do bash não encerrava os filhos gerados pelo script. O bash gera um `sleep` em
+    // background e stop() deve encerrar ambos.
     void stopKillsChildProcessesSpawnedByScript()
     {
 #if defined(Q_OS_WIN)
@@ -137,13 +113,11 @@ private slots:
               "no Windows o encerramento usa QProcess::terminate/kill.");
 #else
         ProcessRunner runner;
-        // O `&` faz o `sleep 30` interno rodar como processo filho do
-        // bash, no mesmo grupo de processos (comportamento padrão sem
-        // `setsid`/`disown`).
+        // O `&` faz o `sleep 30` rodar como filho do bash, no mesmo grupo de processos (sem `setsid`/`disown`).
         runner.start(QStringLiteral("sleep 30 & child_pid=$!; echo $child_pid > /tmp/kai_test_child_pid; wait"),
                      QString(), {});
         QVERIFY(runner.isRunning());
-        QTest::qWait(300); // tempo para o script escrever o PID do filho
+        QTest::qWait(300);
 
         QFile pidFile(QStringLiteral("/tmp/kai_test_child_pid"));
         QVERIFY(pidFile.open(QIODevice::ReadOnly));
@@ -154,9 +128,7 @@ private slots:
         runner.stop();
         QTest::qWait(3000);
 
-        // ::kill(pid, 0) retorna 0 se o processo ainda existir, -1 (com
-        // ESRCH) se já tiver terminado — forma padrão de verificar
-        // existência de um processo sem enviar sinal real.
+        // ::kill(pid, 0) retorna 0 se o processo existe, -1 (ESRCH) se terminou, sem enviar sinal.
         const int stillAlive = ::kill(static_cast<pid_t>(childPid), 0);
         QCOMPARE(stillAlive, -1);
 
@@ -164,18 +136,78 @@ private slots:
 #endif
     }
 
-    // lastRunCrashed() (notificações — feature nova): ProcessRunner já
-    // distinguia QProcess::CrashExit de um exitCode != 0 comum
-    // (ProcessResult::crashed), mas isso se perdia ao virar só
-    // ProcessStatus::Error. Cobre os dois casos: saída normal com erro
-    // (exit 1) NÃO é crash; término por sinal (o mesmo cenário de
-    // backgroundProcessTerminatedViaStopDoesNotCrash, "SIGTERM ->
-    // exitStatus=CrashExit no Qt") É crash.
+    // Regressão: "Parar não encerra, mas Ctrl+C encerra". Sob PTY com `bash -i` (job control) o comando roda num grupo
+    // PRÓPRIO; SIGTERM/SIGKILL no grupo do shell não o alcança, e o job aqui ignora SIGHUP/SIGTERM. Só Ctrl+C (SIGINT)
+    // ou SIGKILL na sessão inteira o encerram: stop() precisa fazer isso.
+    void stopKillsAForegroundJobThatIgnoresTermAndHup()
+    {
+#if defined(Q_OS_WIN)
+        QSKIP("Teste específico de sessões/grupos de processo POSIX.");
+#else
+        const QString pidPath = QStringLiteral("/tmp/kai_test_job_pid_%1").arg(QCoreApplication::applicationPid());
+        QFile::remove(pidPath);
+
+        ProcessRunner runner;
+        runner.setUsePty(true);
+        runner.setInteractiveShell(true);
+        runner.setKillTimeoutMs(1500);
+        // O `;` depois do job impede o bash de fazer exec direto: o job vira filho em grupo próprio. `exec sleep` herda os
+        // sinais ignorados.
+        runner.start(QStringLiteral("bash -c \"trap '' HUP TERM; echo \\$\\$ > %1; exec sleep 300\"; echo fim")
+                         .arg(pidPath),
+                     QString(), {});
+        QVERIFY(runner.isRunning());
+
+        qint64 jobPid = 0;
+        for (int i = 0; i < 40 && jobPid <= 0; ++i) {
+            QTest::qWait(100);
+            QFile pidFile(pidPath);
+            if (pidFile.open(QIODevice::ReadOnly)) {
+                jobPid = pidFile.readAll().trimmed().toLongLong();
+            }
+        }
+        QVERIFY2(jobPid > 0, "o job não gravou o PID");
+        QCOMPARE(::kill(static_cast<pid_t>(jobPid), 0), 0);
+
+        runner.stop();
+        QTest::qWait(4000);
+
+        QCOMPARE(::kill(static_cast<pid_t>(jobPid), 0), -1);
+        QFile::remove(pidPath);
+#endif
+    }
+
+    // Background parado pelo usuário: lastRunStoppedByRequest() é verdadeiro
+    // (a UI não notifica "caiu"); um exit != 0 próprio não é.
+    void lastRunStoppedByRequestDistinguishesStopFromRealFailure()
+    {
+        ProcessManager manager;
+
+        auto stopped = std::make_unique<ProcessRunner>();
+        ProcessRunner *rawStopped = stopped.get();
+        manager.track(QStringLiteral("cmd_stopped"), std::move(stopped));
+        QCoreApplication::processEvents();
+        rawStopped->start(QStringLiteral("sleep 30"), QString(), {});
+        QVERIFY(rawStopped->isRunning());
+        rawStopped->stop();
+        QTRY_VERIFY_WITH_TIMEOUT(manager.statusOf(QStringLiteral("cmd_stopped")) != ProcessStatus::Running, 10000);
+        QVERIFY(manager.lastRunStoppedByRequest(QStringLiteral("cmd_stopped")));
+
+        auto failing = std::make_unique<ProcessRunner>();
+        ProcessRunner *rawFailing = failing.get();
+        manager.track(QStringLiteral("cmd_failing"), std::move(failing));
+        QCoreApplication::processEvents();
+        rawFailing->start(QStringLiteral("exit 2"), QString(), {});
+        QTRY_VERIFY_WITH_TIMEOUT(manager.statusOf(QStringLiteral("cmd_failing")) != ProcessStatus::Running, 5000);
+        QVERIFY(!manager.lastRunStoppedByRequest(QStringLiteral("cmd_failing")));
+    }
+
+    // lastRunCrashed(): ProcessRunner distingue QProcess::CrashExit de exitCode != 0 (ProcessResult::crashed), o que
+    // se perdia ao virar ProcessStatus::Error. Saída normal com erro (exit 1) não é crash; término por sinal é.
     void lastRunCrashedDistinguishesCrashFromPlainExitError()
     {
         ProcessManager manager;
 
-        // Caso 1: saída normal com código de erro — não é crash.
         auto plainErrorRunner = std::make_unique<ProcessRunner>();
         ProcessRunner *rawPlainErrorRunner = plainErrorRunner.get();
         manager.track(QStringLiteral("cmd_plain_error"), std::move(plainErrorRunner));
@@ -186,7 +218,6 @@ private slots:
         QCOMPARE(manager.statusOf(QStringLiteral("cmd_plain_error")), ProcessStatus::Error);
         QVERIFY(!manager.lastRunCrashed(QStringLiteral("cmd_plain_error")));
 
-        // Caso 2: terminado por sinal (stop() -> SIGTERM) — é crash.
         auto crashedRunner = std::make_unique<ProcessRunner>();
         ProcessRunner *rawCrashedRunner = crashedRunner.get();
         manager.track(QStringLiteral("cmd_crashed"), std::move(crashedRunner));
@@ -199,7 +230,6 @@ private slots:
         QCOMPARE(manager.statusOf(QStringLiteral("cmd_crashed")), ProcessStatus::Error);
         QVERIFY(manager.lastRunCrashed(QStringLiteral("cmd_crashed")));
 
-        // Comando nunca rastreado: fallback seguro, nunca crash.
         QVERIFY(!manager.lastRunCrashed(QStringLiteral("cmd_never_tracked")));
     }
 };

@@ -1,6 +1,6 @@
 #include <QTest>
 #include <QApplication>
-#include "ui/code-output-view.h"
+#include "ui/features/output/code-output-view.h"
 
 using namespace kai::ui;
 

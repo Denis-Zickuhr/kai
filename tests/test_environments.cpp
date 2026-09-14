@@ -1,9 +1,6 @@
-// Testes da feature de Environments como pacotes selecionáveis:
-//  - migração do global_env_vars legado para um pacote "Global";
-//  - round-trip (save/load) da lista de environments e do pacote ativo;
-//  - seleção/persistência do environment ativo.
-// Usa QStandardPaths em modo de teste para isolar em um diretório temporário
-// (não toca no ~/.config/kai real do usuário).
+// Environments como pacotes selecionáveis: migração do global_env_vars legado para um pacote "Global",
+// round-trip da lista e do pacote ativo, persistência do ativo. QStandardPaths em modo de teste isola o
+// diretório (não toca no ~/.config/kai real).
 
 #include <QTest>
 #include <QStandardPaths>
@@ -24,19 +21,16 @@ private slots:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
-        // Garante um diretório limpo por execução.
         ConfigManager cm;
         const QString dir = cm.configDirPath();
         QDir(dir).removeRecursively();
         QDir().mkpath(dir);
     }
 
-    // Um settings.json legado (só global_env_vars, sem environments) deve
-    // migrar para um pacote "Global" com essas variáveis, e ficar ativo.
+    // Um settings.json legado (só global_env_vars) migra para um pacote "Global" ativo.
     void legacyGlobalEnvVarsMigrateToPackage()
     {
         ConfigManager cm;
-        // Escreve um settings.json legado à mão.
         QJsonObject root;
         QJsonObject env;
         env["PORT"] = "8080";
@@ -52,16 +46,13 @@ private slots:
         QCOMPARE(loaded.environments.first().name, QStringLiteral("Global"));
         QCOMPARE(loaded.environments.first().vars.value(QStringLiteral("PORT")), QStringLiteral("8080"));
         QCOMPARE(loaded.environments.first().vars.value(QStringLiteral("TOKEN")), QStringLiteral("abc"));
-        // O pacote migrado deve estar ativo.
         QCOMPARE(loaded.activeEnvironmentId, loaded.environments.first().id);
     }
 
-    // Round-trip: salvar múltiplos environments + ativo e recarregar mantém
-    // tudo idêntico.
+    // Round-trip: múltiplos environments + ativo recarregam idênticos.
     void environmentsRoundTrip()
     {
         ConfigManager cm;
-        // Limpa o arquivo pra não herdar do teste anterior.
         QFile::remove(cm.settingsFilePath());
 
         SettingsData s;
@@ -86,8 +77,7 @@ private slots:
         QCOMPARE(loaded.activeEnvironmentId, QStringLiteral("env_prod"));
     }
 
-    // Variáveis secretas: as chaves marcadas como secretas sobrevivem ao
-    // round-trip (save/load) junto com os valores.
+    // Chaves marcadas como secretas sobrevivem ao round-trip junto com os valores.
     void secretKeysRoundTrip()
     {
         ConfigManager cm;
@@ -110,8 +100,7 @@ private slots:
         QCOMPARE(loaded.environments.first().vars.value("API_KEY"), QStringLiteral("super-secret"));
     }
 
-    // Alvos de terminal: a flag usePty (TTY por alvo) sobrevive ao
-    // round-trip (save/load). Um alvo é "tty", outro "robusto".
+    // A flag usePty (TTY por alvo) sobrevive ao round-trip.
     void terminalTargetUsePtyRoundTrip()
     {
         ConfigManager cm;
@@ -129,10 +118,7 @@ private slots:
         QVERIFY(cm.saveSettings(s));
 
         const SettingsData loaded = cm.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente (auto-seedado
-        // pra dar um lugar de configurar Saída/TTY sem precisar de
-        // wrapping — ver ConfigManager::loadSettings).
-        QCOMPARE(loaded.terminalProfiles.size(), 3);
+        QCOMPARE(loaded.terminalProfiles.size(), 2);
         bool sawTty = false, sawRobust = false;
         for (const TerminalProfile &t : loaded.terminalProfiles) {
             if (t.name == QStringLiteral("WSL (tty)")) { sawTty = true; QVERIFY(t.usePty); }

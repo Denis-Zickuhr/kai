@@ -1,17 +1,21 @@
 #include <QTest>
+#include "core/yaml-bridge.h"
 #include <QTemporaryDir>
 #include <QFile>
 
-#include "ui/project-selector.h"
+#include "ui/features/collections/project-selector.h"
 #include "core/models.h"
 
 using namespace kai::ui;
 using namespace kai::core;
 
-// Cobre o versionamento de coleções por projeto (definição original da feature
-// "Coleções"): um kai.json pode trazer uma chave "collections", e a
-// importação do projeto deve materializar cada uma como Collection
-// associada à pasta do projeto (folderId), utilizável como fonte de dados.
+// Versionamento de coleções por projeto: um kai.json pode trazer "collections", e a importação materializa cada
+// uma como Collection associada à pasta do projeto (folderId). Fixtures em JSON por legibilidade, gravados como kai.yml.
+static QByteArray yml(const char *json)
+{
+    return kai::core::jsonTextToYamlText(QString::fromUtf8(json)).toUtf8();
+}
+
 class TestProjectCollections : public QObject {
     Q_OBJECT
 
@@ -21,9 +25,9 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "API Clientes",
             "icon": "database",
             "commands": [{"name": "Build", "type": "shell", "command": "echo ok"}],
@@ -42,7 +46,7 @@ private slots:
                     ]
                 }
             ]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -50,7 +54,6 @@ private slots:
         QVERIFY(result.success);
         QCOMPARE(result.commands.size(), 1);
 
-        // A coleção do projeto foi materializada e associada à pasta.
         QCOMPARE(result.collections.size(), 1);
         const Collection &col = result.collections.at(0);
         QCOMPARE(col.name, QStringLiteral("Clientes"));
@@ -59,8 +62,81 @@ private slots:
         QCOMPARE(col.schema.size(), 3);
         QCOMPARE(col.entries.size(), 2);
         QCOMPARE(col.entries.at(0).values.value(QStringLiteral("value")), QStringLiteral("Alice"));
-        // sourcePath aponta para o kai.json de origem (versionamento).
-        QVERIFY(col.sourcePath.endsWith(QStringLiteral("kai.json")));
+        QVERIFY(col.sourcePath.endsWith(QStringLiteral("kai.yml")));
+    }
+
+    // Import Project também aceita kai.yml/kai.yaml (sem kai.json), convertendo pelo mesmo bridge YAML<->JSON do
+    // Exportar/Importar Configuração.
+    void importAcceptsKaiYmlWhenKaiJsonIsAbsent()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QFile kaiYml(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(R"yaml(
+project_name: "API Clientes YAML"
+icon: "database"
+commands:
+  - name: "Build"
+    type: "shell"
+    command: "echo ok"
+)yaml");
+        kaiYml.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.name, QStringLiteral("API Clientes YAML"));
+        QCOMPARE(result.commands.size(), 1);
+        QCOMPARE(result.commands.at(0).name, QStringLiteral("Build"));
+    }
+
+    // O JSON deixou de ser formato de arquivo de projeto: um kai.json sozinho não é lido.
+    void aLoneKaiJsonIsNotRead()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile legacy(directory.filePath(QStringLiteral("kai.json")));
+        QVERIFY(legacy.open(QIODevice::WriteOnly));
+        legacy.write(R"json({"project_name": "Antigo", "commands": [{"name": "A", "type": "shell", "command": "echo"}]})json");
+        legacy.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY(!result.success);
+    }
+
+    // Regressão: um kai.yml na forma do Export/Import Configuration ("folders": [{"name", "icon", "is_project": true}],
+    // sem "project_name"/"icon" no topo) ficava com o nome do diretório e ícone vazio; agora a entrada de "folders" é o
+    // fallback quando project_name/icon faltam.
+    void importFallsBackToIsProjectFolderEntryForNameAndIcon()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QFile kaiYml(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(R"yaml(
+commands:
+  - name: "Sync"
+    type: "shell"
+    command: "npm run sync"
+    icon: "refresh-ccw"
+folders:
+  - icon: "box"
+    is_project: true
+    name: "Amazon Marketplace API"
+)yaml");
+        kaiYml.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.name, QStringLiteral("Amazon Marketplace API"));
+        QCOMPARE(result.folder.icon, QStringLiteral("box"));
+        QCOMPARE(result.commands.size(), 1);
+        QCOMPARE(result.commands.at(0).icon, QStringLiteral("refresh-ccw"));
     }
 
     void paramReferencesCollectionByName()
@@ -68,9 +144,9 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "API",
             "commands": [{
                 "name": "Saudar",
@@ -86,7 +162,7 @@ private slots:
                 "schema": [{"name": "value", "label": "Nome", "type": "value"}],
                 "entries": [{"values": {"value": "Alice"}}]
             }]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -96,8 +172,7 @@ private slots:
         QCOMPARE(result.commands.at(0).params.size(), 1);
         QCOMPARE(result.collections.size(), 1);
 
-        // O param "cliente" deve estar ligado ao id gerado da coleção
-        // "Clientes" (resolvido por nome durante o import).
+        // O param "cliente" liga ao id gerado da coleção "Clientes" (resolvido por nome no import).
         const Parameter &p = result.commands.at(0).params.at(0);
         QCOMPARE(p.collectionId, result.collections.at(0).id);
         QCOMPARE(p.collectionDisplayField, QStringLiteral("value"));
@@ -108,12 +183,12 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "Sem Coleções",
             "commands": [{"name": "Run", "type": "shell", "command": "ls"}]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -122,16 +197,14 @@ private slots:
         QCOMPARE(result.collections.size(), 0);
     }
 
-    // Suporte a PASTAS em projetos (feedback do usuário: era base da spec).
-    // Um comando pode declarar "folder": "Nome" ou "A/B" (aninhado); cada
-    // segmento vira uma subpasta sob a pasta raiz do projeto.
+    // Pastas em projetos: "folder": "Nome" ou "A/B" (aninhado) em um comando; cada segmento vira uma subpasta sob a raiz.
     void importCreatesSubFoldersFromFolderKey()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "API",
             "commands": [
                 {"name": "Raiz", "type": "shell", "command": "echo raiz"},
@@ -139,7 +212,7 @@ private slots:
                 {"name": "Shopee", "type": "shell", "command": "echo s", "folder": "Marketplaces/Shopee"},
                 {"name": "Olist", "type": "shell", "command": "echo o", "folder": "Marketplaces/Olist"}
             ]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -147,8 +220,7 @@ private slots:
         QVERIFY(result.success);
         QCOMPARE(result.commands.size(), 4);
 
-        // Subpastas: Health, Marketplaces, Shopee, Olist (Marketplaces é
-        // criada uma vez e reusada por Shopee e Olist).
+        // Subpastas: Health, Marketplaces, Shopee, Olist (Marketplaces criada uma vez e reusada).
         auto folderIdByName = [&](const QString &name) -> QString {
             for (const Folder &f : result.subFolders) if (f.name == name) return f.id;
             return QString();
@@ -160,8 +232,6 @@ private slots:
         const QString olistId = folderIdByName(QStringLiteral("Olist"));
         QVERIFY(!healthId.isEmpty() && !mktId.isEmpty() && !shopeeId.isEmpty() && !olistId.isEmpty());
 
-        // "Raiz" fica na pasta do projeto; "Health" na subpasta Health;
-        // Shopee/Olist aninhados sob Marketplaces.
         auto cmdFolder = [&](const QString &cmdName) -> QString {
             for (const Command &c : result.commands) if (c.name == cmdName) return c.folderId;
             return QString();
@@ -171,7 +241,6 @@ private slots:
         QCOMPARE(cmdFolder(QStringLiteral("Shopee")), shopeeId);
         QCOMPARE(cmdFolder(QStringLiteral("Olist")), olistId);
 
-        // Marketplaces é filha da raiz; Shopee/Olist filhas de Marketplaces.
         for (const Folder &f : result.subFolders) {
             if (f.id == mktId) QCOMPARE(f.parentId.value_or(QString()), result.folder.id);
             if (f.id == shopeeId) QCOMPARE(f.parentId.value_or(QString()), mktId);
@@ -179,21 +248,143 @@ private slots:
         }
     }
 
-    // AUDITORIA de import/export (revisão geral pedida pelo usuário): o
-    // parser de kai.json de projeto lia só um subconjunto pequeno dos
-    // campos de Command (o resto era descartado silenciosamente mesmo
-    // usando as MESMAS chaves de Command::toJson). Cobre os campos simples
-    // adicionados: description/compact_output/hide_on_run/hidden/
-    // capture_env/open_last_link/interactive_terminal/terminal_target/
-    // auto_run/auto_run_delay_sec, responders e a nova Condição de Execução.
+    // Um "folders" opcional com {"path", "icon"} dá ícone a uma subpasta, sem criá-la: a pasta continua nascendo de
+    // "folder" nos comandos.
+    void importAppliesSubFolderIconFromFoldersArrayByPath()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(yml(R"json({
+            "project_name": "API",
+            "commands": [
+                {"name": "API dev", "type": "shell", "command": "go run", "folder": "Backend/API"}
+            ],
+            "folders": [
+                {"path": "Backend", "icon": "server"},
+                {"path": "Backend/API", "icon": "webhook"},
+                {"path": "Nao Usada", "icon": "trash"}
+            ]
+        })json"));
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.subFolders.size(), 2);
+
+        auto folderByName = [&](const QString &name) -> const Folder * {
+            for (const Folder &f : result.subFolders) if (f.name == name) return &f;
+            return nullptr;
+        };
+        const Folder *backend = folderByName(QStringLiteral("Backend"));
+        const Folder *api = folderByName(QStringLiteral("API"));
+        QVERIFY(backend != nullptr && api != nullptr);
+        QCOMPARE(backend->icon, QStringLiteral("server"));
+        QCOMPARE(api->icon, QStringLiteral("webhook"));
+        // Uma entrada cujo path nenhum comando/coleção referencia não cria pasta.
+        QVERIFY(folderByName(QStringLiteral("Nao Usada")) == nullptr);
+    }
+
+    // "cli_path": o mesmo mecanismo de "folders" o carrega para uma subpasta implícita, e o "cli_path" do topo vira o
+    // da raiz do projeto (como project_name/icon).
+    void importAppliesCliPathFromTopLevelAndFoldersArray()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(yml(R"json({
+            "project_name": "API",
+            "cli_path": "api",
+            "commands": [
+                {"name": "API dev", "type": "shell", "command": "go run", "folder": "Backend/Zaphyr", "cli_path": "env"}
+            ],
+            "folders": [
+                {"path": "Backend/Zaphyr", "cli_path": "zephyr"}
+            ]
+        })json"));
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.cliPath, QStringLiteral("api"));
+
+        const Folder *zaphyr = nullptr;
+        for (const Folder &f : result.subFolders) {
+            if (f.name == QStringLiteral("Zaphyr")) { zaphyr = &f; break; }
+        }
+        QVERIFY(zaphyr != nullptr);
+        QCOMPARE(zaphyr->cliPath, QStringLiteral("zephyr"));
+        QCOMPARE(result.commands.first().cliPath, QStringLiteral("env"));
+    }
+
+    // Regressão: "path" escrito com o nome do projeto como prefixo ("Amazon Marketplace API/Sincronizar") nunca batia,
+    // pois o path de um comando não inclui a raiz. O prefixo "<project_name>/" é removido se presente.
+    void importAppliesSubFolderIconWhenPathIncludesProjectNamePrefix()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(yml(R"json({
+            "project_name": "Amazon Marketplace API",
+            "icon": "box",
+            "commands": [
+                {"name": "Geral", "type": "shell", "command": "npm run sync", "folder": "Sincronizar", "icon": "refresh-ccw"}
+            ],
+            "folders": [
+                {"path": "Amazon Marketplace API/Sincronizar", "icon": "refresh-ccw"}
+            ]
+        })json"));
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.subFolders.size(), 1);
+        QCOMPARE(result.subFolders.first().name, QStringLiteral("Sincronizar"));
+        QCOMPARE(result.subFolders.first().icon, QStringLiteral("refresh-ccw"));
+    }
+
+    // kai.json/kai.yml de projeto leva "kip"/"kip_window" até o Command (o parser reusa Command::fromJson).
+    void importCarriesKipFlags()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(yml(R"json({
+            "project_name": "KIP Demo",
+            "commands": [
+                {"name": "Deploy", "type": "shell", "command": "deploy --kip", "kip": true, "kip_window": true},
+                {"name": "Plain", "type": "shell", "command": "ls"}
+            ]
+        })json"));
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.commands.size(), 2);
+        QVERIFY(result.commands.at(0).kip);
+        QVERIFY(result.commands.at(0).kipOpenInWindow);
+        QVERIFY(!result.commands.at(1).kip);
+    }
+
+    // O parser lia só um subconjunto dos campos de Command (o resto era descartado em silêncio, apesar das MESMAS
+    // chaves de Command::toJson). Cobre os campos simples (description, compact_output, hide_on_run, hidden,
+    // capture_env, open_last_link, interactive_terminal, terminal_target, auto_run*), responders e Condição de Execução.
     void importParsesPreviouslyMissingCommandFields()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "Projeto Completo",
             "commands": [
                 {
@@ -201,15 +392,23 @@ private slots:
                     "type": "shell",
                     "command": "gh auth login",
                     "description": "Faz login",
+                    "icon": "key-round",
+                    "formatted_output": true,
                     "compact_output": true,
                     "hide_on_run": true,
                     "hidden": true,
                     "capture_env": true,
+                    "declared_env_vars": [
+                        {"name": "TOKEN", "persist": true, "scope": "global"}
+                    ],
                     "open_last_link": true,
                     "interactive_terminal": true,
                     "terminal_target": "WSL",
                     "auto_run": true,
                     "auto_run_delay_sec": 5,
+                    "params": [
+                        {"name": "scope", "label": "Scope", "type": "text", "optional": true}
+                    ],
                     "responders": [
                         {"name": "Confirmar", "pattern": "\\[y/N\\]", "response": "y"}
                     ],
@@ -220,7 +419,7 @@ private slots:
                     "condition_skip_behavior": "failure"
                 }
             ]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -230,15 +429,31 @@ private slots:
 
         const Command &c = result.commands.at(0);
         QCOMPARE(c.description, QStringLiteral("Faz login"));
+        // icon/formatted_output/declared_env_vars e Parameter::optional: o parser antigo não os lia; agora reusa
+        // core::Command::fromJson (o mesmo do Export/Import Configuration), então campo novo chega sozinho.
+        QCOMPARE(c.icon, QStringLiteral("key-round"));
+        QCOMPARE(c.formattedOutput, true);
         QCOMPARE(c.compactOutput, true);
         QCOMPARE(c.hideOnRun, true);
         QCOMPARE(c.hidden, true);
         QCOMPARE(c.captureEnv, true);
+        QCOMPARE(c.declaredEnvVars.size(), 1);
+        if (!c.declaredEnvVars.isEmpty()) {
+            QCOMPARE(c.declaredEnvVars.first().name, QStringLiteral("TOKEN"));
+            QCOMPARE(c.declaredEnvVars.first().persist, true);
+        }
         QCOMPARE(c.openLastLink, true);
         QCOMPARE(c.interactiveTerminal, true);
         QCOMPARE(c.terminalTarget, QStringLiteral("WSL"));
         QCOMPARE(c.autoRun, true);
         QCOMPARE(c.autoRunDelaySec, 5);
+        QCOMPARE(c.params.size(), 1);
+        if (!c.params.isEmpty()) {
+            QCOMPARE(c.params.first().optional, true);
+        }
+        // working_dir sem a chave herda da pasta-projeto; o import não grava "{{PROJECT_PATH}}" em cada comando.
+        QCOMPARE(int(c.workingDirMode), int(WorkingDirMode::Inherit));
+        QVERIFY(c.workingDir.isEmpty());
         QCOMPARE(c.responders.size(), 1);
         QCOMPARE(c.responders.at(0).name, QStringLiteral("Confirmar"));
         QCOMPARE(c.executionConditions.size(), 1);
@@ -248,17 +463,16 @@ private slots:
         QCOMPARE(c.conditionSkipBehavior, QStringLiteral("failure"));
     }
 
-    // Hooks no kai.json de projeto referenciam outros comandos do MESMO
-    // manifesto por NOME (o autor não conhece os ids gerados) — resolvidos
-    // para os ids reais depois que todos os comandos existem.
+    // Hooks referenciam outros comandos do mesmo manifesto por NOME, resolvidos para os ids reais depois que todos
+    // os comandos existem.
     void importResolvesHooksByName()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "Projeto Hooks",
             "commands": [
                 {
@@ -270,7 +484,7 @@ private slots:
                 {"name": "Login", "type": "shell", "command": "gh auth login"},
                 {"name": "Notificar", "type": "shell", "command": "echo done"}
             ]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -295,23 +509,19 @@ private slots:
         QVERIFY(deploy.hooks.cleanup.isEmpty());
     }
 
-    // AUDITORIA (bug relatado): o path usado pra LER o kai.json e o valor
-    // gravado como PROJECT_PATH precisam ser INDEPENDENTES — editar um não
-    // pode quebrar o outro. Aqui o "projectPathOverride" (2º argumento) é
-    // deliberadamente um path que NÃO existe no disco (simula o usuário
-    // simplificando à mão, ex: tirando o prefixo do WSL) — a leitura do
-    // kai.json deve continuar funcionando normalmente porque ela usa
-    // `directoryPath` (o path real), nunca o override.
+    // O path usado para LER o kai.json e o gravado como PROJECT_PATH são independentes: o "projectPathOverride" (2º
+    // argumento) é deliberadamente um path inexistente (usuário simplificando à mão, ex: sem o prefixo do WSL) e a
+    // leitura segue usando `directoryPath`, nunca o override.
     void importUsesRealDirectoryToReadButOverrideToSaveProjectPath()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(yml(R"json({
             "project_name": "Projeto",
             "commands": [{"name": "Build", "type": "shell", "command": "make"}]
-        })json");
+        })json"));
         kaiJson.close();
 
         ProjectSelector selector;
@@ -319,26 +529,29 @@ private slots:
         const ProjectImportResult result = selector.importFromDirectory(directory.path(), fakeSimplifiedPath);
 
         QVERIFY2(result.success, qPrintable(result.errorMessage));
-        QCOMPARE(result.commands.size(), 1); // achou o kai.json normalmente
-        QCOMPARE(result.folder.projectPath.value_or(QString()), fakeSimplifiedPath); // mas salvou o override
-        QCOMPARE(result.folder.envVars.value(QStringLiteral("PROJECT_PATH")), fakeSimplifiedPath);
+        QCOMPARE(result.commands.size(), 1);
+        QCOMPARE(int(result.folder.workingDirMode), int(WorkingDirMode::Custom));
+        QCOMPARE(result.folder.workingDir, fakeSimplifiedPath);
+        // PROJECT_PATH não é mais variável gravada na pasta: é calculada na execução.
+        QVERIFY(!result.folder.envVars.contains(QStringLiteral("PROJECT_PATH")));
+        // E o comando importado herda a raiz em vez de repetir o caminho.
+        QCOMPARE(int(result.commands.first().workingDirMode), int(WorkingDirMode::Inherit));
     }
 
-    // Sem override (string vazia, o padrão): mantém o comportamento antigo
-    // — PROJECT_PATH cai pro directoryPath literal.
+    // Sem override (string vazia, o padrão): o diretório do projeto cai para o directoryPath literal.
     void importFallsBackToDirectoryPathWhenNoOverrideGiven()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({"project_name": "Projeto", "commands": []})json");
+        kaiJson.write(yml(R"json({"project_name": "Projeto", "commands": []})json"));
         kaiJson.close();
 
         ProjectSelector selector;
         const ProjectImportResult result = selector.importFromDirectory(directory.path());
         QVERIFY(result.success);
-        QCOMPARE(result.folder.projectPath.value_or(QString()), directory.path());
+        QCOMPARE(result.folder.workingDir, directory.path());
     }
 };
 

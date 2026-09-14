@@ -5,6 +5,9 @@
 
 #include <QTest>
 #include <QStringList>
+#include <QTemporaryFile>
+#include <QTextStream>
+#include <QUuid>
 
 #include "ipc/cli-client.h"
 
@@ -54,12 +57,52 @@ private slots:
     }
 
     // list sem instância rodando: tratado, mas falha de conexão (exit 2).
-    // (Assume que nenhuma instância do Kai está escutando durante o teste.)
+    // O cliente conecta num socket GLOBAL fixo: isola num nome ÚNICO (KAI_IPC_SOCKET_NAME_OVERRIDE) para
+    // não depender de haver um Kai real rodando na máquina.
     void listWithoutInstanceReportsConnectionError()
     {
+        const QByteArray uniqueSocketName =
+            QStringLiteral("kai-ipc-test-%1").arg(QUuid::createUuid().toString(QUuid::Id128)).toUtf8();
+        qputenv("KAI_IPC_SOCKET_NAME_OVERRIDE", uniqueSocketName);
         const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("list")});
+        qunsetenv("KAI_IPC_SOCKET_NAME_OVERRIDE");
         QVERIFY(o.handled);
         QCOMPARE(o.exitCode, 2); // 2 = não conseguiu conectar
+    }
+
+    // validate sem caminho de arquivo: erro de uso (exit 2), sem tentar IPC.
+    void validateWithoutFileIsUsageError()
+    {
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate")});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 2);
+    }
+
+    // validate roda OFFLINE (não precisa de instância) — um arquivo válido
+    // sai com 0, mesmo sem nenhum Kai rodando.
+    void validateValidFileExitsZeroWithoutInstance()
+    {
+        QTemporaryFile file;
+        QVERIFY(file.open());
+        QTextStream(&file) << QStringLiteral("commands:\n  - name: X\n    type: shell\n    command: echo hi\n");
+        file.close();
+
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate"), file.fileName()});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 0);
+    }
+
+    // Arquivo com erro estrutural: exit 1 (não 2 — não é falha de conexão).
+    void validateInvalidFileExitsOne()
+    {
+        QTemporaryFile file;
+        QVERIFY(file.open());
+        QTextStream(&file) << QStringLiteral("commands:\n  - type: shell\n");
+        file.close();
+
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate"), file.fileName()});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 1);
     }
 };
 

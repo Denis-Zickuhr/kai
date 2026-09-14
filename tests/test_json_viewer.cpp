@@ -4,24 +4,15 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
-#include "ui/json-viewer-widget.h"
-#include "ui/foldable-json-view.h"
+#include "ui/shared/json-viewer-widget.h"
+#include "ui/shared/foldable-json-view.h"
 #include "utils/translation-manager.h"
 
 using namespace kai::ui;
 
-// Cobre a extração/parse de JSON do JsonViewerWidget quando o texto vem
-// MISTURADO (cabeçalho de log + corpo), especialmente quando o cabeçalho
-// contém chaves de template como "{{BASE_URL}}" que confundiriam um parser
-// que pegasse o primeiro '{'. Bug reportado (json-erro.png): o viewer
-// mostrava "(texto)" em vez do JSON.
-//
-// Reescrito para a versão em TEXTO LIVRE (FoldableJsonView) — pedido do
-// usuário: "quero um editor de json mais bonito e fluido [...] estilo
-// insomnia/postman". Os testes originais inspecionavam a árvore
-// (QTreeWidget::topLevelItemCount); agora inspecionam o texto
-// pretty-printed exibido (QPlainTextEdit::toPlainText), preservando a
-// MESMA intenção de cobertura (parse correto / fallback correto).
+// JsonViewerWidget com texto misto (cabeçalho de log + corpo), sobretudo quando o cabeçalho tem chaves
+// de template como "{{BASE_URL}}" que confundiriam um parser que pegasse o primeiro '{'.
+// Os testes inspecionam o texto pretty-printed (FoldableJsonView, QPlainTextEdit::toPlainText).
 class TestJsonViewer : public QObject {
     Q_OBJECT
 
@@ -37,8 +28,7 @@ private slots:
         QVERIFY2(text.contains(QStringLiteral("\"c\": 2")), qPrintable(text));
     }
 
-    // O caso da print: log "HTTP GET {{BASE_URL}}/get -> status 200 (...)"
-    // seguido do corpo JSON. O '{' de "{{BASE_URL}}" NÃO deve atrapalhar.
+    // Log "HTTP GET {{BASE_URL}}/get -> status 200 (...)" seguido do corpo JSON: o '{' do template não atrapalha.
     void parsesJsonAfterHeaderWithTemplateBraces()
     {
         const QString mixed = QStringLiteral(
@@ -54,13 +44,11 @@ private slots:
         auto *view = w.findChild<QPlainTextEdit *>();
         QVERIFY(view != nullptr);
         const QString text = view->toPlainText();
-        // Reconheceu o JSON (as 4 chaves aparecem formatadas)...
         QVERIFY2(text.contains(QStringLiteral("\"args\"")), qPrintable(text));
         QVERIFY2(text.contains(QStringLiteral("\"headers\"")), qPrintable(text));
         QVERIFY2(text.contains(QStringLiteral("\"origin\"")), qPrintable(text));
         QVERIFY2(text.contains(QStringLiteral("\"url\"")), qPrintable(text));
-        // ...e não caiu no fallback de texto cru (o cabeçalho do log some,
-        // só o JSON pretty-printed fica).
+        // Não caiu no fallback de texto cru (o cabeçalho do log some).
         QVERIFY2(!text.contains(QStringLiteral("HTTP GET")), qPrintable(text));
     }
 
@@ -71,16 +59,13 @@ private slots:
         w.setJsonText(raw);
         auto *view = w.findChild<QPlainTextEdit *>();
         QVERIFY(view != nullptr);
-        // Fallback: mostra o texto cru tal como veio (sem árvore, sem
-        // marcador "(texto)" artificial).
+        // Fallback: texto cru como veio.
         QCOMPARE(view->toPlainText(), raw);
         QCOMPARE(w.formattedJson(), raw);
     }
 
-    // Bug reportado: com o log contendo o ECO da requisição (um JSON) e a
-    // RESPOSTA (outro JSON), o viewer capturava um span com os DOIS objetos
-    // e mostrava campos duplicados/quebrados. Deve pegar só o primeiro JSON
-    // balanceado (o eco), com suas chaves corretas.
+    // Log com o eco da requisição (um JSON) e a resposta (outro JSON): pega só o primeiro JSON
+    // balanceado (o eco), não um span com os dois.
     void extractsOnlyFirstBalancedJsonNotTwoConcatenated()
     {
         const QString twoJsons = QStringLiteral(
@@ -93,17 +78,15 @@ private slots:
         auto *view = w.findChild<QPlainTextEdit *>();
         QVERIFY(view != nullptr);
         const QString text = view->toPlainText();
-        // Primeiro JSON balanceado = { nome, tipo } — não deve conter "echo"
-        // nem "ok" (que só existem no segundo objeto).
+        // Primeiro JSON = { nome, tipo }: sem "echo" nem "ok" (do segundo objeto).
         QVERIFY2(text.contains(QStringLiteral("\"nome\": \"Kai\"")), qPrintable(text));
         QVERIFY2(text.contains(QStringLiteral("\"tipo\": \"runner\"")), qPrintable(text));
         QVERIFY2(!text.contains(QStringLiteral("\"echo\"")), qPrintable(text));
         QVERIFY2(!text.contains(QStringLiteral("\"ok\"")), qPrintable(text));
     }
 
-    // REGRESSÃO (achados de auditoria C2/A3): a detecção antiga era só
-    // "contém '{'" -> falso positivo (botão acendia e a árvore abria vazia);
-    // e com vários JSONs no log o correto é o MAIS RECENTE (o último).
+    // A detecção não pode ser só "contém '{'" (falso positivo: botão acendia e a árvore abria vazia);
+    // com vários JSONs no log vale o mais recente (último).
     void extractJsonBlockRejectsNonJsonAndPicksLast()
     {
         // Sem JSON de verdade: chaves de template e log de shell.
@@ -111,7 +94,6 @@ private slots:
         QVERIFY2(JsonViewerWidget::extractJsonBlock(noJson).isEmpty(),
                  "texto sem JSON valido nao deveria ser detectado como JSON");
 
-        // Dois JSONs no log: deve pegar o ULTIMO (resposta mais recente).
         const QString twoJson = QStringLiteral(
             "HTTP 200\n{\"resposta\": \"antiga\"}\nHTTP 200\n{\"resposta\": \"nova\"}\n");
         const QString block = JsonViewerWidget::extractJsonBlock(twoJson);
@@ -121,10 +103,8 @@ private slots:
         QVERIFY(!block.contains(QStringLiteral("antiga")));
     }
 
-    // REGRESSÃO (bug reportado com /api/docs.json): o log termina com
-    // "tags": [] seguido de "[Pipeline concluído...]". Uma varredura de trás
-    // para frente casava o ARRAY VAZIO primeiro e a janela abria sem nada.
-    // Deve retornar o documento de NÍVEL SUPERIOR inteiro.
+    // Log terminando em `"tags": []` seguido de "[Pipeline concluído...]": a varredura de trás para frente
+    // casava o array vazio. Deve retornar o documento de nível superior inteiro.
     void picksOuterDocumentNotTrailingEmptyArray()
     {
         const QString log = QStringLiteral(
@@ -143,10 +123,7 @@ private slots:
         QCOMPARE(d.object().value(QStringLiteral("openapi")).toString(), QStringLiteral("3.0.0"));
     }
 
-    // NOVO: cobertura do colapso inline (pedido central do ticket). Um
-    // objeto aninhado deve virar um par dobrável, e colapsar deve esconder
-    // as linhas internas sem alterar o texto puro do documento (o texto
-    // continua todo lá — só ficam blocos invisíveis).
+    // Colapso inline: objeto aninhado vira par dobrável; colapsar esconde as linhas internas sem alterar o texto puro.
     void nestedObjectIsFoldableAndTogglesVisibility()
     {
         JsonViewerWidget w;
@@ -155,7 +132,6 @@ private slots:
         auto *view = w.findChild<FoldableJsonView *>();
         QVERIFY(view != nullptr);
 
-        // Acha a linha que abre o objeto "user" (termina em '{').
         int startBlock = -1;
         for (QTextBlock b = view->document()->firstBlock(); b.isValid(); b = b.next()) {
             if (b.text().trimmed().endsWith(QLatin1Char('{')) && b.text().contains(QStringLiteral("user"))) {
@@ -169,7 +145,6 @@ private slots:
 
         view->toggleFold(startBlock);
         QVERIFY(view->isFoldCollapsed(startBlock));
-        // A linha logo após o início (ex: "id": 1) deve estar OCULTA.
         QTextBlock inner = view->document()->findBlockByNumber(startBlock + 1);
         QVERIFY(inner.isValid());
         QVERIFY(!inner.isVisible());
@@ -177,8 +152,30 @@ private slots:
         view->toggleFold(startBlock);
         QVERIFY(!view->isFoldCollapsed(startBlock));
         QVERIFY(view->document()->findBlockByNumber(startBlock + 1).isVisible());
-        // Texto puro continua intacto independente do colapso.
         QVERIFY(view->toPlainText().contains(QStringLiteral("\"name\": \"Ana\"")));
+    }
+
+    // Objeto de nível 1 com centenas de linhas nascia auto-colapsado (limiar de 40 linhas):
+    // JsonViewerWidget não deve auto-colapsar nada ao carregar.
+    void largeJsonBodyIsNotAutoCollapsedOnLoad()
+    {
+        QJsonObject root;
+        for (int i = 0; i < 200; ++i) {
+            root.insert(QStringLiteral("field_%1").arg(i), QStringLiteral("value_%1").arg(i));
+        }
+        const QString bigJson = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+        JsonViewerWidget w;
+        w.setJsonText(bigJson);
+        auto *view = w.findChild<FoldableJsonView *>();
+        QVERIFY(view != nullptr);
+
+        // Nenhum bloco colapsado após o carregamento: todo campo (field_0..field_199) visível no texto renderizado.
+        for (QTextBlock b = view->document()->firstBlock(); b.isValid(); b = b.next()) {
+            QVERIFY2(b.isVisible(), qPrintable(QStringLiteral("bloco oculto por auto-colapso: '%1'").arg(b.text())));
+        }
+        QVERIFY(view->toPlainText().contains(QStringLiteral("\"field_0\"")));
+        QVERIFY(view->toPlainText().contains(QStringLiteral("\"field_199\"")));
     }
 };
 

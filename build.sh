@@ -3,12 +3,26 @@ set -e
 
 BUILD_DIR="build"
 INSTALL_DIR="$HOME/.local/bin"
+JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
+# ./build.sh          -> só o binário `kai` (build/bin/kai), sem os testes.
+# ./build.sh tests    -> tudo (kai + suíte de testes) em build-dev/, com as bibliotecas kai-* compartilhadas: cada teste
+#                        fica com poucas centenas de KB em vez de ~14 MB. Rodar: ctest --test-dir build-dev
+if [ "$1" = "tests" ]; then
+    BUILD_DIR="build-dev"
+    echo "==> Configurando o projeto (dev: testes + bibliotecas compartilhadas)..."
+    cmake -B "$BUILD_DIR" -S . -DCMAKE_BUILD_TYPE=Release -DKAI_SHARED_LIBS=ON
+    echo "==> Compilando o Kai e os testes..."
+    cmake --build "$BUILD_DIR" --parallel "$JOBS"
+    echo "==> Pronto. Binário: $BUILD_DIR/bin/kai. Testes: ctest --test-dir $BUILD_DIR"
+    exit 0
+fi
 
 echo "==> Configurando o projeto com CMake..."
 cmake -B "$BUILD_DIR" -S . -DCMAKE_BUILD_TYPE=Release
 
 echo "==> Compilando o Kai..."
-cmake --build "$BUILD_DIR" --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+cmake --build "$BUILD_DIR" --parallel "$JOBS" --target kai
 
 if [ "$1" = "install" ]; then
     echo "==> Instalando binário em $INSTALL_DIR..."
@@ -23,7 +37,11 @@ if [ "$1" = "install" ]; then
     ASSETS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kai/assets"
     echo "==> Instalando assets em $ASSETS_DIR..."
     mkdir -p "$ASSETS_DIR"
-    for grupo in themes i18n help logo; do
+    # Os samples viram assets/samples: o agente de IA os consulta como referência (read_samples).
+    mkdir -p "$ASSETS_DIR"
+    rm -rf "$ASSETS_DIR/samples"
+    cp -r sample "$ASSETS_DIR/samples"
+    for grupo in themes i18n help logo manifesto; do
         if [ -d "assets/$grupo" ]; then
             rm -rf "$ASSETS_DIR/$grupo"
             cp -r "assets/$grupo" "$ASSETS_DIR/$grupo"

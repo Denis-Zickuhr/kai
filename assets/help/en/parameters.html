@@ -1,0 +1,38 @@
+<h2>Parameters</h2>
+<p><b>Parameters</b> ask for values in a form <i>before</i> a command runs. Add them in the command editor's <b>Parameters</b> tab; each one becomes <code>{{name}}</code> in the command (or in the URL, headers and body of an HTTP command; in Python/Node code it arrives as an environment variable).</p>
+<h3>Types</h3>
+<table>
+<tr><td><b>text</b></td><td>a line of text</td></tr>
+<tr><td><b>textarea</b></td><td>multi-line text that grows as you type</td></tr>
+<tr><td><b>number</b></td><td>a numeric field</td></tr>
+<tr><td><b>bool</b></td><td>a switch (inserted as true/false)</td></tr>
+<tr><td><b>select</b></td><td>one of a fixed list of options (optionally <b>multi-select</b>, joined by commas) <i>or</i> an entry of a <a href='help://collections'>collection</a></td></tr>
+<tr><td><b>file</b></td><td>a file or folder picker (see below)</td></tr>
+<tr><td><b>json</b></td><td>a snippet editor with syntax highlighting, handy for bodies</td></tr>
+<tr><td><b>date</b></td><td>a date picker for a date, a time or both, optionally a range</td></tr>
+<tr><td><b>grid</b></td><td>a table of rows with one typed field per column (see below)</td></tr>
+</table>
+<h3>Common options</h3>
+<ul>
+<li><b>Label</b> and <b>default value</b>. Kai remembers the last values you used and pre-fills them; options of a select are sorted by how recently you used them.</li>
+<li><b>Required</b> puts an asterisk and blocks OK until it is filled.</li>
+<li><b>Optional</b> hides the field behind a checkbox (<i>Provide &lt;label&gt;?</i>) so a long form stays short; it only counts when ticked.</li>
+<li><b>Group</b> — give several parameters the same group name to fold them into a section.</li>
+<li><b>Step</b> — give parameters the same step name to put them on one page of the form. The form then has <i>Back</i> / <i>Next</i> (and <i>OK</i> on the last page); <i>Next</i> waits for the page's required fields. Pages follow the order each step first appears, parameters without a step go on the first page, and a group should stay within one step.</li>
+<li><b>Description</b> is shown in the CLI's <code>--help</code> (see <a href='help://cli'>CLI</a>).</li>
+</ul>
+<h3>File and folder</h3>
+<p><b>Selection mode</b> picks a file, a folder or <i>both</i> (asked at run time). The picker opens in the last folder you used anywhere in Kai. <b>Path format</b> converts what the system returns: <code>native</code>, <code>posix</code> (<code>/mnt/c/...</code>) or <code>windows</code> (<code>C:\...</code>) — useful when a Windows Kai runs commands in WSL.</p>
+<h3>Date</h3>
+<p><b>Date field shows</b> date, time or date &amp; time. With <b>Range</b>, <code>{{name}}</code> is the start and <code>{{name.end}}</code> the end. <b>Paste format</b> chooses how the value is written: ISO, BR (15/01/2024), US, 24h time, Unix seconds or milliseconds, or a custom template (<code>yyyy-MM-dd HH:mm</code>).</p>
+<h3>Grid</h3>
+<p>A <b>grid</b> collects <i>N rows</i> of several fields each (say the new price of many products). In the parameter editor add the <b>columns</b> (name, label and a type: text, number, bool, select or date) and, optionally, a <b>row template</b>. In the run form each row is a line of typed fields; <b>Add row</b> appends one and the clipboard button pastes rows copied from a spreadsheet or CSV, one record per line, columns in order.</p>
+<table>
+<tr><td><code>{{name}}</code></td><td>with no template, the JSON array of the rows, e.g. <code>[{"sku":"A-1","price":19.9}]</code> (numbers and bools typed, keys in column order); with a <b>row template</b>, each row written through it and joined by the <b>separator</b> (<code>,</code> by default; <code>\n</code> and <code>\t</code> mean newline and tab)</td></tr>
+<tr><td><code>{{name__json}}</code></td><td>always the JSON array</td></tr>
+<tr><td><code>{{name__count}}</code></td><td>how many rows</td></tr>
+</table>
+<p>In the template <code>{{column}}</code> is the cell text and <code>{{column|json}}</code> its JSON literal (text quoted and escaped, number and bool bare), e.g. <code>{"sku":{{sku|json}},"price":{{price|json}}}</code>. A body like <code>{"products": {{products}}}</code> then just works. The rows are remembered for the next run. On the command line pass the JSON array; columns you leave out take their default.</p>
+<h3>Select tied to a collection</h3>
+<p>Choosing an entry injects the displayed field as <code>{{name}}</code> <i>and</i> every field of the entry as <code>{{name.field}}</code> — see <a href='help://collections'>Collections</a>.</p>
+<div class='tip'>On the command line the required parameters are positional and the optional ones are <code>--name=value</code> — see <a href='help://cli'>CLI</a>.</div>

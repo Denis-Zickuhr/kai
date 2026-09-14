@@ -1,0 +1,11 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/kip">
+    <file>kip.py</file>
+    <file>kip.js</file>
+    <file>kai.py</file>
+    <file>kai.js</file>
+    <file>kip.php</file>
+    <file>kip.sh</file>
+    <file>kip.awk</file>
+</qresource>
+</RCC>

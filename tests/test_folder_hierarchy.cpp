@@ -2,8 +2,9 @@
 #include <QTreeWidget>
 #include <QTabWidget>
 #include <QTabBar>
+#include <QSignalSpy>
 
-#include "ui/command-tree-widget.h"
+#include "ui/features/command-editor/command-tree-widget.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -23,8 +24,7 @@ QTreeWidgetItem *findChildByText(QTreeWidgetItem *parent, const QString &text)
     return nullptr;
 }
 
-// Cada pasta raiz agora é uma aba dinâmica; o teste localiza a árvore
-// pela identificação armazenada no QTabBar, sem depender de posição fixa.
+// Cada pasta raiz é uma aba dinâmica; localiza a árvore pela identificação armazenada no QTabBar.
 QTreeWidget *treeForRoot(CommandTreeWidget &widget, const QString &rootId)
 {
     auto *tabWidget = widget.findChild<QTabWidget *>();
@@ -37,11 +37,8 @@ QTreeWidget *treeForRoot(CommandTreeWidget &widget, const QString &rootId)
 }
 }
 
-// Cobre a hierarquia real de pastas dentro de uma aba dinâmica: a pasta
-// raiz representa a própria aba (nome + ícone no QTabBar) e NÃO é
-// renderizada como item dentro da sua árvore — só filhas diretas
-// (subpastas e comandos) aparecem como itens de topo
-// (ajuste pós-reformulação de abas, feedback do usuário).
+// Hierarquia de pastas numa aba dinâmica: a pasta raiz é a própria aba (nome + ícone) e não vira item
+// da árvore; só filhas diretas (subpastas e comandos) são itens de topo.
 class TestFolderHierarchy : public QObject {
     Q_OBJECT
 
@@ -63,8 +60,7 @@ private slots:
         auto *customTree = treeForRoot(widget, QStringLiteral("f_parent"));
         QVERIFY(customTree != nullptr);
 
-        // A pasta raiz ("Pasta Pai") não deve aparecer em nenhum item da
-        // própria árvore — ela já está representada pela aba em si.
+        // A raiz já é representada pela aba: não aparece como item.
         bool rootFoundAsItem = false;
         for (int i = 0; i < customTree->topLevelItemCount(); ++i) {
             if (customTree->topLevelItem(i)->text(0) == QStringLiteral("Pasta Pai")) {
@@ -73,7 +69,6 @@ private slots:
         }
         QVERIFY(!rootFoundAsItem);
 
-        // A pasta filha, por ser filha direta da raiz, é item de topo.
         QCOMPARE(customTree->topLevelItemCount(), 1);
         QCOMPARE(customTree->topLevelItem(0)->text(0), QStringLiteral("Pasta Filha"));
     }
@@ -99,8 +94,7 @@ private slots:
 
         auto *customTree = treeForRoot(widget, QStringLiteral("f_1"));
 
-        // "Nivel 1" é a raiz/aba e não aparece como item; "Nivel 2" (sua
-        // filha direta) é o único item de topo da árvore.
+        // "Nivel 1" é a aba; "Nivel 2" é o único item de topo.
         QCOMPARE(customTree->topLevelItemCount(), 1);
 
         QTreeWidgetItem *level2 = customTree->topLevelItem(0);
@@ -142,10 +136,7 @@ private slots:
 
     void commandsDirectlyInsideRootFolderBecomeTopLevelItems()
     {
-        // Comando que pertence diretamente à pasta raiz (não a uma
-        // subpasta) não deve ser descartado silenciosamente
-        // agora que a raiz não tem mais item de pasta correspondente —
-        // deve aparecer como item de topo da árvore da aba.
+        // Comando direto da raiz não é descartado: aparece como item de topo.
         Folder rootFolder;
         rootFolder.id = QStringLiteral("f_root");
         rootFolder.name = QStringLiteral("Raiz");
@@ -167,11 +158,7 @@ private slots:
 
     void orphanFolderBecomesFallbackRootTabWithoutRenderingItself()
     {
-        // Pasta referenciando um parentId que não existe (ex: pasta pai
-        // excluída) não deve ser descartada silenciosamente —
-        // torna-se sua própria aba raiz de fallback. Como toda raiz, não
-        // aparece como item dentro da própria árvore (agora vazia, pois
-        // não tem filhas).
+        // Pasta com parentId inexistente (pai excluído) não é descartada: vira aba raiz de fallback, com árvore vazia.
         Folder orphan;
         orphan.id = QStringLiteral("f_orphan");
         orphan.name = QStringLiteral("Pasta Orfa");
@@ -192,6 +179,55 @@ private slots:
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_orphan"));
         QCOMPARE(tree->topLevelItemCount(), 0);
+    }
+
+    // Pasta órfã (aba raiz de fallback) marcada hidden respeita a marca como qualquer raiz: sem aba
+    // por padrão, só com "mostrar ocultos".
+    void hiddenOrphanFolderRespectsShowHiddenLikeAnyRootFolder()
+    {
+        Folder orphan;
+        orphan.id = QStringLiteral("f_hidden_orphan");
+        orphan.name = QStringLiteral("Pasta Orfa Oculta");
+        orphan.parentId = QStringLiteral("f_inexistente");
+        orphan.hidden = true;
+
+        CommandTreeWidget widget;
+        widget.setData({orphan}, {});
+
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        auto tabExists = [&]() {
+            for (int i = 0; i < tabWidget->count(); ++i) {
+                if (tabWidget->tabBar()->tabData(i).toString() == QStringLiteral("f_hidden_orphan")) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        QVERIFY2(!tabExists(), "pasta raiz oculta (mesmo órfã) não deveria virar aba por padrão");
+
+        widget.setShowHidden(true);
+        widget.setData({orphan}, {});
+        QVERIFY2(tabExists(), "com 'mostrar ocultos' ligado, a aba deveria aparecer");
+    }
+
+    // O menu de contexto da aba oferece ocultar/mostrar a pasta raiz (o form de pasta não tem "oculta" e o
+    // atalho normal só vê itens dentro da árvore). Testa o sinal de showTabContextMenu (privado) via
+    // QSignalSpy: dirigir QMenu::exec() off-screen não é confiável.
+    void toggleFolderHiddenSignalExistsAndCarriesFolderId()
+    {
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Raiz");
+
+        CommandTreeWidget widget;
+        widget.setData({root}, {});
+
+        QSignalSpy spy(&widget, &CommandTreeWidget::toggleFolderHiddenRequested);
+        QVERIFY(spy.isValid());
+        emit widget.toggleFolderHiddenRequested(QStringLiteral("f_root"));
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("f_root"));
     }
 };
 

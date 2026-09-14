@@ -3,8 +3,8 @@
 #include <QFile>
 #include <QDir>
 
-#include "ui/project-detection-strategy.h"
-#include "ui/project-selector.h"
+#include "ui/features/collections/project-detection-strategy.h"
+#include "ui/features/collections/project-selector.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -31,10 +31,8 @@ const ProjectDetectionStrategy *findStrategy(
 }
 } // namespace
 
-// IMPORTAÇÃO GENÉRICA (feedback do usuário): flag opcional em "Importar
-// Projeto" que reconhece definições de execução em formatos que não são
-// kai.json. Cada ecossistema é uma ProjectDetectionStrategy isolada — este
-// arquivo cobre cada uma individualmente e o fluxo integrado via
+// Importação genérica: flag opcional em "Importar Projeto" que reconhece definições de execução fora do kai.json.
+// Cada ecossistema é uma ProjectDetectionStrategy isolada; o arquivo cobre cada uma e o fluxo integrado via
 // ProjectSelector::importFromDirectory.
 class TestProjectDetectionStrategy : public QObject {
     Q_OBJECT
@@ -204,13 +202,10 @@ services:
         }
     }
 
-    // --- Fluxo integrado (ProjectSelector) ---
-
     void importFromDirectoryDetectsGenericDefinitionsWithoutKaiJson()
     {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        // SEM kai.json — só um package.json.
         writeFile(dir.filePath(QStringLiteral("package.json")), R"json({"scripts": {"start": "node index.js"}})json");
 
         ProjectSelector selector;
@@ -243,10 +238,12 @@ services:
     {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        writeFile(dir.filePath(QStringLiteral("kai.json")), R"json({
-            "project_name": "Misto",
-            "commands": [{"name": "Comando do kai.json", "type": "shell", "command": "echo oi"}]
-        })json");
+        writeFile(dir.filePath(QStringLiteral("kai.yml")), R"yaml(project_name: "Misto"
+commands:
+  - name: "Comando do kai.yml"
+    type: "shell"
+    command: "echo oi"
+)yaml");
         writeFile(dir.filePath(QStringLiteral("package.json")), R"json({"scripts": {"start": "node index.js"}})json");
 
         ProjectSelector selector;
@@ -258,11 +255,10 @@ services:
 
         QString kaiCmdFolder, npmCmdFolder;
         for (const Command &c : result.commands) {
-            if (c.name == QStringLiteral("Comando do kai.json")) kaiCmdFolder = c.folderId;
+            if (c.name == QStringLiteral("Comando do kai.yml")) kaiCmdFolder = c.folderId;
             if (c.name == QStringLiteral("start")) npmCmdFolder = c.folderId;
         }
-        // O comando do kai.json fica na RAIZ do projeto; o detectado (npm)
-        // numa subpasta própria — nunca se misturam.
+        // O comando do kai.json fica na raiz do projeto; o detectado (npm) numa subpasta própria.
         QCOMPARE(kaiCmdFolder, result.folder.id);
         QVERIFY(!npmCmdFolder.isEmpty());
         QVERIFY(npmCmdFolder != result.folder.id);

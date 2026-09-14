@@ -1,6 +1,5 @@
-// Testes do histórico de execuções (RunHistory) — persistência em runs.json,
-// ordem (mais recente primeiro), limite de registros e truncamento de saída.
-// Usa QStandardPaths em modo de teste para isolar num diretório temporário.
+// RunHistory: persistência em runs.json, ordem (mais recente primeiro), limite de registros e truncamento de saída,
+// isolado em diretório temporário via QStandardPaths em modo de teste.
 
 #include <QTest>
 #include <QStandardPaths>

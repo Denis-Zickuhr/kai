@@ -19,6 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # QSvgRenderer. curl/file/fuse são para o empacotamento AppImage.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        ccache \
         cmake \
         ninja-build \
         git \

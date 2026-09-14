@@ -8,13 +8,14 @@ namespace {
 constexpr const char *kLogTag = "OutputResponder";
 }
 
-OutputResponderMatcher::OutputResponderMatcher(const QVector<core::OutputResponder> &responders)
+OutputResponderMatcher::OutputResponderMatcher(const QVector<core::OutputResponder> &responders,
+                                               core::EnvironmentManager *envManager)
+    : m_envManager(envManager)
 {
     m_rules.reserve(responders.size());
     for (const core::OutputResponder &r : responders) {
         Rule rule;
         rule.spec = r;
-        // Nome é OBRIGATÓRIO para o responsor funcionar (feedback do usuário).
         if (r.enabled && !r.name.trimmed().isEmpty() && !r.pattern.isEmpty()) {
             rule.regex = QRegularExpression(r.pattern);
             rule.valid = rule.regex.isValid();
@@ -58,19 +59,13 @@ QString OutputResponderMatcher::expandGroups(const QString &response,
 QVector<OutputResponderMatcher::Reply> OutputResponderMatcher::feed(const QString &chunk)
 {
     QVector<Reply> replies;
-    if (m_rules.isEmpty() || chunk.isEmpty()) {
-        // Ainda acumula no buffer para não perder contexto entre chunks,
-        // mas sem regras não há o que casar.
-        if (m_rules.isEmpty()) {
-            return replies;
-        }
+    if (m_rules.isEmpty()) {
+        return replies;
     }
 
     m_buffer += chunk;
 
-    // Tenta casar cada regra a partir do cursor. Uma regra pode casar mais de
-    // uma vez se o buffer trouxe múltiplos prompts; por isso o laço externo
-    // repete enquanto ALGUMA regra casar em uma posição nova.
+    // Uma regra pode casar mais de uma vez (vários prompts no buffer): repete enquanto alguma casar numa posição nova.
     bool progressed = true;
     while (progressed) {
         progressed = false;
@@ -83,7 +78,6 @@ QVector<OutputResponderMatcher::Reply> OutputResponderMatcher::feed(const QStrin
             if (!rule.valid) {
                 continue;
             }
-            // Respeita o limite (se ligado) e o teto de sanidade anti-loop.
             const int cap = rule.spec.limitTriggers
                 ? qMin(rule.spec.maxTriggers, kSanityCap)
                 : kSanityCap;
@@ -94,8 +88,7 @@ QVector<OutputResponderMatcher::Reply> OutputResponderMatcher::feed(const QStrin
             if (!m.hasMatch()) {
                 continue;
             }
-            // Escolhe o casamento que termina MAIS CEDO (ordem cronológica de
-            // aparição na saída), para responder os prompts na ordem certa.
+            // O casamento que termina mais cedo vence, para responder os prompts na ordem de aparição.
             const int end = m.capturedEnd(0);
             if (earliestEnd < 0 || end < earliestEnd) {
                 earliestEnd = end;
@@ -108,18 +101,20 @@ QVector<OutputResponderMatcher::Reply> OutputResponderMatcher::feed(const QStrin
             Rule &rule = m_rules[bestRule];
             Reply reply;
             reply.text = expandGroups(rule.spec.response, bestMatch);
+            // {{VAR}} depois dos grupos, cuja sintaxe é diferente e não conflita.
+            if (m_envManager) {
+                reply.text = m_envManager->interpolate(reply.text);
+            }
             reply.ruleIndex = bestRule;
             replies.append(reply);
             rule.fired += 1;
-            // Avança o cursor para depois deste casamento: não recasa o mesmo
-            // trecho. max() protege contra regex de largura zero (evita loop).
+            // Avança o cursor; max() protege contra regex de largura zero (evita loop).
             m_scanFrom = qMax(earliestEnd, m_scanFrom + 1);
             progressed = true;
         }
     }
 
-    // Corte do buffer: mantém só a cauda (kMaxBuffer) para não vazar em
-    // processos verbosos. Ajusta o cursor junto.
+    // Só a cauda fica; o cursor acompanha.
     if (m_buffer.size() > kMaxBuffer) {
         const int drop = m_buffer.size() - kMaxBuffer;
         m_buffer.remove(0, drop);

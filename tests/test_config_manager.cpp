@@ -18,8 +18,7 @@ class TestConfigManager : public QObject {
 private slots:
     void init()
     {
-        // Isola cada teste em um diretório de config temporário, evitando
-        // tocar no ~/.config/kai real da máquina do usuário.
+        // Isola cada teste num diretório de config temporário (não toca no ~/.config/kai real).
         m_tempDir = std::make_unique<QTemporaryDir>();
         QVERIFY(m_tempDir->isValid());
         qputenv("XDG_CONFIG_HOME", m_tempDir->path().toUtf8());
@@ -28,6 +27,30 @@ private slots:
     void cleanup()
     {
         m_tempDir.reset();
+    }
+
+    // doc-usage.json: o contador de uso das pastas volta como foi gravado; sem arquivo, vazio; contagens inválidas somem.
+    void docUsageRoundTripsAndStartsEmpty()
+    {
+        ConfigManager manager;
+        QVERIFY(manager.loadDocUsage().isEmpty());
+        QMap<QString, int> usage{{QStringLiteral("f1"), 3}, {QStringLiteral("f2"), 1}, {QStringLiteral("gone"), 0}};
+        QVERIFY(manager.saveDocUsage(usage));
+        const QMap<QString, int> loaded = manager.loadDocUsage();
+        QCOMPARE(loaded.value(QStringLiteral("f1")), 3);
+        QCOMPARE(loaded.value(QStringLiteral("f2")), 1);
+        QVERIFY(!loaded.contains(QStringLiteral("gone")));
+    }
+
+    // O recolhido da lista de comandos é lembrado nas configurações (padrão: aberta).
+    void commandsCollapsedIsRememberedInSettings()
+    {
+        ConfigManager manager;
+        SettingsData settings = manager.loadSettings();
+        QVERIFY(!settings.commandsCollapsed);
+        settings.commandsCollapsed = true;
+        QVERIFY(manager.saveSettings(settings));
+        QVERIFY(manager.loadSettings().commandsCollapsed);
     }
 
     // escreve JSON inválido em commands.json, espera que o Kai crie
@@ -72,8 +95,7 @@ private slots:
 
         const SettingsData data = manager.loadSettings();
 
-        // Recuperação devolve os DEFAULTS do modelo. O tema padrão passou a
-        // ser "kai-dark" na repaginação visual (era "dracula").
+        // Recuperação devolve os DEFAULTS do modelo (tema padrão "kai-dark").
         QCOMPARE(data.activeTheme, QStringLiteral("kai-dark"));
         QCOMPARE(recoveredSpy.count(), 1);
     }
@@ -117,19 +139,14 @@ private slots:
         QCOMPARE(data.commands.size(), 0);
     }
 
-    // Dois comandos com o MESMO id no commands.json (ex: importação/versão
-    // antiga): o load deve PRESERVAR ambos, renomeando o segundo para um id
-    // único — em vez de um sobrescrever o outro no mapa id->comando
-    // (bug real: params/hooks "sumiam" ao executar porque o comando errado
-    // vencia). O PRIMEIRO mantém o id original.
+    // Dois comandos com o MESMO id no commands.json (ex: importação/versão antiga): o load preserva ambos, renomeando o
+    // segundo para um id único (senão um sobrescrevia o outro no mapa id->comando e params/hooks "sumiam"). O PRIMEIRO mantém o id.
     void loadDeduplicatesRepeatedCommandIds()
     {
         ConfigManager manager;
         const QString path = manager.commandsFilePath();
         QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
 
-        // Primeiro comando (com 1 parâmetro) e um segundo com o MESMO id
-        // (sem parâmetros) — a colisão que causava o bug.
         const QString json = QStringLiteral(R"({
             "folders": [],
             "commands": [
@@ -145,15 +162,12 @@ private slots:
 
         const CommandsData data = manager.loadCommands();
         QCOMPARE(data.commands.size(), 2);
-        // Ambos sobrevivem com ids DISTINTOS.
         QVERIFY(data.commands.at(0).id != data.commands.at(1).id);
-        // O primeiro mantém o id original e os seus parâmetros.
         QCOMPARE(data.commands.at(0).id, QStringLiteral("c_dup"));
         QCOMPARE(data.commands.at(0).params.size(), 1);
     }
 
-    // (3) As opções de exibição da Saída persistem em settings.json entre
-    // sessões (feedback do usuário). Round-trip dos 6 campos.
+    // As opções de exibição da Saída persistem em settings.json entre sessões (round-trip dos 6 campos).
     void outputViewOptionsRoundTrip()
     {
         ConfigManager manager;
@@ -175,7 +189,7 @@ private slots:
         QCOMPARE(loaded.outputFontSize, 14);
     }
 
-    // O sabor de shell do alvo de terminal persiste (bug do export).
+    // O sabor de shell do alvo de terminal persiste.
     void terminalTargetShellFlavorRoundTrip()
     {
         ConfigManager manager;
@@ -189,10 +203,7 @@ private slots:
         QVERIFY(manager.saveSettings(s));
 
         const SettingsData loaded = manager.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente (auto-seedado
-        // pra dar um lugar de configurar Saída/TTY sem precisar de
-        // wrapping — ver ConfigManager::loadSettings).
-        QCOMPARE(loaded.terminalProfiles.size(), 2);
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
         const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
             [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
         QVERIFY(it != loaded.terminalProfiles.constEnd());
@@ -200,10 +211,18 @@ private slots:
         QCOMPARE(it->usePty, false);
     }
 
-    // Migração: um alvo PowerShell antigo com a gambiarra $l[2..] é reescrito
-    // na carga (o template não contém mais o corte de linhas). Escrevemos o
-    // alvo legado via API (saveSettings) e depois forçamos o padrão legado no
-    // template para simular a config antiga.
+    // Nenhum perfil "Default" é criado sozinho: apagar o último perfil o deixa apagado.
+    void noTerminalProfileIsAutoCreated()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        s.terminalProfiles.clear();
+        QVERIFY(manager.saveSettings(s));
+        QVERIFY(manager.loadSettings().terminalProfiles.isEmpty());
+    }
+
+    // Migração: um alvo PowerShell antigo com a gambiarra $l[2..] é reescrito na carga. O alvo legado é gravado via API
+    // (saveSettings) e o padrão legado é forçado no template para simular a config antiga.
     void legacyPowerShellTemplateIsMigratedOnLoad()
     {
         ConfigManager manager;
@@ -218,9 +237,7 @@ private slots:
         QVERIFY(manager.saveSettings(s));
 
         const SettingsData loaded = manager.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente — ver comentário
-        // equivalente em terminalTargetShellFlavorRoundTrip().
-        QCOMPARE(loaded.terminalProfiles.size(), 2);
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
         const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
             [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
         QVERIFY(it != loaded.terminalProfiles.constEnd());
@@ -228,10 +245,41 @@ private slots:
                  "o template PowerShell legado não foi migrado (ainda tem $l[2..])");
     }
 
-    // Notificações (feature nova): os 6 toggles devem sobreviver ao ciclo
-    // salvar->carregar, e o default de uma instalação nova (sem
-    // settings.json prévio) precisa ser o opt-in seguro (master switch
-    // desligado, só sucesso de background desligado por padrão também).
+    // Atalho padrão de "Focar saída" trocou de Ctrl+` para Ctrl+' (a crase é
+    // tecla morta no ABNT2). Quem salvou as Configurações com o padrão antigo
+    // é migrado UMA vez; depois disso, escolher Ctrl+` de propósito fica.
+    void focusOutputShortcutMigratesFromBacktickOnce()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+`"]}, "focus_output_shortcut": "Ctrl+`"})");
+        file.close();
+
+        SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.shortcuts.value(QStringLiteral("action.focus_output")), QStringList{QStringLiteral("Ctrl+'")});
+        QCOMPARE(loaded.focusOutputShortcut, QStringLiteral("Ctrl+'"));
+
+        loaded.shortcuts[QStringLiteral("action.focus_output")] = {QStringLiteral("Ctrl+`")};
+        QVERIFY(manager.saveSettings(loaded));
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+`")});
+    }
+
+    // Outro atalho qualquer escolhido pelo usuário nunca é tocado.
+    void focusOutputShortcutMigrationKeepsCustomChoice()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+Shift+O"]}})");
+        file.close();
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+Shift+O")});
+    }
+
+    // Notificações: os 6 toggles sobrevivem ao ciclo salvar->carregar; o default de instalação nova é o opt-in seguro
+    // (master switch desligado, sucesso de background desligado também).
     void notificationSettingsRoundTrip()
     {
         ConfigManager manager;
@@ -262,12 +310,71 @@ private slots:
         QVERIFY(loaded.notifyEvenWhenFocused);
     }
 
+    void interpreterSettingsRoundTripAndDefaultWhenAbsent()
+    {
+        ConfigManager manager;
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.interpreters.python, QStringLiteral("python3"));
+        QCOMPARE(defaults.interpreters.node, QStringLiteral("node"));
+        QCOMPARE(defaults.interpreters.php, QStringLiteral("php"));
+
+        SettingsData s = defaults;
+        s.interpreters.python = QStringLiteral("uv run python");
+        s.interpreters.node = QStringLiteral("/opt/node/bin/node");
+        s.interpreters.php = QStringLiteral("/usr/bin/php8.3 -d memory_limit=1G");
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = ConfigManager().loadSettings();
+        QCOMPARE(loaded.interpreters.python, QStringLiteral("uv run python"));
+        QCOMPARE(loaded.interpreters.node, QStringLiteral("/opt/node/bin/node"));
+        QCOMPARE(loaded.interpreters.php, QStringLiteral("/usr/bin/php8.3 -d memory_limit=1G"));
+    }
+
 private:
     std::unique_ptr<QTemporaryDir> m_tempDir;
 
-    // Repaginação visual: densidade, estilo de canto e flags de efeito devem
-    // sobreviver ao ciclo salvar->carregar (senão a preferência do usuário se
-    // perde no próximo boot).
+private slots:
+
+    // Densidade, estilo de canto e flags de efeito sobrevivem ao ciclo salvar->carregar.
+    void kipSettingsRoundTripAndAreClamped()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
+        ConfigManager manager;
+        // Padrões quando o arquivo não tem o objeto "kip".
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.kip.handshakeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.changeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.cancelGraceSec, 3);
+        QVERIFY(defaults.kip.rememberAnswers);
+        QVERIFY(defaults.kip.expandDetailsOnFailure);
+        QCOMPARE(defaults.kip.detachedWindowMode, QStringLiteral("preference")); // segue a preferência geral
+
+        SettingsData s = defaults;
+        s.kip.detachedWindowMode = QStringLiteral("fullscreen");
+        s.kip.handshakeTimeoutSec = 30;
+        s.kip.changeTimeoutSec = 4;
+        s.kip.cancelGraceSec = 9;
+        s.kip.rememberAnswers = false;
+        s.kip.expandDetailsOnFailure = false;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.kip, s.kip);
+
+        // Valores absurdos (arquivo editado à mão) viram valores dentro dos limites.
+        s.kip.handshakeTimeoutSec = 100000;
+        s.kip.cancelGraceSec = -5;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData clamped = manager.loadSettings();
+        QCOMPARE(clamped.kip.handshakeTimeoutSec, KipSettings::kMaxTimeoutSec);
+        QCOMPARE(clamped.kip.cancelGraceSec, KipSettings::kMinGraceSec);
+
+        // Um modo desconhecido (arquivo editado à mão) volta a seguir a preferência geral.
+        s.kip.detachedWindowMode = QStringLiteral("sideways");
+        QVERIFY(manager.saveSettings(s));
+        QCOMPARE(manager.loadSettings().kip.detachedWindowMode, QStringLiteral("preference"));
+    }
+
     void appearanceSettingsRoundTrip()
     {
         ConfigManager manager;
@@ -290,6 +397,40 @@ private:
         QVERIFY(loaded.fxTranslucency);
         QVERIFY(loaded.fxBlur);
         QVERIFY(loaded.fxAnimations);
+    }
+
+    // Os filtros de coleções (incluindo exibir favoritos) ficam em arquivo separado (collection-filters.json), id -> config,
+    // igual dynamic-vars.json; não toca em collections.json (dado autorado da coleção).
+    void collectionFiltersRoundTripByCollectionId()
+    {
+        ConfigManager manager;
+
+        QMap<QString, CollectionFilterState> data;
+        CollectionFilterState a;
+        a.search = QStringLiteral("alice");
+        a.favoritesOnly = true;
+        data[QStringLiteral("col1")] = a;
+        CollectionFilterState b;
+        b.search = QStringLiteral("");
+        b.favoritesOnly = false;
+        data[QStringLiteral("col2")] = b;
+        QVERIFY(manager.saveCollectionFilters(data));
+
+        QVERIFY(!QFile::exists(manager.collectionsFilePath()));
+
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QCOMPARE(loaded.size(), 2);
+        QCOMPARE(loaded.value(QStringLiteral("col1")).search, QStringLiteral("alice"));
+        QVERIFY(loaded.value(QStringLiteral("col1")).favoritesOnly);
+        QCOMPARE(loaded.value(QStringLiteral("col2")).search, QString());
+        QVERIFY(!loaded.value(QStringLiteral("col2")).favoritesOnly);
+    }
+
+    void loadingMissingCollectionFiltersFileReturnsEmptyMapWithoutCrash()
+    {
+        ConfigManager manager;
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QVERIFY(loaded.isEmpty());
     }
 };
 

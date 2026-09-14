@@ -13,18 +13,42 @@ class QThread;
 
 namespace kai::engine {
 
+// Lógica de UNC do ProcessRunner exposta para o cleanup hook (ExecutionPipeline::runCleanupHooks), que roda um QProcess
+// próprio, destacado, fora de ProcessRunner::start(). As duas primeiras são string pura (sem API do Windows) e existem em
+// todas as plataformas, para testar no Linux.
+bool isWindowsUncPath(const QString &path);
+QString wrapWindowsCommandForUncWorkingDir(const QString &command, const QString &workingDir);
+
+// Onde o cmd.exe nasce (nativeCwd; vazio = herda o cwd do kai.exe, se não for UNC) e para onde dá `pushd` (pushdDir;
+// vazio = sem pushd). `commandHandlesWorkingDir`: o comando já faz o próprio `cd` (alvo de terminal, ex.: wsl.exe ... bash
+// -c 'cd ...'); aí o pushd no cwd UNC é pior que inútil: o wsl.exe nasce num drive mapeado temporário e falha ao traduzir.
+struct WindowsLaunchDirs {
+    QString nativeCwd;
+    QString pushdDir;
+};
+WindowsLaunchDirs planWindowsLaunchDirs(const QString &workingDir, const QString &currentDir,
+                                        bool commandHandlesWorkingDir, const QString &safeDir);
+
+#if defined(Q_OS_WIN)
+QString windowsSafeNonUncStartDir();
+#endif
+
+// Processo DESTACADO (kill remoto, cleanup hook, Kai subido pelo CLI) nunca herda o console nem os handles de quem chamou:
+// no modo CLI são o terminal do usuário (o kill remoto do destrutor rodava depois do kai sair e sujava o prompt).
+// Windows: CREATE_NO_WINDOW, sem herança de handles e cwd seguro (nunca UNC). No-op fora do Windows.
+void isolateDetachedProcess(QProcess &process);
+
 // Resultado final da execução de um ProcessRunner.
 struct ProcessResult {
     int exitCode = -1;
     bool crashed = false;
     QString errorMessage;
+    // Encerramento PEDIDO (stop()/forceStop(): Parar, `kai kill`, reset, re-execução): não é falha do comando.
+    bool stoppedByRequest = false;
 };
 
-// Wrapper assíncrono sobre QProcess.
-// Injeta variáveis de ambiente resolvidas, captura stdout/stderr em tempo
-// real e garante encerramento seguro via terminate -> timeout -> kill.
-//
-// Nunca bloqueia a thread chamadora: todo I/O é orientado a sinais.
+// Wrapper assíncrono sobre QProcess: injeta o ambiente resolvido, captura stdout/stderr em tempo real e encerra via
+// terminate -> timeout -> kill. Nunca bloqueia a thread chamadora.
 class ProcessRunner : public QObject {
     Q_OBJECT
 
@@ -40,78 +64,59 @@ public:
     // ambiente já resolvido (precedência aplicada previamente pelo chamador).
     void start(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
 
-    // Solicita encerramento gracioso: SIGTERM -> timeout -> SIGKILL. Envia
-    // o sinal para o grupo de processos inteiro (não apenas o PID do bash
-    // usado para interpretar o comando), garantindo que processos filhos
-    // gerados pelo script (ex: `npm run dev` gerando um processo `node`)
-    // também sejam encerrados — bug real corrigido: "SIGKILL fraco" era
-    // na verdade o processo filho sobrevivendo órfão após o bash morrer.
+    // Encerramento gracioso: SIGTERM -> timeout -> SIGKILL, enviado ao grupo de processos inteiro (não só ao bash), para
+    // que filhos do script (ex.: `npm run dev` -> `node`) não sobrevivam órfãos.
     void stop();
 
-    // Escreve dados no stdin do processo em execução (interação
-    // real com o Terminal Drawer, não apenas leitura de output). Um '\n' é
-    // acrescentado automaticamente se `text` não terminar com um. Não-op
-    // silencioso se o processo não estiver rodando.
+    // Encerramento IMEDIATO ("Forçar parada"): SIGKILL (ou TerminateProcess/taskkill /F /T no Windows) direto no
+    // grupo/árvore, sem SIGTERM nem esperar `m_killTimeoutMs`.
+    void forceStop();
+
+    // Escreve no stdin do processo, acrescentando '\n' se faltar. Não-op se não estiver rodando.
     void writeToStdin(const QString &text);
 
-    // Escreve dados CRUS no stdin do processo, SEM acrescentar '\n'. Usado
-    // para caracteres de controle do terminal: Ctrl+C (\x03), Ctrl+D (\x04).
-    // Sob PTY/ConPTY, a disciplina de linha do terminal converte \x03 em
-    // SIGINT e \x04 em EOF para o processo em foreground — é como um terminal
-    // real trata essas teclas. Não-op se o processo não estiver rodando.
+    // Escrita CRUA no stdin, sem '\n': caracteres de controle (Ctrl+C \x03, Ctrl+D \x04), que a disciplina de linha do
+    // PTY/ConPTY converte em SIGINT/EOF. Não-op se não estiver rodando.
     void writeRaw(const QString &text);
 
-    // Mesma escrita crua de writeRaw(), mas recebendo BYTES diretamente em
-    // vez de QString — usado pelo terminal interativo (PtyTerminalWidget):
-    // as sequências de escape que a libvterm gera a partir de teclado/mouse
-    // já vêm prontas como bytes; passá-las por um QString (que assume
-    // UTF-8) e converter de volta seria trabalho e risco desnecessários.
-    // Não-op se o processo não estiver rodando.
+    // Escrita crua de BYTES (PtyTerminalWidget): as sequências da libvterm já vêm prontas; passar por QString arriscaria
+    // a codificação. Não-op se não estiver rodando.
     void writeRawBytes(const QByteArray &data);
 
-    // Propaga um resize de terminal pro processo: ioctl(TIOCSWINSZ) no fd
-    // mestre do PTY (Unix) ou ResizePseudoConsole no HPCON (Windows/
-    // ConPTY). Não-op silencioso fora do modo PTY/ConPTY (modo QProcess
-    // não tem noção de tamanho de terminal).
+    // Propaga o resize do terminal: ioctl(TIOCSWINSZ) no PTY (Unix) ou ResizePseudoConsole (ConPTY). Não-op fora do modo PTY.
     void resizePty(int rows, int cols);
 
     bool isRunning() const;
     qint64 processId() const;
 
-    // Executa comandos shell dentro de um pseudo-terminal (PTY). Necessário
-    // para comandos interativos que só se comportam corretamente sob um
-    // terminal real — ex: `read -p "Prompt"` do bash SÓ imprime o prompt
-    // se stdin for um tty (bug reportado: "não consigo ver o output do
-    // read na pergunta"). Com PTY ativado, o processo enxerga um terminal
-    // e o prompt aparece. Padrão: true (todo comando shell roda sob PTY,
-    // reproduzindo o comportamento de um terminal de verdade). Se o PTY
-    // não puder ser criado, cai automaticamente para o modo QProcess.
+    // Roda sob um pseudo-terminal: comandos interativos (ex.: `read -p`) só imprimem o prompt com um tty. Padrão: true;
+    // se o PTY não puder ser criado, cai para o modo QProcess.
     void setUsePty(bool enabled);
 
-    // Invoca o bash com -i (interativo) além do -c (Unix apenas — no
-    // Windows o caminho padrão é cmd.exe, sem bash). Sem -i, bash SEMPRE
-    // roda não-interativo quando recebe -c (independente de pty), então
-    // NUNCA lê ~/.bashrc — é assim que todo comando do Kai roda hoje, o
-    // que é o certo pro caso comum (ambiente limpo/previsível). Forçar -i
-    // faria o bash se comportar como interativo e ler o bashrc mesmo com
-    // -c, pro caso de um usuário querer um terminal DE VERDADE, com os
-    // aliases/PATH dele. Padrão: false (não muda o comportamento de
-    // sempre) — atualmente nada no app liga isso.
+    // bash -i além de -c (só Unix). Sem -i o bash com -c nunca lê ~/.bashrc (ambiente previsível); -i serviria a um
+    // terminal de verdade com os aliases/PATH do usuário. Padrão: false; nada no app liga isto hoje.
     void setInteractiveShell(bool enabled);
 
-    // Comando EXTRA de encerramento executado no stop()/destruição, usado
-    // para matar o processo do LADO REMOTO (ex: dentro do WSL). Necessário
-    // porque no WSL2 os processos Linux NÃO são filhos Windows do wsl.exe:
-    // taskkill /T mata cmd.exe+wsl.exe (lado Windows) e o bash/node dentro
-    // da distro SOBREVIVE como processo fantasma (bug real reportado).
-    // A linha recebida já é completa (ex: "wsl.exe -- bash -lc '...'") e é
-    // disparada de forma DESTACADA (não bloqueia a GUI).
+    // Comando EXTRA de kill do lado REMOTO, executado no stop()/destruição. No WSL2 os processos Linux não são filhos
+    // Windows do wsl.exe: taskkill /T mata cmd.exe+wsl.exe e o bash/node da distro sobrevive. A linha já é completa
+    // (ex.: "wsl.exe -- bash -lc '...'") e disparada DESTACADA (não bloqueia a GUI).
     void setRemoteKillCommandLine(const QString &commandLine);
 
-    // Modo de encerramento RÁPIDO (usado no fechamento do app): o destrutor
-    // NÃO faz waits bloqueantes — só sinaliza o kill e sai. Sem isto, fechar
-    // o Kai com N processos congelava a GUI por N x (1-3s) somados
-    // (achado de auditoria: até ~9s com 3 processos).
+    // O comando recebido por start() já aplica o próprio working dir (alvo
+    // de terminal com `cd` embutido) — ver planWindowsLaunchDirs. Só muda
+    // algo no Windows. Padrão: false.
+    void setCommandHandlesWorkingDir(bool enabled);
+
+    // O processo usa stdin/stdout/stderr do processo Kai (sem PTY/ConPTY,
+    // sem captura: outputReady nunca dispara). Ver ExecutionPipeline::
+    // setInheritTerminal. No Unix não usa setsid: o comando fica no grupo de
+    // processos do terminal e recebe o Ctrl+C dele. No Windows não cria Job
+    // Object: um comando em segundo plano sobrevive à saída do kai, como um
+    // `cmd &`. Padrão: false.
+    void setInheritTerminal(bool enabled);
+
+    // Encerramento RÁPIDO (fechamento do app): o destrutor não faz waits bloqueantes, só sinaliza o kill e sai (senão
+    // fechar o Kai com N processos congela a GUI por N x 1-3 s).
     static void setFastShutdown(bool enabled);
     static bool fastShutdown();
 
@@ -129,18 +134,20 @@ private slots:
     void handlePtyReadyRead();
 
 private:
+    void startInheritingTerminal(const QString &command, const QString &workingDir,
+                                 const QMap<QString, QString> &env);
     // Inicia o comando sob um pseudo-terminal (forkpty). Retorna false se
     // não conseguir criar o PTY (chamador cai para o modo QProcess).
     bool startWithPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
     void cleanupPty();
 
-    // Windows: inicia o comando sob um ConPTY (pseudoconsole nativo do
-    // Win10 1809+), o equivalente ao forkpty do Unix — faz o processo
-    // enxergar um terminal real, então prompts interativos (ex: `read`,
-    // `set /p`, prompts sem newline) aparecem na saída. Retorna false se o
-    // ConPTY não puder ser criado (chamador cai para cmd /c via QProcess).
+    // Windows: inicia o comando sob um ConPTY (Win10 1809+), equivalente ao forkpty. Retorna false se não puder ser
+    // criado (o chamador cai para cmd /c via QProcess).
     bool startWithConPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
     void cleanupConPty();
+    // Encerra a árvore INTEIRA via Job Object (TerminateJobObject, atômico). Se o job não pôde ser criado/atribuído
+    // (m_jobHandle nulo, raro), cai para `taskkill /T /F`; `pid` só serve a esse fallback.
+    void terminateProcessTree(qint64 pid);
 
     std::unique_ptr<QProcess> m_process;
     int m_killTimeoutMs = 2000;
@@ -155,26 +162,27 @@ private:
     QString decodeOut(const QByteArray &data);
     QString decodeErr(const QByteArray &data);
 
-    // --- Modo PTY (comandos shell interativos) ---
     bool m_usePty = true;
     bool m_interactiveShell = false;
+    bool m_commandHandlesWorkingDir = false;
+    bool m_inheritTerminal = false;
     int m_ptyMasterFd = -1;
     qint64 m_ptyChildPid = -1;
     QSocketNotifier *m_ptyNotifier = nullptr;
 
-    // --- Modo ConPTY (Windows) ---
     // Handles guardados como void* para não vazar <windows.h> no header.
     void *m_hPC = nullptr;            // HPCON (pseudoconsole)
     void *m_conInWrite = nullptr;     // HANDLE — escrevemos o stdin aqui
     void *m_conOutRead = nullptr;     // HANDLE — lemos a saída daqui
     void *m_conProcess = nullptr;     // HANDLE do processo filho
     void *m_conThread = nullptr;      // HANDLE da thread do processo filho
+    // Job Object do processo filho e de toda a árvore. Criado no start (ConPTY: antes do ResumeThread, para o processo não
+    // rodar nem um instante fora do job). Substitui o `taskkill` externo, cujo padrão (CreateProcessW cru + taskkill /F
+    // escondido) o Windows Defender lia como dropper e matava o Kai. Nulo se falhar: terminateProcessTree() usa taskkill.
+    void *m_jobHandle = nullptr;
     QThread *m_conReader = nullptr;   // thread que lê o pipe de saída
-    // Flag de ABORT da thread leitora: o dtor sinaliza e a thread sai no
-    // próximo ciclo, permitindo um join CONFIÁVEL antes de destruir o objeto
-    // (antes o dtor fazia wait(1500) com timeout que podia expirar com a
-    // thread ainda viva, e as lambdas enfileiradas usavam um `this` já
-    // destruído — use-after-free, achado de auditoria).
+    // ABORT da thread leitora: o dtor sinaliza e faz join confiável antes de destruir o objeto (um wait com timeout
+    // deixava lambdas enfileiradas usarem `this` destruído).
     std::atomic<bool> m_conReaderAbort{false};
 };
 

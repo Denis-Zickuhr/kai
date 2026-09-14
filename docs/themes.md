@@ -16,3 +16,10 @@ theme's accent color.
 2. Adjust the colors/QSS.
 3. Select it in Settings (or edit the active one and watch the live
    reload).
+
+## Themes made by the AI
+
+With the [AI assistant or MCP bridge](ai.md) you can ask for a theme
+("a dark ocean theme with a cyan accent"). The assistant writes it to your
+themes folder after you approve, and it appears in Settings like any other.
+Built-in themes are never overwritten.

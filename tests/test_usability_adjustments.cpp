@@ -5,10 +5,10 @@
 #include <QToolButton>
 #include <QPushButton>
 
-#include "ui/command-tree-widget.h"
-#include "ui/action-sidebar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/fuzzy-search.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/fuzzy-search.h"
 #include "core/models.h"
 #include "utils/translation-manager.h"
 
@@ -48,12 +48,8 @@ QPushButton *buttonByTooltip(const ItemActionsBar &bar, const QString &tooltip)
 }
 }
 
-// Cobre a arquitetura de ROW ACTIONS na ActionSidebar (feedback do
-// usuário: os antigos botões inline por linha na árvore viraram row
-// actions sempre carregadas na sidebar, habilitadas conforme o estado da
-// linha selecionada). A árvore de comandos agora é de coluna única (sem
-// a coluna de controles inline). Os textos dos tooltips vêm do language
-// pack i18n; em ambiente de teste sem troca de idioma, o padrão é inglês.
+// Row actions na ActionSidebar: sempre carregadas, habilitadas conforme o estado da linha selecionada. Os tooltips
+// vêm do pack i18n (padrão inglês em teste).
 class TestUsabilityAdjustments : public QObject {
     Q_OBJECT
 
@@ -74,27 +70,24 @@ private slots:
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_1"));
         QVERIFY(tree != nullptr);
-        // Duas colunas agora: [0] ícone+nome (com estrutura de árvore) e
-        // [1] indicador de status "rodando" grande e separado (feedback do
-        // usuário). Os controles inline permanecem removidos (viraram row
-        // actions na ActionSidebar).
+        // Colunas: [0] ícone+nome e [1] indicador de "rodando", que também leva os ícones das ações nas linhas de pasta.
+        // Sem widgets dentro das células.
         QCOMPARE(tree->columnCount(), 2);
+        QVERIFY(!tree->isColumnHidden(1));
         QVERIFY(tree->itemWidget(tree->topLevelItem(0), 0) == nullptr);
         QVERIFY(tree->itemWidget(tree->topLevelItem(0), 1) == nullptr);
     }
 
     void sidebarRowActionsAlwaysLoaded()
     {
-        // As row actions (grupo Execução) ficam SEMPRE carregadas (widgets
-        // existem), apenas habilitadas/desabilitadas conforme o contexto.
-        // Edit/Delete moram no grupo Item (ItemActionsBar); "editar body
-        // (rápido)" mora aqui, no grupo Execução (pedido do usuário).
+        // As row actions (grupo Execução) ficam sempre carregadas, só habilitadas/desabilitadas. Edit/Delete moram no grupo
+        // Item (ItemActionsBar); "editar body (rápido)" mora no grupo Execução.
         ActionSidebar sidebar;
         QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Run command")) != nullptr);
         QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Stop (terminate process)")) != nullptr);
         QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Force stop (kill process)")) != nullptr);
         QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Reset and restart command")) != nullptr);
-        QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Edit body (quick)")) != nullptr);
+        QVERIFY(buttonByTooltip(sidebar, QStringLiteral("Quick edit")) != nullptr);
 
         ItemActionsBar itemBar;
         QVERIFY(buttonByTooltip(itemBar, QStringLiteral("Edit Command")) != nullptr);
@@ -107,16 +100,14 @@ private slots:
         auto *play = buttonByTooltip(sidebar, QStringLiteral("Run command"));
         auto *stop = buttonByTooltip(sidebar, QStringLiteral("Stop (terminate process)"));
         auto *reset = buttonByTooltip(sidebar, QStringLiteral("Reset and restart command"));
-        auto *editBody = buttonByTooltip(sidebar, QStringLiteral("Edit body (quick)"));
+        auto *editBody = buttonByTooltip(sidebar, QStringLiteral("Quick edit"));
 
-        // Sem seleção: tudo desabilitado.
         sidebar.setRowContext(false, false, false, false);
         QVERIFY(!play->isEnabled());
         QVERIFY(!stop->isEnabled());
         QVERIFY(!editBody->isEnabled());
 
-        // Comando parado selecionado: play habilitado, stop não. Editar
-        // body só habilita para comando HTTP (último parâmetro).
+        // Comando parado selecionado: play habilitado, stop não; editar body só para comando HTTP (último parâmetro).
         sidebar.setRowContext(true, true, false, false, false);
         QVERIFY(play->isEnabled());
         QVERIFY(!stop->isEnabled());
@@ -124,7 +115,6 @@ private slots:
         sidebar.setRowContext(true, true, false, false, true);
         QVERIFY(editBody->isEnabled());
 
-        // Comando rodando: stop habilitado e reset habilitado; play não.
         sidebar.setRowContext(true, true, true, false);
         QVERIFY(!play->isEnabled());
         QVERIFY(stop->isEnabled());
@@ -135,15 +125,13 @@ private slots:
         QVERIFY(play->isEnabled());
         QVERIFY(reset->isEnabled());
 
-        // Pasta selecionada: play/stop/reset/editBody desabilitados.
         sidebar.setRowContext(true, false, false, false);
         QVERIFY(!play->isEnabled());
         QVERIFY(!stop->isEnabled());
         QVERIFY(!reset->isEnabled());
         QVERIFY(!editBody->isEnabled());
 
-        // ItemActionsBar: editar/excluir habilitam com qualquer seleção
-        // (pasta ou comando).
+        // ItemActionsBar: editar/excluir habilitam com qualquer seleção (pasta ou comando).
         ItemActionsBar itemBar;
         auto *edit = buttonByTooltip(itemBar, QStringLiteral("Edit Command"));
         itemBar.setRowContext(false);
@@ -168,8 +156,7 @@ private slots:
     void searchBarHasNoIconAndSimplifiedPlaceholder()
     {
         FuzzySearchBar searchBar;
-        // Placeholder agora vem do i18n — compara contra a mesma chave, não
-        // um literal PT fixo (o padrão do TranslationManager é EN).
+        // O placeholder vem do i18n: compara contra a mesma chave, não um literal.
         QCOMPARE(searchBar.placeholderText(), kai::utils::tr(QStringLiteral("fuzzy_search.placeholder")));
         QVERIFY(searchBar.actions().isEmpty());
     }
@@ -195,7 +182,7 @@ private slots:
         widget.setRunningCommandIds({QStringLiteral("c_1")});
 
         auto *treeAfter = qobject_cast<QTreeWidget *>(tabWidget->currentWidget());
-        QCOMPARE(treeAfter, treeBefore); // mesmo QTreeWidget, não recriado.
+        QCOMPARE(treeAfter, treeBefore);
         QVERIFY(treeAfter->currentItem() != nullptr);
         QCOMPARE(treeAfter->currentItem()->text(0), QStringLiteral("Comando"));
     }
@@ -240,28 +227,24 @@ private slots:
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_1"));
         QTreeWidgetItem *commandItem = tree->topLevelItem(0);
-        // O indicador de "rodando" agora fica GRANDE e SEPARADO na coluna
-        // de status (1), não sobreposto ao ícone do comando (coluna 0)
-        // — feedback do usuário. Coluna 0 (ícone do comando) permanece
-        // inalterada entre idle/running; coluna 1 ganha/perde o ícone.
+        // O indicador de "rodando" fica separado na coluna de status (1), sem sobrepor o ícone do comando (coluna 0),
+        // que não muda entre idle/running.
         const QIcon col0Idle = commandItem->icon(0);
-        QVERIFY(commandItem->icon(1).isNull()); // sem indicador quando idle
+        QVERIFY(commandItem->icon(1).isNull());
 
         widget.setRunningCommandIds({QStringLiteral("c_1")});
-        QVERIFY(!tree->topLevelItem(0)->icon(1).isNull());        // indicador aparece na col 1
+        QVERIFY(!tree->topLevelItem(0)->icon(1).isNull());
         QCOMPARE(tree->topLevelItem(0)->icon(0).pixmap(16, 16).toImage(),
                  col0Idle.pixmap(16, 16).toImage());              // ícone do comando não muda
 
         widget.setRunningCommandIds({});
-        QVERIFY(tree->topLevelItem(0)->icon(1).isNull());         // indicador some ao parar
+        QVERIFY(tree->topLevelItem(0)->icon(1).isNull());
     }
 
     void commandNestedInsideCommandStillRenders()
     {
-        // Bug corrigido (feedback do usuário): agrupar comando
-        // dentro de comando é permitido; o comando aninhado deve
-        // continuar aparecendo na árvore (folderId do filho aponta para o
-        // id do comando-pai) e o pai continua executável.
+        // Comando aninhado em comando é permitido: o filho aparece na árvore (folderId aponta para o id do pai) e o pai
+        // continua executável.
         Folder root;
         root.id = QStringLiteral("f_1");
         root.name = QStringLiteral("Raiz");
@@ -274,14 +257,13 @@ private slots:
         Command child;
         child.id = QStringLiteral("c_child");
         child.name = QStringLiteral("Filho");
-        child.folderId = QStringLiteral("c_parent"); // aninhado sob o comando pai
+        child.folderId = QStringLiteral("c_parent");
 
         CommandTreeWidget widget;
         widget.setData({root}, {parent, child});
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_1"));
         QVERIFY(tree != nullptr);
-        // O pai é item de topo e o filho aparece como seu filho na árvore.
         QCOMPARE(tree->topLevelItemCount(), 1);
         QCOMPARE(tree->topLevelItem(0)->text(0), QStringLiteral("Pai"));
         QCOMPARE(tree->topLevelItem(0)->childCount(), 1);

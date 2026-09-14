@@ -4,16 +4,13 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 
-#include "ui/env-var-autocomplete.h"
-#include "ui/inline-code-field.h"
+#include "ui/features/environments/env-var-autocomplete.h"
+#include "ui/shared/inline-code-field.h"
 
 using namespace kai::ui;
 
-// Autocomplete de {{var}} (pedido do usuário: "digitar {{ e já aparece uma
-// listinha de opções"). Verifica o CONTRATO do componente reutilizável
-// (env-var-autocomplete.h) num QPlainTextEdit real (via InlineCodeField,
-// o consumidor real em Command/HTTP) e num QLineEdit real — os dois
-// overloads existentes.
+// Autocomplete de {{var}}: contrato do componente reutilizável (env-var-autocomplete.h) num QPlainTextEdit real
+// (via InlineCodeField) e num QLineEdit real — os dois overloads.
 class TestEnvVarAutocomplete : public QObject {
     Q_OBJECT
 
@@ -87,7 +84,6 @@ private slots:
         // "a" casa (fuzzy, case-insensitive) API_URL e API_KEY, mas não USER_ID.
         QCOMPARE(list->count(), 2);
 
-        // Mais um caractere estreita ainda mais o filtro.
         QTest::keyClicks(field->editor(), QStringLiteral("pi_u"));
         QTest::qWait(30);
         QCOMPARE(list->count(), 1);
@@ -141,14 +137,103 @@ private slots:
         QTest::qWait(30);
 
         QVERIFY(!popup->isVisible());
-        // Nada foi inserido além do que o usuário já tinha digitado.
         QCOMPARE(field->toPlainText(), QStringLiteral("{{a"));
 
         delete field;
     }
 
-    // Mesmo contrato no overload de QLineEdit (usado em URL HTTP / Default
-    // de parâmetro), não só no QPlainTextEdit do InlineCodeField.
+    // Autocomplete de bloco condicional ({% -> if, if / else): só ativo com supportConditionals=true.
+    void percentTriggerSuggestsConditionalBlocksWhenEnabled()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+        QVERIFY(popup->isVisible());
+        auto *list = popup->findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        QCOMPARE(list->count(), 2); // "if" e "if / else"
+
+        delete field;
+    }
+
+    // Sem supportConditionals (default), "{%" nunca abre popup.
+    void percentTriggerDoesNothingWhenConditionalsDisabled()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{QStringLiteral("X")}; });
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup == nullptr || !popup->isVisible());
+
+        delete field;
+    }
+
+    // Selecionar "if" insere o snippet completo com o cursor DENTRO dele (logo após "if "), não no fim.
+    void selectingIfInsertsSnippetWithCursorAtCondition()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+
+        QTest::keyClick(field->editor(), Qt::Key_Return);
+        QTest::qWait(30);
+
+        QCOMPARE(field->toPlainText(), QStringLiteral("{% if  %}\n{% endif %}"));
+        QCOMPARE(field->editor()->textCursor().position(), 6); // logo após "{% if "
+        QVERIFY(!popup->isVisible());
+
+        QTest::keyClicks(field->editor(), QStringLiteral("VAR"));
+        QCOMPARE(field->toPlainText(), QStringLiteral("{% if VAR %}\n{% endif %}"));
+
+        delete field;
+    }
+
+    void selectingIfElseInsertsSnippetWithElseBranch()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+        auto *list = popup->findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        list->setCurrentRow(1); // "if / else"
+
+        QTest::keyClick(field->editor(), Qt::Key_Return);
+        QTest::qWait(30);
+
+        QCOMPARE(field->toPlainText(),
+            QStringLiteral("{% if  %}\n\n{% else %}\n\n{% endif %}"));
+
+        delete field;
+    }
+
+    // Mesmo contrato no overload de QLineEdit (URL HTTP / default de parâmetro).
     void lineEditOverloadWorksTheSameWay()
     {
         auto *field = new QLineEdit();

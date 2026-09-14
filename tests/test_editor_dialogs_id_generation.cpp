@@ -1,13 +1,12 @@
 #include <QTest>
 
-#include "ui/folder-editor-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/name-uniqueness.h"
+#include "ui/features/collections/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/shared/name-uniqueness.h"
 
 using namespace kai::ui;
 
-// Testa a lógica pura de geração de ids dos novos editores de Pasta/Comando
-// (lacuna de UX corrigida), sem depender de exibição de diálogo.
+// Lógica pura de geração de ids dos editores de Pasta/Comando, sem exibir diálogo.
 class TestEditorDialogsIdGeneration : public QObject {
     Q_OBJECT
 
@@ -44,8 +43,6 @@ private slots:
         const QString id = CommandEditorDialog::generateCommandId(QStringLiteral("f_x"), QStringLiteral("BUILD RELEASE"));
         QCOMPARE(id, QStringLiteral("c_f_x_build_release"));
     }
-
-    // --- Bloqueio de nomes duplicados na mesma pasta (feedback do usuário) ---
 
     void commandNameCollidesWithSiblingInSameFolder()
     {

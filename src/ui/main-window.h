@@ -1,31 +1,45 @@
 #pragma once
 
+#include "ui/features/docs/doc-note.h"
+#include <QJsonArray>
 #include <QMainWindow>
 #include <QSystemTrayIcon>
 #include <QMap>
 #include <QSet>
+#include <map>
+#include <memory>
 #include <QIcon>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <memory>
 
 #include "core/config-manager.h"
 #include "core/environment-manager.h"
 #include "core/run-history.h"
+#include "core/notification-history.h"
 #include "core/models.h"
+#include "core/note-files.h"
 #include "engine/execution-pipeline.h"
 #include "engine/process-manager.h"
-#include "ui/command-tree-widget.h"
-#include "ui/expand-collapse-bar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/action-group-container.h"
-#include "ui/fuzzy-search.h"
-#include "ui/terminal-drawer.h"
-#include "ui/project-selector.h"
-#include "ui/project-import-options-dialog.h"
-#include "ui/top-utility-bar.h"
-#include "ui/action-sidebar.h"
-#include "ui/process-list-dialog.h"
-#include "ui/log-viewer-dialog.h"
+#include "engine/cron-scheduler.h"
+#include "engine/project-sync-manager.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/expand-collapse-bar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/status-line.h"
+#include <QHash>
+#include <QPointer>
+#include <QTimer>
+#include "ui/shared/action-group-container.h"
+#include "ui/features/output/terminal-drawer.h"
+#include "ui/features/collections/import-selection-dialog.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/features/collections/project-import-options-dialog.h"
+#include "ui/shared/top-utility-bar.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/features/history/process-list-dialog.h"
+#include "ui/features/output/logs-panel.h"
+#include "ui/layout/layout-model.h"
 #include "utils/theme-manager.h"
 
 class QHotkey;
@@ -33,124 +47,153 @@ class QSplitter;
 class QShortcut;
 class QStackedWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace kai::ui {
 
-// Janela principal do Kai: usa a titlebar NATIVA do sistema operacional
-// (decisão de escopo: sem frameless customizado), com bandeja
-// do sistema, atalho global (QHotkey), Top Utility Bar (Settings/Debug/
-// Help/Scope badge), busca fuzzy, navegação por abas e Terminal Drawer
-// integrado ao ExecutionPipeline.
-//
-// Toda lógica de negócio (ConfigManager, EnvironmentManager,
-// ExecutionPipeline) é acessada via composição e sinais/slots, nunca
-// herança — mantendo o desacoplamento exigido pelo AGENTS.md.
+namespace layout {
+class DockHost;
+class LayoutController;
+class LayoutStore;
+class ViewRegistry;
+} // namespace layout
+
+class ExternalRunSession;
+class AiChatWindow;
+class MainWindowAgentHost;
+class McpBridge;
+class QuickRunPopup;
+class RunMirrorPanel;
+class DocSessionStore;
+class DocumentPanel;
+class EnvironmentManagerDialog;
+class ParameterFormDialog;
+
+// Janela principal: titlebar nativa, bandeja, atalho global (QHotkey), Terminal Drawer. A lógica de negócio
+// (ConfigManager, EnvironmentManager, ExecutionPipeline) entra por composição e sinais/slots.
 class MainWindow : public QMainWindow {
     Q_OBJECT
+
+    // O host do agente de IA enxerga as listas vivas e a persistência (ver features/ai/).
+    friend class MainWindowAgentHost;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
-    // --- API para o IPC/CLI (kai run/list/env/show) ---
     // Executa um comando pelo NOME (case-insensitive). Retorna false + msg
     // se não encontrado/ambíguo. Não bloqueia (dispara a execução).
     bool runCommandByName(const QString &name, QString &message);
-    // Nomes de todos os comandos (para `kai list`).
+    // `kai import [arquivo|pasta]`: importa o kai.yml sem diálogo (pasta-pai = raiz). `only` vazio = tudo;
+    // ver cliImportSelection. `message` = resumo ou erro.
+    bool importProjectFromCli(const QString &path, const QStringList &only, QString &message);
+    // `kai import --recursive <pasta>`: importa cada projeto (kai.yml) abaixo da pasta, a própria inclusa.
+    // `parentFolderId` vazio = raiz (ou a pasta do Kai que já contém o diretório).
+    bool importProjectTreeFromCli(const QString &rootDirectory, QString &message, const QString &parentFolderId = QString());
+    // A pasta do Kai (projeto ou subpasta) cujo diretório de trabalho contém `directory`, a mais funda; vazio = nenhuma.
+    QString enclosingFolderIdFor(const QString &directory) const;
+    // `kai attach <nome|pid>`: espelha a saída de um processo que JÁ está
+    // rodando (reenvia o fim do log já impresso, depois segue ao vivo) e
+    // repassa o teclado. nullptr + `errorMessage` se não há esse processo.
+    ExternalRunSession *startAttachSession(const QString &target, QString &errorMessage);
+    QJsonArray runningProcessItems();
+    // `kai -gdn`: aviso de fim de uma execução disparada pelo CLI em modo destacado (o CLI já foi embora).
+    void notifyExternalRunFinished(const QString &commandId, int exitCode, qint64 elapsedMs);
+    bool raiseNotificationFromCli(const QString &level, const QString &title, const QString &body,
+                                  QString &message);
+    // Roda `commandId` pelo app a pedido de um cliente EXTERNO (`kai -g` via IPC) e devolve uma sessão que
+    // espelha saída/fim e aceita teclado. nullptr + `errorMessage` se o comando não existe ou já está rodando.
+    // `openOutputWindow` (-w): abre a saída numa janela desacoplada. `invocationDir`: diretório do terminal do
+    // cliente; vale no lugar do working dir do comando quando ele pede (cliWorkingDir).
+    ExternalRunSession *startExternalRun(const QString &commandId,
+                                         const QMap<QString, QString> &paramValues,
+                                         QString &errorMessage, bool openOutputWindow = false,
+                                         const QString &invocationDir = QString());
+    // Saída guardada em memória de um comando (id real ou virtual de uma ação de
+    // pasta), limitada pelo tamanho máximo de log das configurações.
+    QString storedOutputFor(const QString &commandId) const { return m_commandLogs.value(commandId); }
     QStringList commandNames() const;
     // Ativa um environment pelo NOME. Retorna false + msg se não achado.
     bool activateEnvironmentByName(const QString &name, QString &message);
-    // Nomes dos environments + o nome do ativo (para `kai env list`).
     QStringList environmentNames(QString &activeName);
-    // Exibe/traz a janela do Kai à frente (para `kai show`).
-    void showAndRaise();
+    // `reason` só alimenta o log: toda vez que o Kai se põe à frente do que o usuário está fazendo fica registrado.
+    void showAndRaise(const char *reason = "unspecified");
+    // Chamado por main.cpp depois da decisão de visibilidade do boot. Daqui em diante a janela só aparece por ação
+    // explícita do usuário (atalho global, bandeja, `kai show`/CLI); qualquer outro show é descartado.
+    void armVisibilityGuard();
+    // Ver o motivo em setVisible (main-window.cpp): show sem ação do usuário é descartado.
+    void setVisible(bool visible) override;
 
-    // true se o ícone de bandeja foi registrado com sucesso. Usado por
-    // outras decisões (notificações, "ocultar ao rodar" só faz sentido
-    // com bandeja pra voltar) — NÃO decide mais o boot inicial (ver
-    // globalHotkeyRegistered() abaixo).
+    // O quadro de painéis (zonas, abas, flutuantes), para os testes.
+    layout::DockHost *dockHost() const { return m_dock; }
+    layout::ViewRegistry *viewRegistry() const { return m_viewRegistry; }
+    layout::LayoutController *layoutController() const { return m_layoutController; }
+    DocumentPanel *documentPanel() const { return m_documentPanel; }
+
+    // false sem ícone de bandeja (afeta notificações e "ocultar ao rodar").
     bool trayAvailable() const { return m_trayIcon != nullptr; }
 
-    // true se o atalho global (QHotkey) foi registrado com sucesso —
-    // setupGlobalHotkey() roda SÍNCRONO no construtor, então isto já
-    // reflete o resultado real assim que a MainWindow termina de
-    // construir. main.cpp usa isto (não trayAvailable()) para decidir o
-    // boot: o Kai (app que inicia com o sistema) só sobe OCULTO se
-    // conseguir registrar o atalho — é o único jeito de trazê-lo de volta
-    // sem bandeja/clique. Bug relatado: "hoje quando liguei meu PC o Kai
-    // aparece aberto" — a decisão antes olhava trayAvailable(), que pode
-    // legitimamente estar disponível mas não ser o mecanismo real de
-    // retorno (ex: ambiente sem bandeja de fato clicável) nem cobre o
-    // caso em que o atalho falhou (aí sim faria sentido ficar visível).
+    // true se o atalho global foi registrado (setupGlobalHotkey roda síncrono no construtor).
     bool globalHotkeyRegistered() const { return static_cast<bool>(m_globalHotkey); }
 
-    // Decisão FINAL de visibilidade no boot (usada por main.cpp em vez de
-    // globalHotkeyRegistered() direto). "Iniciar visível" (settings.
-    // startVisible, feedback do usuário) é BINÁRIA e nunca consulta o
-    // atalho global: ligada = sempre visível; desligada = sempre oculto
-    // (bandeja). Antes, "desligado" caía de volta num fallback condicionado
-    // ao atalho (visível se o registro falhasse) — reintroduzia o mesmo bug
-    // que a opção resolve ("abre sozinho" quando o atalho falha ao
-    // registrar por motivo alheio ao usuário: WSL/WSLg, colisão com outro
-    // app). Reabrir com a opção desligada continua possível via ícone de
-    // bandeja ou `kai show` (CLI/IPC), que não dependem do atalho.
+    // Decisão final de visibilidade no boot: binária, vem só de settings.startVisible e nunca consulta o atalho
+    // global (ele pode falhar por motivo alheio ao usuário: WSL/WSLg, colisão com outro app). Reabrir sem ele:
+    // bandeja ou `kai show`.
     bool shouldStartVisible();
-    // Nomes de TODAS as variáveis dinâmicas capturadas, em qualquer escopo —
-    // alimenta o autocomplete {{var}} do CommandEditorDialog (feedback do
-    // usuário: "adicione ENVS temporárias na interpolação do autocomplete").
+    // Nomes de todas as variáveis dinâmicas capturadas, em qualquer escopo (autocomplete {{var}}).
     QStringList availableDynamicVarNames() const;
 
-    // --- API de processos para o IPC/CLI (kai ps/attach/kill) ---
     // Lista os processos em execução: linhas "nome | pid | status".
     QStringList runningProcessLines();
-    // Atacha: traz a janela e conecta o terminal ao comando (por nome).
     bool attachProcessByName(const QString &name, QString &message);
-    // Mata o processo do comando (por nome).
     bool killProcessByName(const QString &name, QString &message);
 
 private:
-    // Resolve um alvo de processo por PID (numérico) OU nome do comando,
-    // dentre os processos EM EXECUÇÃO. Preenche commandId/commandName ou
-    // error. Usado por attach/kill via CLI.
+    // Alvo por PID (numérico) OU nome do comando, entre os processos em execução.
     bool resolveProcessTarget(const QString &arg, QString &commandId,
                               QString &commandName, QString &error);
 public:
 
 protected:
-    // Auto-ocultar ao perder o foco (comportamento de launcher, configurável).
     void changeEvent(QEvent *event) override;
-
+    // Reaplica a máscara de cantos a cada redimensionamento (ver updateWindowShape).
+    void resizeEvent(QResizeEvent *event) override;
 
     void closeEvent(QCloseEvent *event) override;
-    // Ao exibir a janela, move o foco para a árvore de comandos, para que
-    // a navegação por seta (↑/↓) opere nos comandos imediatamente
-    // (feedback do usuário: navegação por seta deve ser prioridade).
+    // Foca a árvore de comandos ao exibir, para as setas operarem de imediato.
     void showEvent(QShowEvent *event) override;
-    // Resize por borda na janela frameless: detecta o cursor próximo às
-    // bordas/cantos e delega o redimensionamento nativo ao window manager
-    // (QWindow::startSystemResize), o jeito robusto que funciona em X11/
-    // WSLg sem cálculo manual de geometria.
+    // Resize por borda na janela frameless: delega ao window manager (QWindow::startSystemResize), que funciona em
+    // X11/WSLg sem calcular geometria.
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     bool event(QEvent *e) override;
-    // Filtro instalado no container central: intercepta movimento/clique
-    // do mouse nas bordas para iniciar o resize nativo, já que o container
-    // cobre a área da janela e receberia os eventos antes da MainWindow.
+#if defined(Q_OS_WIN)
+    // Snap, redimensionar pelas bordas e arrastar pela barra de título com o comportamento nativo do Windows.
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
+#endif
+    // Instalado no container central, que cobre a janela e receberia o mouse antes da MainWindow.
     bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
-    void handleFilterQueryChanged(const QString &query);
+    // Pára tudo o que está rodando (pelo mesmo caminho do botão Parar de cada comando).
+    void stopAllRunning();
+    // Põe a saída de um comando num painel próprio: um app KIP vira mini app (`kip:`), o resto um espelho (`run:`).
+    void openRunPanel(const QString &commandId);
+    void pinKipPanel(const QString &commandId);
+    void startProjectSync(const QString &folderId, bool kaiToFile);
     void handleCommandActivated(const QString &commandId);
     void handlePipelineLog(const QString &commandId, const QString &text, bool isError);
     void handlePipelineFinished(const engine::PipelineResult &result);
-    void handleImportProjectRequested();
-    void handleImportConfigRequested();
-    void handleImportOpenApiRequested();
-    void handleExportGlobalRequested();
-    void handleExportFolderRequested();
-    void handleExportCommandRequested();
+    void handleKipSessionStarted(const QString &commandId, engine::KipSession *session);
+    void handleKipNotify(const QString &commandId, const QString &title, const QString &text, core::KipLevel level);
+    void handleKipAnswersRemembered(const QString &commandId, const QJsonObject &remembered);
+    void handleImportRequested();
+    void handleExportRequested();
+    // Abre o diálogo de exportar; com `targetId`, já apontando pra essa pasta/comando.
+    void showExportDialog(const QString &targetId, bool targetIsFolder);
     void handleTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
+    void trackScreenChanges();
     void handleThemeReloaded(const utils::ResolvedTheme &theme);
     void handleNewFolderRequested();
     void handleNewCommandRequested();
@@ -158,11 +201,33 @@ private slots:
     void handleEditRequested(const QString &commandId, bool isFolder);
     void handleDeleteRequested(const QString &commandId, bool isFolder);
     void handleDuplicateRequested(const QString &itemId, bool isFolder);
-    // Handlers de coleção (item não-executável).
+    void handleNewNoteRequested();
+    void handleNoteEditRequested(const QString &noteId);
+    void handleNoteDuplicateRequested(const QString &noteId);
+    void handleNoteDeleteRequested(const QString &noteId);
+    // Levar a nota para fora do Kai (salvar como, abrir cópia no editor do sistema, copiar) e trazer um arquivo de
+    // texto como nota nova. O conteúdo vem da nota guardada (menu da árvore) ou da tela (leitor, com edições não salvas).
+    void handleNoteFileActionRequested(const QString &noteId, core::NoteFileAction action);
+    void exportNote(const QString &noteId, core::NoteFileAction action, const QString &content);
+    // A saída guardada de um comando vira uma nota (na pasta dele), sem abrir nada além dela.
+    void saveOutputAsNote(const QString &commandId);
+    QString plainLogFor(const QString &commandId) const;
+    void handleNoteActivated(const QString &noteId);
+    void handleNoteSelected(const QString &noteId);
+    void persistNotes();
+    void showNoteView(const QString &noteId, bool startEditing, bool reveal = true);
+    QVector<DocNote> docNotesFor(const QString &folderId) const;
+    QString folderDocumentDirectory(const QString &folderId) const;
+    // O botão das pastas do painel Documento: menu com as pastas que têm documentação, mais usadas primeiro.
+    void showDocsMenu(const QPoint &globalPos);
+    void openFolderDocs(const QString &folderId);
+    void recordDocUse(const QString &folderId);
+    void refreshDocNotes();
+    void resetDrawerForNonCommand();
+    bool isNoteId(const QString &id) const;
     void handleCollectionEditRequested(const QString &collectionId);
     void handleCollectionDuplicateRequested(const QString &collectionId);
     void handleCollectionDeleteRequested(const QString &collectionId);
-    // Carrega e persiste collections.json.
     void persistCollections();
     // Remove uma pasta e, recursivamente, suas subpastas e comandos.
     // Não confirma nem persiste (o chamador decide).
@@ -172,15 +237,17 @@ private slots:
     // reparenteado para o avô. NÃO persiste (o chamador chama persistCommands).
     void deleteFolderWithDialog(const QString &folderId);
     void handleQuickEditBodyRequested(const QString &commandId);
+    void handleQuickEditFolderRequested(const QString &folderId);
     void handleSettingsRequested();
-    // Config corrompida foi restaurada de backup (ConfigManager::
-    // configRecovered) — hoje só logava; vira notificação opcional.
+    // IA (roadmap A10): abre o chat; sem provedor configurado o painel do chat não existe.
+    void showAiChat();
+    void refreshAiAvailability();
     void handleConfigRecovered(const QString &filePath, const QString &backupPath);
-    // Environments (pacotes selecionáveis): trocar o ativo pelo seletor do
-    // topo e abrir a tela de gestão (criar/editar/excluir).
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
+    void saveEnvironmentsFromPanel();
     void handleRunHistoryRequested();
+    void handleNotificationHistoryRequested();
     void handleLogsRequested();
     void handleHelpRequested();
     void handleWelcomeScreenClosed();
@@ -194,68 +261,115 @@ private slots:
     // bytes de teclado prontos para o PTY, e mudança de tamanho em células.
     void handleTerminalRawInput(const QByteArray &data);
     void handleTerminalSizeChanged(int rows, int cols);
+    void handleFirstErrorInFormattedOutput();
 
     void handleBackgroundProcessStarted(const QString &commandId, engine::ProcessRunner *runner);
     void handleBackgroundProcessOutput(const QString &commandId, const QString &text, bool isError);
     void handleBackgroundProcessStatusChanged(const QString &commandId, engine::ProcessStatus status);
     void handleShowProcessListRequested();
-    void handleKillCommandRequested(const QString &commandId);
+    // `force`: false = encerramento gracioso (SIGTERM -> timeout configurável -> SIGKILL, ProcessRunner::stop);
+    // true = SIGKILL imediato (ProcessRunner::forceStop).
+    void handleKillCommandRequested(const QString &commandId, bool force = false);
     void handleResetCommandRequested(const QString &commandId);
     void handleTreeStructureChanged(const QVector<TreeNodePlacement> &placements);
     void toggleVisibility();
-    // Controles da janela frameless (custom title bar).
     void handleMaximizeRestore();
-    // Inicia o arraste nativo da janela (delegado ao window manager via
-    // QWindow::startSystemMove) — chamado pela title bar ao pressionar.
     void handleWindowMoveRequested();
 
 private:
     void setupUi();
     void setupToolbar();
     void setupTrayIcon();
-    // Quais toggles de SettingsData::notifyOn* correspondem a cada evento
-    // — mapeado internamente por maybeShowNotification, pra quem chama
-    // não precisar carregar Configurações duas vezes (uma pro toggle,
-    // outra dentro do método).
-    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered };
-    // Notificações (pedido do usuário): mostra um toast nativo da bandeja
-    // se habilitado nas Configurações E o toggle daquele evento
-    // específico estiver ligado, respeitando foco/bandeja (ver
-    // notification-gate.h::shouldShowNotification — sem bandeja ou
-    // master switch desligado, é no-op silencioso).
+    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered, FirstErrorInFormattedOutput, KipNotify };
+    // Toast nativo da bandeja se habilitado nas Configurações E o toggle do evento estiver ligado (ver
+    // notification-gate.h); sem bandeja é no-op. `commandId` (opcional) fica no histórico para "ir para o comando".
     void maybeShowNotification(NotificationEvent event, const QString &title, const QString &body,
-                                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Warning);
+                                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Warning,
+                                const QString &commandId = QString(),
+                                const QString &eventKeyOverride = QString());
+    // A view KIP deste comando está na frente do usuário (janela visível, em foco, mostrando o comando; ou a
+    // janela destacada em foco)? O `notify` do programa só vira toast quando não está.
+    bool isKipViewVisible(const QString &commandId) const;
     QIcon loadAppIcon() const;
-    // Resolve o ProcessRunner do comando CONECTADO ao Terminal Drawer no
-    // momento — mesma lógica repetida em handleTerminalInputEntered/
-    // Interrupt/Eof (execução única via pipeline OU processo background
-    // rastreado pelo ProcessManager), extraída para os handlers do
-    // terminal interativo (handleTerminalRawInput/SizeChanged) não
-    // duplicá-la de novo. nullptr se não houver comando conectado ou o
-    // runner já não existir.
+    // Runner do comando conectado ao Terminal Drawer (execução única do pipeline ou processo background do
+    // ProcessManager); nullptr se não houver.
     engine::ProcessRunner *connectedProcessRunner() const;
     void setupGlobalHotkey();
     void setupTheme();
     void setupActionShortcuts();
     void applyEditShortcutOnSelection();
     void applyDeleteShortcutOnSelection();
-    // Reconstrói m_upperActionsContainer/m_bottomActionsContainer/
-    // m_leftActionsContainer/m_sideActionsContainer conforme a preferência
-    // de posicionamento de cada grupo (Item/Exibição/Execução) em
-    // SettingsData — chamado no setup e ao salvar Configurações.
+    // Reconstrói os containers de ação conforme o posicionamento de cada grupo (Item/Exibição/Execução) em
+    // SettingsData; chamado no setup e ao salvar Configurações.
     void applyActionGroupPlacement();
-    // Reparenta m_mainAreaWrapper (busca+árvore/actions) e m_terminalDrawer
-    // no splitter externo certo, conforme SettingsData::outputPosition
-    // ("bottom"/"left"/"right") — chamado no setup e ao salvar
-    // Configurações. Reparenta os widgets JÁ CONSTRUÍDOS (não recria nada),
-    // então conexões/estado do TerminalDrawer sobrevivem.
-    void applyOutputPosition();
+    // Layout flexível: registra os painéis (Comandos, Saída, ...), lê o layout.json (migrando o antigo outputPosition) e
+    // monta o DockHost. Os widgets dos painéis são construídos uma vez em setupUi(); o host só os reparenta.
+    void setupLayout();
+    void registerPanelViews();
+    void registerRunViews();
+    void restoreLayoutFromDisk();
+    // Painéis de UM comando: o espelho vivo de uma execução (`run:<id>`) e o comando KIP fixado (`kip:<id>`). Recebem log,
+    // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
+    QWidget *createMirrorPanel(const QString &commandId, bool kip);
+    void forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action);
+    // Um comando aberto num painel próprio (`run:`/`kip:`) vive só ali: a Saída padrão não ganha guia nem se conecta
+    // a ele. Fechar o painel devolve a guia à Saída. Exceção: o terminal interativo (PTY) só existe na Saída.
+    bool livesInPanel(const QString &commandId) const;
+    static bool panelOwnsOutput(const core::Command &command);
+    // Pai dos diálogos que abrem ao rodar: uma janela flutuante fixada (sempre no topo) cobriria um diálogo filho da
+    // janela principal; filho dela, o diálogo fica acima.
+    QWidget *dialogParent();
+    // O id do painel de um comando: um app KIP vira mini app (`kip:`, volta ao reiniciar); o resto, espelho (`run:`).
+    QString panelIdForCommand(const QString &commandId) const;
+    bool kipPanelAutoStarts(const QString &commandId);
+    void setKipPanelAutoStart(const QString &commandId, bool on);
+    // Ao iniciar: roda os apps KIP com painel e "Abrir com o Kai" ligado (inertes: esperam o usuário na tela inicial).
+    void autoStartKipPanels();
+    void revealCommandPanel(const QString &commandId);
+    void moveOutOfOutput(const QString &commandId);
+    // Faixa com os botões de execução (executar, parar, forçar, reiniciar, body) no cabeçalho da Saída de um comando que vive
+    // fora da árvore — painel ou janela destacada, onde não há a árvore pra agir.
+    ActionSidebar *makeCommandActionStrip(const QString &commandId);
+    void refreshCommandActionStrips();
+    void setMirrorStatus(const QString &commandId, ExecutionStatus status);
+    ExecutionStatus executionStatusFor(const QString &commandId) const;
+    QWidget *createDocumentPanel();
+    bool isViewPlaced(const QString &id) const;
+    void revealViewQuietly(const QString &id);
+    void syncDocumentPlacement();
+    // A Saída descobre pela zona onde está o eixo do colapso (altura embaixo, largura nas laterais, nenhum no miolo).
+    void applyDrawerPosition();
+    void showOutputPanel();
+    void showDocumentPanel();
+    void restoreDefaultLayout();
+    void syncPanelBarHeights();
+    // Com uma coluna de ações entre a lista e a Saída, o handle interno do splitter é desabilitado (só
+    // redimensionaria a coluna); a borda da lista, do lado da Saída, passa a arrastar o divisor externo (dragTreeBorder).
+    void updateTreeBorderResizeHandles();
+    // Cantos da própria janela (sem borda nativa): raio do token radiusMd aplicado por máscara; reto, maximizado ou
+    // tela cheia = sem máscara.
+    void updateWindowShape();
+    bool m_visibilityGuardArmed = false;
+    bool m_hiddenExplicitly = false;
+    int m_explicitShowDepth = 0;
+    bool m_initialFocusDone = false; // o foco inicial na árvore vale só para a primeira exibição (ver showEvent)
+    QElapsedTimer m_lastScreenChange;
+    bool m_translucentWindow = false; // ver shouldUseTranslucentWindow (main-window.cpp)
+    // Windows 11: cantos nativos do DWM aceitos (sem máscara nem raio no QSS) e o
+    // último estilo de cantos aplicado (-1 = reaplicar).
+    bool m_nativeCorners = false;
+    bool m_nativeSnap = false; // Windows: as bordas e o arraste da barra são do sistema (ver native-window-snap.h)
+    int m_nativeCornerStyle = -1;
+    void setWelcomeMode(bool welcome);
+    bool m_welcomeMode = false;
+    QVBoxLayout *m_treeContainerLayout = nullptr;
+    void applyFrameInsets();
+    void dragTreeBorder(bool press, int globalX);
+    int m_treeDragStartX = 0;
+    int m_treeDragStartWidth = 0;
 
-    // Handlers das ações de item/exibição/execução, extraídos das lambdas
-    // dos sinais de clique para serem reusados também pelos atalhos de
-    // teclado configuráveis (ver setupActionShortcuts/actionShortcutSpecs)
-    // — a ação funciona pelo atalho mesmo se o grupo estiver com
-    // posicionamento "não exibir".
+    // Reusados pelos atalhos de teclado configuráveis (setupActionShortcuts): a ação funciona mesmo com o grupo em
+    // "não exibir".
     void triggerPlaySelected();
     void triggerStopSelected();
     void triggerForceStopSelected();
@@ -270,210 +384,324 @@ private:
     void triggerCollapseAll();
     void triggerToggleHiddenSelected();
     void triggerToggleShowHidden();
+    // Filtro "exibir apenas em execução": só da sessão, não persiste.
+    void triggerToggleRunningOnly();
+    void showEyeEasterEgg();
 
     void quitApplication();
-    void toggleSearchBar();
-    // Foca/desfoca o painel de Saída (só quando há saída ativa): alterna o
-    // foco entre o campo de entrada da Saída e a árvore de comandos.
     void toggleOutputFocus();
     void ensureDefaultThemeInstalled();
     void loadConfig();
     void centerOnActiveScreen();
     void reloadCommandTree();
-    // Alterna entre a WelcomeScreen (0 comandos E 0 pastas — instalação
-    // limpa/config apagada) e a árvore normal. Chamado ao fim de
-    // reloadCommandTree() para reagir a qualquer criação/exclusão sem
-    // precisar de um ponto de chamada dedicado por handler.
+    // WelcomeScreen quando não há comandos nem pastas; chamado ao fim de reloadCommandTree().
     void updateWelcomeScreenVisibility();
-    // Aplica as vars do environment ativo no EnvironmentManager (escopo
-    // global) e atualiza o seletor do topo.
     void applyActiveEnvironment();
-    void refreshEnvironmentSelector();
-    // Abre o formulário de parâmetros (se o comando tiver) e então executa.
-    void promptParamsAndRun(const core::Command &command);
+    void promptParamsAndRun(core::Command command);
+    // Roda o script de uma lista dinâmica (Parameter::optionsScript) e entrega o resultado ao `dialog`.
+    void runOptionsScript(const core::Command &command, const QMap<QString, QString> &currentValues,
+                          const QString &script, QPointer<ParameterFormDialog> dialog, const QString &paramName);
     void runCommandWithParams(const core::Command &command, const QMap<QString, QString> &paramValues);
     // Dispara os comandos marcados com autoRun ao iniciar o Kai (cada um após
     // seu delay em segundos), usando os valores da última execução.
     void scheduleAutoRunCommands();
     void persistCommands();
     void writeExportFile(const QString &path, const QString &content);
+    void copyExportToClipboard(const QString &content);
+    void importProjectFromDirectory(const QString &directory);
+    void importProjectTreeFromDirectory(const QString &directory);
+    struct TreeImportOutcome {
+        int imported = 0;
+        QStringList failures; // "pasta: motivo"
+    };
+    // Importa cada pasta de `directories` (pais antes dos filhos) como projeto. `rootProjectPath` é o PROJECT_PATH da
+    // raiz; o das demais é ele + o caminho relativo. Um projeto dentro de outro (desta importação) entra dentro dele; os
+    // demais em `parentFolderId` (vazio = raiz, ou a pasta do Kai que já contém o diretório, como na CLI).
+    TreeImportOutcome importProjectTree(const QString &rootDirectory, const QStringList &directories,
+                                        const QString &rootProjectPath, bool detectGeneric,
+                                        const QString &parentFolderId);
+    // Anexa um projeto já lido (ids únicos, grava, coleções, árvore) — o
+    // mesmo fim do import pelo diálogo e pelo CLI. false se a gravação falhou. `newRootId` recebe o id final da pasta do projeto.
+    bool mergeImportedProject(ProjectImportResult importResult, const QString &parentFolderId, QString *newRootId = nullptr,
+                              bool reloadTree = true);
+
+    // Ligações do pipeline que não dependem de qual comando roda (HTTP, "pulado",
+    // variáveis dinâmicas persistidas): o principal e os das ações de pasta.
+    void connectPipelineAuxSignals(engine::ExecutionPipeline *pipeline);
+    void configureEnvForRun(core::EnvironmentManager &env, const core::Command &command,
+                            const QMap<QString, QString> &paramValues);
+    void prepareDrawerForRun(const core::Command &command);
+    // AÇÕES DE PASTA (core/folder-actions.h): cada par (comando, pasta) é um comando VIRTUAL em m_commandsById, com id
+    // próprio, então tudo indexado por id (logs, painel de saída, parar/forçar/resetar) funciona sem mudança. Cada
+    // execução tem pipeline e ambiente próprios: o principal só aguenta uma cadeia por vez e as ações rodam em paralelo.
+    struct ActionRun;
+    void rebuildActionCommands();
+    void startFolderAction(const core::Command &command, const QMap<QString, QString> &paramValues);
+    void handleActionFinished(const QString &actionId, const engine::PipelineResult &result);
+    void handleFolderActionActivated(const QString &commandId, const QString &folderId);
+    // Documentação da pasta (README do diretório, ou o primeiro documento que houver) no painel Documento. `Reveal` (a pasta
+    // foi selecionada) também traz o painel à frente; `Quiet` só atualiza o que ele mostra.
+    enum class DocReveal { Reveal, Quiet };
+    bool showFolderDocumentation(const QString &folderId, DocReveal reveal = DocReveal::Reveal);
+    void followDocumentToCommand(const QString &commandId);
+    void setCommandsCollapsed(bool collapsed);
+    // Reflete o painel maximizado no DockHost (a Saída maximizada é o modo foco) no flag, no chevron e nas configurações.
+    void syncCommandsCollapsed();
+    void showQuickRun();
+    void noteRecentCommand(const QString &commandId);
+    QStringList m_recentCommandIds;
+    bool m_recentSeeded = false;
+    // Da bandeja, com o Kai oculto: a busca abre no meio da tela sob o cursor, sem trazer a janela.
+    void showQuickRunFromTray();
+    QuickRunPopup *preparedQuickRun();
+    QuickRunPopup *m_quickRun = nullptr;
+    // Ctrl+K: a mesma janelinha do "+", mas com comandos, pastas, notas, ambientes e ações.
+    void showCommandPalette();
+    void runPaletteAction(const QString &actionId);
+    void revealInTree(const QString &itemId, const std::function<void()> &fallback);
+    void showCommandInTree(const QString &commandId);
+    QString folderPathOf(const QString &folderId) const;
+    QuickRunPopup *m_palette = nullptr;
+    void showFindPalette();
+    void revealItemActions(const QString &itemId);
+    QuickRunPopup *m_findPalette = nullptr; // Buscar item (Ctrl+F): inerte, leva ao item e às ações dele
+    bool m_restoringUiState = false; // restaurando o recolhido da sessão anterior: não regrava
+    void handleDocKaiLink(const QString &action, const QString &target);
+    // Tela "caminho não encontrado" da documentação: acerta (automatic) ou abre o editor da pasta que define o diretório.
+    void fixDocDirectory(bool automatic, const QString &directory, const QString &suggestion);
+    QString m_docFolderId;
+    QMap<QString, int> m_docUsage; // id da pasta -> vezes que a documentação dela foi aberta (doc-usage.json)
+    QTimer *m_docUsageSaveTimer = nullptr;
+    bool m_docUsageSaving = false;
+    DocumentPanel *m_documentPanel = nullptr;
+    // O painel Variáveis (a tela de ambientes embutida) e o aviso de que a gravação veio dele (não recarregar a lista).
+    QPointer<EnvironmentManagerDialog> m_environmentsPanel;
+    bool m_savingEnvironmentsFromPanel = false;
+    bool m_documentWasPlaced = false;
+    // Pasta de um comando selecionado que não tem documentação (não se confere o disco de novo a cada clique) e a "senha" do
+    // pedido em andamento (uma seleção nova o invalida).
+    QString m_docFollowMiss;
+    quint64 m_docFollowToken = 0;
+    struct DocSource {
+        QString folderId;
+        QString directory; // só quando a pasta tem diretório PRÓPRIO a verificar
+        bool hasNotes = false;
+    };
+    void findDocSources(bool includeHidden, std::function<void(const QVector<DocSource> &)> done);
+    void refreshDocSources();
+    QString documentTargetFor(const QString &itemId) const;
+    void showDocumentFor(const QString &itemId);
+    bool canShowOutput(const QString &commandId) const;
+    void updateFocusActions();
+    QSet<QString> m_docSourceFolders; // fontes de documentação (refreshDocSources)
+    bool m_smartFocus = false; // Configurações → Foco inteligente (desligado: a Saída e o Documento só vêm quando pedidos)
+    bool m_inlineActions = false; // Configurações → Ações inline (botões do item na linha da árvore)
+    // O item que já estava selecionado enquanto a árvore é reconstruída (um comando editado, pelo agente ou por um diálogo):
+    // a árvore o seleciona de novo, e isso não é uma navegação, então nada passa à frente nem muda de painel.
+    QString m_restoredSelectionId;
+    quint64 m_docSourcesToken = 0;
+    // A memória do leitor de documentos (posições, rascunhos, recentes) e as marcas de "não salvo" na árvore de comandos.
+    DocSessionStore *m_docStore = nullptr;
+    void refreshDraftMarks();
+    void showFolderActionMenu(const QString &commandId, const QString &folderId, const QPoint &globalPos);
+    engine::ProcessRunner *runnerFor(const QString &commandId) const;
+    QStringList allPipelineRunningCommandIds() const;
+    void handleProjectSyncPlan(const engine::SyncPlan &plan);
+    void finishProjectSync(const QString &folderId);
+    QString folderDisplayName(const QString &folderId) const;
+    void importOpenApiFromFile(const QString &path);
+    // Coleção Postman / exportação do Insomnia / HAR: vira uma pasta com as requisições (e os padrões HTTP).
+    void importHttpCollectionFromFile(const QString &path, int kind);
+    void importConfigFromFile(const QString &path);
+    bool readConfigPackage(const QString &path, core::ConfigManager::ImportResult &result, QString &error,
+                           bool *isPackage = nullptr) const;
+    void applyConfigImport(const core::ConfigManager::ImportResult &result,
+                           const ImportSelectionDialog::Selection &selection, QString &doneMessage);
+    static bool cliImportSelection(const QStringList &only, ImportSelectionDialog::Selection &selection, QString &error);
     void reconnectTerminalToCommand(const QString &commandId);
-    // Resolve o ProcessRunner de UM comando específico por id — mesma
-    // lógica repetida em handleTerminal{Interrupt,Eof,RawData,Resize}
-    // (pipeline primeiro, depois ProcessManager).
+
+    // --- Barra de guias das saídas (OutputTabsBar) ---
+    // Uma guia por comando executado na sessão (a ação de pasta tem a sua, por pasta). Fechar só tira a guia: o
+    // processo segue e o log fica guardado; clicar no comando de novo ou iniciar uma execução a traz de volta.
+    void ensureOutputTab(const QString &commandId);
+    void refreshOutputTabs();
+    void activateOutputTab(const QString &commandId);
+    void showCommandOutput(const QString &commandId);
+    void closeOutputTab(const QString &commandId);
+    void showOutputTabMenu(const QString &commandId, const QPoint &globalPos);
+    void cycleOutputTab(int direction);
+    bool hasOutputToShow(const QString &commandId) const;
+    void clearOutputPanel();
     engine::ProcessRunner *runnerForCommandId(const QString &commandId) const;
     void handleCommandSelectionChanged(const QString &itemId, bool isFolder);
     void updateRunningCommandStatus();
     void appendToCommandLog(const QString &commandId, const QString &text);
     QStringList availableThemeNames() const;
+    QStringList bundledThemeNames() const;
+    QJsonObject themeDocument(const QString &name) const;
+    bool saveThemeFromAgent(const QString &name, const QJsonObject &doc, QString &error);
+    // Grava e aplica as configurações como o diálogo faz, sem diálogo (ferramentas de configuração da IA).
+    bool applySettingsFromAgent(const core::SettingsData &settings, QString &error);
     QString resolveTargetFolderId() const;
-    // Garante ID ÚNICO pra uma pasta nova (bug relatado: 2 pastas com o
-    // MESMO NOME geravam o MESMO id via FolderEditorDialog::
-    // generateFolderId — puro slug do nome, sem desambiguação — colidindo
-    // em qualquer lookup por id (árvore, chain de herança de env_vars,
-    // etc.) e fazendo uma pasta "carregar" o conteúdo da outra). Mesmo
-    // padrão já usado pra comandos (ver handleSaveOrUpdateCommand): se o
-    // id já existe, anexa um sufixo numérico até achar um livre.
+    // Id único para pasta nova: nomes iguais geram o mesmo slug e ids repetidos colidem nos lookups (árvore, herança
+    // de env_vars). Anexa sufixo numérico até achar um livre.
     QString uniqueFolderId(const QString &candidate) const;
+    QString commitNewFolder(core::Folder folder, bool nested);
+    // Ids da pasta raiz + todas as descendentes.
+    QVector<QString> folderSubtreeIds(const QString &rootFolderId) const;
+    // Coleções vinculadas a uma subárvore de pastas ou a um comando: guardadas ali (Collection::folderId) OU
+    // referenciadas por um parâmetro Select do escopo (Parameter::collectionId), mesmo que vivam em outro lugar.
+    QVector<core::Collection> linkedCollectionsForFolder(const QString &folderId) const;
+    QVector<core::Collection> linkedCollectionsForCommand(const QString &commandId) const;
     QVector<core::Command> commandsInFolder(const QString &folderId) const;
-    // Bloqueia nomes duplicados de Command/Collection DENTRO DA MESMA pasta
-    // (feedback do usuário: pastas diferentes podem repetir nome livremente,
-    // só irmãos na mesma pasta não). `excludeId` ignora o próprio item ao
-    // editar (senão ele colidiria consigo mesmo).
+    // Bloqueia nomes duplicados entre irmãos da mesma pasta (pastas diferentes podem repetir). `excludeId` ignora o
+    // próprio item ao editar.
     bool hasDuplicateCommandName(const QString &folderId, const QString &name, const QString &excludeId) const;
     bool hasDuplicateCollectionName(const QString &folderId, const QString &name, const QString &excludeId) const;
 
     core::ConfigManager m_configManager;
+    MainWindowAgentHost *m_agentHost = nullptr;
+    McpBridge *m_mcpBridge = nullptr;
+    QPointer<AiChatWindow> m_aiChat;
+    bool m_aiConfigured = false;
+    QVector<core::GlobalAction> m_globalActions;
+    std::map<QString, std::shared_ptr<ActionRun>> m_actionRuns; // execuções de ação em andamento
+    QSet<QString> m_actionsRan; // ações que já rodaram nesta sessão (têm saída guardada pra carregar)
+    // Ações KIP: a sessão é filha do pipeline que a criou e a view mostra o estado final dela
+    // depois do fim do processo, então o pipeline fica vivo até a próxima execução da ação.
+    std::map<QString, QPointer<engine::ExecutionPipeline>> m_keptKipPipelines;
+    engine::KipSession *kipSessionFor(const QString &commandId) const;
+    engine::ProjectSyncManager *m_projectSync = nullptr;
+    QSet<QString> m_projectSyncBusy;
+    // Destaque de pasta dessincronizada: sem watcher, só confere (em segundo plano) ao abrir,
+    // ao focar a janela, depois de salvar edições e ao fim de um sync.
+    QTimer *m_syncDriftTimer = nullptr;
+    void scheduleSyncDriftCheck();
     core::EnvironmentManager m_envManager;
     core::RunHistory m_runHistory;
+    core::NotificationHistory m_notificationHistory;
+    engine::CronScheduler m_cronScheduler;
     QDateTime m_runStartedAt; // início da execução atual (para o histórico)
     core::CommandsData m_commandsData;
     QMap<QString, core::Command> m_commandsById;
-    // Coleções (item não-executável na árvore), persistidas em
-    // collections.json separado.
     QVector<core::Collection> m_collections;
+    QVector<core::Note> m_notes;
     QSet<QString> m_failedCommandIds;
     QMap<QString, QString> m_backgroundProcessLogs;
     QMap<QString, QString> m_commandLogs;
-    // Último resultado HTTP estruturado POR comando: as abas Headers/JSON
-    // vinham só do resultado ao vivo (httpResultReady) e sumiam ao trocar de
-    // aba/comando e voltar (relatado). Guardamos aqui para REAPLICAR no
-    // reconnect, mantendo Headers/JSON ao reselecionar um comando HTTP.
+    // "Abrir último link" em terminal interativo: o processo nunca termina com sucesso, então a URL é checada a cada
+    // chunk de saída (handlePipelineLog) e a primeira abre uma vez por execução.
+    QSet<QString> m_openedLastLinkForRun;
+    // Comandos KIP cuja view deve abrir na janela própria quando a sessão nascer
+    // (`kai -gw`, mesmo mecanismo do `kip_window`).
+    QSet<QString> m_kipOpenWindowFor;
+    // Apps KIP abertos sozinhos no boot ("Abrir com o Kai") cuja sessão ainda é essa: não vêm à frente nem pegam o foco.
+    QSet<QString> m_kipAutoStarted;
+    bool m_autoStartingKip = false;
+    // Geração da sessão KIP por comando: o fechamento automático da janela (kip_auto_close)
+    // só vale para a sessão que o agendou, não para uma re-execução que veio depois.
+    QHash<QString, int> m_kipAutoCloseGeneration;
+    // SettingsData::outputMaxLogSizeKb já em caracteres: appendToCommandLog roda a cada chunk de qualquer comando e
+    // não deve ler a config do disco. Recalculado ao salvar Configurações.
+    int m_outputMaxLogSizeChars = 1024 * 1024;
+    // Último resultado HTTP por comando, reaplicado no reconnect (as abas Headers/JSON sumiam ao trocar de comando).
     QMap<QString, engine::HttpResult> m_lastHttpResult;
-    // Comandos HTTP cuja ÚLTIMA execução foi pulada por Execution Condition
-    // (conditionSkipBehavior == "success") — ver ExecutionPipeline::
-    // commandSkippedByCondition. ausência = última execução real (ou nunca
-    // rodou). Um resultado HTTP de verdade (httpResultReady) sempre remove
-    // a entrada — um resultado novo nunca pode conviver com o marcador de
-    // pulo de uma rodada anterior.
+    // Requisições HTTP enviadas que ainda esperam resposta: quando começou e o limite (0 = sem limite).
+    struct HttpWait {
+        QDateTime startedAt;
+        int timeoutSec = 0;
+    };
+    QHash<QString, HttpWait> m_httpWaits;
+    // Comandos HTTP cuja última execução foi pulada por Execution Condition (conditionSkipBehavior == "success").
+    // Um resultado HTTP real (httpResultReady) sempre remove a entrada.
     QMap<QString, QString> m_skippedReason;
     QString m_connectedTerminalCommandId;
-    // Id do comando de EXECUÇÃO ÚNICA atualmente rodando no ExecutionPipeline
-    // (não background, portanto NÃO rastreado pelo m_processManager). Usado
-    // para marcá-lo como "rodando" na árvore, permitir matá-lo e reconectar
-    // o stdin ao trocar de seleção e voltar (bugs reportados). Vazio quando
-    // não há execução única ativa.
-    // FONTE ÚNICA DE VERDADE de "este comando está rodando".
-    // Considera: (1) background no ProcessManager, (2) o Set de execuções do
-    // pipeline (sobrevive ao gap entre hooks) e (3) o runner REAL do comando
-    // no registry. Antes cada ponto da UI calculava isso do seu jeito, e o
-    // painel lateral usava o slot único m_activePipelineCommandId — que o 2º
-    // comando sobrescrevia, fazendo as ações "sumirem" ao voltar ao 1º.
+    QStringList m_outputTabOrder;   // ids das guias, na ordem da barra
+    // Fonte única de "este comando está rodando": background no ProcessManager, set de execuções do pipeline
+    // (sobrevive ao gap entre hooks) e o runner real no registry.
     bool isCommandRunning(const QString &commandId) const;
 
-    // Traduz as preferências de aparência (densidade, cantos, efeitos) para
-    // os design tokens e re-aplica a folha de estilo. Chamado no boot e ao
-    // salvar o Settings, para a troca valer sem reiniciar o app.
     void applyAppearanceSettings();
 
-    // Aplica a preferência de geometria da janela (tamanho fixo, maximizada,
-    // tela cheia ou lembrar o último tamanho).
     void applyWindowGeometryPreference();
 
-    // Esconde a janela quando o foco vai para FORA do Kai, se a opção estiver
-    // ligada. Tem guardas para não esconder quando o foco foi para um diálogo
-    // ou janela do PRÓPRIO app.
+    // Esconde a janela quando o foco vai para FORA do Kai, se a opção estiver ligada; não esconde se foi para um
+    // diálogo ou janela do próprio app.
     void maybeAutoHideOnFocusLoss();
-    // Auto-ocultar ao perder o foco (comportamento de launcher) — ver
-    // maybeAutoHideOnFocusLoss().
     bool m_autoHideOnFocusLoss = false;
-    // "Mostrar ocultos" (toggle da barra de Exibição) — espelha
-    // SettingsData::showHiddenCommands, aplicado em m_commandTree.
     bool m_showHiddenCommands = false;
+    bool m_showRunningOnly = false;
 
+    // Comando de execução única ativo no pipeline (vazio se nenhum).
     QString m_activePipelineCommandId;
-    // Se o comando de execução única ativo é HTTP (para abrir o JSON viewer
-    // com a resposta ao finalizar).
+    // Se esse comando é HTTP (abre o JSON viewer com a resposta ao finalizar).
     bool m_activePipelineIsHttp = false;
-    // Comandos cuja EXECUÇÃO (pipeline) está em andamento — marcados no
-    // disparo e limpos SÓ no pipelineFinished. Fonte de verdade estável do
-    // indicador "rodando": sobrevive à troca de estágios/hooks (o
-    // activeProcessRunner fica null no gap entre um hook e o próximo,
-    // apagando a bolinha — bug reportado) e a execuções concorrentes (o 2º
-    // comando não some o ícone do 1º — bug reportado).
+    // Comandos com pipeline em andamento: marcados no disparo e limpos só no pipelineFinished. Sobrevive ao gap
+    // entre hooks (sem runner ativo) e a execuções concorrentes.
     QSet<QString> m_pipelineRunningIds;
 
     engine::ExecutionPipeline *m_pipeline = nullptr;    engine::ProcessManager *m_processManager = nullptr;
     utils::ThemeManager *m_themeManager = nullptr;
 
     TopUtilityBar *m_topBar = nullptr;
-    FuzzySearchBar *m_searchBar = nullptr;
-    // Os 3 grupos de ações (Item/Exibição/Execução — pedido do usuário: cada
-    // um posicionável independentemente via Settings). São widgets "soltos"
-    // até applyActionGroupPlacement() reparentá-los num dos dois
-    // containers abaixo (ou em nenhum, se "não exibir").
+    // Os 3 grupos de ações (Item/Exibição/Execução) são widgets soltos até applyActionGroupPlacement()
+    // reparentá-los num dos containers abaixo (ou em nenhum, se "não exibir").
     ItemActionsBar *m_itemActionsBar{nullptr};
+    StatusLine *m_statusLine{nullptr};
     ExpandCollapseBar *m_expandCollapseBar{nullptr};
     ActionSidebar *m_actionSidebar = nullptr;
-    // Containers genéricos de posicionamento: upper (horizontal, acima da
-    // árvore), bottom (horizontal, abaixo da árvore), left (vertical, 1º
-    // widget do m_horizontalSplitter) e side (vertical, ao lado direito —
-    // nome histórico, ver applyActionGroupPlacement()). Hospedam 0-3 dos
-    // grupos acima, decidido em applyActionGroupPlacement().
+    // Containers de posicionamento: upper (acima da árvore), bottom (abaixo), left (1º widget do m_horizontalSplitter)
+    // e side (à direita; nome histórico). Hospedam 0-3 grupos (applyActionGroupPlacement()).
     ActionGroupContainer *m_upperActionsContainer{nullptr};
     ActionGroupContainer *m_bottomActionsContainer{nullptr};
     ActionGroupContainer *m_leftActionsContainer{nullptr};
     ActionGroupContainer *m_sideActionsContainer{nullptr};
     CommandTreeWidget *m_commandTree = nullptr;
-    // Tela de boas-vindas (estilo VSCode Welcome tab), mostrada em vez de
-    // m_commandTree/m_upperActionsContainer/m_bottomActionsContainer
-    // quando o app não tem NENHUM comando nem pasta — ver
-    // updateWelcomeScreenVisibility(). Vive dentro do mesmo treeContainer
-    // (ver setupUi), então continua respeitando o splitter/redimensionamento
-    // existente sem widgets extras.
+    // Mostrada em vez da árvore e dos containers de ação quando não há comando nem pasta; vive no mesmo
+    // treeContainer (updateWelcomeScreenVisibility()).
     class WelcomeScreen *m_welcomeScreen = nullptr;
-    // "x" da tela de boas-vindas fechada manualmente enquanto o app
-    // continua vazio — suprime o auto-show até Ajuda -> "Tela de
-    // Boas-Vindas" (handleShowWelcomeRequested) resetar. Ver
-    // updateWelcomeScreenVisibility().
+    // Fechada manualmente enquanto o app segue vazio: suprime o auto-show até Ajuda -> "Tela de Boas-Vindas".
     bool m_welcomeScreenDismissed = false;
-    // Overlay de loading genérico da janela principal (import de projeto e
-    // outras ações demoradas — feedback do usuário: "tudo que carrega").
+    // Overlay de loading genérico (import de projeto e outras ações demoradas).
     class LoadingOverlay *m_loadingOverlay = nullptr;
     TerminalDrawer *m_terminalDrawer = nullptr;
     QSplitter *m_horizontalSplitter = nullptr;
-    // Widget "fixo" da área principal (busca + m_horizontalSplitter),
-    // construído uma única vez em setupUi(); applyOutputPosition() decide
-    // em qual splitter externo ele entra (m_outerSplitter, junto com
-    // m_terminalDrawer), sem recriar nada — ver applyOutputPosition().
+    // Widget "fixo" da área principal (busca + m_horizontalSplitter), construído uma única vez em setupUi() e entregue ao
+    // DockHost como o painel "commands".
     QWidget *m_mainAreaWrapper = nullptr;
-    // Widget de conteúdo (abaixo da title bar) cujo QVBoxLayout hospeda o
-    // m_outerSplitter — applyOutputPosition() troca o splitter externo
-    // dentro deste layout ao mudar SettingsData::outputPosition.
+    // Widget de conteúdo (abaixo da title bar) que hospeda o DockHost e a tela de boas-vindas.
     QWidget *m_content = nullptr;
-    // Splitter externo ATUAL (recriado por applyOutputPosition() a cada
-    // mudança de posição): Vertical [m_mainAreaWrapper, m_terminalDrawer]
-    // para "bottom" (comportamento padrão/histórico), ou Horizontal
-    // [m_terminalDrawer, m_mainAreaWrapper] / [m_mainAreaWrapper,
-    // m_terminalDrawer] para "left"/"right".
-    QSplitter *m_outerSplitter = nullptr;
-    // Debounce do salvamento do tamanho do m_outerSplitter (pedido do
-    // usuário: "o que eu salvei redimensionando fica") — reinicia a cada
-    // QSplitter::splitterMoved (drag do mouse), só persiste settings.json
-    // quando o usuário PARA de arrastar. Ver applyOutputPosition().
-    QTimer *m_outputSplitterSaveTimer = nullptr;
-    // Shortcuts Manager v2 (ver utils::actionShortcutSpecs): UM QVector
-    // cobre TODAS as ações agora (antes eram ~12 ponteiros nomeados +
-    // este vetor separado pras data-driven) — cada spec pode gerar 0..N
-    // QShortcut (multi-binding), todos recriados junto em
-    // setupActionShortcuts().
+    layout::ViewRegistry *m_viewRegistry = nullptr;
+    layout::DockHost *m_dock = nullptr;
+    layout::LayoutStore *m_layoutStore = nullptr;
+    layout::LayoutController *m_layoutController = nullptr;
+    QVector<QPointer<ActionSidebar>> m_commandStrips; // as faixas de ação dos painéis/janelas de comando (propriedade kaiCommandId)
+    QHash<QString, QPointer<RunMirrorPanel>> m_mirrors; // por id do painel (`run:<id>` / `kip:<id>`)
+    // Modo foco: a lista de comandos some e a Saída (com as guias dos programas ativos) ocupa tudo — é o painel Saída
+    // maximizado no DockHost. O chevron fica no começo da barra de guias.
+    bool m_commandsCollapsed = false;
+    // Execução em segundo plano de um comando OCULTO (cron, auto-run, `kai run`): não puxa a Saída, não a expande e não
+    // cria guia. `m_quietRun` vale só durante a chamada que dispara; `m_quietRunIds` guarda os que estão rodando assim.
+    bool m_quietRun = false;
+    QSet<QString> m_quietRunIds;
+    // Disparados pelo auto-run (boot) ou pelo agendamento (cron): rodam em silêncio, sem Saída e sem aparecer na barra de
+    // status (contagem de rodando e último resultado). Uma execução manual do mesmo comando tira o id daqui.
+    bool m_scheduledRun = false;
+    QSet<QString> m_silentRunIds;
+    void runInBackground(const QString &commandId, bool scheduled = false);
+    // Um QVector cobre todas as ações (utils::actionShortcutSpecs); cada spec gera 0..N QShortcut (multi-binding),
+    // todos recriados em setupActionShortcuts().
     QVector<QShortcut *> m_actionShortcuts;
     ProjectSelector *m_projectSelector = nullptr;
 
     QSystemTrayIcon *m_trayIcon = nullptr;
     std::unique_ptr<QHotkey> m_globalHotkey;
     ProcessListDialog *m_processListDialog = nullptr;
-    LogViewerDialog *m_logViewerDialog = nullptr;
 
-    // Estado do arraste da janela frameless (custom title bar).
-    // Detecção de borda para resize da janela frameless: retorna as
-    // bordas (Qt::Edges) sob a posição do cursor, ou 0 se estiver no
-    // interior. `kResizeMargin` é a largura da faixa sensível nas bordas.
+    // Borda da janela frameless sob o cursor (0 = interior); `kResizeMargin` é a largura da faixa sensível.
     Qt::Edges edgesAt(const QPoint &pos) const;
     static constexpr int kResizeMargin = 8;
-    // Cursor de resize ativo via QApplication::setOverrideCursor (global, não
-    // herda por widget). Guardamos o estado para restaurar exatamente uma vez
-    // ao sair da faixa de borda.
+    // Cursor de resize via QApplication::setOverrideCursor (global): guarda o estado para restaurar uma única vez.
     bool m_resizeCursorActive = false;
 };
 

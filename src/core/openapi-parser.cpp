@@ -18,7 +18,6 @@ const QStringList kHttpMethods = {
 // Swagger 2 host+basePath+scheme). Retorna vazio se não houver.
 QString resolveBaseUrl(const QJsonObject &root)
 {
-    // OpenAPI 3.x.
     const QJsonArray servers = root.value(QStringLiteral("servers")).toArray();
     if (!servers.isEmpty()) {
         const QString url = servers.first().toObject().value(QStringLiteral("url")).toString();
@@ -26,7 +25,6 @@ QString resolveBaseUrl(const QJsonObject &root)
             return url;
         }
     }
-    // Swagger 2.0.
     const QString host = root.value(QStringLiteral("host")).toString();
     if (!host.isEmpty()) {
         const QString basePath = root.value(QStringLiteral("basePath")).toString();
@@ -79,7 +77,6 @@ QJsonObject requestBodySchema(const QJsonObject &op)
         return content.value(QStringLiteral("application/json")).toObject()
             .value(QStringLiteral("schema")).toObject();
     }
-    // primeiro content-type disponível
     if (!content.isEmpty()) {
         return content.begin().value().toObject().value(QStringLiteral("schema")).toObject();
     }
@@ -101,7 +98,6 @@ OpenApiParseResult parseOpenApi(const QString &jsonText)
     }
     const QJsonObject root = doc.object();
 
-    // Valida que parece OpenAPI/Swagger.
     if (!root.contains(QStringLiteral("openapi")) && !root.contains(QStringLiteral("swagger"))) {
         result.errorMessage = utils::tr(QStringLiteral("openapi.error.not_openapi"));
         return result;
@@ -128,7 +124,6 @@ OpenApiParseResult parseOpenApi(const QString &jsonText)
             cfg.method = httpMethodFromString(method.toUpper());
             cfg.url = baseUrl + path;
 
-            // Corpo de exemplo para métodos com body.
             const QJsonObject schema = requestBodySchema(op);
             if (!schema.isEmpty()) {
                 const QJsonValue example = exampleFromSchema(schema);
@@ -137,7 +132,7 @@ OpenApiParseResult parseOpenApi(const QString &jsonText)
                         ? QJsonDocument(example.toObject())
                         : QJsonDocument(QJsonArray{example}));
                     cfg.body = QString::fromUtf8(bodyDoc.toJson(QJsonDocument::Indented));
-                    cfg.headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+                    cfg.headers.append({QStringLiteral("Content-Type"), QStringLiteral("application/json")});
                 }
             }
 

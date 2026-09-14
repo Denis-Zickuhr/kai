@@ -1,26 +1,30 @@
-# Overview
+# Kai overview
 
-**Kai** is a native command runner (C++/Qt6) for developers: it runs Shell
-scripts and HTTP requests, chains automations (hooks), injects
-environment-scoped variables — all behind a global shortcut and with a
-light footprint. The UX inspiration is **CopyQ**: light, native, with a
-global shortcut.
+**Kai** is a native command runner for developers: it keeps the commands you run every day — shell, Python, Node, HTTP requests — one global shortcut away, injects variables per environment, streams the output live and never leaves orphaned processes behind.
 
-## Typical flow
+## Typical workflow
 
-1. Create **folders** and, inside them, **commands** (Shell or HTTP).
-2. Set **variables** in an **Environment** (a selectable package at the top).
-3. Run with a double-click; watch the output in the output panel.
-4. Automate with **hooks** (pre/post/cleanup) and reuse via the **CLI**.
+1. Create **folders** (they become tabs) and, inside them, **commands** — see [Folders, tree & search](organizing.md).
+2. Write the command: a [shell line](commands.md), [Python or Node code](languages.md) or an [HTTP request](commands-http.md). Ask for values with [parameters](parameters.md).
+3. Set **variables** in an [environment](environments.md) (the **Variables** panel) and use them as `{{VAR}}`.
+4. Run with a double-click or **Enter**; follow the [Output](output.md) live.
+5. Automate: [hooks](hooks.md), [schedules](scheduling.md), [auto-replies](responders.md), and the [command line](cli.md).
 
-## Concepts
+## The main window
 
-- **Folder:** groups commands; becomes a tab. Can have subfolders.
-- **Command:** an executable unit (Shell or HTTP).
-- **Environment:** a package of variables; one active at a time.
-- **Hook:** a command fired before/after/on cleanup of another.
-- **Execution condition:** a guard deciding whether a command actually runs.
-- **Collection:** a data source for `select` parameters.
+- **Top bar:** menus **File** (import, export, run history, logs, hide, quit), **View** (panels and layout), **Settings** and **Help**.
+- **Tabs and tree:** one tab per folder, with the commands and subfolders in a tree; the side bar next to it runs, stops, edits and creates things.
+- **Output panel:** the result of the selected command (on the right by default; any [panel](layout.md) can be dragged to another cell).
+- **Status line:** how many commands are running (click for the [process list](processes.md)), whether the last run succeeded and the unread [notifications](notifications.md).
 
-See also: [Shell commands](commands-shell.md), [HTTP commands](commands-http.md),
-[Environments](environments.md).
+> **Tip:** Press **Ctrl+F** to find a command, folder or note and open its actions. The [global shortcut](shortcuts.md) shows or hides Kai from anywhere.
+
+## Where to read next
+
+|   |   |
+|---|---|
+| [Commands](commands.md) | what a command can do and its options |
+| [Languages](languages.md) | Python, Node or PHP code instead of a shell line, plus the built-in `kai` and `kip` modules |
+| [KIP](kip.md) | turn a command into a small app with forms, progress and results |
+| [kai.yml](kai-yml.md) | keep a project's commands in a versionable file |
+| [Settings](settings.md) | appearance, layout, notifications, interpreters and more |

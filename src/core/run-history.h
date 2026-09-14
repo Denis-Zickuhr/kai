@@ -7,39 +7,33 @@
 
 namespace kai::core {
 
-// Um registro de execução (run) — feedback do usuário: histórico das
-// últimas execuções (HTTP e Shell) com timestamp e saída salva, para
-// reexecutar e comparar.
+// Registro de uma execução (HTTP e Command) com timestamp e saída salva, para reexecutar e comparar.
 struct RunRecord {
     QString id;            // uuid do run
     QString commandId;     // id do comando executado
     QString commandName;   // nome no momento da execução (denormalizado)
-    QString commandType;   // "shell" | "http"
+    QString commandType;   // "command" | "http" (registros antigos: "shell")
     QDateTime startedAt;
     qint64 durationMs = 0;
     bool success = false;
     QString output;        // stdout/stderr acumulado (truncado)
 };
 
-// Persiste e recupera o histórico de execuções em runs.json (no diretório
-// de config do Kai). Mantém um limite de registros para não crescer sem
-// controle. Desacoplado da UI (comunica via valores de retorno).
+// Persiste o histórico de execuções em runs.json (diretório de config), com limite de registros.
+// Desacoplado da UI.
 class RunHistory : public QObject {
     Q_OBJECT
 
 public:
     explicit RunHistory(QObject *parent = nullptr);
 
-    // Caminho do arquivo runs.json (mesmo diretório de config).
     QString filePath() const;
 
-    // Carrega os runs (mais recentes primeiro). Corrupção -> lista vazia.
+    // Mais recentes primeiro. Corrupção -> lista vazia.
     QVector<RunRecord> load() const;
 
-    // Adiciona um run ao topo e persiste, respeitando o limite máximo.
     void append(const RunRecord &record);
 
-    // Limpa todo o histórico.
     void clear();
 
     // Limite de registros mantidos (os mais antigos são descartados).

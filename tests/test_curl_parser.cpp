@@ -30,8 +30,8 @@ private slots:
         QVERIFY(r.ok);
         QCOMPARE(r.config.method, HttpMethod::Post);
         QCOMPARE(r.config.url, QStringLiteral("https://api.example.com/login"));
-        QCOMPARE(r.config.headers.value("Content-Type"), QStringLiteral("application/json"));
-        QCOMPARE(r.config.headers.value("Accept"), QStringLiteral("application/json"));
+        QCOMPARE(httpEntryValue(r.config.headers, QStringLiteral("Content-Type")), QStringLiteral("application/json"));
+        QCOMPARE(httpEntryValue(r.config.headers, QStringLiteral("Accept")), QStringLiteral("application/json"));
         QVERIFY(r.config.body.contains(QStringLiteral("\"user\":\"admin\"")));
     }
 
@@ -55,15 +55,51 @@ private slots:
         QVERIFY(r.ok);
         QCOMPARE(r.config.method, HttpMethod::Put);
         QCOMPARE(r.config.url, QStringLiteral("https://api.example.com/item/5"));
-        QCOMPARE(r.config.headers.value("X-Token"), QStringLiteral("abc"));
+        QCOMPARE(httpEntryValue(r.config.headers, QStringLiteral("X-Token")), QStringLiteral("abc"));
     }
 
-    // -u vira header Authorization Basic.
-    void basicAuthBecomesHeader()
+    // -u vira autenticação Basic (e não um header com a senha em base64).
+    void basicAuthBecomesAuth()
     {
         const auto r = parseCurl(QStringLiteral("curl -u user:pass https://x.com"));
         QVERIFY(r.ok);
-        QVERIFY(r.config.headers.value("Authorization").startsWith(QStringLiteral("Basic ")));
+        QCOMPARE(r.config.auth.type, HttpAuthType::Basic);
+        QCOMPARE(r.config.auth.username, QStringLiteral("user"));
+        QCOMPARE(r.config.auth.password, QStringLiteral("pass"));
+        QVERIFY(httpEntryValue(r.config.headers, QStringLiteral("Authorization")).isEmpty());
+    }
+
+    void formFlagsBecomeMultipartFields()
+    {
+        const auto r = parseCurl(QStringLiteral("curl -F name=Ana -F avatar=@/tmp/a.png https://x.com/up"));
+        QVERIFY(r.ok);
+        QCOMPARE(r.config.bodyType, HttpBodyType::Multipart);
+        QCOMPARE(r.config.method, HttpMethod::Post);
+        QCOMPARE(r.config.formFields.size(), 2);
+        QCOMPARE(r.config.formFields.at(0).name, QStringLiteral("name"));
+        QVERIFY(!r.config.formFields.at(0).isFile);
+        QVERIFY(r.config.formFields.at(1).isFile);
+        QCOMPARE(r.config.formFields.at(1).value, QStringLiteral("/tmp/a.png"));
+    }
+
+    void connectionFlagsFillTheOptions()
+    {
+        const auto r = parseCurl(QStringLiteral(
+            "curl -k -x socks5://p:1080 -m 30 -I -o out.bin --connect-timeout 5 https://x.com"));
+        QVERIFY(r.ok);
+        QCOMPARE(r.config.url, QStringLiteral("https://x.com"));
+        QCOMPARE(r.config.method, HttpMethod::Head);
+        QVERIFY(r.config.options.verifyTls.has_value() && !*r.config.options.verifyTls);
+        QCOMPARE(r.config.options.proxy.value_or(QString()), QStringLiteral("socks5://p:1080"));
+        QCOMPARE(r.config.options.timeoutSec.value_or(0), 30);
+    }
+
+    void unknownVerbsKeepTheirName()
+    {
+        const auto r = parseCurl(QStringLiteral("curl -X PROPFIND https://x.com"));
+        QVERIFY(r.ok);
+        QCOMPARE(r.config.method, HttpMethod::Custom);
+        QCOMPARE(r.config.methodName(), QStringLiteral("PROPFIND"));
     }
 
     // Flags que ignoramos não devem consumir a URL.

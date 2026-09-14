@@ -1,12 +1,12 @@
 #include <QtTest>
 
 #include "engine/output-responder-matcher.h"
+#include "core/environment-manager.h"
 
 using namespace kai::engine;
 using namespace kai::core;
 
-// Testes de UNIDADE do matcher de auto-responsores. Sem processo real: só a
-// lógica de casamento sobre chunks, captura de grupo, limite e buffer.
+// Unidade do matcher de auto-responsores, sem processo real: casamento sobre chunks, captura de grupo, limite e buffer.
 class TestOutputResponder : public QObject {
     Q_OBJECT
 
@@ -22,11 +22,10 @@ private slots:
         OutputResponderMatcher m({r});
 
         auto a = m.feed(QStringLiteral("Deseja Contin"));
-        QCOMPARE(a.size(), 0); // prompt ainda incompleto
+        QCOMPARE(a.size(), 0);
         auto b = m.feed(QStringLiteral("uar? [y/N] "));
         QCOMPARE(b.size(), 1);
         QCOMPARE(b.at(0).text, QStringLiteral("y"));
-        // Mais saída não deve re-disparar o mesmo prompt.
         auto c = m.feed(QStringLiteral("\nfazendo coisas...\n"));
         QCOMPARE(c.size(), 0);
     }
@@ -43,6 +42,37 @@ private slots:
         auto out = m.feed(QStringLiteral("Base de dados [producao]? "));
         QCOMPARE(out.size(), 1);
         QCOMPARE(out.at(0).text, QStringLiteral("producao"));
+    }
+
+    // {{VAR}} na resposta, junto com \1 no mesmo texto.
+    void interpolatesEnvVarsInResponse()
+    {
+        EnvironmentManager env;
+        env.setGlobalVars({{"DB_PASSWORD", "s3cr3t"}});
+
+        OutputResponder r;
+        r.name = QStringLiteral("t");
+        r.pattern = QStringLiteral("Senha para (\\w+):");
+        r.response = QStringLiteral("{{DB_PASSWORD}} (\\1)");
+        OutputResponderMatcher m({r}, &env);
+
+        auto out = m.feed(QStringLiteral("Senha para producao: "));
+        QCOMPARE(out.size(), 1);
+        QCOMPARE(out.at(0).text, QStringLiteral("s3cr3t (producao)"));
+    }
+
+    // Sem EnvironmentManager (nullptr, padrão) {{VAR}} passa como texto literal, sem crash.
+    void withoutEnvironmentManagerLeavesPlaceholdersLiteral()
+    {
+        OutputResponder r;
+        r.name = QStringLiteral("t");
+        r.pattern = QStringLiteral("Continuar\\?");
+        r.response = QStringLiteral("{{X}}");
+        OutputResponderMatcher m({r});
+
+        auto out = m.feed(QStringLiteral("Continuar? "));
+        QCOMPARE(out.size(), 1);
+        QCOMPARE(out.at(0).text, QStringLiteral("{{X}}"));
     }
 
     // Vários prompts no mesmo chunk casam na ORDEM de aparição.
@@ -76,7 +106,7 @@ private slots:
         auto out = m.feed(QStringLiteral("prompt prompt prompt"));
         QCOMPARE(out.size(), 1);
         auto out2 = m.feed(QStringLiteral("prompt de novo"));
-        QCOMPARE(out2.size(), 0); // já atingiu o limite
+        QCOMPARE(out2.size(), 0);
     }
 
     // Sem limite configurado, o teto de sanidade impede loop infinito.
@@ -88,7 +118,6 @@ private slots:
         r.response = QStringLiteral("y");
         OutputResponderMatcher m({r});
 
-        // 200 ocorrências, mas o teto de sanidade é 50.
         auto out = m.feed(QString(200, QLatin1Char('x')));
         QCOMPARE(out.size(), OutputResponderMatcher::kSanityCap);
     }
@@ -123,7 +152,7 @@ private slots:
     void unnamedResponderDoesNotFire()
     {
         OutputResponder r;
-        r.name = QString(); // sem nome
+        r.name = QString();
         r.pattern = QStringLiteral("prompt");
         r.response = QStringLiteral("ok");
         OutputResponderMatcher m({r});
@@ -140,9 +169,7 @@ private slots:
         r.response = QStringLiteral("achou");
         OutputResponderMatcher m({r});
 
-        // Enche o buffer muito além do teto, sem casar.
         m.feed(QString(OutputResponderMatcher::kMaxBuffer * 2, QLatin1Char('a')));
-        // Agora manda o padrão: deve casar mesmo após o corte.
         auto out = m.feed(QStringLiteral("...MARCA_FINAL..."));
         QCOMPARE(out.size(), 1);
         QCOMPARE(out.at(0).text, QStringLiteral("achou"));

@@ -17,14 +17,9 @@ struct ResolvedTheme {
     QString qss;
 };
 
-// Carrega, resolve e aplica temas no formato JSON descrito na
-// (inspirado no modelo do CopyQ): variáveis base + expressões de cor
-// ${var ± #hex} + blocos de CSS por componente, traduzidos para QSS.
-//
-// Suporta live reload via QFileSystemWatcher: qualquer alteração no arquivo
-// do tema ativo é reprocessada automaticamente, emitindo themeReloaded().
-// Erros de parsing nunca crasham a aplicação — o tema anterior é mantido e
-// um warning é logado (mesma política de resiliência).
+// Carrega, resolve e aplica temas JSON (variáveis base + expressões ${var ± #hex} + blocos CSS por componente,
+// traduzidos para QSS). Live reload via QFileSystemWatcher emite themeReloaded(). Erros de parsing nunca
+// crasham: o tema anterior é mantido e um warning é logado.
 class ThemeManager : public QObject {
     Q_OBJECT
 
@@ -32,27 +27,20 @@ public:
     explicit ThemeManager(QObject *parent = nullptr);
     ~ThemeManager() override;
 
-    // Diretório onde os temas do usuário residem: ~/.config/kai/themes/.
     QString themesDirPath() const;
 
-    // Carrega um tema pelo nome (sem extensão), ex: "dracula" ->
-    // ~/.config/kai/themes/dracula.json. Retorna false se o arquivo não
-    // existir ou for inválido (mantém o tema atual, se houver).
+    // Carrega um tema pelo nome (sem extensão) de ~/.config/kai/themes/. false se o arquivo não existir ou for inválido (mantém o atual).
     bool loadTheme(const QString &themeName);
 
-    // Carrega um tema a partir de um caminho de arquivo absoluto.
     bool loadThemeFromFile(const QString &filePath);
 
     const ResolvedTheme &currentTheme() const;
     bool hasTheme() const;
 
-    // Habilita/desabilita o watcher de live reload do arquivo atualmente
-    // carregado.
     void setLiveReloadEnabled(bool enabled);
 
 signals:
-    // Emitido sempre que um tema é (re)carregado com sucesso, seja pela
-    // primeira carga ou por live reload.
+    // Emitido a cada (re)carga bem-sucedida, inclusive por live reload.
     void themeReloaded(const ResolvedTheme &theme);
     void themeLoadFailed(const QString &filePath, const QString &errorMessage);
 

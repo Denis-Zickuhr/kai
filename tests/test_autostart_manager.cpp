@@ -27,7 +27,6 @@ private slots:
 
     void cleanup()
     {
-        // Garante que não fica registro pendente entre testes.
         utils::AutostartManager::setEnabled(false, QStringLiteral("/tmp/kai"));
         m_tempDir.reset();
     }
@@ -92,27 +91,23 @@ private slots:
         const QString exec = QStringLiteral("/usr/local/bin/kai");
         QVERIFY(!utils::AutostartManager::isEnabled());
 
-        // sync(false) num estado já desabilitado: mantém desabilitado.
         QVERIFY(utils::AutostartManager::sync(false, exec));
         QVERIFY(!utils::AutostartManager::isEnabled());
 
-        // sync(true): habilita.
         QVERIFY(utils::AutostartManager::sync(true, exec));
         QVERIFY(utils::AutostartManager::isEnabled());
 
-        // sync(true) de novo: idempotente, continua habilitado.
         QVERIFY(utils::AutostartManager::sync(true, exec));
         QVERIFY(utils::AutostartManager::isEnabled());
     }
 #endif
 
-    // Round-trip da config: autostart deve persistir em settings.json.
     void autostartSettingRoundTrips()
     {
         core::ConfigManager manager;
 
         core::SettingsData data = manager.loadSettings();
-        QCOMPARE(data.autostart, false); // default
+        QCOMPARE(data.autostart, false);
 
         data.autostart = true;
         QVERIFY(manager.saveSettings(data));
@@ -121,29 +116,22 @@ private slots:
         QCOMPARE(reloaded.autostart, true);
     }
 
-    // REGRESSÃO (bug reportado: "o Kai não está inicializando no Windows por
-    // padrão, mesmo com a flag marcada"). Duas causas somadas: (1) o registro
-    // só era escrito quando a opção MUDAVA no diálogo; (2) o sync() só checava
-    // se a entrada EXISTIA, não se apontava para o executável atual — então
-    // reinstalar em outra pasta deixava um caminho morto.
+    // sync() deve corrigir o destino registrado quando o executável muda (reinstalar em outra pasta deixava
+    // um caminho morto): checar só se a entrada EXISTE não basta.
     void syncFixesStaleExecutablePath()
     {
         const QString oldPath = QDir::temp().filePath(QStringLiteral("kai-old/kai"));
         const QString newPath = QDir::temp().filePath(QStringLiteral("kai-new/kai"));
 
-        // Registra apontando para o caminho ANTIGO.
         QVERIFY(utils::AutostartManager::setEnabled(true, oldPath));
         QVERIFY(utils::AutostartManager::isEnabled());
         QCOMPARE(QDir::toNativeSeparators(utils::AutostartManager::registeredTarget()),
                  QDir::toNativeSeparators(oldPath));
 
-        // sync com o caminho NOVO deve CORRIGIR o destino (antes não corrigia,
-        // porque isEnabled() já era true e ele considerava tudo em ordem).
         QVERIFY(utils::AutostartManager::sync(true, newPath));
         QCOMPARE(QDir::toNativeSeparators(utils::AutostartManager::registeredTarget()),
                  QDir::toNativeSeparators(newPath));
 
-        // Desligar remove de fato.
         QVERIFY(utils::AutostartManager::sync(false, newPath));
         QVERIFY(!utils::AutostartManager::isEnabled());
     }

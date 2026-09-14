@@ -2,14 +2,13 @@
 #include <QKeyEvent>
 #include <QTemporaryDir>
 
-#include "ui/shortcut-capture-field.h"
+#include "ui/shared/shortcut-capture-field.h"
 #include "core/config-manager.h"
 
 using namespace kai::ui;
 using namespace kai::core;
 
-// Cobre a "revolução dos atalhos": o campo inteligente de
-// captura de teclas e a persistência dos novos atalhos em settings.json.
+// Campo de captura de teclas e persistência dos atalhos em settings.json.
 class TestShortcutSystem : public QObject {
     Q_OBJECT
 
@@ -26,7 +25,6 @@ private slots:
         ShortcutCaptureField field;
         QVERIFY(field.keySequenceString().isEmpty());
 
-        // Simula o usuário pressionando Ctrl+Shift+N.
         QKeyEvent event(QEvent::KeyPress, Qt::Key_N,
                         Qt::ControlModifier | Qt::ShiftModifier);
         QCoreApplication::sendEvent(&field, &event);
@@ -64,8 +62,7 @@ private slots:
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
-        // ConfigManager usa AppConfigLocation; forçamos um diretório
-        // isolado via HOME/XDG para não tocar no config real do usuário.
+        // ConfigManager usa AppConfigLocation: isola o diretório via HOME/XDG para não tocar no config real.
         qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
 
         ConfigManager config;

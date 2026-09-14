@@ -1,6 +1,8 @@
-# Variables `{{VAR}}`
+# Variables {{VAR}}
 
-Shell, URL, Headers and Body all support `{{VAR}}` interpolation.
+`{{VAR}}` is replaced right before a command runs. It works in **native commands**, the working directory, HTTP URL / headers / body, the response of an [auto-reply](responders.md) and the values of [execution conditions](hooks.md). In [Python/Node code](languages.md) it is *not* replaced — read environment variables instead.
+
+Names accept letters, digits, `_` and `.` (the dot reaches a field of a [collection](collections.md) entry: `{{customer.email}}`); a `$` prefix is a [dynamic variable](dynamic-vars.md) (`{{$uuid}}`). Typing `{{` in an editor suggests the variables available.
 
 ## Precedence
 
@@ -8,19 +10,19 @@ Shell, URL, Headers and Body all support `{{VAR}}` interpolation.
 Global  <  Folder/Project  <  Dynamic (HTTP)  <  Parameters
 ```
 
-The right side overrides the left. A missing variable becomes an empty
-string (with a log warning) — Kai never breaks over it.
+The rightmost overrides the leftmost. A missing variable becomes an empty string (with a warning in the log) — Kai never crashes because of it.
 
-## Examples
+## Conditional text
 
-```bash
-echo "Port: {{PORT}}, Env: {{NODE_ENV}}"
-```
+A block can choose what text survives, before the variables are replaced:
 
 ```
-GET {{BASE_URL}}/users/{{USER_ID}}
-Authorization: Bearer {{AUTH_TOKEN}}
+docker compose up {% if {{BUILD}} == "true" %}--build{% else %}--no-build{% endif %} {{service}}
 ```
 
-See [environments.md](environments.md) (where global variables live) and
-[dynamic-vars.md](dynamic-vars.md) (variables generated on the fly).
+- `{% if A op B %}` … optional `{% else %}` … `{% endif %}`; blocks can be nested.
+- Operators: `==`, `!=`, `>`, `=`, ` 1000 %}`); the order operators need numbers, otherwise the condition is false.
+- Operands are `{{VAR}}`, quoted text or a number. With **no operator** the condition is true when the value is not empty, not `false` and not `0`: `{% if {{VERBOSE}} %}-v{% endif %}`.
+- `kai --dry-run` shows the text after the blocks were resolved.
+
+See [Environments](environments.md) and [Parameters](parameters.md).

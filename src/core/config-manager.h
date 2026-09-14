@@ -7,6 +7,9 @@
 #include <QStringList>
 #include <QVector>
 
+#include "core/ai-profile.h"
+#include "core/interpreter-settings.h"
+#include "core/kip-settings.h"
 #include "core/models.h"
 
 namespace kai::core {
@@ -15,65 +18,45 @@ namespace kai::core {
 struct CommandsData {
     QVector<Folder> folders;
     QVector<Command> commands;
+    // As notas (core::Note) moram no notes.json: preenchido só por quem precisa delas junto das pastas e
+    // comandos (export por pasta/global e sync com o kai.yml). Só as que não são `local` saem nesses pacotes.
+    QVector<Note> notes = {};
 };
 
-// Alvo de terminal configurável (feedback do usuário: escolher em
-// qual terminal executar comandos shell, ex: rodar nativamente no WSL a
-// partir do app no Windows). `commandTemplate` envolve o comando final;
-// o placeholder {{command}} é substituído pelo comando interpolado.
-// Ex (WSL bridge): nome="WSL", template="wsl -d Ubuntu -- bash -lc '{{command}}'".
-// Sabor de shell do alvo de terminal. Define a SINTAXE do prefixo de
-// ambiente/working-dir que o pipeline injeta antes do comando. O bug real
-// reportado: um alvo PowerShell recebia `export K='V'` (sintaxe bash) e o
-// PowerShell abortava com "O termo 'export' não é reconhecido". Cada sabor
-// tem a sua sintaxe de export e de `cd`.
-//  - Auto: detecta pelo template (powershell/pwsh -> PowerShell; cmd -> Cmd;
-//    senão Posix). Mantém alvos antigos funcionando sem migração.
+// CollectionFilterState fica em core/models.h (compartilhado com a UI sem puxar esta classe pros headers de ui/).
+
+// Sabor de shell do alvo de terminal: define a SINTAXE do prefixo de ambiente/working-dir que o pipeline
+// injeta antes do comando (um alvo PowerShell recebendo `export K='V'` abortava).
+//  - Auto: detecta pelo template (powershell/pwsh -> PowerShell; cmd -> Cmd; senão Posix).
 //  - Posix: export K='V' / cd '...' (bash, sh, WSL, docker exec bash).
 //  - PowerShell: $env:K='V' / Set-Location -LiteralPath '...'.
 //  - Cmd: set "K=V" / cd /d "...".
 enum class ShellFlavor { Auto, Posix, PowerShell, Cmd };
 
+// Alvo de terminal configurável. `commandTemplate` envolve o comando final; {{command}} é substituído
+// pelo comando interpolado. Ex (WSL bridge): "wsl -d Ubuntu -- bash -lc '{{command}}'".
 struct TerminalProfile {
     QString name;
     QString commandTemplate;
-    // Sabor de shell do alvo (ver ShellFlavor). Default Auto = detectar pelo
-    // template. Determina a sintaxe do prefixo de env/working-dir injetado.
+    // Auto = detectar pelo template.
     ShellFlavor shell = ShellFlavor::Auto;
-    // Se o alvo deve rodar sob um PTY/ConPTY (terminal real). Default
-    // true = terminal interativo (forkpty/ConPTY), para comandos que
-    // perguntam/pedem senha/streamam e para Ctrl+C/Ctrl+D funcionarem.
-    // false = QProcess robusto (lifecycle/kill confiáveis, sem garbling),
-    // escape hatch para comandos que quebram sob ConPTY (ex: &&/aspas/pipes
-    // no Windows). A escolha é POR ALVO de terminal.
+    // true: roda sob PTY/ConPTY (terminal real: prompts, senha, streaming, Ctrl+C/Ctrl+D). false:
+    // QProcess robusto (lifecycle/kill confiáveis), escape hatch para comandos que quebram sob ConPTY
+    // (&&/aspas/pipes no Windows). Por alvo.
     bool usePty = true;
-    // Alvo PADRÃO (feedback do usuário: raramente uso o shell default do
-    // Windows). Quando um alvo é marcado como padrão, os comandos SEM
-    // terminal_target explícito passam a rodar por ele — sem precisar
-    // configurar comando a comando. Só um alvo é o padrão por vez.
+    // Alvo PADRÃO: comandos SEM terminal_target explícito rodam por ele. Só um por vez.
     bool isDefault = false;
-    // Ícone customizado do Perfil (pedido do usuário: "quero a
-    // possibilidade de incluir ícones para os perfis, use a mesma lógica
-    // que tem nos comandos e pastas") — MESMA convenção de Command::icon:
-    // nome de um ícone do pool padrão (ex: "terminal") OU um path de
-    // arquivo prefixado com "file:", resolvido por
-    // IconPickerWidget::iconForName. Vazio = sem ícone customizado (cai no
-    // ícone genérico de terminal usado hoje).
+    // Mesma convenção de Command::icon (pool padrão ou "file:" + caminho, IconPickerWidget::iconForName).
     QString icon;
 };
 
-// Pacote de variáveis de ambiente selecionável (vibe Insomnia/Postman —
-// feedback do usuário). Cada Environment é um conjunto nomeado de vars;
-// apenas um fica ATIVO por vez e alimenta o escopo "global" do
-// EnvironmentManager. Substitui o antigo `global_env_vars` avulso, que é
-// migrado para um pacote na primeira carga.
+// Pacote nomeado de variáveis de ambiente; só um fica ATIVO por vez e alimenta o escopo "global" do
+// EnvironmentManager. Substitui o antigo `global_env_vars`, migrado para um pacote na primeira carga.
 struct Environment {
     QString id;
     QString name;
     QMap<QString, QString> vars;
-    // Nomes de variáveis marcadas como SECRETAS (feedback do usuário):
-    // mascaradas na UI (campo password) e nunca ecoadas em logs. O valor
-    // ainda é persistido para uso na interpolação.
+    // Variáveis SECRETAS: mascaradas na UI e nunca ecoadas em logs; o valor é persistido para a interpolação.
     QSet<QString> secretKeys;
 };
 
@@ -81,298 +64,293 @@ struct Environment {
 struct SettingsData {
     QString activeTheme = QStringLiteral("kai-dark");
 
-    // --- APARÊNCIA (repaginação visual) ---
-    // Densidade da interface: "comfortable" (padrão) ou "compact". Afeta a
-    // grade de espaçamento, a altura dos controles e o tamanho da fonte.
+    // --- Aparência ---
+    // "comfortable" (padrão) ou "compact": espaçamento, altura dos controles e fonte.
     QString uiDensity = QStringLiteral("comfortable");
-    // Estilo de canto: 0 = reto, 1 = suave (padrão), 2 = arredondado (Material).
+    // Canto: 0 = reto, 1 = suave (padrão), 2 = arredondado (Material).
     int uiCornerStyle = 1;
+    // Linhas de conexão da árvore: 0 = nativa do Qt (some assim que um QSS de app é aplicado), 1 =
+    // nenhuma (só o indicador de expandir), 2 = contínua (uma linha vertical por nível, padrão).
+    int treeConnectorStyle = 2;
 
-    // Imagem de plano de fundo da ABA DE COMANDOS (feedback do usuário):
-    // caminho absoluto de uma imagem que, se definida, é pintada atrás da
-    // árvore de comandos (só ali). Vazio = sem fundo (comportamento padrão).
+    // Imagem de fundo da árvore de comandos (caminho absoluto; vazio = sem fundo).
     QString commandsBackgroundImage;
-    // dos itens quando há imagem de fundo. 100 = fundo dos itens totalmente
-    // sólido (imagem quase escondida); valores menores deixam a imagem
-    // transparecer. Padrão 70 para o fundo ser visível ao carregar.
+    // Opacidade do fundo dos itens sobre a imagem: 100 = sólido (imagem quase escondida).
     int commandsBackgroundOpacity = 70;
 
-    // Onde cada grupo de ações aparece: "upper" (topo, acima da árvore —
-    // padrão), "bottom" (embaixo, abaixo da árvore), "left" (esquerda),
-    // "side" (nome PERSISTIDO histórico pra "direita" — não renomeado por
-    // compat com settings.json antigos, só o rótulo exibido virou
-    // "Direita"/"Right") ou "hidden" (não aparece; o atalho configurado
-    // continua funcionando). Item = CRUD (pasta/comando/coleção); Exibição
-    // = expandir/colapsar + ocultar; Execução = play/stop/force-stop/
-    // reset. Pedido do usuário: cada grupo é posicionável independentemente,
-    // com 5 posições possíveis (Topo/Embaixo/Esquerda/Direita/Oculto).
+    // Onde cada grupo de ações aparece: "upper" (padrão), "bottom", "left", "side" (nome persistido
+    // histórico de "direita", mantido por compat) ou "hidden" (atalho continua funcionando).
+    // Item = CRUD; Exibição = expandir/colapsar + ocultar; Execução = play/stop/force-stop/reset.
     QString itemActionsPlacement = QStringLiteral("upper");
     QString displayActionsPlacement = QStringLiteral("upper");
     QString executionActionsPlacement = QStringLiteral("upper");
-    // Posição do painel de Saída: "bottom" (padrão, comportamento
-    // histórico — abaixo dos comandos), "left" ou "right" (pedido do
-    // usuário: flexibilizar a Saída para além do fundo fixo).
+    // Posição do painel de Saída: "bottom" (padrão), "left" ou "right".
     QString outputPosition = QStringLiteral("bottom");
-    // Tamanhos (em pixels, no formato de QSplitter::sizes()) do splitter
-    // externo que divide árvore+ações vs. Saída — lembrado entre sessões
-    // (pedido do usuário: "o que eu salvei redimensionando fica"). Vazio =
-    // usa os defaults calculados por MainWindow::applyOutputPosition().
+    // QSplitter::sizes() do splitter externo (árvore+ações vs. Saída); vazio = defaults de
+    // MainWindow::applyOutputPosition().
     QList<int> outputSplitterSizes;
-    // Efeitos opcionais, DESLIGADOS por padrão para não surpreender em
-    // ambientes sem compositor (ex: WSLg) nem custar performance.
+    // Efeitos opcionais, desligados por padrão (sem compositor, ex: WSLg, e por performance).
     bool fxShadows = false;        // elevação com sombra
     bool fxTranslucency = false;   // fundo translúcido
     bool fxBlur = false;           // "material líquido": Mica/Acrylic no Win11
     bool fxAnimations = false;     // fade/slide em painéis e diálogos
+    // Gradientes de tema (janela/header/sidebar/badges); ligado por padrão pois o TEMA já declara os pares de cor.
+    bool gradientsEnabled = true;
 
-    // --- JANELA (pedido do usuário: tamanho default configurável) ---
-    // Modo de abertura: "size" usa windowWidth/windowHeight, "maximized" abre
-    // maximizada, "fullscreen" abre em tela cheia, "remember" restaura o último
-    // tamanho usado.
-    // AUTO-OCULTAR AO PERDER O FOCO (comportamento de launcher). Sem isto a
-    // janela fica visível ao clicar fora, e o atalho global passa a exigir DUAS
-    // pressões (a primeira esconde, a segunda mostra).
+    // --- Janela ---
+    // Auto-ocultar ao perder o foco (launcher): sem isto o atalho global exige DUAS pressões.
     bool autoHideOnFocusLoss = false;
-
+    // "size" usa windowWidth/windowHeight, "maximized", "fullscreen" ou "remember" (último tamanho usado).
     QString windowMode = QStringLiteral("size");
     int windowWidth = 1280;
     int windowHeight = 760;
+    // Último tamanho da janela de SAÍDA desacoplada (modo "remember"); 0 = cai em windowWidth/windowHeight.
+    int detachedWindowWidth = 0;
+    int detachedWindowHeight = 0;
     QString globalHotkey = QStringLiteral("Ctrl+Shift+B");
 
-    // INICIAR VISÍVEL (feedback do usuário): override explícito da decisão
-    // de boot, independente do atalho global. Antes o Kai decidia sozinho
-    // (oculto se o atalho global registrasse com sucesso, visível como rede
-    // de segurança se não) — mas o registro do atalho pode falhar por
-    // motivos alheios ao usuário (ambiente WSL/WSLg onde o backend nativo é
-    // pouco confiável, ou colisão com outro app já usando a mesma
-    // combinação), fazendo o Kai abrir visível toda vez sem ele ter pedido.
-    // Default TRUE (sempre visível ao iniciar) — mais previsível pra quem
-    // roda em WSL; quem quer voltar ao comportamento antigo (oculto quando
-    // o atalho funciona) desliga esta opção.
+    // Iniciar visível: override da decisão de boot, independente do atalho global (cujo registro pode
+    // falhar em WSL/WSLg ou por colisão, abrindo visível sem o usuário pedir). Default true; desligar
+    // oculta o Kai quando o atalho funciona.
     bool startVisible = true;
 
-    // LEGADO: variáveis globais avulsas. Mantido para MIGRAÇÃO — na carga,
-    // se houver conteúdo aqui e nenhum environment definido, viram um
-    // pacote "Global" em `environments`. Não é mais editado diretamente.
+    // LEGADO: variáveis globais avulsas, mantidas para MIGRAÇÃO (viram o pacote "Global" em
+    // `environments` se este estiver vazio na carga).
     QMap<QString, QString> globalEnvVars;
 
-    // Environments como pacotes selecionáveis (vibe Insomnia/Postman —
-    // feedback do usuário). O pacote de id `activeEnvironmentId` alimenta o
-    // escopo global do EnvironmentManager.
+    // O pacote `activeEnvironmentId` alimenta o escopo global do EnvironmentManager.
     QVector<Environment> environments;
     QString activeEnvironmentId;
 
-    // LEGADO (Shortcuts Manager v2 — ver `shortcuts` mais abaixo): todos os
-    // campos individuais desta seção (nextTabShortcut...toggleEditModeShortcut)
-    // e o mapa `actionShortcuts` logo depois deles são mantidos só pra
-    // MIGRAÇÃO automática (ver ConfigManager::loadSettings) — não são mais
-    // editados diretamente pelo Settings, nem lidos por ninguém além da
-    // migração e (por enquanto) do atalho global de troca de idioma dos
-    // diálogos de edição avançada (dialog-utils.h/json-editor-dialog.cpp,
-    // que leem via utils::firstShortcutFor agora, não mais estes campos).
-    //
-    // Atalhos de navegação circular entre abas dinâmicas de pastas, spec
-    // 05 — da última aba "avançar" volta para a primeira, e vice-versa.
-    // Remapeáveis pelo usuário.
-    // usuário via SettingsDialog, persistidos como string de QKeySequence
-    // (ex: "Right", "Ctrl+Tab").
+    // LEGADO (Shortcuts Manager v2, ver `shortcuts`): os campos desta seção e `actionShortcuts` ficam
+    // só para MIGRAÇÃO (ConfigManager::loadSettings) e para o atalho de troca de idioma dos diálogos de
+    // edição avançada (dialog-utils.h/json-editor-dialog.cpp, que já leem via utils::firstShortcutFor).
+    // Navegação circular entre abas dinâmicas de pastas (QKeySequence como string, ex: "Right", "Ctrl+Tab").
     QString nextTabShortcut = QStringLiteral("Right");
     QString previousTabShortcut = QStringLiteral("Left");
 
-    // Atalhos de ações do app ("revolução dos atalhos": toda
-    // ação relevante tem atalho configurável). Persistidos em
-    // settings.json e remapeáveis via SettingsDialog. Editar/Excluir só
-    // disparam com o foco na árvore de comandos (Qt::WidgetWithChildren-
-    // Shortcut), evitando conflito com digitação em campos de texto.
+    // Atalhos de ações do app, remapeáveis. Editar/Excluir só disparam com o foco na árvore de comandos
+    // (Qt::WidgetWithChildrenShortcut), evitando conflito com digitação.
     QString editItemShortcut = QStringLiteral("F2");
     QString deleteItemShortcut = QStringLiteral("Delete");
     QString newFolderShortcut = QStringLiteral("Ctrl+Shift+N");
     QString newCommandShortcut = QStringLiteral("Ctrl+N");
     QString quitAppShortcut = QStringLiteral("Ctrl+Q");
-    // Alterna a visibilidade da barra de busca (feedback do
-    // usuário: busca oculta por padrão, aparece e autofoca com Ctrl+F).
+    // Alterna a barra de busca (oculta por padrão; autofoca).
     QString toggleSearchShortcut = QStringLiteral("Ctrl+F");
-    // Abre o menu de contexto (navegável por teclado) sobre o item
-    // selecionado na árvore. Insert por padrão, remapeável (pedido de UX:
-    // atalho para o menu de contexto de pastas/itens).
+    // Menu de contexto (navegável por teclado) do item selecionado na árvore.
     QString contextMenuShortcut = QStringLiteral("Ins");
-    // Foca/desfoca o painel de Saída quando há saída ativa (alterna o foco
-    // entre a Saída e a árvore de comandos). Remapeável.
-    QString focusOutputShortcut = QStringLiteral("Ctrl+`");
-    // Alterna o modo de edição SIMPLES <-> AVANÇADO (JSON) nos diálogos que
-    // têm modo avançado (coleções, pastas, comandos). Remapeável.
+    // Alterna o foco entre a Saída (quando ativa) e a árvore de comandos.
+    QString focusOutputShortcut = QStringLiteral("Ctrl+'");
+    // Alterna o modo de edição SIMPLES <-> AVANÇADO (JSON) nos diálogos que têm os dois.
     QString toggleEditModeShortcut = QStringLiteral("Ctrl+E");
 
-    // Atalhos data-driven das ações de item/exibição/execução que ganharam
-    // atalho configurável (pedido do usuário) — chave = id estável (ver
-    // utils::actionShortcutSpecs, ex: "action.play"), valor =
-    // QKeySequence::toString(). Ausente/vazio = sem atalho atribuído. As
-    // ações que já tinham shortcut dedicado antes (editItemShortcut etc.,
-    // acima) não entram aqui.
+    // Atalhos das demais ações de item/exibição/execução: id estável (utils::actionShortcutSpecs, ex:
+    // "action.play") -> QKeySequence::toString(); ausente/vazio = sem atalho.
     QMap<QString, QString> actionShortcuts;
 
-    // Shortcuts Manager v2 (pedido do usuário: sair de uma config simples
-    // pra um gerenciador de verdade, com tabela e MÚLTIPLOS atalhos por
-    // ação). Substitui TODOS os campos nomeados acima + `actionShortcuts`
-    // — id de ação (ver utils::actionShortcutSpecs) -> LISTA de sequências
-    // QKeySequence::toString() (multi-binding: ex. "abrir nova sessão"
-    // pode ter Ctrl+T E Ctrl+Shift+T ao mesmo tempo). Ação ausente do mapa
-    // = usa o(s) default(s) da spec; lista vazia = sem atalho nenhum.
-    // Migrado automaticamente do formato antigo na 1ª carga (ver
-    // ConfigManager::loadSettings) — o resto do app nunca precisa saber se
-    // os dados vieram do formato legado ou daqui.
+    // Shortcuts Manager v2: substitui TODOS os campos nomeados acima + `actionShortcuts`. id de ação
+    // (utils::actionShortcutSpecs) -> LISTA de sequências (multi-binding). Ausente = defaults da spec;
+    // lista vazia = sem atalho. Migrado do formato antigo na 1ª carga (ConfigManager::loadSettings).
     QMap<QString, QStringList> shortcuts;
 
-    // "Mostrar ocultos" (toggle da barra de Exibição): comandos marcados
-    // hidden ficam visíveis na árvore enquanto true. Não editável no
-    // diálogo de Configurações — é um toggle rápido persistido aqui.
+    // Migrações pontuais já aplicadas (ids estáveis); cada uma roda uma vez para não desfazer uma
+    // escolha feita depois (ver ConfigManager::loadSettings).
+    QStringList appliedMigrations;
+
+    // Toggle "Mostrar ocultos" da barra de Exibição (não editável nas Configurações).
     bool showHiddenCommands = false;
 
-    // Modo de criação/edição de comandos (feedback do usuário):
-    // "standard" = interface de formulário (CommandEditorDialog, padrão);
-    // "advanced" = editor de JSON cru (CommandJsonEditorDialog), para
-    // usuários experientes. Na criação em modo avançado, o editor já
-    // começa com um JSON template pré-preenchido.
+    // "standard" = formulário (CommandEditorDialog); "advanced" = JSON cru (CommandJsonEditorDialog),
+    // que na criação já começa com um template pré-preenchido.
     QString commandCreationMode = QStringLiteral("standard");
     QString commandEditMode = QStringLiteral("standard");
 
-    // Estado colapsado do Terminal Drawer/painel de Saída
-    // (feedback do usuário: lembrar entre sessões se o terminal estava
-    // colapsado). Persistido global em settings.json.
+    // Estado colapsado do Terminal Drawer/painel de Saída, lembrado entre sessões.
     bool terminalCollapsed = false;
+    // Idem para a lista de comandos recolhida (foco só na Saída).
+    bool commandsCollapsed = false;
 
-    // Opções de exibição da Saída (feedback do usuário: as opções do menu da
-    // Saída devem PERSISTIR entre sessões, globalmente — não como config no
-    // diálogo, apenas guardando o valor escolhido). Antes só o "compact"
-    // persistia, e por comando. Agora todas persistem em settings.json.
-    // Espelham OutputPanel::ViewOptions.
+    // Opções do menu da Saída, globais e persistidas em settings.json (espelham OutputPanel::ViewOptions).
     bool outputLineNumbers = false;
     bool outputWrap = false;
     bool outputTimestamps = false;
     bool outputAutoScroll = true;
     bool outputCompact = false;
     int outputFontSize = 0; // 0 = usa o tamanho do tema
+    // Tamanho MÁXIMO (KB) do log guardado por comando (MainWindow::appendToCommandLog); ao passar,
+    // descarta o INÍCIO. Default 1024.
+    int outputMaxLogSizeKb = 1024;
 
-    // Iniciar o Kai automaticamente com o sistema (autoboot/autostart).
-    // Configurável pelo usuário via SettingsDialog. Quando ligado, o Kai
-    // registra-se no mecanismo nativo de autostart do SO (Linux: um
-    // .desktop em ~/.config/autostart/; Windows: uma chave em
-    // HKCU\...\Run) através de utils::AutostartManager. Default false —
-    // não altera o sistema do usuário sem consentimento explícito.
+    // "Parar" manda SIGTERM e espera ESTE tempo (s) antes de escalar pra SIGKILL; "Forçar parada" é
+    // SIGKILL imediato (ProcessRunner::forceStop). 5s: curto para não travar a UI, longo o bastante
+    // para processos com cleanup próprio (servidores, containers).
+    int gracefulStopTimeoutSec = 5;
+
+    // Iniciar com o sistema: registra no autostart nativo do SO (Linux: .desktop em
+    // ~/.config/autostart/; Windows: chave HKCU\...\Run) via utils::AutostartManager. Off por padrão,
+    // sem consentimento explícito não altera o sistema.
     bool autostart = false;
 
-    // Idioma da interface (language pack i18n). Código de idioma como
-    // "en" (padrão) ou "pt". Resolve para assets/i18n/<code>.json via
-    // TranslationManager. Textos sem tradução caem no inglês, depois na
-    // própria chave.
+    // Foco inteligente: selecionar na árvore traz a Saída (comando) ou o Documento (pasta) do item. Desligado (padrão),
+    // navegar não mexe neles: a Saída vem ao executar (ou pela guia dela) e o Documento pelo ícone de documento da pasta.
+    bool smartFocus = false;
+
+    // Ações inline: as ações do item (executar, parar, reiniciar, body, saída, documento) aparecem na própria linha da
+    // árvore, logo depois do nome, conforme o estado dele. Desligado (padrão): só pelo grupo Execução e pelo menu.
+    bool inlineActions = false;
+
+    // Código do idioma da interface ("en" padrão, "pt"); resolve para assets/i18n/<code>.json via
+    // TranslationManager. Sem tradução cai no inglês, depois na própria chave.
     QString language = QStringLiteral("en");
 
-    // Alvos de terminal configuráveis (feedback do usuário). Cada
-    // comando shell pode escolher rodar no terminal local (padrão) ou num
-    // destes alvos (ex: WSL bridge). Vazio por padrão.
+    // Alvos de terminal; cada comando shell roda no local (padrão) ou num destes (ex: WSL bridge).
     QVector<TerminalProfile> terminalProfiles;
 
-    // --- NOTIFICAÇÕES (pedido do usuário) ---
-    // Canal: notificação nativa do SO via bandeja (QSystemTrayIcon::
-    // showMessage). Master switch DESLIGADO por padrão: feature nova e
-    // opt-in — não deve surpreender quem já usa o Kai com notificações do
-    // nada depois de um update.
+    // Ações GLOBAIS: ícones em todas as pastas (ou só nas pastas-projeto). Ver core/folder-actions.h.
+    QVector<GlobalAction> globalActions;
+
+    // --- Notificações ---
+    // Canal: notificação nativa do SO via bandeja (QSystemTrayIcon::showMessage). Master switch OFF
+    // por padrão (opt-in).
     bool notificationsEnabled = false;
-    // Falha ao executar um comando (pre-hook, comando principal — shell
-    // com erro/crash OU HTTP >= 400 — ou post-hook), inclusive quando
-    // disparado por auto-run (mesmo caminho de um clique manual).
+    // Falha ao executar um comando (pre-hook, principal — shell com erro/crash ou HTTP >= 400 — ou
+    // post-hook), inclusive por auto-run.
     bool notifyOnCommandFailure = true;
     // Processo em segundo plano caiu/terminou com erro sozinho.
     bool notifyOnBackgroundProcessCrash = true;
-    // Processo em segundo plano concluiu com SUCESSO — opt-in explícito
-    // (desligado por padrão pra não virar spam de notificação).
+    // Processo em segundo plano concluiu com SUCESSO (opt-in, evita spam).
     bool notifyOnBackgroundProcessSuccess = false;
-    // Um arquivo de configuração corrompido (commands.json/settings.json/
-    // collections.json) foi restaurado automaticamente de backup.
+    // Arquivo de configuração corrompido restaurado automaticamente de backup.
     bool notifyOnConfigRecovered = true;
-    // Pedido do usuário: configurável, não hard-coded. false (padrão) =
-    // só notifica quando a janela do Kai NÃO está em foco — evita
-    // redundância com o badge vermelho que já aparece na árvore quando o
-    // Kai está aberto e visível.
+    // Linha JSON de nível ERROR/FATAL/CRIT na Saída Formatada, no máximo UMA vez por execução
+    // (OutputPanel::firstErrorInFormattedOutput). Opt-in.
+    bool notifyOnFirstErrorInFormattedOutput = false;
+    // false = só notifica com a janela do Kai SEM foco (com ela visível o badge da árvore já avisa).
     bool notifyEvenWhenFocused = false;
+
+    // Configurações → KIP (spec 11 §23), objeto "kip".
+    KipSettings kip;
+    // Apps KIP com painel próprio que abrem com o Kai (ids de comando); entra ao pôr o app num painel,
+    // sai pelo menu do painel ("Abrir com o Kai").
+    QStringList kipPanelAutoStart;
+
+    // Configurações → Linguagens: interpretadores Python/Node, objeto "interpreters".
+    InterpreterSettings interpreters;
 };
 
-// Responsável por carregar/persistir commands.json e settings.json em
-// ~/.config/kai/ (Linux) ou %APPDATA%/Kai/ (Windows), com escrita atômica
-// e recuperação automática de arquivos corrompidos.
+// Carrega/persiste commands.json e settings.json em ~/.config/kai/ (Linux) ou %APPDATA%/Kai/ (Windows),
+// com escrita atômica e recuperação automática de arquivos corrompidos.
 class ConfigManager : public QObject {
     Q_OBJECT
 
 public:
     explicit ConfigManager(QObject *parent = nullptr);
 
-    // Diretório base de configuração do Kai, criado se necessário.
     QString configDirPath() const;
     QString commandsFilePath() const;
     QString settingsFilePath() const;
-    // Arquivo separado das coleções (não fica no commands.json).
     QString collectionsFilePath() const;
-    // Arquivo separado das variáveis dinâmicas PERSISTENTES (EnvExtractor::
-    // persist == true) — NÃO é config estática autorada pelo usuário como
-    // environments.json, é o VALOR capturado em runtime, então fica à parte.
+    QString notesFilePath() const;
+    // Memória do leitor de documentos (posições, rascunhos, recentes) — ui::DocSessionStore.
+    QString docUsageFilePath() const;
+    QString docStateFilePath() const;
+    // Layout flexível da janela (zonas, painéis, flutuantes, perspectivas) — ui::layout::LayoutStore.
+    // Estado pessoal: fora do settings.json e nunca no YAML do projeto.
+    QString layoutFilePath() const;
+    // Variáveis dinâmicas PERSISTENTES (EnvExtractor::persist): é o VALOR capturado em runtime, não
+    // config autorada, por isso fica à parte.
     QString dynamicVarsFilePath() const;
 
-    // scopeKey -> {var: valor}. Arquivo ausente/corrompido -> mapa vazio
-    // (nunca falha o boot do app por causa disto).
+    // scopeKey -> {var: valor}. Arquivo ausente/corrompido -> mapa vazio (nunca falha o boot).
     QMap<QString, QMap<QString, QString>> loadPersistedDynamicVars();
     bool savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
 
-    // Carrega commands.json. Em caso de corrupção, faz backup do arquivo
-    // inválido, restaura um estado vazio seguro e emite configRecovered().
+    // ai.json: perfis de IA COM as chaves de API (modo 0600), fora do settings.json de propósito:
+    // nenhuma exportação nem sincronização o lê.
+    QString aiFilePath() const;
+    // Pasta do histórico de conversas da IA (AiConversationStore); também nunca exportada.
+    QString aiConversationsDirPath() const;
+    AiSettings loadAiSettings();
+    bool saveAiSettings(const AiSettings &settings);
+
+    // Filtros da tela de seleção de coleções (busca + favoritos) por Collection::id (CollectionFilterState).
+    QString collectionFiltersFilePath() const;
+    // Arquivo ausente/corrompido -> mapa vazio (a tela cai nos defaults).
+    QMap<QString, CollectionFilterState> loadCollectionFilters();
+    bool saveCollectionFilters(const QMap<QString, CollectionFilterState> &data);
+
+    // Em caso de corrupção, faz backup do arquivo inválido, restaura um estado vazio e emite configRecovered().
     CommandsData loadCommands();
 
-    // Persiste commands.json via escrita atômica (tmp + rename).
+    // Escrita atômica (tmp + rename).
     bool saveCommands(const CommandsData &data);
 
-    // Carrega settings.json. Mesma política de recuperação de commands.json.
+    // Mesma política de recuperação de commands.json.
     SettingsData loadSettings();
 
-    // Persiste settings.json via escrita atômica (tmp + rename).
+    // Escrita atômica (tmp + rename).
     bool saveSettings(const SettingsData &data);
 
-    // Carrega collections.json (lista de Collection). Mesma política de
-    // recuperação de corrupção dos demais arquivos.
+    // Mesma política de recuperação dos demais arquivos.
     QVector<Collection> loadCollections();
 
-    // Persiste collections.json via escrita atômica (tmp + rename).
+    // Escrita atômica (tmp + rename).
     bool saveCollections(const QVector<Collection> &collections);
 
-    // --- Import/Export de configuração (feedback do usuário) ---
-    // Gera um documento JSON exportável (string) conforme o escopo:
-    //  - Global: settings + todas as pastas e comandos;
-    //  - Pasta: a pasta (e subpastas descendentes) + seus comandos;
-    //  - Comando: um único comando.
-    // O JSON tem um cabeçalho {"kai_export": {"scope": ..., "version": 1}}
-    // para validação na importação.
-    // EXPORTAÇÃO SELETIVA (pedido do usuário: um form com checkboxes onde ele
-    // escolhe o que sai). A exportação global antiga levava settings + pastas +
-    // comandos e IGNORAVA as coleções por completo — então um backup nunca era
-    // realmente completo.
+    // notes.json (core::Note); mesma política de recuperação e escrita atômica.
+    QVector<Note> loadNotes();
+    bool saveNotes(const QVector<Note> &notes);
+
+    // doc-usage.json: quantas vezes a documentação de cada pasta foi aberta (id -> contagem). Estado LOCAL
+    // (fora de exportação e sync); ordena o menu de documentos por uso.
+    QMap<QString, int> loadDocUsage();
+    bool saveDocUsage(const QMap<QString, int> &usage);
+
+    // --- Import/Export de configuração ---
+    // O JSON exportado tem o cabeçalho {"kai_export": {"scope": ..., "version": 1}} para validação na importação.
+    // Escopos: Global (settings + pastas e comandos), Pasta (e descendentes) e Comando.
     struct ExportSelection {
         bool settings = true;          // preferências gerais/aparência/atalhos
         bool commands = true;          // pastas + comandos
         bool environments = true;      // pacotes de variáveis
         bool collections = true;       // coleções (nome, pasta, SCHEMA)
         bool collectionEntries = true; // os DADOS das coleções (linhas)
+        bool terminalProfiles = true;  // independente de `settings`
+        bool globalActions = true;     // comandos mapeados em todas as pastas
     };
-    // Gera o JSON conforme a seleção. Coleções sem entries saem só com o
-    // schema, permitindo exportar a ESTRUTURA sem os dados.
+    // Coleções sem entries saem só com o schema. `lean` true (padrão): sem ids (pastas por path "A/B",
+    // hooks pelo NOME do comando, Select pelo NOME da coleção; o app gera ids novos, então reimportar
+    // ADICIONA) e sem chaves em valor default. false: ids estáveis (reimportar atualiza por id) e toda
+    // chave presente.
     static QString exportSelective(const ExportSelection &selection,
                                    const SettingsData &settings,
                                    const CommandsData &commands,
-                                   const QVector<Collection> &collections);
+                                   const QVector<Collection> &collections,
+                                   bool lean = true);
 
     static QString exportGlobal(const SettingsData &settings, const CommandsData &commands);
-    static QString exportFolder(const QString &folderId, const CommandsData &commands);
-    static QString exportCommand(const QString &commandId, const CommandsData &commands);
+    // `linkedCollections`: coleções a levar junto (ver MainWindow::handleExportFolderRequested).
+    // `terminalProfiles`: alvos de terminal a levar junto (sem eles, o terminalTarget perde a conexão
+    // silenciosamente noutra máquina). `lean`: ver exportSelective. `includeActionCommands`: leva os
+    // comandos usados pelas AÇÕES das pastas que moram FORA da pasta (actionCommandsOutsideFolder),
+    // marcados "action_only".
+    static QString exportFolder(const QString &folderId, const CommandsData &commands,
+                                const QVector<Collection> &linkedCollections = {},
+                                const QVector<TerminalProfile> &terminalProfiles = {},
+                                bool lean = true, bool includeActionCommands = false);
+    // Coleções de que a subárvore de `folderId` depende (guardadas nela ou referenciadas por um
+    // parâmetro select); é o que o export por pasta e o sync com arquivo levam.
+    static QVector<Collection> linkedCollectionsForFolder(const QString &folderId, const CommandsData &commands,
+                                                          const QVector<Collection> &collections);
+    // Comandos usados como ação por alguma pasta da subárvore de `folderId` e fora dela (sem repetir, na ordem das ações).
+    static QVector<Command> actionCommandsOutsideFolder(const QString &folderId, const CommandsData &commands);
+    static QString exportCommand(const QString &commandId, const CommandsData &commands,
+                                 const QVector<Collection> &linkedCollections = {},
+                                 const QVector<TerminalProfile> &terminalProfiles = {},
+                                 bool lean = true);
 
-    // Resultado da importação: itens a mesclar no estado atual. O chamador
-    // decide como aplicar (append/merge) e persistir. `ok` false indica
+    // Itens a mesclar no estado atual; o chamador decide como aplicar e persistir. `ok` false =
     // JSON inválido/não reconhecido (errorMessage descreve).
     struct ImportResult {
         bool ok = false;
@@ -380,38 +358,56 @@ public:
         QString scope; // "global" | "folder" | "command"
         QVector<Folder> folders;
         QVector<Command> commands;
-        // `hasSettings`: o pacote trouxe PREFERÊNCIAS gerais (tema,
-        // densidade, posicionamento, janela, atalhos...) — detectado pela
-        // presença de "active_theme", que exportSelective só inclui quando
-        // `selection.settings` está marcado.
+        // Notas do pacote (sempre `local == false`).
+        QVector<Note> notes;
+        // O pacote trouxe PREFERÊNCIAS gerais (detectado por "active_theme", só presente com `selection.settings`).
         bool hasSettings = false;
-        // `hasEnvironments`: o pacote trouxe PACOTES DE AMBIENTE (Environments
-        // — nomes/vars/segredos), independente de `hasSettings` (o usuário
-        // pode exportar só um dos dois — ver ExportSelection). Antes desta
-        // auditoria, o export global sequer escrevia esta seção (bug real:
-        // "Exportar Configurações Globais" perdia todos os Environments).
+        // Trouxe PACOTES DE AMBIENTE, independente de `hasSettings`.
         bool hasEnvironments = false;
+        // Trouxe ALVOS DE TERMINAL (ficam em `settings.terminalProfiles`; este flag só marca "veio algo").
+        bool hasTerminalProfiles = false;
         SettingsData settings;
-        // Coleções vindas no pacote (podem chegar sem entries, se o usuário
-        // exportou apenas a estrutura).
+        // Coleções do pacote (sem entries se só a estrutura foi exportada).
         bool hasCollections = false;
         QVector<Collection> collections;
+        // AÇÕES (core/folder-actions.h): referências resolvidas no pacote vêm por id (Folder::actions,
+        // settings.globalActions); as que apontam pra comando FORA dele vêm por NOME (ver applyImportedActions).
+        struct PendingAction {
+            QString name;
+            bool onlyProjects = false;
+            bool expansion = false;
+            QString group = {};
+            QString groupIcon = {};
+        };
+        bool hasGlobalActions = false;
+        // Comandos usados pelas ações e fora da pasta exportada ("action_only"); não entram em `commands`,
+        // suas ações ficam em pendingFolderActions por nome (ver actionCommandsToImport).
+        QVector<Command> actionCommands;
+        QMap<QString, QStringList> pendingFolderActions; // id da pasta -> nomes de comando
+        QMap<QString, QStringList> pendingFolderExpansion; // idem, o subconjunto de expansão
+        QMap<QString, QMap<QString, QString>> pendingFolderGroups; // id da pasta -> (nome do comando -> grupo)
+        QVector<PendingAction> pendingGlobalActions;
     };
     static ImportResult importFromJson(const QString &jsonText);
+    // Casa por NOME (só se único) as referências pendentes contra `allCommands` e junta as ações globais
+    // sem repetir. `folders` já deve conter as importadas. Devolve quantas referências não resolveram.
+    static int applyImportedActions(const ImportResult &result, QVector<Folder> &folders,
+                                    const QVector<Command> &allCommands, QVector<GlobalAction> &globalActions);
+    // Dos actionCommands do pacote, os que valem importar: sem comando de mesmo nome nem id em `existing`.
+    static QVector<Command> actionCommandsToImport(const ImportResult &result, const QVector<Command> &existing);
+    // Acrescenta a `data` numa pasta "Ações importadas" na raiz (criada se faltar).
+    static void appendImportedActionCommands(const QVector<Command> &toImport, CommandsData &data);
     bool mergeImportResult(const ImportResult &result);
 
 signals:
-    // Emitido quando um arquivo de configuração corrompido foi detectado e
-    // recuperado. `backupPath` aponta para a cópia do arquivo inválido.
+    // Arquivo de configuração corrompido detectado e recuperado; `backupPath` é a cópia do inválido.
     void configRecovered(const QString &filePath, const QString &backupPath);
 
 private:
-    // Lê e faz parse de um arquivo JSON. Em caso de falha, executa a rotina
-    // de recuperação (backup + notificação) e retorna um objeto vazio.
+    // Em falha, executa a recuperação (backup + notificação) e retorna objeto vazio.
     QJsonObject readJsonWithRecovery(const QString &filePath);
 
-    // Escreve `doc` atomicamente em `filePath` usando um arquivo .tmp seguido
-    // de rename.
+    // Escrita atômica (.tmp + rename).
     bool writeJsonAtomic(const QString &filePath, const QJsonDocument &doc);
 
     QString backupCorruptedFile(const QString &filePath);

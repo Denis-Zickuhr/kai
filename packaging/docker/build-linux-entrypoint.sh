@@ -10,11 +10,20 @@ SRC=/src
 BUILD_DIR=/tmp/build-linux
 OUT=/out
 
+# BUILD INCREMENTAL: o diretório de build e o ccache vivem em volumes nomeados (ver docker-compose.yml), então um
+# release sem mudanças no código só relinka. KAI_CLEAN_BUILD=1 começa do zero.
+if [[ "${KAI_CLEAN_BUILD:-0}" == "1" ]]; then
+    echo "   KAI_CLEAN_BUILD=1: descartando o diretório de build."
+    rm -rf "$BUILD_DIR"
+fi
+
 echo "==> Configurando (CMake, Release, Ninja)..."
-cmake -B "$BUILD_DIR" -S "$SRC" -G Ninja -DCMAKE_BUILD_TYPE=Release
+# Sem a suíte de testes: o AppImage só precisa do binário `kai`.
+cmake -B "$BUILD_DIR" -S "$SRC" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DKAI_BUILD_TESTS=OFF -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
 
 echo "==> Compilando..."
-cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+cmake --build "$BUILD_DIR" --parallel "$(nproc)" --target kai
 
 BIN="$BUILD_DIR/bin/kai"
 if [[ ! -x "$BIN" ]]; then
@@ -34,6 +43,7 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 
 cp "$BIN" "$APPDIR/usr/bin/kai"
 cp -r "$SRC/assets" "$APPDIR/usr/bin/assets"
+cp -r "$SRC/sample" "$APPDIR/usr/bin/assets/samples"
 
 # .desktop e ícone exigidos pelo formato AppImage.
 cat > "$APPDIR/usr/share/applications/kai.desktop" <<'DESKTOP'
@@ -88,6 +98,7 @@ else
     mkdir -p "$OUT/kai-linux"
     cp "$BIN" "$OUT/kai-linux/kai"
     cp -r "$SRC/assets" "$OUT/kai-linux/assets"
+    cp -r "$SRC/sample" "$OUT/kai-linux/assets/samples"
 fi
 
 echo "==> Artefatos Linux em $OUT:"

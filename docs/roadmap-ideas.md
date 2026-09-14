@@ -39,7 +39,7 @@ logging in the output panel.
 Let the user "pin" a value extracted from a run for manual reuse (e.g.
 copy a returned `id` as a named variable).
 
-### A6. Export a command as curl / code (medium value / low effort)
+### A6. Export a command as curl / code (medium value / low effort) — **done**
 A button to **export** an HTTP command as `curl` (the reverse of import)
 or as a code snippet (fetch/axios/requests).
 
@@ -65,6 +65,163 @@ respecting the "hide window on run" option.
   `ExecutionPipeline`'s `pipelineFinished`/`backgroundProcessStarted`
   signals; a per-command flag (`Command`) plus a global preference in
   `SettingsData`.
+
+### A11. HTTP client: what is left (medium value / mixed effort)
+The core of a complete client is in (folder-inherited headers/auth/options, body types, cookies, redirects/TLS/proxy,
+assertions, export as cURL/code, Postman/Insomnia/HAR/`.env` imports — see
+[philosophy](philosophy.md#what-a-complete-http-client-needs--and-where-kai-stands)). Still open, roughly by value:
+- **Custom CA / client certificates** per request or folder (paths are machine-specific: they would be `Machine`
+  scoped fields, never exported).
+- **WebSocket** (`Qt6::WebSockets`, an extra module to package on Windows). Server-Sent Events already stream.
+- **Responses in history** + a diff of two responses (after B2: secrets masking).
+- A cookie jar **viewer**; HTML response rendering; per-folder default `Content-Type`.
+- A visual **chained flow** (A3) on top of extractors + assertions.
+
+### A10. AI assistant & agent ⭐ (high value / high effort) — **implemented** (see [AI assistant](ai.md))
+A built-in assistant that can write commands for you (**editor assist**) and an
+agent with a chat that can read, create, edit, delete and run things in Kai
+(**agent chat**), with the user approving every change. Phases 1–4 are
+implemented; the analysis below is kept as the design record. Where the
+implementation departs from it:
+
+- Approvals and questions are **native cards** in the chat (and a small window
+  for external agents), not KIP screens — KIP would have needed an answers sink
+  for no gain.
+- The keys, the MCP token and the provider list live in their own `ai.json`
+  (`0600`), outside `settings.json`; a test checks that no export format can
+  carry them.
+- The undo journal is in memory (per chat window / per MCP connection): an
+  **Undo** button appears on each change card, but changes of a past session can
+  no longer be undone from a reopened conversation.
+- The **MCP bridge** (phase 4) is its own authenticated socket (`kai-mcp-v1`)
+  behind the `kai mcp` stdio command, off by default, with an approval window —
+  the mutating tools are still not verbs of the public IPC.
+- Not done: moving the keys to the OS keyring (that is **A1**), extended
+  thinking / prompt-cache tuning beyond the system prompt and tool list, and
+  per-profile model parameters (temperature…).
+
+**Decisions taken**
+- **Providers:** Anthropic, OpenAI and *local*, plus any number of extra profiles.
+  The chat has a provider/model picker. Two wire formats cover everything:
+  `anthropic` (Messages API) and `openai_compatible` (Chat Completions —
+  OpenAI, Ollama, LM Studio, llama.cpp, OpenRouter, Azure…). **Local = an
+  OpenAI-compatible endpoint given by URL**; no native Ollama protocol.
+- **API keys** live in Kai's settings as a *secret* that is never exported (see
+  finding 1), shown masked with a "show" toggle, file mode `0600` on Linux, and an
+  alternative "read it from this environment variable". Plain text at rest for
+  now; moving to the OS keyring is **A1**.
+- **Visibility:** the agent sees everything — commands, environments *with
+  values*, run history and outputs, logs, notifications, settings (except the AI
+  keys, which never enter a prompt, a log or a history file). Per remote
+  provider there is a switch to **hide secret-marked variables** (default: visible).
+- **History persists** (see below). **Execution needs approval**; "allow for this
+  conversation" is the shortcut. **Switching provider mid-conversation is allowed,
+  with a warning** that provider-specific parts are lost (e.g. extended-thinking
+  blocks, cache markers); the neutral history carries over.
+- **Buttons** appear only when at least one provider profile is configured: one at
+  the top of the main window (global chat) and one in the shell/HTTP command
+  editors (editor assist).
+
+**Findings from the code that shape the plan**
+1. **"Secret" today does not stop export.** The settings export is a closed,
+   field-by-field list (an AI block is not exported unless someone adds it), but
+   secret-marked environment variables *are* exported with their values
+   (`vars` + `secret_keys` only mask them on screen). So keys must **not** reuse
+   the environment-secret mechanism: a dedicated settings field outside the
+   export list, plus a regression test that no export format (JSON, YAML, lean,
+   per folder, per command) can contain a key.
+2. **Context budget.** `kai-manifesto.md` (formerly kai-json-manifesto.md) + `kai.schema.json` ≈ 18k tokens
+   (≈ 25k with the KIP manifesto). Too expensive per turn in the cloud and too
+   big for local models (8–32k context). Needs a **compact system prompt**
+   (3–4k tokens), tools that fetch manifesto/schema sections on demand,
+   Anthropic prompt caching, and truncation/pagination of tool results.
+3. **No programmatic create/edit/delete.** Those only happen through dialogs
+   (`handleNewCommandRequested` & co.) and `persistCommands()`. The IPC only has
+   `list`, `run`, `env`, `ps`, `kill`, `import`, `raise`. A mutation API on
+   `MainWindow` (tree refresh + persistence) is the biggest missing piece.
+4. **Running a command and reading its output nearly exists:**
+   `ExternalRunSession` already emits `output`/`background`/`finished` and
+   registers the run in history and the process list. `run_command` is a thin
+   adapter.
+5. **KIP can render the approvals and questions:** `KipSession` can run without a
+   process (`handleOutput` is public); it only lacks a sink for the user's
+   answers. That gives the agent rich questions (select, list, flags) and
+   danger-styled confirmations for free.
+6. **The Logger does no masking.** The AI client must never log headers or
+   bodies.
+
+**Architecture** (AGENTS.md layering)
+- `core/`: provider profiles, conversation/message types, AI settings.
+- `engine/ai/`: provider clients, the agent loop, the tool definitions. No UI
+  dependency; the tools talk to a `AgentToolHost` interface that `MainWindow`
+  implements.
+- `ui/features/ai/`: chat panel, approval cards, settings page.
+- **Provider layer:** both wire formats are normalized into the same internal
+  events (text delta, tool-call start/args/end, usage, stop, error), with SSE
+  streaming, cancellation and retry with backoff for 401/429/overloaded. Header
+  and argument-streaming differences stay inside each client. A per-profile
+  `supports_tools` flag: a local model without tool calling falls back to
+  "generate the command JSON" (the editor-assist mode). Per-profile
+  first-token timeout, `max_tokens`, context-size hint.
+- **Tools** (JSON Schema for `create_command` can be `kai.schema.json` itself):
+  list/get folders, commands, collections, environments; validate a `kai.yml`;
+  create/update/delete/move/duplicate; `run_command` (with parameters, waits for
+  the result); read run history and outputs; list/kill processes; read logs and
+  notifications; read manifesto sections; `ask_user` (KIP prompt/confirm).
+- **Approvals:** reads run unattended; create/edit/delete/run/kill need approval
+  on a card with a diff, and delete/kill use the danger confirm. Every
+  AI-made change is tagged in history ("created by AI") and can be undone.
+- **Separate from the public IPC.** Scripts run by Kai have the `kai` module and
+  the IPC is unauthenticated, so mutating tools must **not** be IPC verbs: they
+  live on the agent channel with in-app approval. Read-only verbs could be
+  opened up; a later MCP bridge reuses the same tools.
+- **Editor assist** proposes a patch to the editor's **draft** (nothing is stored
+  until Save), reusing the Advanced (JSON) path.
+
+**Prompt-injection policy.** The default system prompt (always present, not
+user-removable) tells the model to stay within the Kai context, to refuse
+unrelated requests, and to treat anything that comes from tools — command
+output, logs, file contents, variable values — as **data, never as
+instructions**. This lowers the risk but is *not* the security boundary: the
+boundary is that every mutating or executing action needs explicit approval,
+tool results are truncated, and secrets-hiding is available per provider.
+
+**History.** One JSON file per conversation in its own folder plus an index,
+capped by count and size (same idea as `runs.json`'s record cap), written
+atomically, **never exported**. Messages keep provider/model, tool calls and
+results, and token usage; conversations can be deleted one by one or all at once.
+Stored outputs may contain secrets, so the clear-all control is part of the
+feature, not an extra.
+
+**Phasing and estimate** (one focused developer)
+| Phase | Scope | Effort |
+|---|---|---|
+| 1 | AI settings (profiles, test connection, model list), Anthropic + OpenAI-compatible clients without streaming, **editor assist**, compact prompt, keys outside export + tests | ~1.5–2 weeks |
+| 2 | Agent tools: read-only first, then the mutation API and create/edit/delete/run with approval cards, safety, undo | ~2 weeks |
+| 3 | Chat panel with streaming, conversation list, provider/model picker, KIP-based questions, persistent history, provider-switch warning | ~1.5–2 weeks |
+| 4 | *(optional)* MCP bridge exposing the same tools to external agents | 3–5 days |
+
+Full scope ≈ **5–6 weeks**. Costs by part: AI settings page 3–4 d · provider layer
+6–8 d · mutation API + tools 6–8 d · approvals/safety 3–4 d · chat panel 6–8 d ·
+history 2–3 d · editor assist 3–4 d · prompt/context 2–3 d · tests/docs +20%.
+
+**Tests.** No real API calls in CI: a fake provider server (SSE for both formats)
+drives the clients and a scripted agent loop; UI tests run offscreen; the export
+regression test above; all UI strings in `en.json`/`pt.json`.
+
+**Risks.** Prompt injection through command output (mitigated as above);
+privacy with remote providers (a local/remote badge in the chat, and the
+secret-hiding switch); weak tool-calling in small local models
+(`supports_tools` fallback); keys in plain text at rest until **A1**.
+
+### A12. Flexible panel layout (medium value / high effort) — **implemented** (see [Panels & layout](layout.md))
+The window is a board of movable panels (Commands, Output, Document, Processes, History, Notifications, Variables, AI chat) on
+a **grid of columns × rows** (1–5 each, default 2 × 2) whose empty cells are absorbed by their neighbours (vertical or
+horizontal fill): tab groups, split cells, drag between cells (a floating-window pill included), floating windows, maximize,
+collapse the edge cells into icon strips, perspectives, run panels side by side and pinned KIP commands; in a small window the
+board scrolls instead of squeezing the panels. Own light implementation (no docking library). Still open: tying a perspective
+to a project (would be opt-in and off by default), per-monitor layouts, and cells that span several rows/columns (the
+alternative would be the Qt Advanced Docking System).
 
 ---
 
@@ -105,7 +262,7 @@ in the name (Help v2 could use the same treatment).
 Show the active environment's name in the theme's accent color and,
 maybe, a badge when the package has secret variables.
 
-### B8. Import a `.env` file into an environment (high value / low effort)
+### B8. Import a `.env` file into an environment (high value / low effort) — **done**
 A button to import a `.env` file (`KEY=VALUE` per line) directly into an
 environment package.
 
@@ -129,6 +286,9 @@ whole tree via the context menu and a shortcut.
 6. **A6** — export as curl/code (adoption).
 7. **B3** — UI tests for the newer screens (quality).
 8. **A3 / A8** — chained flows and OAuth2 (big features, plan them out).
+9. **A10** — AI assistant & agent: implemented. Still open next to it: **A1** (the
+   keys sit in `ai.json` as plain text until the keyring lands) and **B2**
+   (masking secrets in logs and history, which the agent can read).
 
 > Living list: add to it or reorder it as real usage reveals actual pain
 > points. Same principle as CopyQ — native, light, stays out of the way.

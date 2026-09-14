@@ -1,4 +1,5 @@
 #include <QTest>
+#include "core/yaml-bridge.h"
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTreeWidget>
@@ -11,10 +12,10 @@
 #include <QMenu>
 #include <QTimer>
 
-#include "ui/command-tree-widget.h"
-#include "ui/project-selector.h"
-#include "ui/item-actions-bar.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 
 using namespace kai::ui;
 using namespace kai::core;
@@ -61,15 +62,9 @@ private slots:
         QVERIFY(!tabWidget->tabBar()->tabIcon(2).isNull());
     }
 
-    // Pedido do usuário: "quero a possibilidade de editar pastas com o
-    // botão direito (pastas raiz)" — antes a tab bar não tinha NENHUM menu
-    // de contexto; só dava pra editar a pasta-raiz via o botão de editar
-    // da toolbar (que segue a aba ativa). O menu real (showTabContextMenu)
-    // abre um QMenu::exec() BLOQUEANTE — tentar dirigir isso via sinais
-    // sintéticos provou ser frágil/plataforma-dependente neste ambiente
-    // (travou sob QT_QPA_PLATFORM=offscreen). Verifica só a FIAÇÃO —
-    // mesmo padrão desta suíte de testes, que não exercita QMenu::exec()
-    // em nenhum outro lugar: a tab bar aceita o evento de contexto.
+    // Regressão: a tab bar não tinha menu de contexto para editar a pasta raiz. O menu real (showTabContextMenu) abre um
+    // QMenu::exec() bloqueante, que travou sob QT_QPA_PLATFORM=offscreen; verifica só a fiação: a tab bar aceita o evento
+    // de contexto.
     void rootTabAcceptsCustomContextMenu()
     {
         CommandTreeWidget widget;
@@ -117,24 +112,22 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(kai::core::jsonTextToYamlText(QString::fromUtf8(R"json({
             "project_name": "Projeto Importado",
             "icon": "database",
             "commands": [{"name": "Build", "type": "shell", "command": "echo ok"}]
-        })json");
+        })json")).toUtf8());
         kaiJson.close();
 
         ProjectSelector selector;
         const ProjectImportResult result = selector.importFromDirectory(directory.path());
         QVERIFY(result.success);
-        // Todo projeto importado já nasce marcado como projeto (fronteira de
-        // escopo de variáveis dinâmicas) — não afeta a renderização da aba,
-        // que continua uma aba normal (ver EnvironmentManager::
-        // setDynamicVarScope e o teste abaixo com isProject=true manual).
+        // Todo projeto importado nasce marcado como projeto (fronteira de escopo de variáveis dinâmicas; ver
+        // EnvironmentManager::setDynamicVarScope); a aba continua normal.
         QVERIFY(result.folder.isProject);
-        QCOMPARE(result.folder.projectPath.value(), directory.path());
+        QCOMPARE(result.folder.workingDir, directory.path());
         QCOMPARE(result.commands.size(), 1);
     }
 
@@ -154,10 +147,8 @@ private slots:
 
     void itemActionsBarEditFolderButtonIsAlwaysEnabled()
     {
-        // Botão novo (ajuste pós-reformulação de abas): a
-        // pasta raiz da aba atual não aparece mais como item navegável,
-        // então este botão precisa estar sempre habilitado, mesmo sem
-        // nenhuma seleção na árvore. Grupo "Item" (ItemActionsBar).
+        // A pasta raiz da aba atual não aparece como item navegável, então este botão (grupo "Item") fica sempre
+        // habilitado, mesmo sem seleção na árvore.
         ItemActionsBar bar;
 
         bool signalEmitted = false;
@@ -180,9 +171,7 @@ private slots:
 
     void itemActionsBarNewFolderAndNewCommandButtonsAreAlwaysEnabled()
     {
-        // Botões fixos migrados do menu superior (feedback do usuário):
-        // sempre habilitados, independente de seleção. Grupo "Item"
-        // (ItemActionsBar).
+        // Botões fixos do grupo "Item" (ItemActionsBar): sempre habilitados, independente de seleção.
         ItemActionsBar bar;
 
         bool newFolderEmitted = false;
@@ -212,13 +201,29 @@ private slots:
         QVERIFY(newCommandEmitted);
     }
 
+    // O grupo "Item" também tem o botão de Nova Nota (ícone de caderno), sempre habilitado.
+    void itemActionsBarHasANewNoteButton()
+    {
+        ItemActionsBar bar;
+        bool emitted = false;
+        QObject::connect(&bar, &ItemActionsBar::newNoteRequested, [&emitted]() { emitted = true; });
+        QPushButton *noteButton = nullptr;
+        for (auto *button : bar.findChildren<QPushButton *>()) {
+            if (button->toolTip() == QStringLiteral("New Note")) {
+                noteButton = button;
+            }
+        }
+        QVERIFY(noteButton != nullptr);
+        QVERIFY(noteButton->isEnabled());
+        QVERIFY(!noteButton->icon().isNull());
+        noteButton->click();
+        QVERIFY(emitted);
+    }
+
     void firstItemIsSelectedNotJustCurrentWhenEnteringTab()
     {
-        // Bug reportado: ao entrar numa aba, o primeiro item vinha
-        // "corrente" (↑/↓ navegavam) mas SEM highlight, porque não estava
-        // de fato SELECIONADO — o QSS pinta ::item:selected. Aqui
-        // garantimos que o primeiro comando da aba ativa nasce
-        // selecionado (isSelected), habilitando o destaque visual.
+        // Regressão: ao entrar numa aba o primeiro item era "corrente" (↑/↓ navegavam) mas não estava selecionado, e o QSS
+        // pinta ::item:selected. O primeiro comando da aba ativa tem de nascer selecionado.
         Folder root;
         root.id = QStringLiteral("f_root");
         root.name = QStringLiteral("Raiz");
@@ -227,14 +232,14 @@ private slots:
         c1.id = QStringLiteral("c_1");
         c1.folderId = root.id;
         c1.name = QStringLiteral("Primeiro");
-        c1.type = CommandType::Shell;
+        c1.type = CommandType::Command;
         c1.command = QStringLiteral("echo 1");
 
         Command c2;
         c2.id = QStringLiteral("c_2");
         c2.folderId = root.id;
         c2.name = QStringLiteral("Segundo");
-        c2.type = CommandType::Shell;
+        c2.type = CommandType::Command;
         c2.command = QStringLiteral("echo 2");
 
         CommandTreeWidget widget;
@@ -245,7 +250,6 @@ private slots:
         auto *tree = qobject_cast<QTreeWidget *>(tabWidget->currentWidget());
         QVERIFY(tree != nullptr);
 
-        // Deve haver um item corrente E ele deve estar selecionado.
         QVERIFY(tree->currentItem() != nullptr);
         QVERIFY(tree->currentItem()->isSelected());
         QCOMPARE(tree->selectedItems().size(), 1);

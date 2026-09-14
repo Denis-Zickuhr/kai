@@ -23,15 +23,13 @@ QString runRegistryKey()
 }
 constexpr const char *kRegistryValueName = "Kai";
 #else
-// Caminho do .desktop de autostart XDG (Linux/BSD).
 QString desktopEntryPath()
 {
     const QString configHome = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
     return QDir(configHome).filePath(QStringLiteral("autostart/kai.desktop"));
 }
 
-// Normaliza o caminho do executável para uso no campo Exec do .desktop:
-// caminhos com espaços são envolvidos em aspas duplas.
+// Caminhos com espaços vão entre aspas duplas no campo Exec do .desktop.
 QString quoteExec(const QString &executablePath)
 {
     if (executablePath.contains(QLatin1Char(' '))) {
@@ -47,8 +45,7 @@ bool AutostartManager::setEnabled(bool enabled, const QString &executablePath)
 #if defined(Q_OS_WIN)
     QSettings runKey(runRegistryKey(), QSettings::NativeFormat);
     if (enabled) {
-        // Windows espera o caminho com separadores nativos e entre aspas
-        // (protege caminhos com espaços, ex: "C:\Program Files\...").
+        // O Windows espera separadores nativos e aspas (caminhos com espaços).
         const QString nativePath = QDir::toNativeSeparators(executablePath);
         runKey.setValue(QString::fromLatin1(kRegistryValueName),
                         QStringLiteral("\"%1\"").arg(nativePath));
@@ -67,7 +64,7 @@ bool AutostartManager::setEnabled(bool enabled, const QString &executablePath)
 
     if (!enabled) {
         if (!QFile::exists(path)) {
-            return true; // já desabilitado
+            return true;
         }
         const bool removed = QFile::remove(path);
         if (!removed) {
@@ -76,7 +73,6 @@ bool AutostartManager::setEnabled(bool enabled, const QString &executablePath)
         return removed;
     }
 
-    // Garante o diretório ~/.config/autostart/.
     QDir().mkpath(QFileInfo(path).absolutePath());
 
     QFile file(path);
@@ -94,8 +90,7 @@ bool AutostartManager::setEnabled(bool enabled, const QString &executablePath)
     out << "Icon=kai\n";
     out << "Terminal=false\n";
     out << "Categories=Development;Utility;\n";
-    // Chaves específicas para autostart XDG: garante que a entrada é
-    // considerada habilitada e não escondida pelo DE.
+    // Garante a entrada habilitada e não escondida pelo DE.
     out << "X-GNOME-Autostart-enabled=true\n";
     out << "Hidden=false\n";
     file.close();
@@ -120,7 +115,6 @@ QString AutostartManager::registeredTarget()
 #if defined(Q_OS_WIN)
     QSettings runKey(runRegistryKey(), QSettings::NativeFormat);
     QString value = runKey.value(QString::fromLatin1(kRegistryValueName)).toString().trimmed();
-    // Remove as aspas que colocamos ao gravar.
     if (value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"')) && value.length() > 1) {
         value = value.mid(1, value.length() - 2);
     }
@@ -149,11 +143,7 @@ QString AutostartManager::registeredTarget()
 
 bool AutostartManager::sync(bool desired, const QString &executablePath)
 {
-    // Reconciliação REAL: além de "está ligado?", confere se a entrada aponta
-    // para o executável ATUAL. Sem isso, reinstalar o Kai em outra pasta
-    // deixava o autostart apontando para um caminho que não existe mais — a
-    // opção aparecia marcada no app e o Kai simplesmente não subia com o
-    // sistema (bug reportado).
+    // Reconciliação real: confere também se a entrada aponta para o executável atual (reinstalar em outra pasta deixava o autostart marcado mas apontando para um caminho morto).
     const bool actuallyEnabled = isEnabled();
     if (desired) {
         const QString registered = registeredTarget();
@@ -161,7 +151,7 @@ bool AutostartManager::sync(bool desired, const QString &executablePath)
         const bool pathMatches =
             QString::compare(QDir::toNativeSeparators(registered), wanted, Qt::CaseInsensitive) == 0;
         if (actuallyEnabled && pathMatches) {
-            return true; // já correto, nada a fazer
+            return true;
         }
         if (actuallyEnabled && !pathMatches) {
             Logger::warning(kLogTag,

@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/fuzzy-search.h"
+#include "ui/shared/fuzzy-search.h"
 
 using namespace kai::ui;
 
@@ -12,6 +12,15 @@ private slots:
     void exactSubsequenceMatchScoresNonNegative()
     {
         QVERIFY(FuzzyMatcher::score(QStringLiteral("dev"), QStringLiteral("Dev Server")) >= 0);
+    }
+
+    // A penalidade de tamanho só ordena: uma letra num nome longo ainda é match.
+    void shortQueryInALongTargetStillMatches()
+    {
+        const QString longTarget = QStringLiteral("Subir o ambiente completo de desenvolvimento com banco e cache");
+        QVERIFY(FuzzyMatcher::score(QStringLiteral("z"), longTarget) == -1);
+        QVERIFY(FuzzyMatcher::score(QStringLiteral("c"), longTarget) >= 0);
+        QCOMPARE(FuzzyMatcher::search(QStringLiteral("c"), {longTarget}).size(), 1);
     }
 
     void nonSubsequenceReturnsNegativeScore()
@@ -34,9 +43,7 @@ private slots:
         QCOMPARE(FuzzyMatcher::score(QStringLiteral("a"), QString()), -1);
     }
 
-    // Prefixo/início-de-palavra deve pontuar mais alto que um match no meio
-    // de uma palavra (sem separador antes), mesmo em strings de tamanho
-    // parecido — valida o bônus de word-boundary do FuzzyMatcher.
+    // Prefixo/início de palavra pontua mais que match no meio de palavra (bônus de word-boundary).
     void prefixMatchScoresHigherThanMidWordMatch()
     {
         const int prefixScore = FuzzyMatcher::score(QStringLiteral("mig"), QStringLiteral("Migration"));
@@ -47,8 +54,7 @@ private slots:
         QVERIFY(prefixScore > midWordScore);
     }
 
-    // Match contíguo (substring) deve pontuar mais alto que caracteres
-    // espalhados sem serem vizinhos.
+    // Match contíguo pontua mais que caracteres espalhados.
     void contiguousMatchScoresHigherThanSpreadMatch()
     {
         const int contiguousScore = FuzzyMatcher::score(QStringLiteral("run"), QStringLiteral("Run Tests"));
@@ -68,11 +74,9 @@ private slots:
 
         const QVector<FuzzyMatchResult> results = FuzzyMatcher::search(QStringLiteral("run"), candidates);
 
-        // "Run Migration" começa com "run" (prefixo) e deve vir primeiro.
         QVERIFY(!results.isEmpty());
         QCOMPARE(results.first().text, QStringLiteral("Run Migration"));
 
-        // "Something Unrelated" não é subsequência de "run" -> não deve aparecer.
         for (const FuzzyMatchResult &r : results) {
             QVERIFY(r.text != QStringLiteral("Something Unrelated"));
         }

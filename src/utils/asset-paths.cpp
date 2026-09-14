@@ -11,12 +11,9 @@ QString assetDir(const QString &relativeName)
     const QString relative = QStringLiteral("assets/") + relativeName;
     const QString appDir = QCoreApplication::applicationDirPath();
 
-    // A ordem importa: primeiro os layouts de DESENVOLVIMENTO (binário em
-    // build/bin, assets na raiz do projeto), depois o layout PORTÁTIL do
-    // Windows (assets ao lado do .exe) e por fim o diretório de dados do
-    // usuário, onde o ./build.sh install deposita uma cópia — sem esse último,
-    // o binário instalado em ~/.local/bin não acha nada, porque ../../assets
-    // aponta para fora do projeto.
+    // A ordem importa: layouts de desenvolvimento (binário em build/bin, assets na raiz), layout portátil do Windows
+    // (assets ao lado do .exe) e o diretório de dados do usuário, onde o ./build.sh install deposita uma cópia (o
+    // binário em ~/.local/bin não acha ../../assets).
     QStringList candidates = {
         QDir(appDir).filePath(QStringLiteral("../../") + relative),
         QDir(appDir).filePath(relative),
@@ -32,6 +29,16 @@ QString assetDir(const QString &relativeName)
         }
     }
     return QString();
+}
+
+QString sampleDir()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString dev = QDir(appDir).filePath(QStringLiteral("../../sample"));
+    if (QDir(dev).exists()) {
+        return QDir(dev).absolutePath();
+    }
+    return assetDir(QStringLiteral("samples"));
 }
 
 } // namespace kai::utils

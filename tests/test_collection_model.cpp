@@ -8,9 +8,8 @@
 
 using namespace kai::core;
 
-// Cobre o modelo Collection (feature "Coleções"): schema extensível,
-// entries com tags/favoritos, e persistência em arquivo SEPARADO
-// (collections.json), isolando o diretório de config num temporário.
+// Modelo Collection: schema extensível, entries com tags/favoritos e persistência em collections.json
+// (separado do commands.json), com o diretório de config isolado num temporário.
 class TestCollectionModel : public QObject {
     Q_OBJECT
 
@@ -42,10 +41,7 @@ private slots:
         QCOMPARE(collectionFieldTypeFromString(QStringLiteral("inexistente")), CollectionFieldType::Text);
     }
 
-    // Round-trip completo: cria uma coleção de usuários com schema
-    // estendido (key, value, email), entradas com tags e favorito, salva e
-    // recarrega — tudo deve ser preservado, no arquivo collections.json
-    // (separado do commands.json).
+    // Round-trip completo (schema estendido, entradas com tags e favorito) em collections.json, separado do commands.json.
     void collectionRoundTripPreservesSchemaEntriesTagsFavorites()
     {
         ConfigManager manager;
@@ -79,7 +75,6 @@ private slots:
 
         QVERIFY(manager.saveCollections({col}));
         QVERIFY(QFile::exists(manager.collectionsFilePath()));
-        // Não deve tocar o commands.json.
         QVERIFY(!QFile::exists(manager.commandsFilePath()));
 
         const QVector<Collection> reloaded = manager.loadCollections();
@@ -101,12 +96,11 @@ private slots:
 
     void collectionWithoutSchemaFallsBackToDefault()
     {
-        // fromJson de um objeto sem schema deve popular o schema default.
         QJsonObject obj;
         obj["id"] = QStringLiteral("c1");
         obj["name"] = QStringLiteral("Vazia");
         const Collection c = Collection::fromJson(obj);
-        QCOMPARE(c.schema.size(), 2); // default key/value
+        QCOMPARE(c.schema.size(), 2);
     }
 
     void loadingMissingCollectionsFileReturnsEmpty()
@@ -115,8 +109,7 @@ private slots:
         QCOMPARE(manager.loadCollections().size(), 0);
     }
 
-    // (2) Visibilidade por campo do schema: precisa sobreviver ao salvar/
-    // carregar; schema antigo (sem a chave) assume visível.
+    // Visibilidade por campo do schema sobrevive ao round-trip; schema antigo (sem a chave) assume visível.
     void schemaFieldVisibilityRoundTrip()
     {
         Collection col;
@@ -133,11 +126,32 @@ private slots:
         QCOMPARE(back.schema.at(0).visible, true);
         QCOMPARE(back.schema.at(1).visible, false);
 
-        // Schema legado (sem "visible") assume visível.
         QJsonObject legacyField;
         legacyField["name"] = QStringLiteral("x");
         legacyField["label"] = QStringLiteral("X");
         QVERIFY(CollectionField::fromJson(legacyField).visible);
+    }
+
+    // "secret" sobrevive ao round-trip; schema antigo (sem a chave) assume NÃO secreto.
+    void schemaFieldSecretRoundTrip()
+    {
+        Collection col;
+        col.id = QStringLiteral("c_sec");
+        col.name = QStringLiteral("Tokens");
+        CollectionField f1;
+        f1.name = QStringLiteral("token"); f1.secret = true;
+        CollectionField f2;
+        f2.name = QStringLiteral("label"); f2.secret = false;
+        col.schema = {f1, f2};
+
+        const Collection back = Collection::fromJson(col.toJson());
+        QCOMPARE(back.schema.size(), 2);
+        QCOMPARE(back.schema.at(0).secret, true);
+        QCOMPARE(back.schema.at(1).secret, false);
+
+        QJsonObject legacyField;
+        legacyField["name"] = QStringLiteral("x");
+        QVERIFY(!CollectionField::fromJson(legacyField).secret);
     }
 
 private:

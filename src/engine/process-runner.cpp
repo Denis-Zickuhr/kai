@@ -1,15 +1,17 @@
 #include "engine/process-runner.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QTimer>
 #include <QFile>
 #include <QSocketNotifier>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QThread>
+#include <QSet>
+#include <QVector>
 
-// APIs POSIX (PTY, sinais, waitpid) só existem em Unix. No Windows
-// (MinGW/MSVC) o ProcessRunner usa um ConPTY (pseudoconsole nativo) para
-// comandos interativos, com fallback para QProcess (cmd /c).
+// POSIX (PTY, sinais, waitpid) só existe em Unix. No Windows o ProcessRunner usa ConPTY, com fallback para QProcess (cmd /c).
 #if !defined(Q_OS_WIN)
 #include <csignal>
 #include <sys/types.h>
@@ -29,10 +31,8 @@
 #endif
 #include <windows.h>
 #include <vector>
-// Alguns headers do MinGW não expõem o ConPTY. Fornecemos os símbolos
-// mínimos (typedef + atributo) para o code path compilar; a existência
-// real de CreatePseudoConsole é resolvida em runtime via GetProcAddress
-// (fallback para cmd /c se ausente).
+// Alguns headers do MinGW não expõem o ConPTY: símbolos mínimos aqui; CreatePseudoConsole é resolvida em runtime
+// (GetProcAddress), com fallback para cmd /c.
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 typedef VOID *HPCON;
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE \
@@ -46,6 +46,15 @@ typedef VOID *HPCON;
 namespace kai::engine {
 
 namespace {
+
+#if !defined(Q_OS_WIN)
+// O shell do comando nativo no Unix: bash; onde não há bash (Alpine, imagens mínimas), o sh.
+const QByteArray &nativeShellPath()
+{
+    static const QByteArray path = QFile::exists(QStringLiteral("/bin/bash")) ? QByteArray("/bin/bash") : QByteArray("/bin/sh");
+    return path;
+}
+#endif
 constexpr const char *kLogTag = "ProcessRunner";
 // Modo de encerramento rápido do app: dtor não faz waits bloqueantes.
 bool g_fastShutdown = false;
@@ -72,17 +81,58 @@ QString maskSecretsForLog(const QString &commandLine)
     return out;
 }
 
+// Caminho UNC (\\servidor\share\...): a forma que o WSL dá ao Windows para um diretório dentro do Linux
+// (\\wsl.localhost\Ubuntu\home\...), quando kai.exe roda a partir de um cwd do WSL via interop.
+bool isUncWorkingDir(const QString &path)
+{
+    // O Qt normaliza para '/': um UNC chega como "//servidor/share"; sem trocar por '\' a checagem não o reconhecia.
+    QString native = path;
+    native.replace(QLatin1Char('/'), QLatin1Char('\\'));
+    return native.startsWith(QStringLiteral("\\\\"));
+}
+
+// CreateProcess aceita UNC como cwd, mas o cmd.exe não o representa ("UNC paths are not supported"): cai em System32 e
+// pode travar o pipe/ConPTY. Por isso nunca passamos UNC como diretório inicial: o cmd.exe nasce num diretório com
+// letra de unidade e o `pushd` (que mapeia uma letra temporária) entra no UNC de dentro do comando. Um `workingDir`
+// UNC some do CreateProcess/QProcess; este wrapper assume.
+QString wrapCommandForWorkingDir(const QString &command, const QString &workingDir)
+{
+    if (workingDir.isEmpty()) {
+        return command;
+    }
+    if (!isUncWorkingDir(workingDir)) {
+        // Caminho normal (letra de unidade): sem pushd.
+        return command;
+    }
+    // Contrabarras sempre: o pushd do cmd.exe rejeita o "//wsl.localhost/..." que o Qt entrega.
+    QString escaped = workingDir;
+    escaped.replace(QLatin1Char('/'), QLatin1Char('\\'));
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    return QStringLiteral("pushd \"%1\" && (%2) & popd").arg(escaped, command);
+}
+
+#if defined(Q_OS_WIN)
+
+// Diretório de partida seguro (nunca UNC) para o cmd.exe quando o working dir real é UNC. nullptr em lpCurrentDirectory
+// não basta: o filho herda o cwd do kai.exe, que é o próprio UNC quando lançado via interop do WSL, e o cmd.exe avisa
+// antes de processar o pushd.
+QString safeNonUncStartDir()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (!isUncWorkingDir(appDir)) {
+        return QDir::toNativeSeparators(appDir);
+    }
+    const QString winDir = qEnvironmentVariable("SystemRoot");
+    if (!winDir.isEmpty()) {
+        return winDir;
+    }
+    return QStringLiteral("C:\\");
+}
+#endif
+
 #if !defined(Q_OS_WIN)
-// Envia um sinal Unix ao grupo de processos inteiro liderado por `pid`
-// (bug real corrigido: "SIGKILL fraco" — matar apenas o PID do bash usado
-// para interpretar o comando não encerra processos filhos que o script
-// tenha gerado, ex: `npm run dev` gerando um processo `node` sobrevivente
-// órfão). QProcess cria o processo filho como líder de seu próprio grupo
-// no Linux (comportamento padrão do fork/exec sem herdar grupo explícito),
-// então kill(-pid, sig) — PID negativo — atinge todo o grupo de uma vez.
-// Falha silenciosamente (sem crashar) se o processo já tiver terminado.
-// Em caso de erro (ex: bash não for líder de grupo por algum motivo),
-// tenta o PID direto como fallback, preservando o comportamento anterior.
+// Sinal ao grupo de processos inteiro de `pid` (o QProcess filho é líder do próprio grupo), para pegar filhos do script
+// (ex.: `npm run dev` -> `node`). Se não for líder, cai no PID direto; silencioso se já terminou.
 void killProcessGroup(qint64 pid, int signal)
 {
     if (pid <= 0) {
@@ -92,14 +142,128 @@ void killProcessGroup(qint64 pid, int signal)
         ::kill(static_cast<pid_t>(pid), signal);
     }
 }
+
+// Um processo vivo (zumbi não conta) lido de /proc.
+struct ProcInfo {
+    pid_t pid = 0;
+    pid_t ppid = 0;
+    pid_t sid = 0;
+    quint64 start = 0;
+};
+
+// Identidade de um processo que não se confunde com outro que reaproveitou o PID: pid + instante de início.
+struct ProcTag {
+    pid_t pid = 0;
+    quint64 start = 0;
+};
+
+QVector<ProcInfo> scanProcesses()
+{
+    QVector<ProcInfo> all;
+    const QStringList entries = QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        bool isPid = false;
+        const pid_t pid = static_cast<pid_t>(entry.toInt(&isPid));
+        if (!isPid) {
+            continue;
+        }
+        QFile stat(QStringLiteral("/proc/%1/stat").arg(entry));
+        if (!stat.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        // "pid (comm) estado ppid pgrp sessão ... starttime": o comm pode ter espaços e parênteses, então o resto vem
+        // depois do ÚLTIMO ')'. Índices a partir do estado: 0=estado, 1=ppid, 3=sessão, 19=starttime.
+        const QByteArray data = stat.readAll();
+        const int closeParen = data.lastIndexOf(')');
+        if (closeParen < 0) {
+            continue;
+        }
+        const QList<QByteArray> fields = data.mid(closeParen + 2).split(' ');
+        if (fields.size() <= 19 || fields.at(0) == "Z") {
+            continue;
+        }
+        all.append({pid, static_cast<pid_t>(fields.at(1).toInt()), static_cast<pid_t>(fields.at(3).toInt()),
+                    fields.at(19).toULongLong()});
+    }
+    return all;
+}
+
+// Tudo que pertence ao comando: a sessão `sid` (o filho do Kai é líder de sessão, via setsid/forkpty) E toda a
+// descendência por pai/filho — um script que chama setsid() sai da sessão mas continua filho de quem o lançou. Os
+// `remembered` (fotografados ao pedir o encerramento) pegam quem já foi reparentado ao init no meio do caminho; o
+// instante de início garante que um PID reaproveitado por outro programa não seja morto por engano.
+QVector<ProcTag> processTree(pid_t sid, const QVector<ProcTag> &remembered = {})
+{
+    const QVector<ProcInfo> all = scanProcesses();
+    QSet<pid_t> wanted;
+    for (const ProcInfo &p : all) {
+        if (p.sid == sid || p.pid == sid) {
+            wanted.insert(p.pid);
+        }
+    }
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (const ProcInfo &p : all) {
+            if (!wanted.contains(p.pid) && wanted.contains(p.ppid)) {
+                wanted.insert(p.pid);
+                grew = true;
+            }
+        }
+    }
+    for (const ProcTag &tag : remembered) {
+        for (const ProcInfo &p : all) {
+            if (p.pid == tag.pid && p.start == tag.start) {
+                wanted.insert(p.pid);
+            }
+        }
+    }
+    QVector<ProcTag> tree;
+    for (const ProcInfo &p : all) {
+        if (wanted.contains(p.pid)) {
+            tree.append({p.pid, p.start});
+        }
+    }
+    return tree;
+}
+
+// Sinal para o comando inteiro (todos os grupos, a sessão e os descendentes) + o grupo do líder.
+void killSession(pid_t sid, int signal, const QVector<ProcTag> &remembered = {})
+{
+    if (sid <= 0) {
+        return;
+    }
+    for (const ProcTag &member : processTree(sid, remembered)) {
+        ::kill(member.pid, signal);
+    }
+    killProcessGroup(sid, signal);
+}
+
+// Escalada SIGTERM -> SIGKILL que NÃO depende do ProcessRunner: o runner pode ser destruído antes (o líder sai com o
+// Ctrl+C, o gerenciador troca o runner numa nova execução), e os timers dele morreriam junto, deixando para trás o que
+// ignorou o sinal. `termAfterMs` < 0 pula o SIGTERM. Só mexe no que ainda vive e é o mesmo processo de antes.
+void scheduleReap(pid_t sid, const QVector<ProcTag> &remembered, int termAfterMs, int killAfterMs)
+{
+    if (termAfterMs >= 0) {
+        QTimer::singleShot(termAfterMs, [sid, remembered]() {
+            if (!processTree(sid, remembered).isEmpty()) {
+                killSession(sid, SIGTERM, remembered);
+            }
+        });
+    }
+    QTimer::singleShot(killAfterMs, [sid, remembered, killAfterMs]() {
+        if (!processTree(sid, remembered).isEmpty()) {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Processo não encerrou em %1ms, forçando SIGKILL ao que sobrou do comando.").arg(killAfterMs));
+            killSession(sid, SIGKILL, remembered);
+        }
+    });
+}
 #else
-// Encerra a ÁRVORE de processos inteira no Windows (bug real reportado:
-// matar só o cmd.exe deixava o bridge wsl.exe e a árvore no WSL órfãos —
-// "encerrar não funciona"). taskkill /T mata o processo E todos os filhos
-// (a árvore inteira, incluindo wsl.exe e o que ele gerou); /F força.
-// Executado de forma destacada (CREATE_NO_WINDOW) para não abrir console.
-// Retorna sem bloquear a GUI. Falha silenciosa se o PID já morreu.
-void killProcessTree(qint64 pid)
+// Mata a árvore no Windows via `taskkill /T /F` destacado (CREATE_NO_WINDOW). Só REDE DE SEGURANÇA, se o Job Object
+// (createJobForProcess/terminateProcessTree) não pôde ser criado no start: um taskkill oculto via CreateProcessW lembra
+// um dropper e o Windows Defender já matou o Kai por isso. Silencioso se o PID já morreu.
+void killProcessTreeViaTaskkill(qint64 pid)
 {
     if (pid <= 0) {
         return;
@@ -119,6 +283,76 @@ void killProcessTree(qint64 pid)
         ::CloseHandle(pi.hThread);
     }
 }
+
+// Job Object com KILL_ON_JOB_CLOSE (a árvore morre ao fechar o handle ou em TerminateJobObject) ao qual `processHandle`
+// é atribuído; substitui o taskkill externo. Retorna nullptr (e fecha o job) se alguma etapa falhar.
+HANDLE createJobForProcess(HANDLE processHandle)
+{
+    HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+    if (!job) {
+        return nullptr;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+    ZeroMemory(&info, sizeof(info));
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+        ::CloseHandle(job);
+        return nullptr;
+    }
+    if (!::AssignProcessToJobObject(job, processHandle)) {
+        ::CloseHandle(job);
+        return nullptr;
+    }
+    return job;
+}
+#endif
+}
+
+bool isWindowsUncPath(const QString &path) { return isUncWorkingDir(path); }
+QString wrapWindowsCommandForUncWorkingDir(const QString &command, const QString &workingDir)
+{
+    return wrapCommandForWorkingDir(command, workingDir);
+}
+WindowsLaunchDirs planWindowsLaunchDirs(const QString &workingDir, const QString &currentDir,
+                                        bool commandHandlesWorkingDir, const QString &safeDir)
+{
+    WindowsLaunchDirs dirs;
+    if (workingDir.isEmpty() && commandHandlesWorkingDir) {
+        // O alvo faz o próprio `cd`: o cwd de nascimento só precisa ser válido para o cmd.exe (nunca UNC), sem pushd.
+        if (isUncWorkingDir(currentDir)) {
+            dirs.nativeCwd = safeDir;
+        }
+        return dirs;
+    }
+    // Sem working dir o comando roda no cwd atual (o que o CreateProcess herdaria); resolvido aqui para detectar UNC.
+    const QString effective = workingDir.isEmpty() ? currentDir : workingDir;
+    if (isUncWorkingDir(effective)) {
+        dirs.nativeCwd = safeDir;
+        dirs.pushdDir = effective;
+    } else {
+        dirs.nativeCwd = effective;
+    }
+    return dirs;
+}
+
+#if defined(Q_OS_WIN)
+QString windowsSafeNonUncStartDir() { return safeNonUncStartDir(); }
+#endif
+
+void isolateDetachedProcess(QProcess &process)
+{
+#if defined(Q_OS_WIN)
+    process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
+        args->flags |= CREATE_NO_WINDOW;
+        // O startDetached do Qt passa bInheritHandles=TRUE: herdaria os pipes da interop do WSL e o `kai` do terminal só
+        // terminaria com ele.
+        args->inheritHandles = false;
+    });
+    if (process.workingDirectory().isEmpty() || isUncWorkingDir(process.workingDirectory())) {
+        process.setWorkingDirectory(safeNonUncStartDir());
+    }
+#else
+    Q_UNUSED(process);
 #endif
 }
 
@@ -138,16 +372,14 @@ ProcessRunner::ProcessRunner(QObject *parent)
 
 ProcessRunner::~ProcessRunner()
 {
-    // Garantia de encerramento seguro mesmo se o chamador esquecer de
-    // chamar stop explicitamente ("processos zumbis").
-    // Kill remoto (lado WSL) também no dtor, senão o processo Linux fica.
-    fireRemoteKill();
+    // Kill remoto (WSL) também no dtor, mas só se ainda vivo: após um término normal o PID do arquivo já morreu e o único
+    // efeito possível seria matar um processo alheio que reaproveitou o PID (no modo CLI rodava a cada `kai <path>`).
+    if (isRunning()) {
+        fireRemoteKill();
+    }
     if (g_fastShutdown) {
-        // Fechamento do app: só sinaliza o kill, SEM waits longos (não
-        // congela a GUI). Mas a thread leitora AINDA precisa ser encerrada,
-        // senão ela continua viva usando um `this` destruído (crash ao
-        // fechar). O join é curto porque o loop dela verifica o flag a cada
-        // ~20ms.
+        // Fechamento do app: só sinaliza o kill, sem waits longos (não congelar a GUI). A thread leitora ainda precisa ser
+        // encerrada, ou usaria um `this` destruído; o join é curto (o loop checa o flag a cada ~20 ms).
 #if defined(Q_OS_WIN)
         if (m_conProcess) { ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1); }
         else if (m_process->state() != QProcess::NotRunning) { m_process->kill(); }
@@ -165,20 +397,18 @@ ProcessRunner::~ProcessRunner()
         }
 #else
         const qint64 fpid = processId();
-        if (fpid > 0) { killProcessGroup(fpid, SIGKILL); }
+        if (fpid > 0) { killSession(static_cast<pid_t>(fpid), SIGKILL); }
 #endif
         return;
     }
 #if defined(Q_OS_WIN)
     if (m_conProcess) {
         const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
-        killProcessTree(conPid); // mata cmd/wsl/filhos, não só o processo direto
+        terminateProcessTree(conPid); // mata cmd/wsl/filhos, não só o processo direto
         ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1);
         ::WaitForSingleObject(static_cast<HANDLE>(m_conProcess), 1000);
         if (m_conReader) {
-            // Sinaliza e AGUARDA de fato (join): a thread sai no próximo
-            // ciclo do loop por causa do flag, então o wait é curto na
-            // prática, mas garantido — evita use-after-free.
+            // Sinaliza e faz join: a thread sai no próximo ciclo pelo flag (evita use-after-free).
             m_conReaderAbort.store(true, std::memory_order_relaxed);
             if (!m_conReader->wait(5000)) {
                 utils::Logger::error(kLogTag,
@@ -193,42 +423,42 @@ ProcessRunner::~ProcessRunner()
 #endif
 #if !defined(Q_OS_WIN)
     if (m_ptyMasterFd >= 0 && m_ptyChildPid > 0) {
-        // Modo PTY (Unix): encerra o grupo do processo filho e reap síncrono.
-        killProcessGroup(m_ptyChildPid, SIGTERM);
+        const QVector<ProcTag> remembered = processTree(static_cast<pid_t>(m_ptyChildPid));
+        killSession(static_cast<pid_t>(m_ptyChildPid), SIGTERM);
         int status = 0;
-        // Espera curta pelo término; se não sair, SIGKILL.
         for (int i = 0; i < 20; ++i) {
             if (::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, WNOHANG) != 0) {
                 break;
             }
             ::usleep(50 * 1000);
             if (i == 19) {
-                killProcessGroup(m_ptyChildPid, SIGKILL);
+                killSession(static_cast<pid_t>(m_ptyChildPid), SIGKILL);
                 ::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, 0);
             }
         }
+        // O líder já saiu, mas o que ele lançou pode estar fazendo a própria limpeza (ex: `docker compose up` descendo os
+        // containers): SIGKILL só depois do tempo de graça, sem prender a GUI esperando.
+        scheduleReap(static_cast<pid_t>(m_ptyChildPid), remembered, -1, m_killTimeoutMs);
         cleanupPty();
         return;
     }
 #endif
     if (isRunning()) {
-        // Encerramento via QProcess (caminho único no Windows; no Unix é o
-        // caminho não-PTY). No Unix usamos o grupo de processos; no Windows
-        // o QProcess::kill encerra o processo (e o cmd /c encerra a árvore
-        // ao ser terminado).
+        // Caminho QProcess (único no Windows; não-PTY no Unix).
 #if !defined(Q_OS_WIN)
         const qint64 pid = processId();
-        killProcessGroup(pid, SIGTERM);
+        const QVector<ProcTag> remembered = processTree(static_cast<pid_t>(pid));
+        killSession(static_cast<pid_t>(pid), SIGTERM);
         if (!m_process->waitForFinished(m_killTimeoutMs)) {
-            killProcessGroup(pid, SIGKILL);
+            killSession(static_cast<pid_t>(pid), SIGKILL, remembered);
             m_process->waitForFinished(1000);
+        } else {
+            scheduleReap(static_cast<pid_t>(pid), remembered, -1, m_killTimeoutMs);
         }
 #else
-        // Windows: taskkill /T /F mata a ÁRVORE (cmd + wsl + filhos), não
-        // só o processo direto — senão o wsl.exe e a árvore no WSL ficam
-        // órfãos (bug reportado: "encerrar não funciona").
+        // taskkill /T /F mata a ÁRVORE (cmd + wsl + filhos); só o processo direto deixaria o wsl.exe e o WSL órfãos.
         const qint64 winPid = m_process->processId();
-        killProcessTree(winPid);
+        terminateProcessTree(winPid);
         if (!m_process->waitForFinished(m_killTimeoutMs)) {
             m_process->kill();
             m_process->waitForFinished(1000);
@@ -236,6 +466,20 @@ ProcessRunner::~ProcessRunner()
 #endif
     }
 }
+
+#if defined(Q_OS_WIN)
+void ProcessRunner::terminateProcessTree(qint64 pid)
+{
+    if (m_jobHandle) {
+        ::TerminateJobObject(static_cast<HANDLE>(m_jobHandle), 1);
+        ::CloseHandle(static_cast<HANDLE>(m_jobHandle));
+        m_jobHandle = nullptr;
+        return;
+    }
+    // Sem Job Object (não pôde ser criado/atribuído no start, raro): rede de segurança com o taskkill externo.
+    killProcessTreeViaTaskkill(pid);
+}
+#endif
 
 void ProcessRunner::setFastShutdown(bool enabled) { g_fastShutdown = enabled; }
 bool ProcessRunner::fastShutdown() { return g_fastShutdown; }
@@ -276,20 +520,73 @@ void ProcessRunner::setRemoteKillCommandLine(const QString &commandLine)
     m_remoteKillCommandLine = commandLine;
 }
 
+void ProcessRunner::setCommandHandlesWorkingDir(bool enabled)
+{
+    m_commandHandlesWorkingDir = enabled;
+}
+
+void ProcessRunner::setInheritTerminal(bool enabled)
+{
+    m_inheritTerminal = enabled;
+}
+
+void ProcessRunner::startInheritingTerminal(const QString &command, const QString &workingDir,
+                                            const QMap<QString, QString> &env)
+{
+    QProcessEnvironment processEnv = QProcessEnvironment::systemEnvironment();
+    for (auto it = env.constBegin(); it != env.constEnd(); ++it) {
+        processEnv.insert(it.key(), it.value());
+    }
+    m_process->setProcessEnvironment(processEnv);
+    m_process->setProcessChannelMode(QProcess::ForwardedChannels);
+    m_process->setInputChannelMode(QProcess::ForwardedInputChannel);
+
+#if defined(Q_OS_WIN)
+    const WindowsLaunchDirs launchDirs = planWindowsLaunchDirs(
+        workingDir, QDir::currentPath(), m_commandHandlesWorkingDir, safeNonUncStartDir());
+    if (!launchDirs.nativeCwd.isEmpty()) {
+        m_process->setWorkingDirectory(launchDirs.nativeCwd);
+    }
+    // Sem "chcp 65001": a saída não é decodificada pelo Kai, e o chcp mudaria
+    // a codepage do console de quem chamou mesmo depois do kai sair.
+    m_process->setProgram(QStringLiteral("cmd.exe"));
+    m_process->setArguments({});
+    m_process->setNativeArguments(
+        QStringLiteral("/c %1").arg(wrapCommandForWorkingDir(command, launchDirs.pushdDir)));
+#else
+    if (!workingDir.isEmpty()) {
+        m_process->setWorkingDirectory(workingDir);
+    }
+    QStringList bashArgs;
+    if (m_interactiveShell) {
+        bashArgs << QStringLiteral("-i");
+    }
+    bashArgs << QStringLiteral("-c") << command;
+    m_process->setProgram(QString::fromLatin1(nativeShellPath()));
+    m_process->setArguments(bashArgs);
+#endif
+
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Iniciando comando no terminal herdado: %1").arg(maskSecretsForLog(command)));
+    m_process->start();
+    if (m_process->waitForStarted(2000) || m_process->state() != QProcess::NotRunning) {
+        emit started();
+    }
+}
+
 void ProcessRunner::fireRemoteKill()
 {
     if (m_remoteKillCommandLine.trimmed().isEmpty()) {
         return;
     }
-    // Dispara DESTACADO (fire-and-forget): não bloqueia a GUI e sobrevive
-    // ao encerramento do runner. É o único jeito de matar o processo do
-    // lado do WSL (que não é filho Windows do wsl.exe).
+    // DESTACADO (fire-and-forget): não bloqueia a GUI e sobrevive ao runner. Único jeito de matar o processo no WSL.
     utils::Logger::info(kLogTag,
         QStringLiteral("Disparando kill REMOTO (lado WSL/host): %1").arg(m_remoteKillCommandLine));
 #if defined(Q_OS_WIN)
     QProcess killer;
     killer.setProgram(QStringLiteral("cmd.exe"));
     killer.setNativeArguments(QStringLiteral("/c %1").arg(m_remoteKillCommandLine));
+    isolateDetachedProcess(killer);
     killer.startDetached();
 #else
     QProcess::startDetached(QStringLiteral("/bin/bash"),
@@ -301,21 +598,28 @@ void ProcessRunner::fireRemoteKill()
 
 void ProcessRunner::start(const QString &command, const QString &workingDir, const QMap<QString, QString> &env)
 {
+    // Diretório de trabalho que não existe aqui: roda no diretório atual, sem aviso na saída, em vez de o QProcess/PTY
+    // falharem ao iniciar (ou de o comando nem sair). UNC do Windows é tratado à parte (planWindowsLaunchDirs).
+    QString effectiveDir = workingDir;
+    if (!effectiveDir.isEmpty() && !isUncWorkingDir(effectiveDir) && !QFileInfo(effectiveDir).isDir()) {
+        utils::Logger::info(kLogTag, QStringLiteral("Diretório de trabalho '%1' não existe; usando o diretório atual.").arg(effectiveDir));
+        effectiveDir.clear();
+    }
+
     m_stopRequested = false;
 
-    // Modo PTY (padrão para comandos shell): roda o comando dentro de um
-    // pseudo-terminal para que programas interativos (ex: `read -p`) se
-    // comportem como num terminal real. Se o PTY não puder ser criado,
-    // cai para o QProcess normal (fallback seguro).
-    if (m_usePty && startWithPty(command, workingDir, env)) {
+    if (m_inheritTerminal) {
+        startInheritingTerminal(command, effectiveDir, env);
+        return;
+    }
+
+    // Modo PTY (padrão): programas interativos (ex.: `read -p`) se comportam como num terminal; sem PTY, cai para QProcess.
+    if (m_usePty && startWithPty(command, effectiveDir, env)) {
         return;
     }
 #if defined(Q_OS_WIN)
-    // Windows: o equivalente do PTY é o ConPTY (pseudoconsole). Faz o
-    // processo enxergar um terminal real, então prompts interativos
-    // aparecem na saída (bug reportado: prompt do `read`/`set /p` sumia
-    // sob o pipe do cmd /c). Fallback para cmd /c se indisponível.
-    if (m_usePty && startWithConPty(command, workingDir, env)) {
+    // Windows: o equivalente é o ConPTY (prompts como `read`/`set /p` não aparecem sob o pipe do cmd /c).
+    if (m_usePty && startWithConPty(command, effectiveDir, env)) {
         return;
     }
 #endif
@@ -326,43 +630,41 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     }
     m_process->setProcessEnvironment(processEnv);
 
-    if (!workingDir.isEmpty()) {
-        m_process->setWorkingDirectory(workingDir);
+#if defined(Q_OS_WIN)
+    // UNC nunca vira o cwd nativo (ver wrapCommandForWorkingDir). Sem working dir o filho herdaria o cwd do próprio
+    // kai.exe, que pode ser o UNC do WSL quando chamado via interop (QProcess com dir vazio também herda): resolve para
+    // o cwd atual a fim de detectar o caso.
+    const WindowsLaunchDirs launchDirs = planWindowsLaunchDirs(
+        effectiveDir, QDir::currentPath(), m_commandHandlesWorkingDir, safeNonUncStartDir());
+    if (!launchDirs.nativeCwd.isEmpty()) {
+        m_process->setWorkingDirectory(launchDirs.nativeCwd);
     }
+#else
+    if (!effectiveDir.isEmpty()) {
+        m_process->setWorkingDirectory(effectiveDir);
+    }
+#endif
 
-    // Log com SEGREDOS MASCARADOS: a linha pode conter "export SECRET='v'"
-    // (injeção de env para o alvo de terminal) — logar cru vazava o segredo
-    // no kai.log (achado de auditoria).
+    // Log com segredos mascarados: a linha pode conter "export SECRET='v'" (env do alvo de terminal).
     utils::Logger::info(kLogTag, QStringLiteral("Iniciando comando: %1").arg(maskSecretsForLog(command)));
 
 #if defined(Q_OS_WIN)
-    // Windows: executa via cmd.exe /c, que interpreta pipes/redirects e
-    // encadeamentos. IMPORTANTE (bug real reportado: comando WSL
-    // "maga env prod {{c}}" chegava só como "maga"): NÃO usar setArguments
-    // com o comando inteiro como UM argumento — o QProcess aplica quoting
-    // (aspas em volta) e o parsing de aspas do 'cmd /c' quebra nos espaços,
-    // descartando o resto. Usamos setNativeArguments para passar a linha de
-    // comando VERBATIM (o applyTerminalProfile já montou/escapou o comando
-    // WSL corretamente, incluindo as aspas do bash -lc '...').
+    // cmd.exe /c interpreta pipes/redirects. NÃO passar o comando inteiro em setArguments: o QProcess põe aspas em volta e
+    // o parsing do 'cmd /c' quebra nos espaços ("maga env prod {{c}}" chegava só como "maga"). setNativeArguments passa a
+    // linha VERBATIM (o applyTerminalProfile já montou/escapou o comando WSL).
     m_process->setProgram(QStringLiteral("cmd.exe"));
     m_process->setArguments({}); // limpa; usamos nativeArguments
-    // '/c ' + comando cru. Envolvemos em aspas externas do cmd apenas
-    // quando necessário não é preciso: o cmd /c aceita a linha inteira.
-    m_process->setNativeArguments(QStringLiteral("/c %1").arg(command));
+    // "chcp 65001 >nul &" põe a sessão em UTF-8 antes do comando: na codepage OEM/ANSI legada (850/1252) acentos e escapes
+    // chegam em bytes que decodeOut() (fixo em UTF-8) não decodifica. O ">nul" descarta a confirmação do chcp.
+    m_process->setNativeArguments(
+        QStringLiteral("/c chcp 65001 >nul & %1")
+            .arg(wrapCommandForWorkingDir(command, launchDirs.pushdDir)));
 #else
-    // Executa via shell para suportar pipes, redirects e loops (ex:
-    // usa `for i in ...; do ...; done`), que QProcess::start() puro não
-    // interpreta ao separar programa e argumentos manualmente.
+    // Via shell para suportar pipes, redirects e loops, que QProcess::start() puro não interpreta.
     //
-    // `setsid` força o bash a se tornar líder de uma nova sessão e, por
-    // consequência, de um novo grupo de processos (PGID == seu próprio
-    // PID) — bug real corrigido: sem isso, QProcess não chama setpgid()
-    // no filho, que herda o PGID do processo pai (o próprio Kai!),
-    // fazendo stop()/killpg() não conseguir isolar e encerrar de forma
-    // confiável o grupo de processos do comando. `setsid` faz parte do
-    // util-linux; fallback defensivo para bash direto se não existir.
-    // -i (interativo) além do -c: ver setInteractiveShell() no header —
-    // sem isso o bash NUNCA lê ~/.bashrc quando recebe -c, mesmo sob pty.
+    // `setsid` faz o bash líder de uma nova sessão/grupo (PGID == PID): sem isso o filho herda o PGID do próprio Kai e
+    // stop()/killpg() não isolaria o grupo do comando. Vem do util-linux; sem ele cai no bash direto.
+    // -i além do -c: ver setInteractiveShell() no header.
     QStringList bashArgs;
     if (m_interactiveShell) {
         bashArgs << QStringLiteral("-i");
@@ -372,17 +674,27 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     static const bool hasSetsid = QFile::exists(QStringLiteral("/usr/bin/setsid"));
     if (hasSetsid) {
         m_process->setProgram(QStringLiteral("/usr/bin/setsid"));
-        m_process->setArguments(QStringList{QStringLiteral("/bin/bash")} + bashArgs);
+        m_process->setArguments(QStringList{QString::fromLatin1(nativeShellPath())} + bashArgs);
     } else {
         utils::Logger::warning(kLogTag,
             QStringLiteral("'setsid' não encontrado; processos filhos gerados pelo comando podem não ser encerrados junto ao parar."));
-        m_process->setProgram(QStringLiteral("/bin/bash"));
+        m_process->setProgram(QString::fromLatin1(nativeShellPath()));
         m_process->setArguments(bashArgs);
     }
 #endif
     m_process->start();
 
     if (m_process->waitForStarted(2000) || m_process->state() != QProcess::NotRunning) {
+#if defined(Q_OS_WIN)
+        // Fallback raro (o caminho principal é o ConPTY): job object aqui também, para encerrar a árvore sem taskkill
+        // externo. QProcess não tem CREATE_SUSPENDED: há uma pequena janela antes do AssignProcessToJobObject; aceitável.
+        HANDLE procHandle = ::OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA,
+                                           FALSE, static_cast<DWORD>(m_process->processId()));
+        if (procHandle) {
+            m_jobHandle = createJobForProcess(procHandle);
+            ::CloseHandle(procHandle);
+        }
+#endif
         emit started();
     }
 }
@@ -390,17 +702,19 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
 bool ProcessRunner::startWithPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env)
 {
 #if defined(Q_OS_WIN)
-    // Windows não tem forkpty/PTY Unix; o modo PTY é indisponível e o
-    // chamador cai automaticamente para o QProcess (cmd /c).
+    // Sem forkpty no Windows: o chamador cai para o QProcess (cmd /c).
     Q_UNUSED(command);
     Q_UNUSED(workingDir);
     Q_UNUSED(env);
     return false;
 #else
     int masterFd = -1;
-    // forkpty cria o par mestre/escravo, faz fork e conecta o filho ao
-    // lado escravo como seu terminal controlador — o filho enxerga um tty.
-    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, nullptr);
+    // Largura generosa de propósito (como no ConPTY): sem winsize o forkpty herda um terminal estreito (80 colunas) e
+    // linhas de log longas arriscam ambiguidade de quebra de linha.
+    struct winsize ws{};
+    ws.ws_col = 500;
+    ws.ws_row = 30;
+    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, &ws);
 
     if (pid < 0) {
         utils::Logger::warning(kLogTag,
@@ -409,61 +723,38 @@ bool ProcessRunner::startWithPty(const QString &command, const QString &workingD
     }
 
     if (pid == 0) {
-        // --- Processo filho ---
-        // Novo grupo/sessão já é garantido pelo forkpty (setsid interno),
-        // então killpg(-pid) atinge o grupo inteiro (mesma semântica do
-        // caminho QProcess com setsid).
+        // Filho: o forkpty já faz setsid, então killpg(-pid) atinge o grupo inteiro.
         if (!workingDir.isEmpty()) {
             if (::chdir(workingDir.toLocal8Bit().constData()) != 0) {
                 // Não fatal: segue no diretório atual.
             }
         }
-        // TERM/COLORTERM sob PTY: o filho HERDA o ambiente do Kai (um app
-        // GUI), cujo TERM próprio é tipicamente vazio/ausente/irrelevante —
-        // não o de um terminal de verdade. Sem isto, CLIs que consultam
-        // $TERM pra decidir capacidades (cores, desenho de caixa/bordas
-        // Unicode) caem no modo degradado "burro" (bug relatado, com
-        // screenshot: um Claude Code aninhado no terminal interativo
-        // desenhava sem NENHUMA borda). Aplicado ANTES do loop de env_vars
-        // do usuário logo abaixo, que ainda pode sobrescrever com um TERM
-        // customizado se quiser (overwrite=1 no loop seguinte).
+        // TERM/COLORTERM: o filho herda o ambiente do Kai (app GUI), cujo TERM é vazio/irrelevante; sem isto as CLIs caem
+        // no modo "burro" (sem cores nem bordas Unicode). Vem antes do loop de env do usuário, que pode sobrescrever.
         ::setenv("TERM", "xterm-256color", 1);
         ::setenv("COLORTERM", "truecolor", 1);
-        // Locale: o Kai é um app GUI, frequentemente lançado sem um shell
-        // de login por trás (autostart/.desktop) — nesse caso ele herda
-        // (e repassa ao filho) um ambiente SEM LANG/LC_ALL, o que faz a
-        // libc do filho cair no locale "C"/POSIX. Programas locale-aware
-        // então tratam os bytes multibyte UTF-8 de acentos (ã, ç, é...)
-        // como latin-1/inválidos e os corrompem ANTES mesmo de chegar ao
-        // PTY — bug relatado ("encoding errado no terminal interativo")
-        // que sobrevivia ao fix de TERM/chcp porque a causa era esta, não
-        // o parser do libvterm (que já está em UTF8 via vterm_set_utf8).
-        // Só define um fallback: nunca sobrescreve um LANG/LC_ALL que já
-        // veio do ambiente herdado ou das env vars do próprio comando.
+        // Locale: lançado sem shell de login (autostart/.desktop) o Kai não tem LANG/LC_ALL e a libc do filho cai no
+        // locale "C", corrompendo os bytes UTF-8 dos acentos. Só define um fallback; nunca sobrescreve LANG/LC_ALL.
         if (::getenv("LANG") == nullptr && ::getenv("LC_ALL") == nullptr) {
             ::setenv("LANG", "C.UTF-8", 1);
         }
         for (auto it = env.constBegin(); it != env.constEnd(); ++it) {
             ::setenv(it.key().toLocal8Bit().constData(), it.value().toLocal8Bit().constData(), 1);
         }
-        // -i (interativo) além do -c — ver setInteractiveShell() no
-        // header: sem isso o bash NUNCA lê ~/.bashrc quando recebe -c,
-        // mesmo sob pty.
+        // argv[0] precisa ser o nome certo: o bash chamado de "sh" liga o modo POSIX.
+        const char *shell = nativeShellPath().constData();
+        const char *shellName = nativeShellPath() == "/bin/bash" ? "bash" : "sh";
         if (m_interactiveShell) {
-            ::execl("/bin/bash", "bash", "-i", "-c", command.toLocal8Bit().constData(), static_cast<char *>(nullptr));
+            ::execl(shell, shellName, "-i", "-c", command.toLocal8Bit().constData(), static_cast<char *>(nullptr));
         } else {
-            ::execl("/bin/bash", "bash", "-c", command.toLocal8Bit().constData(), static_cast<char *>(nullptr));
+            ::execl(shell, shellName, "-c", command.toLocal8Bit().constData(), static_cast<char *>(nullptr));
         }
-        // Se execl retornar, houve erro — encerra o filho.
         ::_exit(127);
     }
 
-    // --- Processo pai ---
     m_ptyChildPid = pid;
     m_ptyMasterFd = masterFd;
 
-    // fd não-bloqueante + notificador de leitura assíncrona (não bloqueia
-    // a GUI, exigência do AGENTS.md).
     const int flags = ::fcntl(masterFd, F_GETFL, 0);
     ::fcntl(masterFd, F_SETFL, flags | O_NONBLOCK);
 
@@ -485,20 +776,9 @@ void ProcessRunner::handlePtyReadyRead()
         return;
     }
 
-    // Bug reportado ("rodei um `bash` puro sob PTY e travou o Kai
-    // inteiro"): um filho MUITO tagarela (aqui, um bash interativo
-    // aninhado — a linha de comando vira "bash -i -c bash", então o shell
-    // de fora fica esperando o de dentro; ambos podem trocar sequências de
-    // consulta/resposta de terminal em alta frequência) faz
-    // este laço de leitura NÃO-bloqueante encontrar dado novo em TODA
-    // iteração, sem nunca esvaziar — como cada ::read() individual não
-    // bloqueia (fd em O_NONBLOCK), a CPU fica 100% aqui, sem NUNCA devolver
-    // o controle pro event loop do Qt: a janela para de responder a
-    // clique/tecla (inclusive o que destravaria o shell do outro lado).
-    // Limite de iterações por invocação: se ainda sobrar dado depois do
-    // teto, agenda a continuação num próximo ciclo do event loop em vez de
-    // continuar synchronous — a UI permanece responsiva mesmo sob um
-    // fluxo constante de saída.
+    // Um filho muito tagarela (ex.: `bash` aninhado sob PTY, trocando consultas de terminal em alta frequência) manteria
+    // este laço não-bloqueante sempre com dado novo, sem devolver o controle ao event loop e travando a janela. O limite
+    // de iterações por invocação agenda a continuação para o próximo ciclo.
     constexpr int kMaxReadIterations = 64; // até 256 KiB por invocação (64 * 4096)
     char buffer[4096];
     QByteArray chunk;
@@ -514,9 +794,7 @@ void ProcessRunner::handlePtyReadyRead()
     }
 
     if (!chunk.isEmpty()) {
-        // O PTY mescla stdout+stderr num único fluxo (como um terminal
-        // real); emitimos como saída normal. O AnsiTextParser da UI lida
-        // com sequências ANSI e \r que o PTY insere.
+        // O PTY mescla stdout+stderr num fluxo (como um terminal); o AnsiTextParser da UI trata os ANSI e \r.
         emit outputReady(decodeOut(chunk), false);
     }
 
@@ -524,16 +802,8 @@ void ProcessRunner::handlePtyReadyRead()
     if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
         int status = 0;
         const pid_t w = ::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, WNOHANG);
-        // CRÍTICO (freeze relatado: `read -p` travava o app inteiro): SÓ
-        // finaliza se o filho REALMENTE saiu (WNOHANG devolveu o pid). Um
-        // ::waitpid(..., 0) BLOQUEANTE aqui rodava na THREAD DA GUI e travava
-        // tudo — o PTY de um bash interativo pode devolver read()<0 com um
-        // errno transitório (ex: EIO enquanto o slave espera input) que NÃO é
-        // EOF de verdade; nesse caso o filho (`read`) segue vivo esperando
-        // stdin e o wait bloqueante nunca retornava (deadlock: main thread em
-        // do_wait, confirmado via /proc/PID/wchan). Se o filho ainda está
-        // vivo, isto NÃO é término: apenas retorna e espera o próximo evento
-        // do QSocketNotifier (ou o EOF real).
+        // Só finaliza se o filho realmente saiu (WNOHANG): um read()<0 transitório (EIO enquanto o slave espera input) não
+        // é EOF, e um waitpid bloqueante aqui travava a thread da GUI. Vivo: espera o próximo evento.
         if (w != static_cast<pid_t>(m_ptyChildPid)) {
             return;
         }
@@ -551,6 +821,7 @@ void ProcessRunner::handlePtyReadyRead()
         ProcessResult result;
         result.exitCode = exitCode;
         result.crashed = crashed;
+        result.stoppedByRequest = m_stopRequested;
         if (crashed) {
             result.errorMessage = m_stopRequested
                 ? utils::tr(QStringLiteral("process_runner.error.stopped_by_user"))
@@ -587,9 +858,7 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     Q_UNUSED(env);
     return false;
 #else
-    // CreatePseudoConsole existe a partir do Windows 10 1809. Resolve
-    // dinamicamente para não falhar o link em toolchains antigas e para
-    // detectar em runtime a indisponibilidade (fallback para cmd /c).
+    // CreatePseudoConsole existe desde o Windows 10 1809: resolvida em runtime (toolchains antigas; fallback cmd /c).
     using CreatePseudoConsoleFn = HRESULT (WINAPI *)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
     using ClosePseudoConsoleFn = void (WINAPI *)(HPCON);
     HMODULE kernel = ::GetModuleHandleW(L"kernel32.dll");
@@ -607,7 +876,6 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
         return false;
     }
 
-    // Dois pipes: um leva stdin PARA o ConPTY; outro traz a saída DELE.
     HANDLE inRead = nullptr, inWrite = nullptr;
     HANDLE outRead = nullptr, outWrite = nullptr;
     if (!::CreatePipe(&inRead, &inWrite, nullptr, 0) ||
@@ -617,7 +885,9 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     }
 
     HPCON hPC = nullptr;
-    const COORD size{120, 30};
+    // Largura generosa de propósito: com 120 colunas, linhas de log longas disparam a ambiguidade de "deferred autowrap"
+    // do ConPTY (caractere duplicado no meio de palavras). A saída é capturada por nós, não um terminal redimensionável.
+    const COORD size{500, 30};
     HRESULT hr = createPC(size, inRead, outWrite, 0, &hPC);
     // As pontas que pertencem ao ConPTY já foram duplicadas por ele.
     ::CloseHandle(inRead);
@@ -630,10 +900,15 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
         return false;
     }
 
-    // STARTUPINFOEX com o atributo do pseudoconsole.
     STARTUPINFOEXW si;
     ZeroMemory(&si, sizeof(si));
     si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+    // Handles padrão NULOS de propósito: sem STARTF_USESTDHANDLES o filho herda stdin/stdout do Kai quando redirecionados
+    // (kai.exe chamado do WSL, pipes da interop), escreve direto no terminal de quem chamou e o ConPTY só devolve o preâmbulo.
+    si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput = nullptr;
+    si.StartupInfo.hStdOutput = nullptr;
+    si.StartupInfo.hStdError = nullptr;
     SIZE_T attrSize = 0;
     ::InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
     std::vector<char> attrBuf(attrSize);
@@ -648,24 +923,17 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
         return false;
     }
 
-    // Executa via cmd.exe /c (mesmo shell do caminho fallback), agora sob
-    // o pseudoconsole. Ambiente: bloco de environment do processo + extras.
-    // "chcp 65001" MUDA A CODEPAGE ATIVA da própria sessão de console pra
-    // UTF-8 antes de rodar o comando de verdade — sem isto, a sessão nasce
-    // na codepage OEM/ANSI legada do sistema (ex: 850/1252), e um processo
-    // que emite acentos (PowerShell, cmd com `dir`, etc.) escreve bytes
-    // nessa codepage legada; como o parser do terminal interativo assume
-    // UTF-8 (vterm_set_utf8), esses bytes viram lixo visual (bug relatado,
-    // com screenshot: "Diretório" virava "Diret♦rio"). ">nul" descarta a
-    // própria mensagem de confirmação do chcp, que senão apareceria antes
-    // da saída real do comando.
-    QString cmdLine = QStringLiteral("cmd.exe /c chcp 65001 >nul & ") + command;
+    // cmd.exe /c sob o pseudoconsole. "chcp 65001" põe a sessão em UTF-8 antes do comando: na codepage OEM/ANSI legada
+    // (850/1252) acentos viram lixo no terminal, que assume UTF-8 (vterm_set_utf8); ">nul" descarta a confirmação.
+    // workingDir vazio herdaria o cwd do kai.exe, possivelmente o UNC do WSL: resolvido em planWindowsLaunchDirs.
+    const WindowsLaunchDirs launchDirs = planWindowsLaunchDirs(
+        workingDir, QDir::currentPath(), m_commandHandlesWorkingDir, safeNonUncStartDir());
+    QString cmdLine = QStringLiteral("cmd.exe /c chcp 65001 >nul & ")
+        + wrapCommandForWorkingDir(command, launchDirs.pushdDir);
     std::wstring wcmd = cmdLine.toStdWString();
     std::vector<wchar_t> mutableCmd(wcmd.begin(), wcmd.end());
     mutableCmd.push_back(L'\0');
 
-    // Bloco de ambiente (UTF-16, duplo-nul ao fim). Começa do ambiente do
-    // processo e aplica os overrides resolvidos.
     QProcessEnvironment pe = QProcessEnvironment::systemEnvironment();
     for (auto it = env.constBegin(); it != env.constEnd(); ++it) {
         pe.insert(it.key(), it.value());
@@ -677,15 +945,19 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     }
     envBlock.push_back(L'\0');
 
-    std::wstring wcwd = workingDir.toStdWString();
+    // UNC nunca vira lpCurrentDirectory (ver wrapCommandForWorkingDir) e nullptr também não é seguro: o filho herdaria o
+    // cwd do kai.exe (o UNC, via interop do WSL) e o cmd.exe avisaria antes do pushd rodar. Por isso um diretório seguro.
+    const std::wstring wcwd = launchDirs.nativeCwd.toStdWString();
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
+    // CREATE_SUSPENDED: o Job Object é criado e o processo atribuído a ele ANTES do ResumeThread, sem janela em que o
+    // processo (ou filhos rápidos) esteja fora do job.
     const BOOL ok = ::CreateProcessW(
         nullptr, mutableCmd.data(), nullptr, nullptr, FALSE,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
         envBlock.data(),
-        workingDir.isEmpty() ? nullptr : wcwd.c_str(),
+        wcwd.empty() ? nullptr : wcwd.c_str(),
         &si.StartupInfo, &pi);
 
     ::DeleteProcThreadAttributeList(si.lpAttributeList);
@@ -705,6 +977,16 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     m_conProcess = pi.hProcess;
     m_conThread = pi.hThread;
 
+    // Job Object antes de liberar a thread (ver CREATE_SUSPENDED e m_jobHandle no header). Se falhar (raro),
+    // terminateProcessTree() cai para o taskkill e o processo segue normalmente.
+    m_jobHandle = createJobForProcess(pi.hProcess);
+    if (!m_jobHandle) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Job Object não pôde ser criado/atribuído (err=%1); fallback taskkill no encerramento.")
+                .arg(::GetLastError()));
+    }
+    ::ResumeThread(pi.hThread);
+
     utils::Logger::info(kLogTag,
         QStringLiteral("Comando iniciado sob ConPTY (pid=%1): %2").arg((qulonglong)pi.dwProcessId).arg(command));
 
@@ -715,15 +997,9 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     m_conReader = QThread::create([this, outReadH, procH]() {
         char buffer[4096];
         DWORD read = 0;
-        // Leitura NÃO-BLOQUEANTE (rede de segurança — bug real: ReadFile
-        // bloqueante travava pra sempre quando o pipe ficava aberto após o
-        // processo sair, ex: bridge wsl.exe; a thread virava zumbi e o
-        // próximo comando travava o app). Estratégia: PeekNamedPipe pra ver
-        // se há bytes; se houver, lê; senão, checa se o processo já saiu.
-        // Quando o processo saiu E não há mais dados bufferizados, encerra.
-        // Um contador de "esvaziamentos após a saída" evita loop infinito
-        // mesmo se o pipe nunca fechar (dá um número fixo de tentativas de
-        // drenagem e então desiste).
+        // Leitura NÃO-bloqueante: um ReadFile bloqueante travava para sempre quando o pipe ficava aberto após o processo
+        // sair (ex.: bridge wsl.exe). PeekNamedPipe vê se há bytes; sem dados, checa se o processo saiu; depois da saída,
+        // poucas passadas extras drenam o buffer e a thread desiste, mesmo se o pipe nunca fechar.
         int drainsAfterExit = 0;
         for (;;) {
             if (m_conReaderAbort.load(std::memory_order_relaxed)) {
@@ -734,10 +1010,8 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
             if (peekOk && avail > 0) {
                 const DWORD toRead = avail > sizeof(buffer) ? sizeof(buffer) : avail;
                 if (::ReadFile(outReadH, buffer, toRead, &read, nullptr) && read > 0) {
-                    // Passa os BYTES para a thread do objeto e decodifica lá
-                    // com o decoder INCREMENTAL: decodificar por chunk na
-                    // thread leitora cortava caractere multi-byte na fronteira
-                    // do buffer (mojibake em acentos/emoji).
+                    // Os bytes vão para a thread do objeto, decodificados pelo decoder incremental (por chunk aqui
+                    // cortaria caracteres multi-byte na fronteira do buffer).
                     const QByteArray chunk(buffer, static_cast<int>(read));
                     QMetaObject::invokeMethod(this, [this, chunk]() {
                         emit outputReady(decodeOut(chunk), false);
@@ -748,17 +1022,14 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
             if (!peekOk) {
                 break; // pipe realmente fechado/quebrado
             }
-            // Sem dados agora: o processo já terminou?
             const bool exited =
                 (::WaitForSingleObject(procH, 0) == WAIT_OBJECT_0);
             if (exited) {
-                // Dá algumas passadas extras pra drenar o que ficou no
-                // buffer após a saída; depois encerra sem travar.
                 if (++drainsAfterExit > 5) {
                     break;
                 }
             }
-            ::Sleep(20); // cede CPU; não-bloqueante
+            ::Sleep(20);
         }
         DWORD code = 0;
         ::GetExitCodeProcess(procH, &code);
@@ -767,6 +1038,7 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
             ProcessResult result;
             result.exitCode = exitCode;
             result.crashed = (exitCode != 0 && m_stopRequested);
+            result.stoppedByRequest = m_stopRequested;
             if (m_stopRequested) {
                 result.errorMessage = utils::tr(QStringLiteral("process_runner.error.stopped_by_user"));
             }
@@ -809,6 +1081,8 @@ void ProcessRunner::cleanupConPty()
     if (m_conOutRead) { ::CloseHandle(m_conOutRead); m_conOutRead = nullptr; }
     if (m_conProcess) { ::CloseHandle(m_conProcess); m_conProcess = nullptr; }
     if (m_conThread)  { ::CloseHandle(m_conThread);  m_conThread = nullptr; }
+    // Saída espontânea (sem terminateProcessTree, que já fecharia o job): fecha aqui para não vazar o handle.
+    if (m_jobHandle)  { ::CloseHandle(static_cast<HANDLE>(m_jobHandle)); m_jobHandle = nullptr; }
 #endif
 }
 
@@ -819,27 +1093,45 @@ void ProcessRunner::stop()
     }
 
     m_stopRequested = true;
-    // Mata primeiro o lado REMOTO (WSL): o taskkill local não alcança os
-    // processos Linux (não são filhos Windows) — sem isto ficam fantasmas.
+#if defined(Q_OS_WIN)
+    if (m_conProcess) {
+        // Parar = o que o Ctrl+C faria, e só depois escalar (igual ao Unix). Matar a árvore de cara não dava ao
+        // binário/`docker compose` a chance de limpar: o lado WSL levava TERM+KILL em 1s e o remoto ficava rodando.
+        // O ConPTY transforma o ^C no CTRL_C_EVENT do console e o wsl.exe o entrega ao tty do Linux (SIGINT).
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Solicitando encerramento gracioso (Ctrl+C) via ConPTY; árvore morta em %1ms se continuar viva.")
+                .arg(m_killTimeoutMs));
+        writeRaw(QStringLiteral("\x03"));
+        QTimer::singleShot(m_killTimeoutMs, this, [this]() {
+            if (!isRunning()) {
+                return;
+            }
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Processo ainda vivo após o tempo de graça; encerrando a árvore."));
+            // O kill do lado WSL acha o processo remoto descendo a árvore por PPID: se o Windows matar o wsl.exe no
+            // mesmo instante, o remoto é reparentado ao init e escapa (ficava rodando). Remoto primeiro, janela
+            // para o TERM/KILL dele agir, só então a árvore local.
+            const bool hasRemote = !m_remoteKillCommandLine.trimmed().isEmpty();
+            fireRemoteKill();
+            if (!hasRemote) {
+                forceStop();
+                return;
+            }
+            constexpr int kRemoteKillSettleMs = 1500;
+            QTimer::singleShot(kRemoteKillSettleMs, this, [this]() { forceStop(); });
+        });
+        return;
+    }
+#endif
+    // Lado REMOTO (WSL) primeiro: o taskkill local não alcança processos Linux.
     fireRemoteKill();
     const qint64 pid = processId();
 #if defined(Q_OS_WIN)
-    // Encerra a ÁRVORE inteira (taskkill /T /F): mata cmd.exe + wsl.exe +
-    // filhos no WSL (bug: matar só o processo direto deixava a árvore viva
-    // e o "encerrar" não surtia efeito). Vale para ConPTY e QProcess.
-    if (m_conProcess) {
-        const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
-        utils::Logger::info(kLogTag,
-            QStringLiteral("Encerrando árvore de processos (ConPTY, pid=%1) via taskkill /T /F.").arg(conPid));
-        killProcessTree(conPid);
-        ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1); // reforço
-        Q_UNUSED(pid);
-        return;
-    }
+    // taskkill /T /F via Job Object: a árvore inteira (cmd.exe + wsl.exe + filhos). Sem ConPTY não há como mandar Ctrl+C.
     utils::Logger::info(kLogTag,
-        QStringLiteral("Encerrando árvore de processos (pid=%1) via taskkill /T /F.").arg(pid));
-    killProcessTree(pid);
-    // Reforço via QProcess caso o taskkill não pegue (ex: pid inválido).
+        QStringLiteral("Encerrando árvore de processos (pid=%1) via Job Object.").arg(pid));
+    terminateProcessTree(pid);
+    // Reforço via QProcess caso o encerramento da árvore não pegue.
     QTimer::singleShot(m_killTimeoutMs, this, [this]() {
         if (isRunning()) {
             utils::Logger::warning(kLogTag,
@@ -848,17 +1140,70 @@ void ProcessRunner::stop()
         }
     });
 #else
-    utils::Logger::info(kLogTag, QStringLiteral("Solicitando encerramento gracioso (SIGTERM) ao grupo de processos."));
-    killProcessGroup(pid, SIGTERM);
+    if (pid <= 0) {
+        return;
+    }
+    // Parar = o que o Ctrl+C faria, e só depois escalar (SIGTERM direto no grupo do shell não alcançava o comando em
+    // primeiro plano: o bash -i o ignora e o PTY ficava aberto). 1) Ctrl+C (^C sob PTY; SIGINT ao grupo sem PTY);
+    // 2) metade do tempo de graça: SIGTERM em toda a sessão; 3) fim dele: SIGKILL. 2 e 3 valem enquanto restar qualquer
+    // processo da sessão, não só o líder.
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Solicitando encerramento gracioso (Ctrl+C -> SIGTERM -> SIGKILL) à sessão de processos."));
+    if (m_ptyMasterFd >= 0) {
+        writeRaw(QStringLiteral("\x03"));
+    } else {
+        killProcessGroup(pid, SIGINT);
+    }
 
-    QTimer::singleShot(m_killTimeoutMs, this, [this, pid]() {
-        if (isRunning()) {
-            utils::Logger::warning(kLogTag,
-                QStringLiteral("Processo não respondeu a SIGTERM em %1ms, forçando SIGKILL ao grupo de processos.")
-                    .arg(m_killTimeoutMs));
-            killProcessGroup(pid, SIGKILL);
-        }
-    });
+    // Fotografia da árvore ANTES de qualquer sinal (os descendentes que mudarem de sessão ou forem reparentados ainda
+    // são achados) e escalada independente deste objeto: se o runner for destruído antes do fim, ela continua.
+    const pid_t sid = static_cast<pid_t>(pid);
+    scheduleReap(sid, processTree(sid), m_killTimeoutMs / 2, m_killTimeoutMs);
+#endif
+}
+
+void ProcessRunner::forceStop()
+{
+    if (!isRunning()) {
+        return;
+    }
+
+    m_stopRequested = true;
+    fireRemoteKill();
+
+#if defined(Q_OS_WIN)
+    if (m_conProcess) {
+        const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Forçando encerramento imediato (ConPTY, pid=%1) via Job Object.").arg(conPid));
+        terminateProcessTree(conPid);
+        ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1);
+        return;
+    }
+    const qint64 pid = processId();
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Forçando encerramento imediato (pid=%1) via Job Object.").arg(pid));
+    terminateProcessTree(pid);
+    if (isRunning()) {
+        m_process->kill();
+    }
+#else
+    if (m_ptyMasterFd >= 0 && m_ptyChildPid > 0) {
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Forçando encerramento imediato (SIGKILL) do grupo de processos (PTY)."));
+        killSession(static_cast<pid_t>(m_ptyChildPid), SIGKILL);
+        int status = 0;
+        ::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, 0);
+        cleanupPty();
+        return;
+    }
+    const qint64 pid = processId();
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Forçando encerramento imediato (SIGKILL) da sessão de processos."));
+    killSession(static_cast<pid_t>(pid), SIGKILL);
+    if (isRunning()) {
+        m_process->waitForFinished(500);
+    }
 #endif
 }
 
@@ -910,16 +1255,10 @@ void ProcessRunner::writeRaw(const QString &payload)
     }
 
 #if defined(Q_OS_WIN)
-    // Modo ConPTY: escreve no pipe de input do pseudoconsole (o processo
-    // lê como se viesse do teclado do terminal). O ConPTY ecoa de volta.
-    // CRASH-SAFE (bug reportado: 2º input após o processo encerrar
-    // crashava): revalida que o processo AINDA está vivo antes de escrever
-    // e trata a falha do WriteFile (pipe quebrado = filho saiu) encerrando
-    // de forma limpa em vez de escrever num handle inválido.
+    // ConPTY: escreve no pipe de input (o processo lê como teclado). Revalida que o processo ainda vive e trata a falha
+    // do WriteFile (pipe quebrado = filho saiu) em vez de escrever num handle inválido.
     if (m_conInWrite) {
-        // Se o processo já saiu, não escreve (evita WriteFile em pipe cujo
-        // leitor morreu). Também dispara o encerramento caso ainda não
-        // tenha sido detectado (ex: bridge wsl.exe que segura o pipe).
+        // Processo já saiu: não escreve (evita WriteFile em pipe cujo leitor morreu).
         if (m_conProcess &&
             ::WaitForSingleObject(static_cast<HANDLE>(m_conProcess), 0) != WAIT_TIMEOUT) {
             utils::Logger::warning(kLogTag,
@@ -942,9 +1281,7 @@ void ProcessRunner::writeRaw(const QString &payload)
 #endif
 
 #if !defined(Q_OS_WIN)
-    // Modo PTY: escreve no fd mestre (o filho lê como se viesse do
-    // teclado do terminal). O PTY ecoa a entrada de volta na saída
-    // automaticamente (comportamento de terminal real).
+    // PTY: escreve no fd mestre; o PTY ecoa a entrada na saída, como um terminal real.
     if (m_ptyMasterFd >= 0) {
         const QByteArray bytes = payload.toUtf8();
         const ssize_t written = ::write(m_ptyMasterFd, bytes.constData(), bytes.size());
@@ -1002,9 +1339,7 @@ void ProcessRunner::resizePty(int rows, int cols)
 #if defined(Q_OS_WIN)
     if (m_hPC) {
         const COORD size{static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
-        // Resolve ResizePseudoConsole em runtime (kernel32), igual a
-        // Create/Close: o MinGW do cross-build não expõe o símbolo no link
-        // (erro "not declared"), mas a função existe no Windows 10+.
+        // ResizePseudoConsole é resolvida em runtime: o MinGW do cross-build não expõe o símbolo no link.
         using ResizePseudoConsoleFn = HRESULT (WINAPI *)(HPCON, COORD);
         HMODULE kernel = ::GetModuleHandleW(L"kernel32.dll");
         auto resizePC = kernel
@@ -1019,10 +1354,7 @@ void ProcessRunner::resizePty(int rows, int cols)
         ws.ws_row = static_cast<unsigned short>(rows);
         ws.ws_col = static_cast<unsigned short>(cols);
         ::ioctl(m_ptyMasterFd, TIOCSWINSZ, &ws);
-        // TIOCSWINSZ não manda SIGWINCH sozinho pro processo em foreground
-        // do grupo — o kernel faz isso automaticamente quando o tamanho
-        // muda via esse ioctl no lado mestre (comportamento padrão de
-        // terminal real, nenhum passo extra necessário aqui).
+        // O kernel envia o SIGWINCH ao grupo em primeiro plano sozinho.
     }
 #endif
 }
@@ -1044,7 +1376,15 @@ void ProcessRunner::handleFinished(int exitCode, QProcess::ExitStatus exitStatus
     ProcessResult result;
     result.exitCode = exitCode;
     result.crashed = (exitStatus == QProcess::CrashExit);
+#if !defined(Q_OS_WIN)
+    // Morto por sinal: o Qt entrega o NÚMERO do sinal; convenção de shell é
+    // 128 + sinal (Ctrl+C = 130) — o mesmo que o caminho PTY já devolve.
+    if (result.crashed && exitCode > 0 && exitCode < 128) {
+        result.exitCode = 128 + exitCode;
+    }
+#endif
 
+    result.stoppedByRequest = m_stopRequested;
     if (result.crashed) {
         result.errorMessage = m_stopRequested
             ? utils::tr(QStringLiteral("process_runner.error.stopped_by_user"))
@@ -1054,12 +1394,12 @@ void ProcessRunner::handleFinished(int exitCode, QProcess::ExitStatus exitStatus
     utils::Logger::info(kLogTag,
         QStringLiteral("Processo finalizado. exitCode=%1 crashed=%2").arg(exitCode).arg(result.crashed));
 
-    // Drena qualquer saída remanescente nos buffers ANTES de emitir
-    // finished. Bug real corrigido (descoberto por teste, T9): quando um
-    // processo termina rápido, o último chunk de stdout/stderr pode ainda
-    // não ter disparado readyRead — sem drenar aqui, esse output se perde
-    // (ex: o dump de `env` da captura de ambiente chegava vazio, e
-    // qualquer comando curto poderia perder suas últimas linhas).
+#if defined(Q_OS_WIN)
+    // Saída espontânea do cmd.exe: fecha o job aqui para não vazar o handle (cleanupConPty e terminateProcessTree cobrem os outros caminhos).
+    if (m_jobHandle) { ::CloseHandle(static_cast<HANDLE>(m_jobHandle)); m_jobHandle = nullptr; }
+#endif
+
+    // Drena a saída remanescente ANTES de emitir finished: processos rápidos terminam antes do último readyRead e perderiam as últimas linhas.
     const QByteArray tailOut = m_process->readAllStandardOutput();
     if (!tailOut.isEmpty()) {
         emit outputReady(decodeOut(tailOut), false);

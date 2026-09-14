@@ -1,0 +1,406 @@
+#include "ui/features/settings/settings-dialog.h"
+#include "ui/features/settings/tabs/general-tab.h"
+#include "ui/features/settings/tabs/appearance-tab.h"
+#include "ui/features/settings/tabs/layout-tab.h"
+#include "ui/features/settings/tabs/shortcuts-tab.h"
+#include "ui/features/settings/tabs/terminals-tab.h"
+#include "ui/features/settings/tabs/actions-tab.h"
+#include "ui/features/settings/tabs/kip-tab.h"
+#include "ui/features/settings/tabs/ai-tab.h"
+#include "core/ai-conversation.h"
+#include "ui/features/settings/tabs/notifications-tab.h"
+#include "ui/shared/dialog-utils.h"
+#include "ui/shared/shortcut-capture-field.h"
+#include "ui/shared/shortcuts-manager-widget.h"
+#include "ui/shared/storage-manager-widget.h"
+#include "ui/features/output/terminal-profiles-editor-widget.h"
+#include "utils/translation-manager.h"
+
+#include <QListWidget>
+#include <QStackedWidget>
+#include <QHBoxLayout>
+#include "ui/shared/lucide-icons.h"
+#include "utils/design-tokens.h"
+#include <QVBoxLayout>
+#include <QSize>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QSlider>
+#include <QSpinBox>
+#include <QCheckBox>
+#include <QScrollArea>
+#include <QDialogButtonBox>
+#include <QColor>
+#include <QFileDialog>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QMessageBox>
+#include "ui/shared/file-dialogs.h"
+
+namespace kai::ui {
+
+SettingsDialog::SettingsDialog(const core::SettingsData &currentSettings,
+                                const QStringList &availableThemeNames,
+                                const QString &themesDirPath,
+                                core::CommandsData &commandsData,
+                                QVector<core::Collection> &collections,
+                                std::function<void()> persistCommands,
+                                std::function<void()> persistCollections,
+                                QVector<core::Note> *notes,
+                                std::function<void()> persistNotes,
+                                QWidget *parent)
+    : QDialog(parent)
+    , m_themesDirPath(themesDirPath)
+{
+    setWindowTitle(utils::tr(QStringLiteral("settings.title")));
+    setSizeGripEnabled(true);
+
+    resize(920, 750);
+    setMinimumSize(480, 400);
+    m_originalSettings = currentSettings;
+    setupUi(currentSettings, availableThemeNames, commandsData, collections,
+            std::move(persistCommands), std::move(persistCollections), notes, std::move(persistNotes));
+    centerOnParent(this);
+}
+
+void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,
+                              core::CommandsData &commandsData, QVector<core::Collection> &collections,
+                              std::function<void()> persistCommands, std::function<void()> persistCollections,
+                              QVector<core::Note> *notes, std::function<void()> persistNotes)
+{
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto *body = new QWidget(this);
+    auto *bodyLayout = new QHBoxLayout(body);
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(0);
+
+    m_navList = new QListWidget(body);
+    m_navList->setObjectName(QStringLiteral("settingsNav"));
+    m_navList->setFrameShape(QFrame::NoFrame);
+    m_navList->setFixedWidth(220);
+    m_navList->setIconSize(QSize(16, 16));
+    m_navList->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    bodyLayout->addWidget(m_navList, 0);
+
+    m_pages = new QStackedWidget(body);
+    bodyLayout->addWidget(m_pages, 1);
+
+    m_generalTab = new GeneralTab(currentSettings);
+    m_appearanceTab = new AppearanceTab(currentSettings, availableThemeNames, currentSettings.activeTheme);
+    connect(m_appearanceTab, &AppearanceTab::importThemeClicked, this, &SettingsDialog::handleImportThemeClicked);
+    m_layoutTab = new LayoutTab(currentSettings);
+    connect(m_layoutTab, &LayoutTab::restoreLayoutRequested, this, &SettingsDialog::restoreLayoutRequested);
+    connect(m_layoutTab, &LayoutTab::gridChangeRequested, this, &SettingsDialog::gridChangeRequested);
+    connect(m_layoutTab, &LayoutTab::zoneSpanRequested, this, &SettingsDialog::zoneSpanRequested);
+    m_shortcutsTab = new ShortcutsTab(currentSettings);
+    m_terminalsTab = new TerminalsTab(currentSettings);
+    m_notificationsTab = new NotificationsTab(currentSettings);
+    m_kipTab = new KipTab(currentSettings.kip);
+    m_actionsTab = new ActionsTab(currentSettings.globalActions, commandsData.commands, commandsData.folders);
+    {
+        core::ConfigManager config;
+        m_originalAi = config.loadAiSettings();
+        const core::AiConversationStore store(config.aiConversationsDirPath());
+        m_aiTab = new AiTab(m_originalAi, int(store.list().size()));
+        // Apagar o histórico é uma ação imediata (como limpar as respostas lembradas do KIP).
+        connect(m_aiTab, &AiTab::clearConversationsRequested, this, [this]() {
+            core::AiConversationStore s(core::ConfigManager().aiConversationsDirPath());
+            s.clearAll();
+            m_aiTab->showClearedCount(0);
+        });
+    }
+    // Esquecer as respostas lembradas é imediato (como na aba Armazenamento): mexe nos comandos vivos e persiste, sem esperar o OK.
+    connect(m_kipTab, &KipTab::clearRememberedRequested, this, [this, &commandsData, persistCommands]() {
+        int cleared = 0;
+        for (core::Command &command : commandsData.commands) {
+            if (!command.kipLastValues.isEmpty()) {
+                command.kipLastValues = QJsonObject();
+                ++cleared;
+            }
+        }
+        if (cleared > 0 && persistCommands) {
+            persistCommands();
+        }
+        m_kipTab->showClearedCount(cleared);
+    });
+
+    const QColor navIconColor(utils::tokens::mutedFg());
+    struct PageDef { QString title; QString icon; QWidget *page; };
+
+    const QVector<PageDef> defs = {
+        {utils::tr(QStringLiteral("settings.group.general")), QStringLiteral("settings"),
+         wrapPage(m_generalTab)},
+        {utils::tr(QStringLiteral("settings.group.appearance")), QStringLiteral("palette"),
+         wrapPage(m_appearanceTab)},
+        {utils::tr(QStringLiteral("settings.group.layout")), QStringLiteral("layout-grid"),
+         wrapPage(m_layoutTab)},
+        {utils::tr(QStringLiteral("settings.group.shortcuts")), QStringLiteral("keyboard"),
+         m_shortcutsTab}, // sem wrapPage: a própria tabela já rola internamente
+        {utils::tr(QStringLiteral("settings.group.terminals")), QStringLiteral("terminal"),
+         wrapPage(m_terminalsTab)},
+        {utils::tr(QStringLiteral("settings.group.actions")), QStringLiteral("zap"),
+         wrapPage(m_actionsTab)},
+        {utils::tr(QStringLiteral("settings.group.storage")), QStringLiteral("database"),
+         buildStoragePage(commandsData, collections, std::move(persistCommands), std::move(persistCollections),
+                          notes, std::move(persistNotes))},
+        {utils::tr(QStringLiteral("settings.group.notifications")), QStringLiteral("bell"),
+         wrapPage(m_notificationsTab)},
+        {utils::tr(QStringLiteral("settings.group.kip")), QStringLiteral("wand-sparkles"),
+         wrapPage(m_kipTab)},
+        {utils::tr(QStringLiteral("settings.group.ai")), QStringLiteral("sparkles"),
+         wrapPage(m_aiTab)},
+    };
+
+    for (const PageDef &d : defs) {
+        auto *item = new QListWidgetItem(LucideIcons::icon(d.icon, navIconColor, 16), d.title, m_navList);
+        item->setSizeHint(QSize(0, 36));
+        m_pages->addWidget(d.page);
+    }
+    connect(m_navList, &QListWidget::currentRowChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    m_navList->setCurrentRow(0);
+
+    outerLayout->addWidget(body, 1);
+
+    auto *buttonContainer = new QWidget(this);
+    auto *buttonLayout = new QVBoxLayout(buttonContainer);
+    buttonLayout->setContentsMargins(16, 8, 16, 12);
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, buttonContainer);
+    stripDialogButtonIcons(buttonBox);
+    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    buttonLayout->addWidget(buttonBox);
+    outerLayout->addWidget(buttonContainer);
+}
+
+QWidget *SettingsDialog::wrapPage(QWidget *inner) const
+{
+    auto *scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setWidget(inner);
+    return scroll;
+}
+
+void SettingsDialog::refreshThemeList()
+{
+    QComboBox *themeField = m_appearanceTab ? m_appearanceTab->themeField() : nullptr;
+    if (!themeField) {
+        return;
+    }
+    const QString previousSelection = themeField->currentText();
+    themeField->clear();
+
+    QStringList names;
+    const QDir dir(m_themesDirPath);
+    for (const QFileInfo &info : dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
+        names << info.baseName();
+    }
+    if (names.isEmpty()) {
+        names << QStringLiteral("dracula");
+    }
+    themeField->addItems(names);
+
+    const int idx = themeField->findText(previousSelection);
+    if (idx >= 0) {
+        themeField->setCurrentIndex(idx);
+    }
+}
+
+QString SettingsDialog::importThemeFromPath(const QString &sourcePath, bool overwriteExisting)
+{
+    if (sourcePath.isEmpty() || !QFile::exists(sourcePath) || m_themesDirPath.isEmpty()) {
+        return QString();
+    }
+
+    QDir().mkpath(m_themesDirPath);
+    const QString baseName = QFileInfo(sourcePath).fileName();
+    const QString destPath = QDir(m_themesDirPath).filePath(baseName);
+
+    QComboBox *themeField = m_appearanceTab ? m_appearanceTab->themeField() : nullptr;
+
+    if (QDir::cleanPath(sourcePath) == QDir::cleanPath(destPath)) {
+        refreshThemeList();
+        const QString themeName = QFileInfo(destPath).baseName();
+        const int idx = themeField ? themeField->findText(themeName) : -1;
+        if (idx >= 0) {
+            themeField->setCurrentIndex(idx);
+        }
+        return themeName;
+    }
+
+    if (QFile::exists(destPath)) {
+        if (!overwriteExisting) {
+            return QString();
+        }
+        QFile::remove(destPath);
+    }
+
+    if (!QFile::copy(sourcePath, destPath)) {
+        return QString();
+    }
+
+    refreshThemeList();
+    const QString themeName = QFileInfo(destPath).baseName();
+    const int idx = themeField ? themeField->findText(themeName) : -1;
+    if (idx >= 0) {
+        themeField->setCurrentIndex(idx);
+    }
+    return themeName;
+}
+
+void SettingsDialog::handleImportThemeClicked()
+{
+    const QString sourcePath = pickOpenFile(this,
+        utils::tr(QStringLiteral("settings.theme.import.dialog_title")),
+        utils::tr(QStringLiteral("settings.theme.import.filter")));
+    if (sourcePath.isEmpty()) {
+        return;
+    }
+
+    const QString destPath = QDir(m_themesDirPath).filePath(QFileInfo(sourcePath).fileName());
+    bool overwrite = true;
+    if (QFile::exists(destPath) && QDir::cleanPath(sourcePath) != QDir::cleanPath(destPath)) {
+        overwrite = confirmYesNo(this,
+            utils::tr(QStringLiteral("settings.theme.import.overwrite.title")),
+            utils::tr(QStringLiteral("settings.theme.import.overwrite.body")).arg(QFileInfo(destPath).fileName()));
+        if (!overwrite) {
+            return;
+        }
+    }
+
+    const QString imported = importThemeFromPath(sourcePath, overwrite);
+    if (imported.isEmpty()) {
+        QMessageBox::warning(this,
+            utils::tr(QStringLiteral("settings.theme.import.failed.title")),
+            utils::tr(QStringLiteral("settings.theme.import.failed.body")));
+    }
+}
+
+QWidget *SettingsDialog::buildStoragePage(core::CommandsData &commandsData, QVector<core::Collection> &collections,
+                                          std::function<void()> persistCommands,
+                                          std::function<void()> persistCollections,
+                                          QVector<core::Note> *notes,
+                                          std::function<void()> persistNotes)
+{
+    // Sem wrapPage: a lista do StorageManagerWidget já rola sozinha (como a aba Atalhos).
+    m_storageManager = new StorageManagerWidget(commandsData, collections,
+        std::move(persistCommands), std::move(persistCollections), notes, std::move(persistNotes), nullptr);
+    return m_storageManager;
+}
+
+core::AiSettings SettingsDialog::buildAiSettings() const
+{
+    return m_aiTab->settings();
+}
+
+bool SettingsDialog::aiSettingsChanged() const
+{
+    return m_aiTab->settings().toJson(true) != m_originalAi.toJson(true);
+}
+
+void SettingsDialog::accept()
+{
+    m_layoutTab->commitGrid();
+    QDialog::accept();
+}
+
+void SettingsDialog::setLayoutModel(const layout::LayoutModel &model)
+{
+    m_layoutTab->setLayoutModel(model);
+}
+
+core::SettingsData SettingsDialog::buildSettings() const
+{
+    core::SettingsData settings;
+    settings.globalHotkey = m_shortcutsTab->hotkeyField()->keySequenceString();
+    settings.activeTheme = m_appearanceTab->themeField()->currentText().trimmed();
+    settings.uiDensity = m_layoutTab->densityField()->currentData().toString();
+    settings.uiCornerStyle = m_layoutTab->cornerStyleField()->currentData().toInt();
+    settings.treeConnectorStyle = m_layoutTab->treeConnectorStyleField()->currentData().toInt();
+    if (m_layoutTab->commandsBgImageField()) {
+        settings.commandsBackgroundImage = m_layoutTab->commandsBgImageField()->text().trimmed();
+    }
+    if (m_layoutTab->commandsBgOpacityField()) {
+        settings.commandsBackgroundOpacity = m_layoutTab->commandsBgOpacityField()->value();
+    }
+    settings.itemActionsPlacement = m_layoutTab->itemActionsPlacementField()->currentData().toString();
+    settings.displayActionsPlacement = m_layoutTab->displayActionsPlacementField()->currentData().toString();
+    settings.executionActionsPlacement = m_layoutTab->executionActionsPlacementField()->currentData().toString();
+    // A posição da Saída agora vive no layout.json (painéis arrastáveis); o campo antigo só serve de migração.
+    settings.outputPosition = m_originalSettings.outputPosition;
+    settings.outputSplitterSizes = m_originalSettings.outputSplitterSizes;
+    // Os campos/mapa legados de atalhos ficam como estavam (só existem para migrar instalações antigas;
+    // ver ConfigManager::loadSettings); shortcuts é a fonte de verdade.
+    settings.shortcuts = m_shortcutsTab->shortcutsManager()->shortcuts();
+    settings.actionShortcuts = m_originalSettings.actionShortcuts;
+    settings.nextTabShortcut = m_originalSettings.nextTabShortcut;
+    settings.previousTabShortcut = m_originalSettings.previousTabShortcut;
+    settings.editItemShortcut = m_originalSettings.editItemShortcut;
+    settings.deleteItemShortcut = m_originalSettings.deleteItemShortcut;
+    settings.newFolderShortcut = m_originalSettings.newFolderShortcut;
+    settings.newCommandShortcut = m_originalSettings.newCommandShortcut;
+    settings.quitAppShortcut = m_originalSettings.quitAppShortcut;
+    settings.toggleSearchShortcut = m_originalSettings.toggleSearchShortcut;
+    settings.contextMenuShortcut = m_originalSettings.contextMenuShortcut;
+    settings.focusOutputShortcut = m_originalSettings.focusOutputShortcut;
+    settings.toggleEditModeShortcut = m_originalSettings.toggleEditModeShortcut;
+    settings.autoHideOnFocusLoss = m_appearanceTab->autoHideField()->isChecked();
+    settings.startVisible = m_appearanceTab->startVisibleField()->isChecked();
+    settings.windowMode = m_appearanceTab->windowModeField()->currentData().toString();
+    settings.windowWidth = m_appearanceTab->windowWidthField()->value();
+    settings.windowHeight = m_appearanceTab->windowHeightField()->value();
+    settings.fxShadows = m_appearanceTab->fxShadowsField()->isChecked();
+    settings.fxTranslucency = m_appearanceTab->fxTranslucencyField()->isChecked();
+    settings.fxBlur = m_appearanceTab->fxBlurField()->isChecked();
+    settings.fxAnimations = m_appearanceTab->fxAnimationsField()->isChecked();
+    settings.gradientsEnabled = m_appearanceTab->gradientsEnabledField()->isChecked();
+    // Seção removida da UI: preserva os valores existentes.
+    settings.commandCreationMode = m_originalSettings.commandCreationMode;
+    settings.commandEditMode = m_originalSettings.commandEditMode;
+    settings.language = m_generalTab->languageField()->currentData().toString();
+    settings.autostart = m_generalTab->autostartField()->isChecked();
+    settings.smartFocus = m_generalTab->smartFocusField()->isChecked();
+    settings.inlineActions = m_generalTab->inlineActionsField()->isChecked();
+    settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
+    // Campos não editados neste diálogo são preservados do estado original.
+    settings.globalEnvVars = m_originalSettings.globalEnvVars;
+    settings.environments = m_originalSettings.environments;
+    settings.activeEnvironmentId = m_originalSettings.activeEnvironmentId;
+    settings.terminalCollapsed = m_originalSettings.terminalCollapsed;
+    settings.commandsCollapsed = m_originalSettings.commandsCollapsed;
+    // "Mostrar ocultos" é um toggle da barra de Exibição, não deste diálogo.
+    settings.showHiddenCommands = m_originalSettings.showHiddenCommands;
+    // buildSettings() parte de um SettingsData default; as opções de exibição da Saída são editadas no menu do painel
+    // e precisam ser copiadas, senão qualquer salvamento as zeraria. Só outputMaxLogSizeKb é editado aqui.
+    settings.outputLineNumbers = m_originalSettings.outputLineNumbers;
+    settings.outputWrap = m_originalSettings.outputWrap;
+    settings.outputTimestamps = m_originalSettings.outputTimestamps;
+    settings.outputAutoScroll = m_originalSettings.outputAutoScroll;
+    settings.outputCompact = m_originalSettings.outputCompact;
+    settings.outputFontSize = m_originalSettings.outputFontSize;
+    settings.outputMaxLogSizeKb = m_generalTab->outputMaxLogSizeField()->value();
+
+    // Perfis de terminal lidos do editor dedicado.
+    settings.terminalProfiles = m_terminalsTab->terminalProfilesEditor()->targets();
+
+    settings.notificationsEnabled = m_notificationsTab->notificationsEnabledField()->isChecked();
+    settings.notifyOnCommandFailure = m_notificationsTab->notifyCommandFailureField()->isChecked();
+    settings.notifyOnBackgroundProcessCrash = m_notificationsTab->notifyBackgroundCrashField()->isChecked();
+    settings.notifyOnBackgroundProcessSuccess = m_notificationsTab->notifyBackgroundSuccessField()->isChecked();
+    settings.notifyOnConfigRecovered = m_notificationsTab->notifyConfigRecoveredField()->isChecked();
+    settings.notifyOnFirstErrorInFormattedOutput = m_notificationsTab->notifyFirstErrorInFormattedOutputField()->isChecked();
+    settings.notifyEvenWhenFocused = m_notificationsTab->notifyEvenWhenFocusedField()->isChecked();
+    settings.kip = m_kipTab->settings();
+    settings.interpreters = m_generalTab->interpreters();
+    settings.globalActions = m_actionsTab->globalActions();
+
+    return settings;
+}
+
+} // namespace kai::ui

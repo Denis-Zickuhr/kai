@@ -1,22 +1,17 @@
 #include <QTest>
 #include <QToolButton>
 
-#include "ui/icon-picker-widget.h"
-#include "ui/icon-picker-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/shared/icon-picker-widget.h"
+#include "ui/shared/icon-picker-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;
 
-// Reprodução real do crash relatado: "crash ao tentar selecionar um icone
-// pra um comando". Causa raiz identificada: o popup do QComboBox usado
-// anteriormente no IconPickerWidget tem um bug documentado do próprio Qt
-// sob Wayland (QTBUG/PYSIDE-2114) que pode crashar a aplicação ao
-// selecionar um item do dropdown. Corrigido substituindo o QComboBox por
-// um botão que abre um QDialog modal (IconPickerDialog) com os ícones em
-// grade — sem nenhum popup leve envolvido. Este teste cobre o fluxo
-// completo de seleção via IconPickerDialog, embutido nos diálogos reais.
+// Crash ao selecionar ícone de um comando: o popup do QComboBox do IconPickerWidget tem bug do Qt sob
+// Wayland (PYSIDE-2114). Foi trocado por um botão que abre o IconPickerDialog modal; o teste cobre o
+// fluxo completo de seleção via IconPickerDialog nos diálogos reais.
 class TestIconPickerCrash : public QObject {
     Q_OBJECT
 
@@ -25,8 +20,6 @@ private slots:
     {
         for (const QString &iconName : IconPickerWidget::poolIconNames()) {
             IconPickerDialog dialog(QString(), nullptr);
-            // Simula a seleção programaticamente (equivalente ao usuário
-            // clicando/dando duplo-clique em um item da grade).
             dialog.show();
             dialog.close();
             Q_UNUSED(iconName);
@@ -54,9 +47,7 @@ private slots:
         auto *button = picker.findChild<QToolButton *>();
         QVERIFY(button != nullptr);
 
-        // Não abre o diálogo modal de fato (bloquearia o teste), mas
-        // exercita setSelectedIconName/selectedIconName repetidamente,
-        // equivalente ao resultado de aceitar o diálogo várias vezes.
+        // Não abre o diálogo modal (bloquearia); exercita setSelectedIconName/selectedIconName repetidamente.
         for (const QString &iconName : IconPickerWidget::poolIconNames()) {
             picker.setSelectedIconName(iconName);
             QCOMPARE(picker.selectedIconName(), iconName);

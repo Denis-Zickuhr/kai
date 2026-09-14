@@ -5,28 +5,19 @@
 #include <QRegularExpression>
 
 #include "core/models.h"
+#include "core/environment-manager.h"
 
 namespace kai::engine {
 
-// Casa a saída de um processo (em chunks) contra uma lista de
-// OutputResponder e decide QUANDO e O QUE responder no stdin.
-//
-// PROBLEMA QUE RESOLVE: a saída chega em CHUNKS, não em linhas, e prompts
-// interativos ("Continuar? [y/N]") NÃO terminam com '\n'. Casar chunk-a-chunk
-// falharia quando o prompt chega quebrado entre dois chunks. Por isso o
-// matcher mantém um BUFFER ROLANTE por execução: acumula a saída, tenta casar
-// os padrões no buffer, e avança um cursor após cada casamento para não
-// re-disparar no mesmo texto.
-//
-// TRAVAS: teto de buffer (evita vazamento em processo verboso), teto de
-// sanidade anti-loop por regra (mesmo sem limite configurado), e o limite
-// opcional (maxTriggers) por regra.
+// Casa a saída de um processo, em chunks, contra uma lista de OutputResponder e decide quando e o que responder no
+// stdin. Prompts ("Continuar? [y/N]") não terminam em \n e podem chegar quebrados entre chunks: por isso há um buffer
+// rolante por execução e um cursor que avança após cada casamento (sem re-disparar no mesmo texto). Travas: teto do
+// buffer, teto anti-loop por regra e o maxTriggers opcional.
 class OutputResponderMatcher {
 public:
-    // Teto de sanidade: nenhuma regra dispara mais que isto por execução,
-    // mesmo sem limite configurado (evita loop infinito de resposta).
+    // Nenhuma regra dispara mais que kSanityCap por execução (mesmo sem limite configurado).
     static constexpr int kSanityCap = 50;
-    // Teto do buffer rolante (caracteres). Ao exceder, descarta o começo.
+    // Teto do buffer rolante (caracteres); ao exceder, descarta o começo.
     static constexpr int kMaxBuffer = 8192;
 
     struct Reply {
@@ -34,10 +25,11 @@ public:
         int ruleIndex = -1; // índice da regra que casou (para log)
     };
 
-    explicit OutputResponderMatcher(const QVector<core::OutputResponder> &responders);
+    // `envManager` (opcional; nulo = sem interpolação) permite {{VAR}} na resposta, além dos grupos \1..\9.
+    explicit OutputResponderMatcher(const QVector<core::OutputResponder> &responders,
+                                    core::EnvironmentManager *envManager = nullptr);
 
-    // Ingere um chunk de saída e retorna as respostas a enviar (na ordem).
-    // Pode retornar 0, 1 ou várias (se o chunk trouxe vários prompts).
+    // Ingere um chunk e devolve as respostas a enviar, na ordem (0, 1 ou várias).
     QVector<Reply> feed(const QString &chunk);
 
 private:
@@ -52,6 +44,7 @@ private:
                                 const QRegularExpressionMatch &match);
 
     QVector<Rule> m_rules;
+    core::EnvironmentManager *m_envManager = nullptr;
     QString m_buffer;
     int m_scanFrom = 0; // cursor: não recasa antes disto
 };

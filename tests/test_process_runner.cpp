@@ -1,3 +1,5 @@
+#include <QDir>
+#include <QFile>
 #include <QTest>
 #include <QSignalSpy>
 
@@ -5,7 +7,6 @@
 
 using namespace kai::engine;
 
-// Execução de Comando Shell Assíncrono com Log em Tempo Real.
 class TestProcessRunner : public QObject {
     Q_OBJECT
 
@@ -33,7 +34,39 @@ private slots:
         QVERIFY(combinedOutput.contains(QStringLiteral("hello-kai")));
     }
 
-    // Valida injeção de ambiente via QProcessEnvironment.
+    // Quem ignora Ctrl+C/SIGTERM, ou saiu da sessão com setsid, ainda é morto depois do tempo de graça, mesmo que o
+    // runner seja destruído antes.
+    void stopKillsStubbornDescendantsEvenIfRunnerIsDestroyed()
+    {
+#if defined(Q_OS_LINUX)
+        const QString marker = QStringLiteral("kai-stubborn-%1").arg(QTest::currentTestFunction());
+        const auto alive = [&marker]() {
+            for (const QString &entry : QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                QFile cmd(QStringLiteral("/proc/%1/cmdline").arg(entry));
+                if (cmd.open(QIODevice::ReadOnly) && cmd.readAll().contains(marker.toUtf8())) {
+                    QFile stat(QStringLiteral("/proc/%1/stat").arg(entry));
+                    if (stat.open(QIODevice::ReadOnly) && !stat.readAll().contains(") Z")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        {
+            auto *runner = new ProcessRunner;
+            runner->setKillTimeoutMs(600);
+            runner->start(QStringLiteral("setsid bash -c 'trap \"\" INT TERM; exec -a %1 sleep 30' & sleep 30").arg(marker),
+                          QString(), {});
+            QTRY_VERIFY_WITH_TIMEOUT(alive(), 3000);
+            runner->stop();
+            delete runner; // os timers do runner morrem aqui; a escalada tem de continuar sozinha
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!alive(), 5000);
+#else
+        QSKIP("Linux only");
+#endif
+    }
+
     void injectedEnvironmentVariableIsVisibleToProcess()
     {
         ProcessRunner runner;
@@ -52,6 +85,23 @@ private slots:
             combinedOutput += call.at(0).toString();
         }
         QVERIFY(combinedOutput.contains(QStringLiteral("valor-injetado")));
+    }
+
+    // Diretório de trabalho que não existe: o comando roda no diretório atual e a saída não ganha nenhum aviso.
+    void aMissingWorkingDirectoryRunsAnywayWithoutAWarning()
+    {
+        ProcessRunner runner;
+        QSignalSpy outputSpy(&runner, &ProcessRunner::outputReady);
+        QSignalSpy finishedSpy(&runner, &ProcessRunner::finished);
+        runner.start(QStringLiteral("echo still-ran"), QStringLiteral("/nao/existe/mesmo"), {});
+        QVERIFY(finishedSpy.wait(5000));
+        QString combinedOutput;
+        for (const QList<QVariant> &call : outputSpy) {
+            combinedOutput += call.at(0).toString();
+        }
+        QVERIFY(combinedOutput.contains(QStringLiteral("still-ran")));
+        QVERIFY2(!combinedOutput.contains(QStringLiteral("kai:")) && !combinedOutput.contains(QStringLiteral("nao/existe")),
+                 qPrintable(combinedOutput));
     }
 
     void nonZeroExitCodeIsReportedCorrectly()
@@ -86,16 +136,13 @@ private slots:
         QVERIFY(combinedOutput.contains(QStringLiteral("Step 3")));
     }
 
-    // Terminal interativo: writeToStdin deve alimentar o stdin de
-    // um processo em execução, permitindo interação real, não apenas
-    // leitura de output.
+    // writeToStdin alimenta o stdin de um processo em execução (interação real, não só leitura de output).
     void writeToStdinDeliversTextToRunningProcess()
     {
         ProcessRunner runner;
         QSignalSpy outputSpy(&runner, &ProcessRunner::outputReady);
         QSignalSpy finishedSpy(&runner, &ProcessRunner::finished);
 
-        // 'read' shell builtin lê uma linha de stdin e a repete via echo.
         runner.start(QStringLiteral("read line; echo \"Recebido: $line\""), QString(), {});
         QVERIFY(runner.isRunning());
 
@@ -113,14 +160,12 @@ private slots:
     void writeToStdinOnStoppedProcessIsNoOp()
     {
         ProcessRunner runner;
-        // Nunca chamou start(): processo não está rodando.
         runner.writeToStdin(QStringLiteral("nao deveria crashar"));
         QVERIFY(!runner.isRunning());
     }
 
-    // (2) writeRaw envia bytes CRUS sem acrescentar '\n'. Ctrl+D (\x04) sob
-    // PTY sinaliza EOF: um `cat` sem argumento lê stdin até o EOF e então
-    // encerra. Sem o EOF, `cat` ficaria bloqueado para sempre.
+    // writeRaw envia bytes crus sem acrescentar '\n'. Ctrl+D (\x04) sob PTY sinaliza EOF: um `cat` sem argumento lê
+    // até o EOF e encerra; sem ele ficaria bloqueado.
     void ctrlDSendsEofAndEndsCat()
     {
         ProcessRunner runner;
@@ -130,17 +175,14 @@ private slots:
         runner.start(QStringLiteral("cat"), QString(), {});
         QVERIFY(runner.isRunning());
 
-        // Manda uma linha e depois EOF (Ctrl+D).
         runner.writeToStdin(QStringLiteral("linha-de-teste"));
         QTest::qWait(200);
         runner.writeRaw(QStringLiteral("\x04"));
 
-        // cat deve encerrar após o EOF (sem travar).
         QVERIFY2(finishedSpy.wait(5000), "cat não encerrou após Ctrl+D (EOF)");
     }
 
-    // read -p imprime o prompt SÓ quando stdin é um tty. Com PTY ligado, o
-    // prompt aparece na saída (regressão do terminal interativo).
+    // read -p imprime o prompt só quando stdin é um tty: com PTY ligado o prompt aparece na saída.
     void readPromptAppearsUnderPty()
     {
         ProcessRunner runner;
@@ -161,6 +203,63 @@ private slots:
         QVERIFY2(combined.contains(QStringLiteral("Confirma?")),
                  qPrintable(QStringLiteral("o prompt do read não apareceu sob PTY -> [%1]").arg(combined)));
         QVERIFY(combined.contains(QStringLiteral("resp=sim")));
+    }
+
+    // Regressão: `kai <cli_path>` via kai.exe chamado do WSL falhava com "A sintaxe do comando está incorreta.": o cwd
+    // vem do Qt com barras normais ("//wsl.localhost/...") e o cmd.exe rejeita esse formato no pushd, que precisa de
+    // contrabarras.
+    void uncWorkingDirWithForwardSlashesIsPushedWithBackslashes()
+    {
+        const QString wrapped = wrapWindowsCommandForUncWorkingDir(
+            QStringLiteral("docker compose up -d"),
+            QStringLiteral("//wsl.localhost/Ubuntu/home/corin/projects/kai"));
+        QCOMPARE(wrapped,
+                 QStringLiteral("pushd \"\\\\wsl.localhost\\Ubuntu\\home\\corin\\projects\\kai\" "
+                                "&& (docker compose up -d) & popd"));
+    }
+
+    void uncDetectionAcceptsBothSeparators()
+    {
+        QVERIFY(isWindowsUncPath(QStringLiteral("//wsl.localhost/Ubuntu/home")));
+        QVERIFY(isWindowsUncPath(QStringLiteral("\\\\wsl$\\Ubuntu\\home")));
+        QVERIFY(!isWindowsUncPath(QStringLiteral("C:/Users/corin")));
+        QVERIFY(!isWindowsUncPath(QStringLiteral("/home/corin")));
+    }
+
+    // Regressão: `kai -g oi` via WSL com alvo WSL dava pushd no cwd UNC do kai.exe, o wsl.exe nascia em Z:\home\corin e
+    // falhava com "wsl: Failed to translate". Com alvo, o `cd` é do próprio comando.
+    void targetHandlingCwdSkipsPushdAndAvoidsUncBirthDir()
+    {
+        const WindowsLaunchDirs dirs = planWindowsLaunchDirs(
+            QString(), QStringLiteral("//wsl.localhost/Ubuntu/home/corin"), true, QStringLiteral("C:\\Kai"));
+        QCOMPARE(dirs.pushdDir, QString());
+        QCOMPARE(dirs.nativeCwd, QStringLiteral("C:\\Kai"));
+
+        const WindowsLaunchDirs normal = planWindowsLaunchDirs(
+            QString(), QStringLiteral("C:/Users/corin"), true, QStringLiteral("C:\\Kai"));
+        QCOMPARE(normal.pushdDir, QString());
+        QCOMPARE(normal.nativeCwd, QString()); // herda um cwd que já é seguro
+    }
+
+    void localCommandInUncCwdStillUsesPushd()
+    {
+        const WindowsLaunchDirs dirs = planWindowsLaunchDirs(
+            QString(), QStringLiteral("//wsl.localhost/Ubuntu/home/corin"), false, QStringLiteral("C:\\Kai"));
+        QCOMPARE(dirs.pushdDir, QStringLiteral("//wsl.localhost/Ubuntu/home/corin"));
+        QCOMPARE(dirs.nativeCwd, QStringLiteral("C:\\Kai"));
+
+        const WindowsLaunchDirs plain = planWindowsLaunchDirs(
+            QStringLiteral("D:/proj"), QStringLiteral("//wsl.localhost/Ubuntu"), false, QStringLiteral("C:\\Kai"));
+        QCOMPARE(plain.pushdDir, QString());
+        QCOMPARE(plain.nativeCwd, QStringLiteral("D:/proj"));
+    }
+
+    void nonUncWorkingDirLeavesCommandUntouched()
+    {
+        QCOMPARE(wrapWindowsCommandForUncWorkingDir(QStringLiteral("dir"), QStringLiteral("C:/work")),
+                 QStringLiteral("dir"));
+        QCOMPARE(wrapWindowsCommandForUncWorkingDir(QStringLiteral("dir"), QString()),
+                 QStringLiteral("dir"));
     }
 };
 

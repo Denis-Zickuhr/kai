@@ -1,7 +1,7 @@
 #include <QTest>
 #include <QApplication>
 #include <QTableWidget>
-#include <QComboBox>
+#include <QScrollBar>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QPushButton>
@@ -10,7 +10,7 @@
 #include <QTimer>
 #include <algorithm>
 
-#include "ui/storage-manager-widget.h"
+#include "ui/shared/storage-manager-widget.h"
 #include "core/config-manager.h"
 #include "core/models.h"
 
@@ -19,17 +19,14 @@ using namespace kai::core;
 
 namespace {
 
-// Layout de colunas da tabela (ver storage-manager-widget.cpp): checkbox
-// numa coluna própria (0), depois Nome/Tipo/Pasta-Origem/Ações.
+// Colunas da tabela (ver storage-manager-widget.cpp): checkbox na coluna 0, depois Nome/Tipo/Pasta-Origem/Ações.
 constexpr int kCheckCol = 0;
 constexpr int kNameCol = 1;
 constexpr int kLocationCol = 3;
 constexpr int kActionsCol = 4;
 
-// A confirmação de exclusão abre um QMessageBox::question BLOQUEANTE
-// (exec síncrono) — agenda um clique em "Sim" pra rodar assim que o
-// diálogo entrar no próprio loop de eventos, senão o teste travaria
-// esperando um clique que nunca vem.
+// A confirmação de exclusão é um QMessageBox::question bloqueante (exec síncrono): agenda o clique em "Sim" para o
+// loop do próprio diálogo, senão o teste trava.
 void confirmNextMessageBox(QMessageBox::StandardButton button = QMessageBox::Yes)
 {
     QTimer::singleShot(50, [button]() {
@@ -75,16 +72,14 @@ Collection makeCollection(const QString &id, const QString &name, const QString 
 
 QCheckBox *checkboxAt(QTableWidget *table, int row)
 {
-    // cellWidget() é o CONTAINER que centraliza o checkbox (ver
-    // StorageManagerWidget::makeRowCheckbox) — o QCheckBox é filho dele.
+    // cellWidget() é o container que centraliza o checkbox (StorageManagerWidget::makeRowCheckbox); o QCheckBox é filho.
     if (auto *container = table->cellWidget(row, kCheckCol)) {
         return container->findChild<QCheckBox *>();
     }
     return nullptr;
 }
 
-// Marca via checkbox (coluna própria) todas as linhas cujo nome contém
-// `needle`.
+// Marca via checkbox todas as linhas cujo nome contém `needle`.
 void checkRowsContaining(QTableWidget *table, const QString &needle)
 {
     for (int i = 0; i < table->rowCount(); ++i) {
@@ -99,9 +94,14 @@ QTableWidget *tableOf(StorageManagerWidget &widget)
     return widget.findChild<QTableWidget *>();
 }
 
-QComboBox *kindComboOf(StorageManagerWidget &widget)
+// Chips de tipo, na ordem: Todos, Comandos, HTTP, Pastas, Coleções (e Notas, se houver notas).
+enum Kind { All = 0, Commands, Http, Folders, Collections, Notes };
+
+void selectKind(StorageManagerWidget &widget, Kind kind)
 {
-    return widget.findChild<QComboBox *>();
+    const auto chips = widget.findChildren<QPushButton *>(QStringLiteral("storageKindChip"));
+    QVERIFY(kind < chips.size());
+    chips.at(kind)->click();
 }
 
 QLineEdit *filterOf(StorageManagerWidget &widget)
@@ -135,18 +135,38 @@ private slots:
                                                             QStringLiteral("f1"), 3)};
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        QCOMPARE(tableOf(widget)->rowCount(), 2); // default kind = Comandos
-        // Checkbox é um cell widget de verdade, numa coluna própria.
+        QCOMPARE(tableOf(widget)->rowCount(), 4); // default = Todos (1 pasta + 2 comandos + 1 coleção)
+        selectKind(widget, Commands);
+        QCOMPARE(tableOf(widget)->rowCount(), 2);
         QVERIFY(checkboxAt(tableOf(widget), 0));
         QVERIFY(!checkboxAt(tableOf(widget), 0)->isChecked());
 
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
+        selectKind(widget, Folders);
         QCOMPARE(tableOf(widget)->rowCount(), 1);
 
-        kindComboOf(widget)->setCurrentIndex(2); // Coleções
+        selectKind(widget, Collections);
         QCOMPARE(tableOf(widget)->rowCount(), 1);
-        // Coluna "Pasta/Origem" traz a contagem de registros junto.
         QVERIFY(tableOf(widget)->item(0, kLocationCol)->text().contains(QStringLiteral("3")));
+    }
+
+    // Numa janela estreita a coluna Nome ficava com ~30px (Pasta/Origem ocupava tudo) e surgia barra horizontal.
+    void nameColumnStaysReadableInANarrowWidget()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("f1"), QStringLiteral("Kai API Tester"));
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build Release"), QStringLiteral("f1"));
+        QVector<Collection> collections;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {});
+        widget.resize(560, 500);
+        widget.show();
+        QTest::qWait(30);
+        QVERIFY2(tableOf(widget)->columnWidth(kNameCol) >= 120, qPrintable(QString::number(tableOf(widget)->columnWidth(kNameCol))));
+        QVERIFY(!tableOf(widget)->horizontalScrollBar()->isVisible());
+        const auto chips = widget.findChildren<QPushButton *>(QStringLiteral("storageKindChip"));
+        for (auto *chip : chips) {
+            QVERIFY(chip->geometry().right() <= widget.width());
+        }
     }
 
     void filterRestrictsVisibleItems()
@@ -162,11 +182,8 @@ private slots:
         QVERIFY(tableOf(widget)->item(0, kNameCol)->text().contains(QStringLiteral("Deploy Prod")));
     }
 
-    // Bug relatado (print): clicar bem na checkbox não fazia nada, porque
-    // o indicador nativo do item E o clique-na-linha tentavam alternar o
-    // MESMO estado juntos e se cancelavam. Agora a checkbox é um widget
-    // de verdade numa coluna própria — clicar nela (setChecked) é o ÚNICO
-    // caminho que a afeta diretamente, sem conflito.
+    // Regressão: clicar na checkbox não fazia nada, pois o indicador nativo do item e o clique-na-linha alternavam o
+    // mesmo estado e se cancelavam. Agora é um widget numa coluna própria; setChecked é o único caminho.
     void checkboxTogglesIndependentlyAndShowsContextualBar()
     {
         CommandsData data;
@@ -176,7 +193,7 @@ private slots:
         StorageManagerWidget widget(data, collections, [] {}, [] {});
         auto *contextualBar = widget.findChild<QWidget *>(QStringLiteral("storageContextualBar"));
         QVERIFY(contextualBar);
-        QVERIFY(contextualBar->isHidden()); // sem seleção, a barra começa escondida
+        QVERIFY(contextualBar->isHidden());
 
         QCheckBox *checkbox = checkboxAt(tableOf(widget), 0);
         QVERIFY(!checkbox->isChecked());
@@ -235,7 +252,7 @@ private slots:
                                                             QString(), 2)};
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(2); // Coleções
+        selectKind(widget, Collections);
         checkRowsContaining(tableOf(widget), QStringLiteral("Usuarios"));
 
         duplicateButtonOf(widget)->click();
@@ -255,7 +272,7 @@ private slots:
         QVector<Collection> collections;
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
+        selectKind(widget, Folders);
         checkRowsContaining(tableOf(widget), QStringLiteral("Meio"));
 
         confirmNextMessageBox();
@@ -278,8 +295,7 @@ private slots:
         QVector<Collection> collections;
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
-        // Marca "Raiz" e "Meio" (mas NÃO "Folha") pra excluir os dois juntos.
+        selectKind(widget, Folders);
         QTableWidget *table = tableOf(widget);
         for (int i = 0; i < table->rowCount(); ++i) {
             const QString text = table->item(i, kNameCol)->text();
@@ -300,6 +316,81 @@ private slots:
         QCOMPARE(data.commands.first().folderId, QStringLiteral("leaf"));
     }
 
+    void httpRequestsHaveTheirOwnFilter()
+    {
+        CommandsData data;
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build"), QString());
+        Command http = makeCommand(QStringLiteral("h1"), QStringLiteral("Ping"), QString());
+        http.type = CommandType::Http;
+        data.commands << http;
+        QVector<Collection> collections;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {});
+        selectKind(widget, Commands);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Build"));
+        selectKind(widget, Http);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Ping"));
+    }
+
+    void notesHaveAFilterAndCanBeDuplicatedAndDeleted()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("f1"), QStringLiteral("Docs"));
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build"), QStringLiteral("f1"));
+        QVector<Collection> collections;
+        QVector<Note> notes;
+        Note note;
+        note.id = QStringLiteral("n1");
+        note.folderId = QStringLiteral("f1");
+        note.name = QStringLiteral("Ideias");
+        notes << note;
+        int notesPersisted = 0;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {}, &notes, [&] { ++notesPersisted; });
+        QCOMPARE(tableOf(widget)->rowCount(), 3);
+        selectKind(widget, Notes);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Ideias"));
+
+        checkRowsContaining(tableOf(widget), QStringLiteral("Ideias"));
+        duplicateButtonOf(widget)->click();
+        QCOMPARE(notes.size(), 2);
+        QVERIFY(notes.last().id != QStringLiteral("n1"));
+        QVERIFY(notes.last().name.startsWith(QStringLiteral("Ideias ")));
+        QCOMPARE(notes.last().folderId, QStringLiteral("f1"));
+        QCOMPARE(notesPersisted, 1);
+
+        checkRowsContaining(tableOf(widget), QStringLiteral("Ideias"));
+        confirmNextMessageBox();
+        deleteButtonOf(widget)->click();
+        QVERIFY(notes.isEmpty());
+        QCOMPARE(notesPersisted, 2);
+    }
+
+    void deletingAFolderMovesItsNotesUpToo()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("root"), QStringLiteral("Raiz"))
+                      << makeFolder(QStringLiteral("mid"), QStringLiteral("Meio"), QStringLiteral("root"));
+        QVector<Collection> collections;
+        QVector<Note> notes;
+        Note note;
+        note.id = QStringLiteral("n1");
+        note.folderId = QStringLiteral("mid");
+        note.name = QStringLiteral("Ideias");
+        notes << note;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {}, &notes, [] {});
+        selectKind(widget, Folders);
+        checkRowsContaining(tableOf(widget), QStringLiteral("Meio"));
+        confirmNextMessageBox();
+        deleteButtonOf(widget)->click();
+        QCOMPARE(notes.size(), 1);
+        QCOMPARE(notes.first().folderId, QStringLiteral("root"));
+    }
+
     void rowLevelDeleteButtonRemovesJustThatItem()
     {
         CommandsData data;
@@ -315,7 +406,7 @@ private slots:
         QCOMPARE(rowButtons.size(), 2);
 
         confirmNextMessageBox();
-        rowButtons.last()->click(); // segundo botão = excluir
+        rowButtons.last()->click();
 
         QCOMPARE(data.commands.size(), 1);
     }

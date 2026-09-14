@@ -1,0 +1,7 @@
+services:
+  a:
+    image: ubuntu:latest
+    command: sleep infinity
+  b:
+    image: ubuntu:latest
+    command: sleep infinity

@@ -2,22 +2,15 @@
 #include <QListWidget>
 #include <QLineEdit>
 
-#include "ui/hooks-editor-widget.h"
+#include "ui/features/command-editor/hooks-editor-widget.h"
 
 using namespace kai::ui;
 using namespace kai::core;
 
-// Cobre o item "hooks: por padrão só a pasta, pesquisando mostra tudo"
-// (feedback do usuário): setAvailableCommands() alimenta o padrão (busca
-// vazia) e setAllAvailableCommands() alimenta o universo completo, usado só
-// quando o usuário digita algo na busca.
-//
-// O widget tem TRÊS QListWidget internos (pre/post/cleanup), todos filhos
-// diretos do mesmo QStackedWidget — só a fase ATIVA (padrão: pre-hooks) é
-// repopulada pela busca. Como a ordem de QWidget::findChildren() entre eles
-// não é algo que a API pública garanta, os testes checam a condição pelo
-// conjunto das três listas (helper allListTexts), em vez de assumir qual
-// delas o findChild "de primeira" devolve.
+// setAvailableCommands() alimenta o padrão (busca vazia: só a pasta) e setAllAvailableCommands() o
+// universo completo, usado só ao digitar na busca.
+// O widget tem três QListWidget (pre/post/cleanup) no mesmo QStackedWidget e a ordem de findChildren()
+// não é garantida: os testes olham o conjunto das três (allListTexts).
 namespace {
 QStringList allListTexts(HooksEditorWidget &widget)
 {
@@ -52,9 +45,7 @@ private slots:
         widget.setAvailableCommands({sameFolder});
         widget.setAllAvailableCommands({sameFolder, otherFolder});
 
-        // Busca vazia (padrão): as 3 fases foram populadas só com o
-        // candidato da pasta — "Deploy Prod" (de fora) não aparece em
-        // NENHUMA das listas.
+        // Busca vazia: "Deploy Prod" (de fora da pasta) não aparece em nenhuma lista.
         const QStringList texts = allListTexts(widget);
         QVERIFY(texts.contains(QStringLiteral("Local Build")));
         QVERIFY(!texts.contains(QStringLiteral("Deploy Prod")));
@@ -79,7 +70,6 @@ private slots:
 
         auto *search = widget.findChild<QLineEdit *>();
         QVERIFY(search);
-        // Digita algo que só bate no comando de FORA da pasta.
         search->setText(QStringLiteral("Deploy"));
 
         QVERIFY(allListTexts(widget).contains(QStringLiteral("Deploy Prod")));
@@ -109,8 +99,38 @@ private slots:
         QVERIFY(allListTexts(widget).contains(QStringLiteral("Deploy Prod")));
 
         search->clear();
-        // Voltou ao escopo padrão (só a pasta): "Deploy Prod" some de novo.
         QVERIFY(!allListTexts(widget).contains(QStringLiteral("Deploy Prod")));
+    }
+    // Comando KIP não pode ser hook: o picker não o oferece, nem na lista da pasta nem na busca expandida.
+    void kipCommandsAreHiddenFromTheHookPicker()
+    {
+        HooksEditorWidget widget;
+        kai::core::Command plain;
+        plain.id = QStringLiteral("c_plain");
+        plain.name = QStringLiteral("Plain Build");
+        plain.folderId = QStringLiteral("f_1");
+        kai::core::Command wizard;
+        wizard.id = QStringLiteral("c_wizard");
+        wizard.name = QStringLiteral("Deploy Wizard");
+        wizard.folderId = QStringLiteral("f_1");
+        wizard.kip = true;
+        kai::core::Command otherWizard = wizard;
+        otherWizard.id = QStringLiteral("c_wizard2");
+        otherWizard.name = QStringLiteral("Remote Wizard");
+        otherWizard.folderId = QStringLiteral("f_2");
+
+        widget.setAvailableCommands({plain, wizard});
+        widget.setAllAvailableCommands({plain, wizard, otherWizard});
+        QStringList texts = allListTexts(widget);
+        QVERIFY(texts.contains(QStringLiteral("Plain Build")));
+        QVERIFY(!texts.contains(QStringLiteral("Deploy Wizard")));
+
+        auto *search = widget.findChild<QLineEdit *>();
+        QVERIFY(search);
+        search->setText(QStringLiteral("wizard"));
+        texts = allListTexts(widget);
+        QVERIFY(!texts.contains(QStringLiteral("Deploy Wizard")));
+        QVERIFY(!texts.contains(QStringLiteral("Remote Wizard")));
     }
 };
 

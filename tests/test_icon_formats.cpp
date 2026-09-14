@@ -6,20 +6,14 @@
 #include <QImageReader>
 #include <QTemporaryDir>
 
-#include "ui/icon-picker-widget.h"
+#include "ui/shared/icon-picker-widget.h"
 
 using namespace kai::ui;
 
-// Suporte a arquivos de imagem como ícone customizado, com foco em GIF.
-//
-// Dois riscos reais cobertos aqui:
-//  1) o plugin de imagem do formato não estar disponível no build/deploy — no
-//     Windows os plugins são copiados pelo windeployqt (qgif.dll), e sem ele a
-//     imagem simplesmente não carrega, sem erro visível;
-//  2) formatos ANIMADOS: QIcon não anima (quem desenha é o QTreeWidget/QTabBar,
-//     que não têm noção de quadros), então precisamos garantir que ao menos o
-//     PRIMEIRO QUADRO seja extraído e resulte num ícone válido — e não num
-//     ícone nulo, que na árvore apareceria como espaço vazio.
+// Ícone customizado a partir de imagem, com foco em GIF. Riscos: (1) plugin do formato ausente no
+// build/deploy (no Windows o windeployqt copia qgif.dll; sem ele a imagem não carrega, sem erro
+// visível); (2) formatos animados: QIcon não anima, então ao menos o primeiro quadro precisa virar
+// um ícone válido, não nulo (espaço vazio na árvore).
 class TestIconFormats : public QObject {
     Q_OBJECT
 
@@ -90,7 +84,6 @@ private slots:
         const QString path = dir.filePath(QStringLiteral("anim.gif"));
         QVERIFY2(writeAnimatedGif(path), "falhou ao escrever o GIF de teste");
 
-        // Confirma que é realmente animado (mais de um quadro).
         QImageReader reader(path);
         QVERIFY(reader.canRead());
         QCOMPARE(QString::fromLatin1(reader.format()), QStringLiteral("gif"));

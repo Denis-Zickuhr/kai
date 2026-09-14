@@ -20,9 +20,17 @@ services:
       context: .
       dockerfile: packaging/docker/Dockerfile.linux
     image: kai-build-linux
+    # Build incremental + ccache em volumes nomeados (como no build-windows): sem mudanças no código o release só
+    # relinka. KAI_CLEAN_BUILD=1 força começar limpo.
     volumes:
       - ./:/src:ro
       - ./dist:/out
+      - kai-linux-build:/tmp/build-linux
+      - kai-linux-ccache:/ccache
+    environment:
+      CCACHE_DIR: /ccache
+      CCACHE_MAXSIZE: 2G
+      KAI_CLEAN_BUILD: "${KAI_CLEAN_BUILD:-0}"
 
   build-windows:
     build:
@@ -65,7 +73,9 @@ services:
 
 # Volumes de BUILD: persistem entre execuções para o build ser incremental.
 # Para liberar o espaço deles quando quiser:
-#   docker volume rm kai-win-build kai-win-ccache
+#   docker volume rm kai-win-build kai-win-ccache kai-linux-build kai-linux-ccache
 volumes:
   kai-win-build:
   kai-win-ccache:
+  kai-linux-build:
+  kai-linux-ccache:

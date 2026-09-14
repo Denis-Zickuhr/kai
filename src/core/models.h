@@ -3,48 +3,62 @@
 #include <QString>
 #include <QStringList>
 #include <QMap>
+#include <QSet>
 #include <QVector>
 #include <QJsonObject>
 #include <optional>
 
+#include "core/http-types.h"
+
 namespace kai::core {
 
-// Sentinela para o campo terminalTarget (de Command e Folder): quando o
-// valor é este, o perfil de terminal é HERDADO do nível acima na hierarquia
-// (comando herda da pasta; subpasta herda da pasta pai). A resolução final
-// é feita em ExecutionPipeline::effectiveTerminalProfileName. Um "@" nunca
-// aparece em nome de perfil, então não colide com um alvo real.
+// Sentinela de terminalTarget (Command e Folder): o perfil é HERDADO do nível acima. Resolvido em
+// ExecutionPipeline::effectiveTerminalProfileName; "@" nunca aparece em nome de perfil.
 inline constexpr char kInheritTerminalTarget[] = "@parent";
 
-// Tipo de campo de um Parameter dinâmico.
+// Diretório de trabalho de pastas e comandos, em TRÊS estados (texto sozinho não distingue "herdar"
+// de "não quero"):
+//   Inherit: o da pasta de cima (padrão). JSON: chave ausente.
+//   Custom:  caminho próprio; RELATIVO resolve sobre o herdado. JSON: texto.
+//   None:    sem diretório, corta a herança. JSON: null.
+// Resolução em core/working-dir.h.
+enum class WorkingDirMode { Inherit, Custom, None };
+
 enum class ParameterType {
     Text,
     Select,
     Bool,
     File,
     Number,
-    // TEXTAREA (feedback do usuário): igual a Text, mas multi-linha com
-    // expansão automática de altura conforme o usuário digita — pra valores
-    // longos (JSON solto, scripts, descrições) que não cabem confortavelmente
-    // numa QLineEdit de uma linha só. Reaproveita `defaultValue` (mesmo campo
-    // que Text usa) como texto inicial multi-linha; nenhum campo novo no
-    // struct é necessário.
+    // Como Text, mas multi-linha com altura automática; usa `defaultValue` como texto inicial.
     Textarea,
-    // JSON (feedback do usuário: "campo pra usar se quiser, pode ter tanto
-    // em shell quanto http"): mini editor de um SNIPPET json que o usuário
-    // referencia via {{nomeDoParam}} dentro do Body (Http) ou do Command
-    // (Shell) — a substituição {{...}} já existe hoje via
-    // EnvironmentManager::interpolate (ver HttpRunner::sendRequest), então
-    // este tipo é PURAMENTE um campo de autoria melhor (realce/dobra de
-    // sintaxe via FoldableJsonView) — não implementa replace algum por si
-    // só. Também reaproveita `defaultValue` como snippet default.
-    Json
+    // Editor de um SNIPPET json referenciado via {{nomeDoParam}} no Body/Command. Só melhora a autoria
+    // (realce/dobra via FoldableJsonView); a substituição é do EnvironmentManager::interpolate.
+    Json,
+    // Abre DatePickerDialog; usa dateMode/dateRange/dateFormat/dateFormatCustom.
+    Date,
+    // Tabela de linhas com colunas tipadas (GridColumn, core/grid-param.h). {{nome}} vira o array JSON
+    // das linhas (ou o texto do modelo de linha), {{nome__json}} sempre o JSON.
+    Grid
 };
 
 QString parameterTypeToString(ParameterType type);
 ParameterType parameterTypeFromString(const QString &value);
 
-// Parâmetro de formulário preenchido em tempo de execução.
+// Coluna de um parâmetro Grid: um campo de cada linha. Só os tipos que cabem numa célula (text, number, bool,
+// select de opções fixas, date); o resto cai em text.
+struct GridColumn {
+    QString name;  // chave no JSON da linha e {{nome}} no modelo de linha
+    QString label; // cabeçalho (vazio = name)
+    ParameterType type = ParameterType::Text;
+    QString defaultValue;
+    QStringList options; // select: "rótulo:valor" ou "valor"
+    QString dateMode = QStringLiteral("date"); // date: "date" | "time" | "datetime" (sempre em ISO)
+
+    QJsonObject toJson() const;
+    static GridColumn fromJson(const QJsonObject &obj);
+};
+
 struct Parameter {
     QString name;
     QString label;
@@ -52,94 +66,123 @@ struct Parameter {
     QString defaultValue;
     QStringList options; // usado quando type == Select
 
-    // MULTI-SELECT (feedback do usuário): quando true e type == Select de
-    // opções fixas (sem collectionId), o form de run mostra uma lista
-    // checkable e junta os valores marcados (separados por vírgula) no valor
-    // do parâmetro. Ignorado para Select ligado a coleção (que já tem sua
-    // própria tela multi-select).
+    // Texto livre para o `--help` de um CLI Path (o `label` é curto demais). Vazio = omitido da ajuda.
+    QString description;
+
+    // Select de opções fixas (sem collectionId): lista checkable; junta os marcados por vírgula.
     bool multiSelect = false;
 
-    // DIRETÓRIO INICIAL do seletor (usado quando type == File): a caixa de
-    // arquivo abre AQUI em vez de num lugar arbitrário. Sem isto o
-    // QFileDialog cai no último diretório visitado pelo processo — que na
-    // primeira vez é a pasta de instalação do Kai, longe do projeto.
-    // Caminho LITERAL (o diálogo de parâmetros não tem acesso ao
-    // EnvironmentManager, então variáveis não são resolvidas aqui). Se a pasta
-    // não existir, o seletor cai no comportamento padrão em vez de abrir num
-    // lugar imprevisível.
-    QString initialDir;
+    // (A antiga "pasta inicial" por parâmetro foi cortada: os seletores abrem no último diretório
+    // usado — utils::LastDirectory. `initial_dir` de arquivos antigos é lido e ignorado.)
 
-    // FORMATO DO PATH devolvido pelo seletor (usado quando type == File —
-    // pedido do usuário: "flag dinâmica pro usuário escolher o tipo de
-    // path que ele quer que o filepick retorne ao terminal, ex: windows,
-    // linux"). O diálogo nativo de arquivo devolve o path no formato do
-    // SISTEMA OPERACIONAL do Kai — sob WSL/WSLg isso costuma ser um path
-    // Windows (C:\...), inútil pra colar direto num comando bash rodando
-    // no lado Linux. Valores: "native" (sem conversão, o que o diálogo
-    // devolveu), "posix" (estilo WSL: /mnt/c/...), "windows" (C:\...).
-    // Ver utils::convertFilePathFormat / ParameterFormDialog::handleBrowseFileClicked.
+    // Formato do path devolvido pelo seletor (type == File). O diálogo nativo devolve o formato do SO
+    // do Kai (sob WSL, C:\..., inútil num bash do lado Linux). "native" (sem conversão), "posix"
+    // (/mnt/c/...), "windows" (C:\...). Ver utils::convertFilePathFormat.
     QString filePathFormat = QStringLiteral("native");
 
-    // PASTA em vez de arquivo (usado quando type == File — feedback do
-    // usuário: "às vezes o param é uma pasta"). true troca o seletor de
-    // QFileDialog::getOpenFileName por getExistingDirectory — mesmo
-    // initialDir/filePathFormat continuam valendo, só muda o QUE se
-    // escolhe. Continua sendo type == File (não um ParameterType novo):
-    // é uma variação do mesmo campo, não um tipo de parâmetro à parte.
+    // LEGADO: só por compatibilidade com kai.yml antigos; o campo de verdade é `pickMode` (um deriva
+    // do outro em toJson/fromJson). Não usar em código novo.
     bool pickFolder = false;
 
-    // Fonte de dados de COLEÇÃO (feature "Coleções"): quando
-    // preenchido, um parâmetro Select puxa suas opções das entradas da
-    // coleção com este id, em vez de `options`. `collectionDisplayField` é
-    // o campo do schema exibido no combo (ex: "value"/"name"); ao escolher
-    // uma entrada, TODOS os campos dela são injetados como {{param.campo}}.
+    // Modo de seleção (type == File): "file" (getOpenFileName), "folder" (getExistingDirectory) ou
+    // "both" (o botão abre um menu arquivo/pasta; um QFileDialog nativo não oferece os dois juntos).
+    QString pickMode = QStringLiteral("file");
+
+    // O campo nasce ESCONDIDO no form de execução (ParameterFormDialog), atrás de uma checkbox
+    // "Informar <label>?".
+    bool optional = false;
+
+    // OPT-IN: só marca asterisco, bloqueia o OK e conta no badge de grupo quando ligado no editor.
+    // `optional` vence: com o campo escondido atrás do "Informar <label>?", `required` não tem efeito.
+    bool required = false;
+
+    // Fonte de COLEÇÃO: um Select puxa as opções da coleção com este id em vez de `options`.
+    // `collectionDisplayField` é o campo exibido no combo; ao escolher, TODOS os campos da entrada
+    // são injetados como {{param.campo}}.
     QString collectionId;
     QString collectionDisplayField;
+    // REFERÊNCIA por NOME a uma coleção que este Kai ainda não tem (veio de um arquivo de projeto).
+    // Enquanto `collectionId` está vazio o nome é guardado (e volta ao arquivo ao sincronizar); quando
+    // uma coleção única de mesmo nome aparece, vira o vínculo (ver bindPendingCollectionReferences).
+    QString collectionName;
+
+    // Fonte SCRIPT: um Select sem coleção roda este comando shell ao abrir o form; cada linha não vazia
+    // do stdout vira uma opção (formato "label:value"). Roda no contexto do comando (pasta, alvo de
+    // terminal, {{VAR}}). A coleção vence se ambos vierem preenchidos.
+    QString optionsScript;
+
+    // Campos usados quando type == Date (ver core::formatDateParamValue / ui::DatePickerDialog).
+    // "date" | "time" | "datetime".
+    QString dateMode = QStringLiteral("date");
+
+    // Intervalo: {{nome}} carrega o INÍCIO e o fim fica em {{nome.end}} (como {{param.campo}}).
+    bool dateRange = false;
+
+    // Chave do formato ao colar o valor no comando (presets em core::dateFormatPresetKeys()); "custom"
+    // usa `dateFormatCustom` (tokens do Qt: yyyy, MM, dd, HH, mm, ss...).
+    QString dateFormat = QStringLiteral("iso_date");
+    QString dateFormatCustom;
+
+    // Parâmetros com o MESMO grupo (trimmed) entram na mesma seção colapsável (ParameterFormDialog::setupUi).
+    QString group;
+    // Etapa do formulário: parâmetros com o mesmo texto (trimmed) ficam numa tela, e o formulário
+    // avança/volta na ordem da primeira aparição. Vazio = a primeira etapa.
+    QString step;
+
+    // Campos usados quando type == Grid.
+    QVector<GridColumn> gridColumns;
+    // Como cada linha vira texto em {{nome}}: modelo com {{coluna}} (ex.: `{"sku":"{{sku}}"}`); vazio = array JSON.
+    QString gridRowTemplate;
+    // Entre as linhas, quando há modelo; aceita \n e \t escritos como texto.
+    QString gridRowSeparator = QStringLiteral(",");
 
     QJsonObject toJson() const;
     static Parameter fromJson(const QJsonObject &obj);
 };
 
-// Extrator de valor de payload JSON -> variável de ambiente.
 struct EnvExtractor {
-    // Opcional (feedback do usuário: "adicionar nome para os extratores, eg:
-    // extrai token") — identifica a linha na tabela em vez do resumo bruto
-    // "json.path -> ENV_VAR" quando há vários extractors. Em branco, cai
-    // pro resumo automático (mesmo padrão de ExecutionCondition::name).
+    // Identifica a linha na tabela; em branco cai no resumo automático.
     QString name;
-    // json_path aceita ALTERNATIVAS separadas por "||" (feedback do
-    // usuário: "extratores tem que suportar a sintaxe de OU") — tenta cada
-    // caminho em ordem, usa o primeiro que existir na resposta. Útil
-    // quando APIs diferentes (ou versões da mesma API) devolvem o mesmo
-    // dado em campos com nomes diferentes. Ex: "data.token || token".
+    // Aceita ALTERNATIVAS separadas por "||": usa o primeiro caminho que existir. Ex: "data.token || token".
     QString jsonPath;
     QString envVar;
-    // Sobrevive a reiniciar o app (feedback do usuário: refresh token/API
-    // key de longa duração não deveriam exigir reautenticar a cada boot).
-    // Persistido em dynamic-vars.json (ConfigManager), NÃO em kai.json —
-    // é o VALOR capturado que persiste, não esta flag em si por comando.
+    // Sobrevive a reiniciar o app. Persistido em dynamic-vars.json (ConfigManager), não em kai.yml:
+    // é o VALOR capturado que persiste.
     bool persist = false;
+
+    // Escopo de destino: "project" grava no escopo dinâmico atual (o projeto selecionado, se houver);
+    // "global" força o escopo Global, para valores reaproveitáveis em qualquer projeto.
+    QString scope = QStringLiteral("project");
 
     QJsonObject toJson() const;
     static EnvExtractor fromJson(const QJsonObject &obj);
 };
 
-// Auto-responsor (listener) de saída: escuta o stdout/stderr de um comando em
-// execução e, quando a saída casa `pattern` (regex), envia `response` ao stdin
-// do processo — automatizando prompts interativos ("Continuar? [y/N]",
-// "Base de dados [X]?"). A resposta pode referenciar grupos capturados no
-// padrão via \1, \2, ... (ex: padrão "Base \[(\w+)\]" + resposta "\1").
-// Feedback do usuário: watchers que respondem por ele.
+// Variável declarada para "Export variables" (Command::captureEnv). Só os nomes DECLARADOS são
+// capturados (ExecutionPipeline::ingestCapturedEnv): capturar tudo vazava variáveis do sistema/WSL
+// e quebrava comandos seguintes. Um nome declarado que o processo não setou vira variável dinâmica
+// VAZIA, para ficar visível no inspetor.
+struct DeclaredEnvVar {
+    QString name;
+    // Mesma semântica de EnvExtractor::persist/scope.
+    bool persist = false;
+    QString scope = QStringLiteral("project"); // "project" | "global"
+
+    QJsonObject toJson() const;
+    static DeclaredEnvVar fromJson(const QJsonObject &obj);
+};
+
+// Auto-responsor de saída: quando o stdout/stderr de um comando casa `pattern` (regex), envia
+// `response` ao stdin (prompts interativos como "Continuar? [y/N]"). A resposta pode usar grupos
+// capturados via \1, \2... (padrão "Base \[(\w+)\]" + resposta "\1").
 struct OutputResponder {
     bool enabled = true;
-    // Nome identificador (feedback do usuário): obrigatório para o responsor
-    // funcionar; é o que aparece na listagem. Sem nome, o matcher ignora.
+    // Obrigatório para funcionar (sem nome o matcher ignora); é o que aparece na listagem.
     QString name;
     QString pattern;         // regex de ativação
     QString response;        // texto enviado ao stdin (\1..\9 = grupos)
-    // Por padrão dispara sem limite (mas há um teto de sanidade anti-loop no
-    // matcher). Se `limitTriggers` for ligado, dispara no máximo `maxTriggers`
-    // vezes por execução.
+    // Sem limite por padrão (há um teto anti-loop no matcher); com `limitTriggers`, no máximo
+    // `maxTriggers` disparos por execução.
     bool limitTriggers = false;
     int maxTriggers = 1;
 
@@ -153,285 +196,309 @@ enum class HttpMethod {
     Put,
     Patch,
     Delete,
-    // QUERY (RFC draft "safe method with body" — pedido do usuário):
-    // como GET, mas aceita corpo, útil pra consultas complexas demais pra
-    // caber na querystring. Sem verbo nativo no Qt Network — despachado
-    // via sendCustomRequest, mesmo caminho de PATCH (ver HttpRunner).
-    Query
+    // Como GET, mas aceita corpo. Sem verbo nativo no Qt Network: despachado via sendCustomRequest (como PATCH).
+    Query,
+    Head,
+    Options,
+    // Qualquer outro verbo (PROPFIND, PURGE...): o texto fica em HttpConfig::customMethod.
+    Custom
 };
 
 QString httpMethodToString(HttpMethod method);
 HttpMethod httpMethodFromString(const QString &value);
 
-// Configuração de requisição HTTP de um Command do tipo "http".
-struct HttpConfig {
-    HttpMethod method = HttpMethod::Get;
-    QString url;
-    QMap<QString, QString> headers;
-    QString body;
-    QVector<EnvExtractor> envExtractors;
-
-    QJsonObject toJson() const;
-    static HttpConfig fromJson(const QJsonObject &obj);
-};
-
-// CONDIÇÃO DE EXECUÇÃO (feedback do usuário): guarda opcional que decide se
-// um comando (principal OU hook — vale pros dois, não é exclusivo de hook)
-// de fato roda. Caso motivador: "rodar um hook de login sozinho só se TOKEN
-// estiver vazio, ou EXPIRES_AT for menor que agora".
-//
-// `left`/`right` são texto LIVRE interpolado (mesmo motor de {{VAR}}/
-// {{$dynamic}} usado em todo o resto do app — ver
-// EnvironmentManager::interpolate/evaluateCondition), então já ganham de
-// graça: variáveis globais/ambiente/dinâmicas/parâmetros, E o token
-// embutido {{$timestamp}} (epoch em segundos) para expressar "agora" (ex:
-// right="{{$timestamp}}" para comparar com um EXPIRES_AT em epoch). `right`
-// é ignorado para os operadores "exists"/"not_exists" (não há o que
-// comparar).
-//
-// `op` é uma das strings curtas (sem enum dedicado — mesmo espírito de
-// outros campos "modo" do Command, ex: terminalTarget/pathFormat):
-//   "exists"       — left, interpolado, não fica vazio (ex: "TOKEN existe")
-//   "not_exists"   — left, interpolado, fica vazio (ex: "TOKEN is null")
-//   "eq" / "ne"    — igual / diferente (numérico se os dois lados parsearem
-//                    como número, senão comparação de string)
-//   "gt" / "ge"    — maior que / maior ou igual (numérico; string cai em
-//                    fallback seguro = falso, como o motor de {% if %})
-//   "lt" / "le"    — menor que / menor ou igual (idem)
-//   "contains" / "not_contains" — substring de left contém/não contém right
+// CONDIÇÃO DE EXECUÇÃO: guarda opcional que decide se um comando (principal ou hook) roda.
+// `left`/`right` são texto livre interpolado pelo mesmo motor de {{VAR}}/{{$dynamic}} (ver
+// EnvironmentManager::evaluateCondition), então {{$timestamp}} (epoch em segundos) expressa "agora".
+// `right` é ignorado em "exists"/"not_exists".
+// `op` (string curta, sem enum):
+//   "exists" / "not_exists" — left, interpolado, não fica / fica vazio
+//   "eq" / "ne"             — igual / diferente (numérico se ambos parseiam, senão string)
+//   "gt" / "ge" / "lt" / "le" — ordem numérica; string não numérica = falso (como {% if %})
+//   "contains" / "not_contains" — substring de left contém / não contém right
 struct ExecutionCondition {
-    // Nome/rótulo opcional (feedback do usuário): identifica a condição na
-    // tabela do editor e nas mensagens de log de pulo/falha — sem nome, a
-    // tabela e o log caem para um resumo automático "left op right", que
-    // fica ilegível quando há várias condições (dificulta debugar QUAL
-    // delas barrou a execução).
+    // Identifica a condição na tabela e nos logs de pulo/falha; sem nome cai num resumo "left op right".
     QString name;
     QString left;
     QString op = QStringLiteral("exists");
     QString right;
-    // Liga/desliga ESTA condição sem apagá-la da lista (feedback do
-    // usuário: "a flag de habilitar/desabilitar era por condição, não
-    // pelo total" — corrigindo uma 1ª tentativa que era um único toggle
-    // pro Command inteiro). false = ExecutionPipeline::evaluateConditions
-    // IGNORA esta linha por completo, como se não existisse na lista
-    // (não conta pro E nem pro OU). Default true — kai.json antigos
-    // continuam se comportando igual.
+    // Liga/desliga ESTA condição sem apagá-la; false = ExecutionPipeline::evaluateConditions a ignora
+    // por completo (não conta pro E nem pro OU).
     bool enabled = true;
 
     QJsonObject toJson() const;
     static ExecutionCondition fromJson(const QJsonObject &obj);
 };
 
-// Pipeline de pre/post execução referenciando ids de outros Commands.
+// Requisição HTTP de um Command do tipo "http". O que vai pela rede é a junção disto com os padrões
+// das pastas (headers, autenticação, opções) — ver core/http-resolve.h.
+struct HttpConfig {
+    HttpMethod method = HttpMethod::Get;
+    QString customMethod; // só quando method == Custom
+    QString url;
+    QVector<HttpEntry> headers;
+    QVector<HttpEntry> queryParams;
+    HttpAuth auth; // Inherit = usa a da pasta
+    HttpBodyType bodyType = HttpBodyType::Raw;
+    QString body;
+    QString graphqlVariables;
+    QVector<HttpEntry> formFields; // Form e Multipart
+    QString bodyFile;              // File
+    HttpOptions options;
+    // Grava a resposta neste arquivo (caminho com {{VAR}}) conforme chega, em vez de em memória (downloads grandes).
+    QString responseFile;
+    QVector<EnvExtractor> envExtractors;
+    // Verificações sobre a resposta (formato das condições de execução). A resposta fica disponível como
+    // RESPONSE_STATUS, RESPONSE_TIME_MS, RESPONSE_SIZE, RESPONSE_CONTENT_TYPE, RESPONSE_BODY e RESPONSE_HEADER_<NOME>.
+    QVector<ExecutionCondition> assertions;
+
+    QString methodName() const;
+    // Aceita qualquer texto: os conhecidos viram o enum, o resto vira Custom.
+    void setMethodName(const QString &name);
+
+    QJsonObject toJson() const;
+    static HttpConfig fromJson(const QJsonObject &obj);
+};
+
 struct Hooks {
     QStringList pre;
     QStringList post;
-    // CLEANUP: rodam SEMPRE que a execução termina — sucesso, falha, crash,
-    // Stop/Force-stop manual ou Reset. Servem para desmontar o que o comando
-    // subiu quando o encerramento do processo não basta (caso reportado: um CLI
-    // que orquestra um ambiente externo continua rodando depois do Stop, porque
-    // o ambiente não é filho do processo que o Kai matou).
-    // Executam de forma independente: um cleanup que falha não impede os
-    // outros, e nunca reabre/reinicia o pipeline.
+    // CLEANUP: roda SEMPRE que a execução termina (sucesso, falha, crash, Stop/Force-stop, Reset), para
+    // desmontar o que o comando subiu quando matar o processo não basta. Independentes entre si: um
+    // cleanup que falha não impede os outros nem reinicia o pipeline.
     QStringList cleanup;
 
     QJsonObject toJson() const;
     static Hooks fromJson(const QJsonObject &obj);
 };
 
+// "Command" roda um programa local (antes "Shell"); a LINGUAGEM (CommandLanguage) decide se o texto é
+// shell, Python ou Node. No JSON o tipo é "command"; "shell" segue aceito na leitura.
 enum class CommandType {
-    Shell,
+    Command,
     Http
 };
 
 QString commandTypeToString(CommandType type);
 CommandType commandTypeFromString(const QString &value);
 
-// Comando executável: shell ou requisição HTTP.
+// Linguagem do texto de um Command. Native = shell do alvo; Python/Node/PHP = o texto é CÓDIGO, entregue
+// ao interpretador sem aspas de shell nem {{VAR}} (variáveis chegam pelo ambiente: os.environ /
+// process.env / getenv()). Native com KIP num shell POSIX ganha a função `kip` (verbos do `kai kip`).
+enum class CommandLanguage {
+    Native,
+    Python,
+    Node,
+    Php
+};
+
+// Chave JSON: "native" | "python" | "node" | "php". Desconhecido = Native (inclui os antigos "bash", "sh", "pwsh").
+QString commandLanguageToString(CommandLanguage language);
+CommandLanguage commandLanguageFromString(const QString &value);
+
+// Diretório de um comando invocado pelo CLI (`kai <path>`, `kai -g`). Default: Command::workingDir.
+// Invocation: o diretório do terminal onde o usuário digitou o `kai` (na GUI vale o default).
+// Chave JSON: "cli_working_dir": "invocation" (ausente = default).
+enum class CliWorkingDir {
+    Default,
+    Invocation
+};
+
+QString cliWorkingDirToString(CliWorkingDir mode);
+CliWorkingDir cliWorkingDirFromString(const QString &value);
+
 struct Command {
     QString id;
     QString folderId;
     QString name;
-    CommandType type = CommandType::Shell;
+    CommandType type = CommandType::Command;
 
-    // DETALHAMENTO (feedback do usuário): texto opcional multi-linha que
-    // descreve o comando. Quando preenchido, aparece como um hint no topo do
-    // formulário de parâmetros (ao executar), no lugar do texto genérico
-    // "insira os valores...". Vazio = mantém o texto padrão.
+    // Texto multi-linha opcional; aparece como hint no topo do formulário de parâmetros.
     QString description;
-    // Ordem manual de exibição dentro da pasta (drag-and-drop
-    // de reordenação): -1 significa "sem ordem manual definida", caindo
-    // na ordenação automática alfabética por nome. Ao arrastar um item na
-    // árvore, todos os irmãos daquele nível recebem um `order` sequencial
-    // persistido, passando a respeitar a ordem manual.
+    // Ordem manual dentro da pasta (drag-and-drop); -1 = sem ordem manual (alfabética por nome). Ao
+    // arrastar, todos os irmãos do nível recebem `order` sequencial.
     int order = -1;
 
-    // Ícone customizado do comando (permitir ícones customizados
-    // por comando, não só o pool prefixado): pode ser o nome de um ícone
-    // do pool padrão (ex: "terminal") OU um path de arquivo de imagem
-    // customizado prefixado com "file:" (ex: "file:/home/user/icon.png"),
-    // resolvido por IconPickerWidget::iconForName. Vazio = sem ícone.
+    // Nome de ícone do pool padrão (ex: "terminal") ou imagem prefixada com "file:" (ex:
+    // "file:/home/user/icon.png"), resolvido por IconPickerWidget::iconForName. Vazio = sem ícone.
     QString icon;
 
-    // Campos específicos de Shell.
     QString command;
-    QString workingDir;
+    // Linguagem de `command` e interpretador opcional (vazio = o global, Configurações → Linguagens).
+    // Só vale com language != Native; é uma linha de shell (aceita argumentos, ex: "uv run python"),
+    // caminhos com espaço entre aspas.
+    CommandLanguage language = CommandLanguage::Native;
+    QString interpreter;
+    WorkingDirMode workingDirMode = WorkingDirMode::Inherit;
+    QString workingDir; // só significativo com WorkingDirMode::Custom
     bool isBackground = false;
-    // SAÍDA COMPACTA: colapsa linhas em branco repetidas e apara espaços à
-    // direita, deixando a saída densa. Preferência POR COMANDO (pedido do
-    // usuário) — pode ser marcada na opção "Compactar" do painel de saída ou
-    // declarada no kai.json como "compact_output": true.
+    // Colapsa linhas em branco repetidas e apara espaços à direita. Por comando; também via
+    // "compact_output": true no kai.yml.
     bool compactOutput = false;
-    // OCULTAR AO EXECUTAR: esconde a janela do Kai ao disparar este comando
-    // (pedido do usuário: alguns apps sim, outros não — por isso é POR COMANDO).
-    // Útil para comandos que abrem outra janela/app e o Kai só estorva.
+    // Esconde a janela do Kai ao disparar este comando (para comandos que abrem outra janela/app).
     bool hideOnRun = false;
 
-    // IGNORAR CÓDIGO DE SAÍDA (bug relatado): alguns comandos que abrem
-    // outro programa/janela (ex: `explorer.exe` chamado de dentro do WSL
-    // pra abrir uma pasta no Windows) retornam um exit code != 0 mesmo
-    // tendo funcionado perfeitamente — é um comportamento conhecido desses
-    // programas específicos, não um erro de verdade. Marcado, o pipeline
-    // sempre trata este comando como bem-sucedido, independente do exit
-    // code (crash de processo — sinal/segfault — ainda é reportado, isso
-    // não mascara isso).
+    // Alguns comandos que abrem outro programa (ex: `explorer.exe` no WSL) retornam exit code != 0 mesmo
+    // funcionando. Marcado, o pipeline trata como sucesso (crash por sinal/segfault ainda é reportado).
     bool ignoreExitCode = false;
 
-    // OCULTAR DA ÁRVORE (diferente de hideOnRun acima — este é sobre
-    // visibilidade na lista, não sobre a janela do Kai): comando marcado
-    // como oculto some da árvore por padrão; só reaparece com "Mostrar
-    // ocultos" ativo (CommandTreeWidget::setShowHidden). Toggle via botão
-    // "Ocultar/Exibir" do grupo Exibição.
+    // Oculto da árvore (diferente de hideOnRun): só reaparece com "Mostrar ocultos"
+    // (CommandTreeWidget::setShowHidden).
     bool hidden = false;
 
-    // Captura de ambiente (feedback do usuário — hooks estilo "gh auth"):
-    // quando true e o comando roda como HOOK (pre/post) de outro comando,
-    // o pipeline captura TODAS as variáveis de ambiente resultantes da
-    // execução deste hook e as injeta como variáveis dinâmicas da sessão,
-    // ficando disponíveis para o comando principal e para os hooks
-    // seguintes (ex: um `gh auth`/`aws sso login` que exporta tokens no
-    // ambiente passa a alimentar os comandos subsequentes automaticamente).
+    // "Exportar variáveis" na UI: captura os nomes de `declaredEnvVars` como variáveis DINÂMICAS no
+    // escopo do projeto atual (ou Global, ver DeclaredEnvVar::scope), disponíveis aos comandos seguintes
+    // do projeto (ex: `aws sso login`). Chave JSON mantida "capture_env" por compatibilidade.
     bool captureEnv = false;
 
-    // Abrir último link impresso (feedback do usuário): quando true, ao
-    // finalizar um comando shell com sucesso, o Kai detecta a ÚLTIMA URL
-    // (http/https) impressa na saída e a abre no navegador padrão
-    // (QDesktopServices). Útil para comandos que sobem um servidor/túnel e
-    // imprimem a URL de acesso (ex: ngrok, vite, "Local: http://...").
+    // Lista branca dos nomes exportáveis (ver DeclaredEnvVar): vazia, captureEnv não captura NADA.
+    QVector<DeclaredEnvVar> declaredEnvVars;
+
+    // Ao fim com sucesso, abre no navegador a ÚLTIMA URL http/https impressa (ex: ngrok, vite).
     bool openLastLink = false;
 
-    // TERMINAL INTERATIVO (feedback do usuário): quando true, a Saída deste
-    // comando vira um emulador de terminal DE VERDADE (grade de células via
-    // libvterm) em vez do parser de cores simples sobre QPlainTextEdit —
-    // necessário para comandos que DESENHAM na tela usando cursor (vim,
-    // htop, less, um Claude Code aninhado, prompts interativos de scripts
-    // git) via posicionamento de cursor/alternate screen buffer, que o
-    // parser ANSI simples não reproduz. Só vale para type == Shell (HTTP
-    // não tem processo/PTY). Ver ui::PtyTerminalWidget.
+    // A Saída vira um emulador de terminal DE VERDADE (libvterm) em vez do parser de cores simples:
+    // necessário para comandos que desenham com cursor/alternate screen (vim, htop, less). Só type ==
+    // Command (HTTP não tem PTY). Ver ui::PtyTerminalWidget.
     bool interactiveTerminal = false;
 
-    // Alvo de terminal onde o comando shell é executado (feedback
-    // do usuário: escolher em qual terminal rodar, ex: WSL bridge no
-    // Windows). Vazio = terminal local padrão (bash -c). Caso contrário,
-    // referencia o nome de um TerminalProfile definido nas configurações
-    // globais, cujo template envolve o comando (placeholder {{command}}).
+    // Saída formatada estilo Grafana/Loki: só para comandos NÃO interativos que logam JSON estruturado.
+    // Cada linha JSON (level/severity, message/msg, time/timestamp) vira um card colapsável; linha que
+    // não é objeto JSON cai pro texto cru. Ver ui::LogLineView.
+    bool formattedOutput = false;
+
+    // KIP (specs/11-kip-protocol.md): roda como SESSÃO KIP (JSON Lines por stdout/stdin, renderizada com
+    // componentes nativos). O Kai nunca reescreve a string do comando (quem escreve `--kip` é o autor).
+    // Só Command. Incompatível com interactiveTerminal, formattedOutput, compactOutput, openLastLink,
+    // responders, captureEnv, isBackground, cron e autoRun (ver kai-file-validator e o editor).
+    bool kip = false;
+    // A view KIP abre numa janela própria (a da saída destacada, `kai -gw`) em vez do painel embutido.
+    bool kipOpenInWindow = false;
+    // Com a view KIP em janela própria, fecha-a após a sessão terminar COM SUCESSO (falha/cancelamento
+    // a mantêm aberta). Atraso em segundos (0 = na hora) para ler o cartão de resultado.
+    bool kipAutoCloseWindow = false;
+    int kipAutoCloseDelaySec = 2;
+    // Últimas respostas dos prompts KIP, para pré-preencher a próxima execução. Chave
+    // "<promptId>/<fieldName>" -> valor JSON.
+    QJsonObject kipLastValues;
+
+    // Alvo de terminal: vazio = terminal local padrão (bash -c); senão, nome de um TerminalProfile das
+    // configurações globais, cujo template envolve o comando (placeholder {{command}}).
     QString terminalTarget;
 
-    // AUTO-RUN (feedback do usuário): quando true, o comando é disparado
-    // automaticamente no start do Kai, após `autoRunDelaySec` segundos.
-    // Usa os últimos valores de parâmetros (lastParamValues); se faltar um
-    // parâmetro obrigatório sem histórico, o auto-run pula o comando e loga
-    // (não trava o boot pedindo formulário). Vale para shell e HTTP.
+    // Dispara o comando no start do Kai após `autoRunDelaySec` segundos, com os últimos valores de
+    // parâmetros (lastParamValues); se faltar um obrigatório sem histórico, pula e loga (não trava o boot).
     bool autoRun = false;
     int autoRunDelaySec = 0;
-    // Últimos valores de parâmetros passados nesta execução
-    // (feedback do usuário: salvar os últimos parâmetros de texto/flag e
-    // pré-preencher no formulário na próxima execução). Chave = nome do
-    // parâmetro, valor = último valor informado.
+    // Últimos valores informados, por nome de parâmetro (pré-preenchem o formulário).
     QMap<QString, QString> lastParamValues;
 
-    // Histórico de uso de valores por parâmetro (feedback do usuário:
-    // ordenar as opções de um Select pelas mais usadas recentemente).
-    // Chave = nome do parâmetro; valor = lista de valores em ordem de uso,
-    // do MAIS RECENTE para o mais antigo (sem duplicatas). O ParameterForm
-    // usa isto para reordenar o combo e alimentar a busca.
+    // AGENDAMENTO CRON: o scheduler dispara o comando pela pipeline normal no horário da expressão
+    // (recorrente, ao contrário de autoRun). Vazio = sem agendamento. Só para CommandType::Command.
+    QString cronExpression;
+
+    // Notificar cada disparo cron (opt-in, respeita o master switch notificationsEnabled para o toast);
+    // a saída fica disponível por hover/expansão no histórico.
+    bool cronNotifyOnRun = false;
+
+    // Valores usados por parâmetro, do MAIS RECENTE para o mais antigo, sem duplicatas; o ParameterForm
+    // reordena o combo de Select e alimenta a busca com isto.
     QMap<QString, QStringList> paramUsageHistory;
 
-    // Campos específicos de Http.
     std::optional<HttpConfig> httpConfig;
 
     QVector<Parameter> params;
     Hooks hooks;
 
-    // CONDIÇÕES DE EXECUÇÃO (ver ExecutionCondition acima): guarda que decide
-    // se ESTE comando roda de verdade, avaliada por ExecutionPipeline no
-    // instante da invocação — vale igual quando o comando roda como
-    // principal (execução direta) OU como hook de outro comando, já que a
-    // regra vive no comando, não em quem o chama.
+    // Guarda avaliada por ExecutionPipeline na invocação (ver ExecutionCondition); vale igual como
+    // principal ou como hook, pois a regra vive no comando.
     QVector<ExecutionCondition> executionConditions;
-    // Combinador entre as linhas de executionConditions: "and" (todas
-    // precisam passar) ou "or" (basta uma passar). Ignorado com 0/1
-    // condições.
+    // Combinador entre as linhas: "and" (todas passam) ou "or" (basta uma). Ignorado com 0/1 condições.
     QString conditionCombinator = QStringLiteral("and");
-    // O que fazer quando a condição barra a execução: "success" (pula
-    // silenciosamente, pipeline segue normal — padrão) ou "failure" (pula E
-    // conta como falha do estágio, abortando o pipeline como qualquer outro
-    // erro).
+    // Quando a condição barra: "success" (pula em silêncio, padrão) ou "failure" (pula E conta como
+    // falha do estágio, abortando o pipeline).
     QString conditionSkipBehavior = QStringLiteral("success");
 
-    // Auto-responsores de saída (listeners que respondem prompts por você).
     QVector<OutputResponder> responders;
+
+    // CLI PATH: segmento que torna este comando alcançável pela linha de comando (ex: "env" em
+    // `kai zephyr env prod`); o último segmento de um cli path sempre termina num Command. Vazio =
+    // só na GUI. Ver Folder::cliPath.
+    QString cliPath;
+    CliWorkingDir cliWorkingDir = CliWorkingDir::Default;
 
     QJsonObject toJson() const;
     static Command fromJson(const QJsonObject &obj);
 };
 
-// Pasta/Projeto com escopo de variáveis de ambiente próprio.
+// Ação GLOBAL: comando existente que aparece em TODAS as pastas (core/folder-actions.h).
+// `onlyProjects`: só em pastas-projeto. `expansion`: fica no menu do símbolo de expansão em vez de um
+// ícone na linha.
+struct GlobalAction {
+    QString commandId;
+    bool onlyProjects = false;
+    bool expansion = false;
+    // GRUPO (tema, ex.: "Git"): ações do mesmo grupo viram UM ícone na linha, que abre o menu delas.
+    // `groupIcon` (vazio = padrão) vale pro grupo todo (ver actionsForFolder).
+    QString group = {};
+    QString groupIcon = {};
+};
+
 struct Folder {
     QString id;
     QString name;
     QString icon;
     std::optional<QString> parentId;
     bool isProject = false;
-    std::optional<QString> projectPath;
+    // Diretório de trabalho herdado pelos filhos (ver WorkingDirMode). Numa pasta-projeto é também a
+    // raiz do projeto (onde fica o kai.yml), no formato NATIVO de onde o app enxerga a pasta; a
+    // conversão pro alvo de terminal (ex: /home/... no WSL) acontece só na execução.
+    WorkingDirMode workingDirMode = WorkingDirMode::Inherit;
+    QString workingDir;
     QMap<QString, QString> envVars;
+    // Headers, autenticação e opções que TODO comando HTTP desta pasta e subpastas herda (core/http-resolve.h).
+    HttpDefaults httpDefaults;
+    // Nomes de `envVars` SECRETOS: o valor vale na execução mas NUNCA vai para arquivo (sync, exportação);
+    // o arquivo guarda só o nome e cada instalação preenche o seu valor.
+    QSet<QString> secretEnvKeys;
 
-    // Ordem manual de exibição entre os irmãos do mesmo nível
-    // (drag-and-drop). -1 = sem ordem manual, cai na ordenação alfabética
-    // automática por nome.
+    // AÇÕES: ids de comandos EXISTENTES, em ordem de cadastro, como ícones inline na linha da pasta;
+    // rodam com a pasta como contexto. Referência, não cópia. Ver core/folder-actions.h.
+    QStringList actions;
+    // Subconjunto de `actions` de EXPANSÃO: entra no menu do símbolo de expansão, não vira ícone.
+    QStringList expansionActions;
+    // GRUPOS: id do comando -> nome do grupo (sobrepõe a expansão) e nome do grupo -> ícone próprio.
+    QMap<QString, QString> actionGroups;
+    QMap<QString, QString> groupIcons;
+
+    // Ordem manual entre irmãos (drag-and-drop); -1 = alfabética por nome.
     int order = -1;
 
-    // OCULTAR DA ÁRVORE (mesma semântica de Command::hidden): pasta
-    // oculta some da árvore/aba por padrão; só reaparece com "Mostrar
-    // ocultos" ativo. Se for uma pasta RAIZ, a própria aba some.
+    // Mesma semântica de Command::hidden; numa pasta RAIZ, a própria aba some.
     bool hidden = false;
 
-    // Perfil de terminal da pasta (mesma convenção de Command::terminalTarget):
-    // vazio = terminal local; um nome referencia um TerminalProfile global;
-    // o sentinela kInheritTerminalTarget ("@parent") = herda do ancestral.
-    // A resolução é hierárquica e do nível MAIS ESPECÍFICO para o genérico:
-    // comando -> pasta do comando -> pasta pai -> ... -> default global
-    // (ver ExecutionPipeline::effectiveTerminalProfileName).
+    // Como Command::terminalTarget: vazio = terminal local; um nome referencia um TerminalProfile; o
+    // sentinela kInheritTerminalTarget herda do ancestral. Resolução do mais específico para o genérico
+    // (ExecutionPipeline::effectiveTerminalProfileName).
     QString terminalTarget;
+
+    // CLI PATH: segmento que endereça esta pasta pela linha de comando (ex: "zephyr" em `kai zephyr env
+    // prod`). Vazio = pasta TRANSPARENTE no namespace de CLI: não é segmento, mas os filhos com cli_path
+    // próprio sobem para o ancestral opt-in mais próximo (ver CliPathResolver). Só precisa ser único
+    // entre IRMÃOS no namespace colapsado (checado em kai-file-validator.cpp).
+    QString cliPath;
+    // Texto mostrado ao lado do segmento quando o CLI lista esta pasta; só com cliPath preenchido.
+    QString cliDescription;
 
     QJsonObject toJson() const;
     static Folder fromJson(const QJsonObject &obj);
 };
 
-// --- Coleções (feature "Coleção", feedback do usuário) --------------------
-// Uma Collection é um novo tipo de item na árvore (ao lado de comandos
-// shell/http), NÃO-executável, que funciona como uma fonte de dados
-// tabular reutilizável: cada entrada é um "registro" com campos definidos
-// por um schema extensível. Coleções podem ser usadas como fonte de um
-// parâmetro Select de outro comando, e o replace {{colecao.campo}} injeta
-// o valor do campo escolhido. Persistidas em ARQUIVO SEPARADO
-// (collections.json), não no commands.json — o arquivo/CSV de origem só
-// inicializa a coleção; a edição vive no collections.json.
+// Coleção: item NÃO-executável da árvore, fonte de dados tabular reutilizável (registros com schema
+// extensível). Serve de fonte de um parâmetro Select, e {{colecao.campo}} injeta o valor do campo
+// escolhido. Persistida em collections.json, não em commands.json; o CSV de origem só a inicializa.
 
-// Tipo de um campo do schema de uma Collection. O par (Key, Value) é o
-// schema default; os demais permitem estender (ex: um campo Email num
-// cadastro de usuários). O tipo é usado pela UI (validação/edição) e pode
-// evoluir sem quebrar dados (tipos desconhecidos caem em Text).
+// Tipo de um campo do schema. (Key, Value) é o schema default; tipos desconhecidos caem em Text.
 enum class CollectionFieldType {
     Text,
     Key,
@@ -445,26 +512,25 @@ enum class CollectionFieldType {
 QString collectionFieldTypeToString(CollectionFieldType type);
 CollectionFieldType collectionFieldTypeFromString(const QString &value);
 
-// Um campo do schema de uma Collection: nome interno estável (usado no
-// replace {{colecao.<name>}} e como chave em CollectionEntry::values),
-// rótulo de exibição e tipo.
+// Campo do schema: nome estável (usado em {{colecao.<name>}} e como chave de CollectionEntry::values),
+// rótulo e tipo.
 struct CollectionField {
     QString name;   // chave estável, ex: "key", "value", "email"
     QString label;  // rótulo exibido no grid, ex: "E-mail"
     CollectionFieldType type = CollectionFieldType::Text;
-    // Visibilidade da coluna no grid da coleção (feedback do usuário: quero ver
-    // rápido só o campo principal, ex: o nome do cliente, não todas as props).
-    // Default true = visível. Campos invisíveis continuam existindo/editáveis
-    // no formulário, só não aparecem como coluna na tabela.
+    // Visibilidade da coluna no grid; campos invisíveis continuam editáveis no formulário.
     bool visible = true;
+
+    // SECRETO: mascarado na tabela/formulário (contra olhares de relance e prints, não contra quem
+    // tem o Kai aberto) e SEMPRE excluído do export, mesmo com "incluir dados das entries".
+    bool secret = false;
 
     QJsonObject toJson() const;
     static CollectionField fromJson(const QJsonObject &obj);
 };
 
-// Uma entrada (registro/linha) de uma Collection. `values` mapeia
-// name-do-campo -> valor. Cada entrada tem identidade própria (id) para
-// favoritos estáveis e um flag de favorito.
+// Entrada (registro) de uma Collection; `values` mapeia name-do-campo -> valor. O id dá identidade
+// para favoritos estáveis.
 struct CollectionEntry {
     QString id;
     QMap<QString, QString> values;
@@ -474,8 +540,7 @@ struct CollectionEntry {
     static CollectionEntry fromJson(const QJsonObject &obj);
 };
 
-// Coleção: item não-executável na árvore, com schema extensível e uma
-// lista de entradas. Persistida em collections.json (separado).
+// Coleção: schema extensível + entradas, persistida em collections.json.
 struct Collection {
     QString id;
     QString folderId; // pasta/aba onde aparece na árvore
@@ -483,24 +548,64 @@ struct Collection {
     QString icon;
     int order = -1;
 
-    // Schema: default = [Key, Value]. Extensível na edição.
     QVector<CollectionField> schema;
     QVector<CollectionEntry> entries;
 
-    // Caminho do arquivo de origem (CSV/JSON) usado para INICIALIZAR a
-    // coleção, se houver. Apenas informativo/reimport — a fonte de verdade
-    // após a criação é o collections.json.
+    // Arquivo de origem (CSV/JSON) que inicializou a coleção; informativo/reimport (a fonte de verdade é collections.json).
     QString sourcePath;
 
-    // OCULTAR DA ÁRVORE (mesma semântica de Command::hidden).
     bool hidden = false;
 
-    // Retorna o schema default (Key, Value) — usado quando uma coleção é
-    // criada sem schema explícito.
+    // Schema default (Key, Value) para coleções criadas sem schema explícito.
     static QVector<CollectionField> defaultSchema();
 
     QJsonObject toJson() const;
     static Collection fromJson(const QJsonObject &obj);
+};
+
+// Nota: item da árvore, sempre dentro de uma pasta (não executa, como a coleção). Texto rápido e
+// arquivos temporários do Kai: o conteúdo mora em notes.json, aparece no seletor de arquivos da pasta
+// e pode ir para o kai.yml do projeto (`local`).
+struct Note {
+    QString id;
+    QString folderId;
+    QString name;
+    QString icon;
+    int order = -1;
+    // markdown (padrão), text, json, yaml ou xml: define como o leitor mostra e quais ferramentas valem.
+    QString type = QStringLiteral("markdown");
+    QString content;
+    // true (padrão): fica só neste Kai, nunca vai para export/kai.yml. false: sincroniza como um item normal.
+    bool local = true;
+    bool hidden = false;
+
+    // Tipos aceitos, na ordem em que aparecem nos seletores.
+    static QStringList types();
+    // Texto fora dos tipos conhecidos vira markdown.
+    static QString normalizedType(const QString &type);
+    // Extensão (sem ponto) do arquivo que representa a nota: md, txt, json, yml, xml.
+    static QString extensionForType(const QString &type);
+    static QString typeForExtension(const QString &extension);
+
+    QJsonObject toJson() const;
+    static Note fromJson(const QJsonObject &obj);
+};
+
+// Campo desta coleção usado como TEXTO DE EXIBIÇÃO de uma entrada (chip, busca, "__label"), centralizado
+// para não divergir entre parameter-form-dialog.cpp e main-window.cpp.
+// Prioridade: 1) `configured`, se existir no schema (qualquer tipo, mesmo Key: pode ser um slug legível);
+// 2) primeiro campo Value; 3) primeiro não-Key; 4) primeiro campo do schema.
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured);
+
+// Liga as referências por nome que ficaram pendentes (Parameter::collectionName) às coleções que existem
+// agora, quando o nome é único. Devolve quantos parâmetros foram ligados.
+int bindPendingCollectionReferences(QVector<Command> &commands, const QVector<Collection> &collections);
+
+// Filtro (busca + favoritos) da tela de seleção de uma Collection, salvo POR COLEÇÃO (chave =
+// Collection::id) na config, fora do collections.json: é estado de USO da UI, não dado da coleção.
+struct CollectionFilterState {
+    QString search;
+    bool favoritesOnly = false;
 };
 
 } // namespace kai::core

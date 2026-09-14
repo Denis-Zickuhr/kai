@@ -1,10 +1,9 @@
 #include <QTest>
 
-#include "ui/ansi-text-parser.h"
+#include "ui/features/output/ansi-text-parser.h"
 
 using namespace kai::ui;
 
-// Testa a lógica pura de parsing ANSI, sem depender de display.
 class TestAnsiTextParser : public QObject {
     Q_OBJECT
 
@@ -18,15 +17,10 @@ private slots:
         QCOMPARE(segments.at(0).text, QStringLiteral("hello world"));
     }
 
-    // Bug reportado (bug-enconding.png): sequências de escape ANSI de
-    // controle de cursor/tela — que surgem sob PTY (ex: read -p do bash) —
-    // vazavam como lixo visual ("[?25l", "[2K", "[1A", "[J"). Devem ser
-    // removidas, preservando o texto legível e as cores.
+    // Controles de cursor/tela sob PTY (ex: read -p do bash) não podem vazar como texto; texto legível e cores ficam.
     void cursorControlSequencesAreStrippedFromOutput()
     {
         AnsiTextParser parser;
-        // Sequências reais capturadas no print: hide cursor, clear line,
-        // cursor up, clear screen — intercaladas com texto e uma cor.
         const QString raw = QStringLiteral(
             "\x1b[?25l\x1b[2K\x1b[31mVocê está em PRODUÇÃO\x1b[0m [y/N] \x1b[1A\x1b[J");
         const QVector<AnsiSegment> segments = parser.parse(raw);
@@ -35,14 +29,11 @@ private slots:
         for (const AnsiSegment &seg : segments) {
             visibleText += seg.text;
         }
-        // O texto legível fica intacto...
         QCOMPARE(visibleText, QStringLiteral("Você está em PRODUÇÃO [y/N] "));
-        // ...e nenhum resíduo de escape/control char sobra.
         QVERIFY(!visibleText.contains(QLatin1Char('\x1b')));
         QVERIFY(!visibleText.contains(QStringLiteral("[2K")));
         QVERIFY(!visibleText.contains(QStringLiteral("[?25l")));
         QVERIFY(!visibleText.contains(QStringLiteral("[1A")));
-        // A cor vermelha do trecho "PRODUÇÃO" foi preservada.
         bool hasRed = false;
         for (const AnsiSegment &seg : segments) {
             if (seg.format.foreground().color() == QColor(205, 0, 0)) {
@@ -50,6 +41,38 @@ private slots:
             }
         }
         QVERIFY(hasRed);
+    }
+
+    // Em caminhos do Windows o ESC chega como o glifo "←": o parser trata as duas grafias igual.
+    void arrowGlyphLeadInIsTreatedLikeRealEscapeByte()
+    {
+        AnsiTextParser parser;
+        const QString raw = QStringLiteral(
+            "←[?25l←[K←[31mVocê está em PRODUÇÃO←[0m [y/N] ←[29;120H");
+        const QVector<AnsiSegment> segments = parser.parse(raw);
+
+        QString visibleText;
+        for (const AnsiSegment &seg : segments) {
+            visibleText += seg.text;
+        }
+        QCOMPARE(visibleText, QStringLiteral("Você está em PRODUÇÃO [y/N] "));
+        QVERIFY(!visibleText.contains(QChar(0x2190)));
+        QVERIFY(!visibleText.contains(QStringLiteral("[K")));
+        QVERIFY(!visibleText.contains(QStringLiteral("[?25l")));
+        QVERIFY(!visibleText.contains(QStringLiteral("[29;120H")));
+    }
+
+    // Lead-in "←[..." partido entre dois chunks não vaza texto nem quebra o chunk seguinte.
+    void arrowGlyphLeadInSlicedAcrossChunksIsStillStripped()
+    {
+        AnsiTextParser parser;
+        auto a = parser.parse(QStringLiteral("antes ←[2"));
+        auto b = parser.parse(QStringLiteral("5l depois"));
+
+        QString visible;
+        for (const AnsiSegment &seg : a) visible += seg.text;
+        for (const AnsiSegment &seg : b) visible += seg.text;
+        QCOMPARE(visible, QStringLiteral("antes  depois"));
     }
 
     void redForegroundCodeAppliesColorToFollowingText()
@@ -74,9 +97,7 @@ private slots:
         QCOMPARE(segments.at(0).format.foreground().color(), QColor(205, 0, 0));
     }
 
-    // Formato persiste entre chamadas sucessivas (parsing incremental de
-    // stream de processo, onde a sequência ANSI pode vir em um chunk e o
-    // texto colorido no chunk seguinte).
+    // Formato persiste entre chunks (ANSI num chunk, texto colorido no seguinte).
     void formatPersistsAcrossIncrementalChunks()
     {
         AnsiTextParser parser;
@@ -113,7 +134,6 @@ private slots:
         QCOMPARE(segments.size(), 0);
     }
 
-    // spec 05: auto-highlight de links (URLs) no Terminal Drawer.
     void urlInPlainTextIsDetectedAsLink()
     {
         AnsiTextParser parser;

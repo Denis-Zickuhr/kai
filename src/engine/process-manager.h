@@ -16,50 +16,39 @@ enum class ProcessStatus {
     Error
 };
 
-// Rastreia processos em background (is_background: true) mantidos vivos
-// em memória, permitindo consultar status e interrompê-los sob demanda
-//.
+// Rastreia processos em background (is_background: true) mantidos vivos em memória, para consultar status e interrompê-los.
 class ProcessManager : public QObject {
     Q_OBJECT
 
 public:
     explicit ProcessManager(QObject *parent = nullptr);
 
-    // Registra um novo processo background já iniciado, associado ao
-    // `commandId` do Command que o originou. ProcessManager assume a posse
-    // (ownership) do ProcessRunner.
+    // Registra um processo background já iniciado para `commandId`; o ProcessManager assume a posse do ProcessRunner.
     void track(const QString &commandId, std::unique_ptr<ProcessRunner> runner);
 
-    // Encerra o processo associado a `commandId` (terminate -> timeout -> kill,
-    // delegado ao próprio ProcessRunner).
+    // Encerra o processo de `commandId` (terminate -> timeout -> kill, delegado ao ProcessRunner).
     void stop(const QString &commandId);
 
-    // Encerra E ESQUECE o processo: para o runner e REMOVE a entrada do
-    // rastreamento. Diferente de stop(), que mantém a entrada (com status
-    // Success/Error) para consulta posterior. Usado quando a sessão é
-    // descartada de vez.
+    // Encerramento IMEDIATO ("Forçar parada"): ProcessRunner::forceStop(), sem esperar terminate.
+    void forceStop(const QString &commandId);
+
+    // Encerra E ESQUECE o processo: remove a entrada do rastreamento (stop() a mantém, com status, para consulta).
     void remove(const QString &commandId);
 
-    // Encerra todos os processos rastreados. Deve ser conectado ao sinal
-    // aboutToQuit do QCoreApplication ("processos zumbis").
+    // Encerra todos os processos rastreados; ligar ao aboutToQuit do QCoreApplication.
     void stopAll();
 
     bool isTracked(const QString &commandId) const;
     ProcessStatus statusOf(const QString &commandId) const;
     QStringList trackedCommandIds() const;
-    // true se a ÚLTIMA finalização deste processo foi um crash de verdade
-    // (QProcess::CrashExit), não só um exitCode != 0 comum — distinção que
-    // já existe em ProcessResult::crashed mas se perdia ao virar
-    // ProcessStatus::Error (os dois colapsavam juntos). Usado só pra
-    // escolher o texto certo em notificações ("crashou" vs. "terminou com
-    // erro"); não afeta nenhuma lógica de badge/UI existente. Comando não
-    // rastreado ou que nunca finalizou: false (fallback seguro).
+    // A ÚLTIMA finalização foi um crash (QProcess::CrashExit), não só exitCode != 0; escolhe o texto da notificação.
+    // Comando não rastreado ou que nunca finalizou: false.
     bool lastRunCrashed(const QString &commandId) const;
 
-    // Retorna o ProcessRunner rastreado para `commandId`, ou nullptr se não
-    // rastreado. Usado pelo Terminal Drawer para permitir interação via
-    // stdin em processos background reconectados (terminal
-    // por-comando).
+    // A última finalização foi um encerramento PEDIDO (Parar/Forçar/kill/reset): não é erro nem falha do comando.
+    bool lastRunStoppedByRequest(const QString &commandId) const;
+
+    // ProcessRunner rastreado para `commandId`, ou nullptr; o Terminal Drawer o usa para stdin.
     ProcessRunner *runnerFor(const QString &commandId) const;
 
 signals:
@@ -70,9 +59,8 @@ private:
     struct TrackedProcess {
         std::unique_ptr<ProcessRunner> runner;
         ProcessStatus status = ProcessStatus::Running;
-        // Ver lastRunCrashed(): reflete ProcessResult::crashed da última
-        // finalização, senão a informação se perde ao virar só Success/Error.
         bool lastCrashed = false;
+        bool lastStoppedByRequest = false;
     };
 
     std::map<QString, TrackedProcess> m_processes;

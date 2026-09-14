@@ -1,0 +1,89 @@
+#pragma once
+
+#include "ui/features/docs/doc-links.h"
+
+#include <QVector>
+#include <QWidget>
+
+namespace kai::ui {
+
+// A barra de cima do leitor de documentos: voltar/avançar, breadcrumbs, botão da árvore e zoom. Pintada pelo próprio
+// widget (nenhum QToolButton: a folha de estilo global deformava ícones e alturas), então a altura e o alinhamento são
+// exatos em qualquer tema.
+class DocNavBar : public QWidget {
+    Q_OBJECT
+
+public:
+    enum class Item { None, Back, Forward, Recent, Tree, Folders, ZoomOut, ZoomLabel, ZoomIn, Crumb };
+
+    explicit DocNavBar(QWidget *parent = nullptr);
+
+    void setCanGoBack(bool enabled);
+    void setCanGoForward(bool enabled);
+    void setCrumbs(const QVector<DocCrumb> &crumbs);
+    void setZoomPercent(int percent);
+    void setTreeActive(bool active);
+    // Há documentos com alterações não salvas: o botão de recentes ganha um selo.
+    void setHasDrafts(bool hasDrafts);
+    void setBarHeight(int height);
+    // O botão no começo da barra que abre o menu das pastas com documentação. Desligado por padrão (a Ajuda não o tem).
+    void setFoldersVisible(bool visible);
+
+    // Retângulo de cada controle (coordenadas do widget), para os testes e o hit-testing.
+    QRect rectOf(Item item) const;
+    QRect crumbRect(int index) const;
+    int crumbCount() const { return m_visibleCrumbs.size(); }
+
+signals:
+    void backRequested();
+    void forwardRequested();
+    // O botão de recentes (relógio): quem escuta abre o menu na posição global dada.
+    void recentRequested(const QPoint &globalPosition);
+    void treeToggleRequested();
+    // O botão das pastas: quem escuta abre o menu na posição global dada.
+    void foldersRequested(const QPoint &globalPosition);
+    void zoomInRequested();
+    void zoomOutRequested();
+    void zoomResetRequested();
+    void crumbActivated(const QString &target);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    bool event(QEvent *event) override;
+
+private:
+    struct Hit {
+        Item item = Item::None;
+        int crumb = -1;
+        bool operator==(const Hit &o) const { return item == o.item && crumb == o.crumb; }
+    };
+    struct VisibleCrumb {
+        QString text;
+        QString target;
+        QRect rect;
+    };
+    void layoutItems();
+    Hit hitAt(const QPoint &pos) const;
+    bool isEnabled(Item item) const;
+    QString tooltipFor(const Hit &hit) const;
+
+    QVector<DocCrumb> m_crumbs;
+    QVector<VisibleCrumb> m_visibleCrumbs;
+    QRect m_back, m_forward, m_recent, m_tree, m_folders, m_zoomOut, m_zoomLabel, m_zoomIn;
+    bool m_foldersVisible = false;
+    bool m_canBack = false;
+    bool m_canForward = false;
+    bool m_treeActive = false;
+    bool m_hasDrafts = false;
+    int m_zoom = 100;
+    int m_barHeight = 36;
+    Hit m_hover;
+    Hit m_pressed;
+};
+
+} // namespace kai::ui

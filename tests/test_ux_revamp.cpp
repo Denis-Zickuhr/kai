@@ -7,29 +7,26 @@
 #include <QSignalSpy>
 
 #include "core/models.h"
-#include "ui/terminal-profiles-editor-widget.h"
-#include "ui/parameter-editor-widget.h"
-#include "ui/key-value-editor-widget.h"
-#include "ui/collection-editor-dialog.h"
-#include "ui/item-actions-bar.h"
-#include "ui/command-tree-widget.h"
-#include "ui/row-edit-dialog.h"
-#include "ui/table-utils.h"
-#include "ui/dialog-utils.h"
+#include "ui/features/output/terminal-profiles-editor-widget.h"
+#include "ui/features/command-editor/parameter-editor-widget.h"
+#include "ui/shared/key-value-editor-widget.h"
+#include "ui/features/collections/collection-editor-dialog.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/row-edit-dialog.h"
+#include "ui/shared/table-utils.h"
+#include "ui/shared/dialog-utils.h"
 
 using namespace kai::ui;
 using namespace kai::core;
 
-// ============================================================================
-// Traves de regressão da REFORMULAÇÃO DE UX/UI (tabelas, tags, alvos de
-// terminal, seletor de pastas com busca, menu contextual, sidebar).
-// ============================================================================
+// Traves de regressão da reformulação de UX/UI (tabelas, tags, alvos de terminal, seletor de pastas com busca,
+// menu contextual, sidebar).
 class TestUxRevamp : public QObject {
     Q_OBJECT
 
 private slots:
-    // BLOCO 3 — exclusividade do "Padrão" e round-trip do modelo. Com o novo
-    // modelo (tabela read-only + form), setTargets/targets preserva os dados.
+    // Exclusividade do "Padrão" e round-trip do modelo: setTargets/targets preservam os dados.
     void terminalProfilesRoundTripPreservesData()
     {
         TerminalProfilesEditorWidget editor;
@@ -51,14 +48,7 @@ private slots:
         QVERIFY(!back.at(1).isDefault);
     }
 
-    // BLOCO 1 — o lápis de edição fica na BARRA INFERIOR (não em coluna): há um
-    // QToolButton de editar como filho direto do widget (fora da tabela).
-    // Redesenho (mockup enviado pelo usuário): a barra de botões
-    // adicionar/editar/remover ABAIXO da tabela foi substituída por ícones
-    // de lápis/lixeira INLINE em cada linha ("Adicionar" migrou pro
-    // cabeçalho do CollapsibleSectionCard que envolve este widget, fora do
-    // escopo deste teste). Verifica que a linha tem os dois ícones de ação
-    // embutidos na própria tabela, não numa barra externa.
+    // O lápis/lixeira ficam inline em cada linha, não numa barra de botões abaixo da tabela.
     void parameterEditorHasInlineRowActions()
     {
         ParameterEditorWidget editor;
@@ -70,33 +60,23 @@ private slots:
         auto *table = editor.findChild<QTableWidget *>();
         QVERIFY(table != nullptr);
         QCOMPARE(table->rowCount(), 1);
-        // Nenhum QToolButton deveria existir FORA da tabela (sem barra
-        // inferior) — só os inline, que ficam dentro dela.
+        // Nenhum QToolButton fora da tabela (sem barra inferior).
         for (QToolButton *b : editor.findChildren<QToolButton *>()) {
             QVERIFY2(table->isAncestorOf(b), "não deveria haver botões fora da tabela");
         }
-        // Coluna de Ações (índice 1 — logo após Nome, ADJACENTE de
-        // propósito: ver comentário de kColActions em
-        // parameter-editor-widget.cpp sobre o bug do "fantasma" visual
-        // quando havia colunas ocultas entre Nome e Ações) tem um cell
-        // widget com pelo menos 2 ícones (lápis + lixeira).
-        QWidget *actionsCell = table->cellWidget(0, 1);
+        // Coluna de Ações (índice 2: Arrastar/Nome/Ações; ver kColDragHandle/kColName/kColActions em
+        // parameter-editor-widget.cpp) tem um cell widget com pelo menos 2 ícones (lápis + lixeira). A coluna 0 também tem
+        // cell widget (indicativo de arrastar), mas sem QToolButton.
+        QWidget *actionsCell = table->cellWidget(0, 2);
         QVERIFY(actionsCell != nullptr);
         QCOMPARE(actionsCell->findChildren<QToolButton *>().size(), 2);
-        // Round-trip do modelo preserva o parâmetro.
         const QVector<Parameter> back = editor.parameters();
         QCOMPARE(back.size(), 1);
         QCOMPARE(back.at(0).name, QStringLiteral("x"));
     }
 
-    // Repaginação visual (mockup "Perfis de Execução"): a tabela virou uma
-    // lista de CARDS, um por perfil — cada card carrega seus próprios
-    // ícones de lápis/lixeira inline (mesmo padrão de makeRowActionsCell
-    // usado nas outras tabelas), mais o botão "+ Novo Perfil" no topo do
-    // widget. Substitui a antiga trava "table + barra inferior com 3
-    // botões" por uma equivalente pro novo layout: pelo menos 1 botão de
-    // adicionar no topo + pelo menos 2 ícones inline (editar/excluir) por
-    // card.
+    // Lista de cards, um por perfil, com lápis/lixeira inline (makeRowActionsCell) e o botão "+ Novo Perfil" no topo:
+    // pelo menos 1 botão de adicionar no topo e 2 ícones inline por card.
     void terminalProfilesHasInlineCardActions()
     {
         TerminalProfilesEditorWidget editor;
@@ -109,11 +89,7 @@ private slots:
         QVERIFY2(buttons.size() >= 3, "esperado adicionar (topo) + editar/excluir (card)");
     }
 
-    // BLOCO 1 — remoção por CHECKBOX (seleção múltipla), não mais por linha
-    // atual. Marca 2 de 3 linhas do key-value e verifica que ambas somem.
-    // Redesenho (mockup enviado pelo usuário): sem mais checkbox de
-    // seleção múltipla + botão "remover" — cada linha tem seu próprio
-    // ícone de lixeira inline (ver ParameterEditorWidget, mesmo padrão).
+    // Cada linha tem o próprio ícone de lixeira inline (sem checkbox de seleção múltipla nem botão "remover").
     void keyValueRemovesByInlineTrashIcon()
     {
         KeyValueEditorWidget editor(nullptr, QStringLiteral("K"), QStringLiteral("V"));
@@ -127,8 +103,7 @@ private slots:
         QVERIFY(table != nullptr);
         QCOMPARE(table->rowCount(), 3);
 
-        // Descobre qual linha é "A" (a ordem reflete QMap, alfabética aqui)
-        // e clica no segundo ícone (lixeira) da célula de ações dela.
+        // Descobre qual linha é "A" (a ordem reflete QMap) e clica na lixeira da célula de ações dela.
         int rowOfA = -1;
         for (int row = 0; row < table->rowCount(); ++row) {
             if (table->item(row, 0)->text() == QStringLiteral("A")) {
@@ -140,7 +115,7 @@ private slots:
         QWidget *actionsCell = table->cellWidget(rowOfA, table->columnCount() - 1);
         QVERIFY(actionsCell != nullptr);
         const QList<QToolButton *> icons = actionsCell->findChildren<QToolButton *>();
-        QCOMPARE(icons.size(), 2); // 0=lápis, 1=lixeira
+        QCOMPARE(icons.size(), 2);
         icons.at(1)->click();
 
         QCOMPARE(table->rowCount(), 2);
@@ -150,20 +125,14 @@ private slots:
         QVERIFY(!back.contains(QStringLiteral("A")));
     }
 
-    // BLOCO 2 — corrige raw text vazando: a célula de tags NÃO é editável inline
-    // (a edição é pelo diálogo dedicado). Se fosse editável, o editor nativo
-    // mostraria "tag1, tag2" por cima dos chips.
+    // No-op: a feature de tags de coleção foi removida.
     void collectionTagsCellIsNotEditableInline()
     {
-        // Teste removido: a feature de tags de coleção foi removida (a coluna
-        // de tags não existe mais). Mantido como no-op para não renumerar o
-        // restante da suíte; a lógica de tags saiu por completo.
         QVERIFY(true);
     }
 
-    // BLOCO 3 — makeSearchableCombo torna o combo editável + com completer
-    // MatchContains, SEM inserir itens novos (NoInsert). O currentData continua
-    // acessível para o chamador ler a pasta escolhida.
+    // makeSearchableCombo: editável + completer MatchContains, sem inserir itens novos (NoInsert); currentData segue
+    // acessível ao chamador.
     void searchableComboIsEditableWithoutInsert()
     {
         QComboBox combo;
@@ -177,12 +146,10 @@ private slots:
         QCOMPARE(combo.insertPolicy(), QComboBox::NoInsert);
         QVERIFY(combo.completer() != nullptr);
         QCOMPARE(combo.completer()->filterMode(), Qt::MatchContains);
-        // currentData continua válido (o chamador lê a pasta por data, não texto).
         QCOMPARE(combo.currentData().toString(), QStringLiteral("fa"));
     }
 
-    // BLOCO 1 — RowEditDialog (form contextual do lápis): declarar campos e ler
-    // os valores de volta, incluindo Combo e Bool.
+    // RowEditDialog: declarar campos e ler os valores de volta, incluindo Combo e Bool.
     void rowEditDialogRoundTrip()
     {
         QVector<RowEditDialog::FieldSpec> fields;
@@ -200,8 +167,7 @@ private slots:
         QCOMPARE(dialog.value(QStringLiteral("tty")), QStringLiteral("true"));
     }
 
-    // BLOCO 4 — a ItemActionsBar (grupo "Item") expõe o botão/sinal de
-    // criar Coleção.
+    // A ItemActionsBar (grupo "Item") expõe o botão/sinal de criar Coleção.
     void itemActionsBarEmitsNewCollectionRequested()
     {
         ItemActionsBar bar;
@@ -209,8 +175,8 @@ private slots:
         QVERIFY2(spy.isValid(), "sinal newCollectionRequested deve existir na ItemActionsBar");
     }
 
-    // BLOCO 4 — o command-tree expõe os sinais de criação (menu de contexto /
-    // Insert) e de force-stop. QSignalSpy inválido = sinal inexistente.
+    // O command-tree expõe os sinais de criação (menu de contexto / Insert) e de force-stop; QSignalSpy inválido =
+    // sinal inexistente.
     void commandTreeExposesContextSignals()
     {
         CommandTreeWidget tree;

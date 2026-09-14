@@ -26,8 +26,7 @@ TranslationManager &TranslationManager::instance()
 TranslationManager::TranslationManager(QObject *parent)
     : QObject(parent)
 {
-    // Carrega o pack padrão (en) já na construção, para que translate()
-    // funcione com fallback mesmo antes de qualquer loadLanguage explícito.
+    // Carrega o pack padrão (en) na construção, para translate() ter fallback antes de qualquer loadLanguage.
     readPack(QString::fromLatin1(kDefaultLanguage), m_fallback);
     m_active = m_fallback;
     m_currentLanguage = QString::fromLatin1(kDefaultLanguage);
@@ -98,8 +97,7 @@ bool TranslationManager::readPack(const QString &code, QHash<QString, QString> &
 
     const QJsonObject root = doc.object();
     for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
-        // Ignora metadados iniciados por "_" (ex: "_language_name"), que
-        // não são chaves de tradução.
+        // Ignora metadados iniciados por "_" (ex.: "_language_name").
         if (it.key().startsWith(QLatin1Char('_'))) {
             continue;
         }
@@ -110,7 +108,6 @@ bool TranslationManager::readPack(const QString &code, QHash<QString, QString> &
 
 bool TranslationManager::loadLanguage(const QString &code)
 {
-    // Garante que o fallback (en) esteja sempre carregado.
     if (m_fallback.isEmpty()) {
         readPack(QString::fromLatin1(kDefaultLanguage), m_fallback);
     }
@@ -139,17 +136,14 @@ bool TranslationManager::loadLanguage(const QString &code)
 
 QString TranslationManager::translate(const QString &key) const
 {
-    // 1) idioma ativo
     auto it = m_active.constFind(key);
     if (it != m_active.constEnd() && !it.value().isEmpty()) {
         return it.value();
     }
-    // 2) idioma padrão (en)
     it = m_fallback.constFind(key);
     if (it != m_fallback.constEnd() && !it.value().isEmpty()) {
         return it.value();
     }
-    // 3) a própria chave (nunca vazio)
     return key;
 }
 

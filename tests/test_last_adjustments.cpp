@@ -6,9 +6,9 @@
 #include <QLineEdit>
 #include <functional>
 
-#include "ui/command-tree-widget.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -27,11 +27,8 @@ QTreeWidget *treeForRoot(CommandTreeWidget &widget, const QString &rootId)
 }
 }
 
-// Cobre os 3 últimos ajustes solicitados pelo usuário antes de pausar a
-// sessão: (1) pastas iniciam colapsadas por padrão; (2) Enter alterna
-// expandir/colapsar numa pasta selecionada; (3) o combo de pasta destino
-// do CommandEditorDialog permite escolher/trocar livremente a pasta do
-// comando, em vez de ficar fixo na pasta onde o diálogo foi aberto.
+// Pastas iniciam colapsadas; Enter alterna expandir/colapsar numa pasta selecionada; o combo de pasta
+// destino do CommandEditorDialog permite trocar livremente a pasta do comando.
 class TestLastAdjustments : public QObject {
     Q_OBJECT
 
@@ -76,9 +73,8 @@ private slots:
 
         auto *customTree = treeForRoot(widget, QStringLiteral("f_root"));
         QTreeWidgetItem *folderItem = customTree->topLevelItem(0);
-        QVERIFY(!folderItem->isExpanded()); // colapsada por padrão
+        QVERIFY(!folderItem->isExpanded());
 
-        // Simula Enter/duplo-clique (QTreeWidget::itemActivated).
         emit customTree->itemActivated(folderItem, 0);
         QVERIFY(folderItem->isExpanded());
 
@@ -98,17 +94,14 @@ private slots:
 
         CommandEditorDialog dialog(QStringLiteral("f_a"), {}, {folderA, folderB}, nullptr);
 
-        auto *folderCombo = dialog.findChildren<QComboBox *>().first();
+        // Não usa o primeiro QComboBox da árvore: outro combo (ex.: PERFIL) pode vir antes do da pasta.
+        auto *folderCombo = dialog.findChild<QComboBox *>(QStringLiteral("commandEditorFolderCombo"));
         QVERIFY(folderCombo != nullptr);
-        // 3 itens agora: "(Raiz)" (folderId vazio) + as 2 pastas. A opção
-        // Raiz foi adicionada (feedback do usuário: comando também vai à
-        // raiz, como coleção).
+        // 3 itens: "(Raiz)" (folderId vazio) + as 2 pastas.
         QCOMPARE(folderCombo->count(), 3);
 
-        // Seleção inicial deve refletir a pasta passada no construtor.
         QCOMPARE(folderCombo->currentData().toString(), QStringLiteral("f_a"));
 
-        // Usuário troca para a Pasta B.
         const int indexOfB = folderCombo->findData(QStringLiteral("f_b"));
         QVERIFY(indexOfB >= 0);
         folderCombo->setCurrentIndex(indexOfB);
@@ -119,8 +112,7 @@ private slots:
         const Command built = dialog.buildCommand();
         QCOMPARE(built.folderId, QStringLiteral("f_b"));
 
-        // Escolher "(Raiz)" (data vazia) DEVE resultar em folderId vazio —
-        // regressão do bug: antes caía de volta na pasta original.
+        // Escolher "(Raiz)" (data vazia) resulta em folderId vazio, não na pasta original.
         const int rootIdx = folderCombo->findData(QString());
         QVERIFY(rootIdx >= 0);
         folderCombo->setCurrentIndex(rootIdx);
@@ -128,11 +120,8 @@ private slots:
         QVERIFY(builtRoot.folderId.isEmpty());
     }
 
-    // Regressão (bug reportado): ao EDITAR um comando, ele "saía da pasta"
-    // e "pulava para o fim da lista". Causa raiz: buildCommand() criava um
-    // Command novo (order == -1 default) descartando o order do existente,
-    // fazendo-o cair no grupo "sem ordem manual" (fim) na renderização.
-    // A correção preserva order (e folderId via combo) na edição.
+    // Editar um comando preserva order (e folderId via combo): buildCommand() criava um Command novo
+    // (order == -1) e o comando "pulava para o fim da lista".
     void editingCommandPreservesManualOrder()
     {
         Folder folderA;
@@ -144,14 +133,14 @@ private slots:
         existing.folderId = QStringLiteral("f_a");
         existing.name = QStringLiteral("Comando Existente");
         existing.command = QStringLiteral("echo hi");
-        existing.order = 3; // posição manual definida por drag anterior
+        existing.order = 3;
 
         CommandEditorDialog dialog(QStringLiteral("f_a"), {}, {folderA}, nullptr, &existing);
 
         const Command built = dialog.buildCommand();
-        QCOMPARE(built.order, 3);                          // order preservado
-        QCOMPARE(built.folderId, QStringLiteral("f_a"));   // não saiu da pasta
-        QCOMPARE(built.id, QStringLiteral("c_existing"));  // mesmo id (edição)
+        QCOMPARE(built.order, 3);
+        QCOMPARE(built.folderId, QStringLiteral("f_a"));
+        QCOMPARE(built.id, QStringLiteral("c_existing"));
     }
 
     // Regressão: mesma preservação de order ao editar uma PASTA.
@@ -168,11 +157,8 @@ private slots:
         QCOMPARE(built.id, QStringLiteral("f_existing"));
     }
 
-    // Regressão (bug reportado: "não consigo gravar parâmetros dinâmicos para
-    // comandos HTTP"). Antes, buildCommand() só atribuía command.params no ramo
-    // SHELL; comandos HTTP descartavam os parâmetros ao salvar. E o carregamento
-    // idem: um HTTP existente abria sem seus params. Este teste trava os dois
-    // lados: um HTTP com params, editado no diálogo, deve SAIR com os params.
+    // buildCommand() só atribuía command.params no ramo SHELL, e o carregamento idem: um HTTP com params,
+    // editado no diálogo, deve sair com os params.
     void httpCommandPreservesDynamicParams()
     {
         Folder folderA;
@@ -202,12 +188,8 @@ private slots:
         QCOMPARE(built.params.at(0).name, QStringLiteral("id"));
     }
 
-    // Regressão (bug reportado): ao finalizar a edição de um comando, as
-    // pastas autocolapsavam porque persistir chama setData->rebuildTabs,
-    // que recria a árvore do zero. A correção captura os ids expandidos
-    // antes e os reexpande depois. Este teste simula: expande uma subpasta,
-    // dispara um novo setData (equivalente ao persist pós-edição) e
-    // verifica que a subpasta continua expandida.
+    // Persistir chama setData->rebuildTabs, que recria a árvore do zero: os ids expandidos são capturados antes
+    // e reexpandidos depois. Expande uma subpasta, dispara novo setData e confere que continua expandida.
     void rebuildPreservesFolderExpansionState()
     {
         Folder root;
@@ -231,7 +213,6 @@ private slots:
         QTreeWidget *tree = treeForRoot(widget, QStringLiteral("f_root"));
         QVERIFY(tree != nullptr);
 
-        // Localiza o item da subpasta e o expande.
         QTreeWidgetItem *subItem = nullptr;
         std::function<void(QTreeWidgetItem *)> find = [&](QTreeWidgetItem *item) {
             if (item->data(0, Qt::UserRole + 1).toString() == QStringLiteral("f_sub")) {
@@ -248,10 +229,8 @@ private slots:
         subItem->setExpanded(true);
         QVERIFY(subItem->isExpanded());
 
-        // Dispara o rebuild (equivalente ao persist pós-edição).
         widget.setData({root, sub}, {cmd});
 
-        // A subpasta deve continuar expandida após o rebuild.
         QTreeWidget *treeAfter = treeForRoot(widget, QStringLiteral("f_root"));
         QVERIFY(treeAfter != nullptr);
         QTreeWidgetItem *subAfter = nullptr;

@@ -18,7 +18,6 @@ class TestI18nSync : public QObject {
     Q_OBJECT
 
 private:
-    // Sobe da pasta de build até a raiz do repositório (onde está assets/).
     static QString repoRoot()
     {
         QDir dir(QCoreApplication::applicationDirPath());
@@ -49,8 +48,7 @@ private slots:
         QVERIFY(!en.isEmpty());
         QVERIFY(!pt.isEmpty());
 
-        // Comparação por laço simples (aritmética de QSet + conversão gerava
-        // exceção no runtime do teste).
+        // Laço simples: aritmética de QSet + conversão gerava exceção no runtime do teste.
         QStringList missingInPt;
         for (const QString &k : en.keys()) {
             if (!pt.contains(k)) {
@@ -68,7 +66,6 @@ private slots:
         QVERIFY2(missingInEn.isEmpty(),
                  qPrintable(QStringLiteral("faltando em en: %1").arg(missingInEn.join(", "))));
 
-        // Nenhum valor vazio (vazio faria a UI mostrar nada).
         for (const QString &k : en.keys()) {
             QVERIFY2(!en.value(k).toString().trimmed().isEmpty(),
                      qPrintable(QStringLiteral("valor vazio em en: %1").arg(k)));
@@ -84,7 +81,6 @@ private slots:
         const QJsonObject en = loadPack(root, QStringLiteral("en"));
         QVERIFY(!en.isEmpty());
 
-        // Varre o código procurando utils::tr(QStringLiteral("chave")).
         static const QRegularExpression call(
             QStringLiteral("utils::tr\\(QStringLiteral\\(\"([^\"]+)\"\\)\\)"));
         QStringList missing;
@@ -111,22 +107,11 @@ private slots:
                                 .arg(missing.join(", "))));
     }
 
-    // CHAVES ÓRFÃS: presentes no pacote e usadas por NINGUÉM. Acumulam quando
-    // uma tela é reescrita e as chaves antigas ficam para trás — foi o caso de 32
-    // delas, a maioria do TerminalDrawer, que passou a delegar ao OutputPanel (e
-    // este tem chaves "output.*" próprias). Órfã não quebra nada, e é justamente
-    // por isso que se acumula: ninguém percebe.
-    //
-    // A checagem procura a chave ENTRE ASPAS dentro do código, em vez de extrair
-    // todos os literais com regex. A primeira versão fazia a extração e produziu
-    // FALSOS ÓRFÃOS por dois motivos que só aparecem em código real:
-    //  - comentários com aspas que atravessam duas linhas (abre em uma, fecha na
-    //    outra) desalinham o pareamento e derrubam todo o resto do arquivo;
-    //  - raw string literals R"(...)" contêm aspas próprias.
-    // Isso quase me fez remover chaves em USO. Buscar a chave entre aspas é imune
-    // a pareamento, e erra para o lado seguro: uma chave citada até em comentário
-    // conta como usada. Falso órfão apaga texto da interface; falso "em uso" só
-    // deixa uma linha a mais no pacote.
+    // Chaves órfãs (no pacote, usadas por ninguém) acumulam quando uma tela é reescrita.
+    // A checagem procura a chave entre aspas no código em vez de extrair literais por regex: aspas que
+    // atravessam linhas em comentários e raw strings R"(...)" desalinham o pareamento e geram falsos órfãos.
+    // Uma chave citada até em comentário conta como usada (falso órfão apaga texto da UI; o inverso só
+    // deixa uma linha a mais no pacote).
     void packHasNoOrphanKeys()
     {
         const QString root = repoRoot();

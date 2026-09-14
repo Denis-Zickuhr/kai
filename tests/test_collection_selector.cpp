@@ -1,10 +1,13 @@
 #include <QTest>
 #include <QComboBox>
 #include <QListWidget>
+#include <QLineEdit>
+#include <QCheckBox>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QDialogButtonBox>
 
-#include "ui/collection-selector-dialog.h"
+#include "ui/features/collections/collection-selector-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -47,8 +50,7 @@ private slots:
 
     void favoriteIsAStarToggle()
     {
-        // A estrela agora é um ÍCONE EMBUTIDO na 1a célula (não mais coluna
-        // própria): o item tem um ícone e o estado de favorito em UserRole+1.
+        // A estrela é um ícone embutido na 1ª célula (favorito em UserRole+1).
         CollectionSelectorDialog dialog(makeCollection(3));
         auto *table = dialog.findChild<QTableWidget *>();
         QVERIFY(table != nullptr);
@@ -56,6 +58,102 @@ private slots:
         QVERIFY(first != nullptr);
         QVERIFY(!first->icon().isNull());          // tem a estrela embutida
         QVERIFY(first->data(Qt::UserRole + 1).isValid()); // estado de favorito
+    }
+
+    // O filtro salvo da última vez é reaplicado ANTES da primeira paginação (senão a lista reabre inteira).
+    void initialFilterIsPreappliedOnOpen()
+    {
+        CollectionFilterState saved;
+        saved.search = QStringLiteral("Nome1");
+        CollectionSelectorDialog dialog(makeCollection(3), {}, true, nullptr, saved);
+
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+        // Só "Nome1" bate na busca salva.
+        QCOMPARE(table->rowCount(), 1);
+
+        auto *search = dialog.findChild<QLineEdit *>();
+        QVERIFY(search != nullptr);
+        QCOMPARE(search->text(), QStringLiteral("Nome1"));
+    }
+
+    // filterState() é o que o chamador persiste: reflete o valor pré-carregado e os ajustes feitos na tela.
+    void filterStateReflectsSearchAndFavoritesToggle()
+    {
+        CollectionSelectorDialog dialog(makeCollection(3));
+        auto *search = dialog.findChild<QLineEdit *>();
+        auto *favorites = dialog.findChild<QCheckBox *>();
+        QVERIFY(search != nullptr);
+        QVERIFY(favorites != nullptr);
+
+        QTest::keyClicks(search, QStringLiteral("Nome2"));
+        favorites->setChecked(true);
+
+        const CollectionFilterState state = dialog.filterState();
+        QCOMPARE(state.search, QStringLiteral("Nome2"));
+        QVERIFY(state.favoritesOnly);
+    }
+
+    // A QTableWidget é reconstruída a cada troca de página, o que apagava a seleção: entradas escolhidas em páginas
+    // diferentes chegam TODAS em selectedEntries() ao aceitar.
+    void multiSelectPersistsAcrossPageChanges()
+    {
+        Collection col = makeCollection(30); // 2 páginas no tamanho padrão (25)
+        CollectionSelectorDialog dialog(col);
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+        QCOMPARE(table->rowCount(), 25);
+
+        table->selectRow(0);
+        const QString firstPageEntryId = table->item(0, 0)->data(Qt::UserRole).toString();
+        QVERIFY(!firstPageEntryId.isEmpty());
+
+        auto *nextButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorNextButton"));
+        QVERIFY(nextButton != nullptr);
+        emit nextButton->clicked();
+        QCOMPARE(table->rowCount(), 5); // 30 - 25 restantes na página 2
+
+        table->selectRow(0);
+        const QString secondPageEntryId = table->item(0, 0)->data(Qt::UserRole).toString();
+        QVERIFY(!secondPageEntryId.isEmpty());
+        QVERIFY(firstPageEntryId != secondPageEntryId);
+
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(buttonBox != nullptr);
+        emit buttonBox->accepted();
+
+        const QVector<CollectionEntry> selected = dialog.selectedEntries();
+        QCOMPARE(selected.size(), 2);
+        QStringList ids;
+        for (const CollectionEntry &e : selected) ids << e.id;
+        QVERIFY(ids.contains(firstPageEntryId));
+        QVERIFY(ids.contains(secondPageEntryId));
+    }
+
+    // Label de contagem + botões "selecionar tudo (filtrados)" e "limpar seleção".
+    void selectAllFilteredAndClearSelectionButtonsWork()
+    {
+        Collection col = makeCollection(30);
+        CollectionSelectorDialog dialog(col);
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+
+        auto *selectAllButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorSelectAllButton"));
+        auto *clearButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorClearSelectionButton"));
+        QVERIFY(selectAllButton != nullptr);
+        QVERIFY(clearButton != nullptr);
+
+        // "Selecionar tudo (filtrados)" pega as 30 entradas, não só as 25
+        // visíveis na página atual.
+        emit selectAllButton->clicked();
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(buttonBox != nullptr);
+        emit buttonBox->accepted();
+        QCOMPARE(dialog.selectedEntries().size(), 30);
+
+        emit clearButton->clicked();
+        emit buttonBox->accepted();
+        QCOMPARE(dialog.selectedEntries().size(), 0);
     }
 
     void historyOrdersEntriesFirst()
@@ -78,9 +176,7 @@ private slots:
         auto *dialog = new CollectionSelectorDialog(col);
         auto *table = dialog->findChild<QTableWidget *>();
         QVERIFY(table != nullptr);
-        // Fecha o diálogo assim que aceitar (o duplo-clique chama accept()).
         QObject::connect(dialog, &QDialog::accepted, dialog, [dialog]() { /* no-op */ });
-        // Dispara o duplo-clique na 2a linha (índice 1), coluna do 1o campo (0).
         QTableWidgetItem *cell = table->item(1, 0);
         QVERIFY(cell != nullptr);
         emit table->itemDoubleClicked(cell);
@@ -90,12 +186,8 @@ private slots:
         delete dialog;
     }
 
-    // REGRESSÃO PREVENIDA na tradução dos diálogos de coleção: os operadores do
-    // filtro por campo do schema eram usados como RÓTULO do combo E como CHAVE
-    // de comparação (ff.op == "sim"/"contém"). Traduzir os rótulos quebraria o
-    // filtro silenciosamente em qualquer idioma. Agora o rótulo é traduzido e a
-    // chave (userData) é estável — este teste trava isso: as chaves precisam
-    // existir no combo e NÃO podem ser o texto exibido.
+    // Os operadores do filtro por campo eram RÓTULO do combo E CHAVE de comparação (ff.op == "sim"/"contém"):
+    // traduzir os rótulos quebraria o filtro. A chave (userData) tem de existir no combo e ser estável, não o texto exibido.
     void filterOperatorsUseStableKeysNotLabels()
     {
         Collection col;
@@ -121,9 +213,7 @@ private slots:
 
         CollectionSelectorDialog dialog(col, QStringList{}, /*multiSelect=*/false, nullptr);
 
-        // Filtros dinâmicos via DROPDOWN: encontra o combo "Adicionar filtro"
-        // (itens com UserRole = nome do campo) e ativa cada campo para criar os
-        // cartões, cujos combos de operador expõem as chaves estáveis.
+        // Filtros via DROPDOWN: ativa cada campo de "Adicionar filtro" para criar os cartões e lê as chaves dos combos de operador.
         QComboBox *addCombo = nullptr;
         for (QComboBox *cb : dialog.findChildren<QComboBox *>()) {
             // O combo de adicionar tem itens cujo userData é um nome de campo
@@ -143,7 +233,6 @@ private slots:
             }
         }
 
-        // Os combos de operador dos cartões devem expor CHAVES estáveis.
         const QList<QComboBox *> combos = dialog.findChildren<QComboBox *>();
         QVERIFY2(!combos.isEmpty(), "nenhum combo de operador encontrado");
 
@@ -154,12 +243,7 @@ private slots:
                 const QString key = combo->itemData(i).toString();
                 if (!key.isEmpty()) {
                     keysFound << key;
-                    // A chave deve ser do conjunto ASCII CANÔNICO. É esse o
-                    // invariante que protege a lógica: se alguém voltar a usar o
-                    // texto exibido como chave, num idioma traduzido a chave
-                    // deixaria de pertencer a este conjunto e o teste quebra.
-                    // (Não comparo chave != rótulo porque em INGLÊS eles
-                    // coincidem legitimamente, ex: "contains".)
+                    // A chave deve ser do conjunto ASCII CANÔNICO (não comparo chave != rótulo: em INGLÊS coincidem, ex: "contains").
                     static const QStringList canonical = {
                         QStringLiteral("none"), QStringLiteral("eq"), QStringLiteral("gt"),
                         QStringLiteral("lt"), QStringLiteral("yes"), QStringLiteral("no"),

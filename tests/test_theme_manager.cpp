@@ -9,14 +9,8 @@
 
 using namespace kai::utils;
 
-// Testa ThemeManager: parse de tema JSON, expressoes de cor ${var+-hex} e
-// resiliencia a JSON invalido.
-//
-// NOTA: raw string literals R"(...)" nao sao usados aqui porque o moc do
-// Qt6 falha silenciosamente ("No relevant classes found") ao processar
-// arquivos com multiplas funcoes Q_OBJECT-scoped contendo raw strings com
-// chaves { } no corpo. QStringLiteral com escapes normais é usado em vez
-// disso.
+// ThemeManager: parse de tema JSON, expressões de cor ${var+-hex} e resiliência a JSON inválido. Sem raw strings
+// R"(...)": o moc do Qt6 falha silenciosamente ("No relevant classes found") com raw strings contendo chaves.
 class TestThemeManager : public QObject {
     Q_OBJECT
 
@@ -55,8 +49,7 @@ private slots:
         QVERIFY(theme.qss.contains(QStringLiteral("#282a36")));
     }
 
-    // Valida a expressao de cor estilo CopyQ: ${bg - #222222} deve subtrair
-    // componente a componente.
+    // ${bg - #222222} subtrai componente a componente.
     void colorSubtractionExpressionIsResolvedCorrectly()
     {
         const QString json = QStringLiteral(
@@ -68,7 +61,6 @@ private slots:
         ThemeManager manager;
         QVERIFY(manager.loadThemeFromFile(themePath));
 
-        // 0x28-0x22=0x06, 0x2a-0x22=0x08, 0x36-0x22=0x14
         QCOMPARE(manager.currentTheme().variables.value("tab_bg"), QStringLiteral("#060814"));
     }
 
@@ -97,12 +89,10 @@ private slots:
         ThemeManager manager;
         QVERIFY(manager.loadThemeFromFile(themePath));
 
-        // f8-00=f8, f8-44=b4, f2-00=f2 -> depois +40,00,00 -> clamp(f8+40)=ff, b4, f2
         QCOMPARE(manager.currentTheme().variables.value("num_fg"), QStringLiteral("#ffb4f2"));
     }
 
-    // spec 07: JSON corrompido nao deve crashar; mantem tema anterior (ou
-    // hasTheme() == false se nunca houve um tema valido carregado).
+    // JSON corrompido não crasha; mantém o tema anterior (ou hasTheme() == false se nunca houve um válido).
     void invalidJsonThemeDoesNotCrashAndKeepsPreviousState()
     {
         const QString themePath = writeThemeFile(QStringLiteral("{ this is not valid json"));
@@ -128,7 +118,6 @@ private slots:
         const QString invalidPath = writeThemeFile(QStringLiteral("{ corrupted"), QStringLiteral("invalid.json"));
         QVERIFY(!manager.loadThemeFromFile(invalidPath));
 
-        // Tema anterior ("valid") permanece intacto.
         QCOMPARE(manager.currentTheme().name, QStringLiteral("valid"));
         QVERIFY(manager.hasTheme());
     }
@@ -150,15 +139,12 @@ private slots:
 
         ThemeManager manager;
         QVERIFY(manager.loadThemeFromFile(themePath));
-        // Expressao nao resolvida permanece como estava (nao crasha).
+
         QVERIFY(!manager.currentTheme().variables.value("broken").isEmpty());
     }
 
-    // O tema claro (light.json) usa a operacao de SOMA de cor
-    // (${bg + #666666}) para clarear tons — ja coberto por
-    // colorAdditionExpressionIsResolvedCorrectly. Aqui validamos que um
-    // tema com fundo claro carrega e resolve corretamente
-    // ("criar mais temas: dracula=escuro + um tema claro").
+    // O tema claro (light.json) usa a SOMA de cor (${bg + #666666}), coberta em
+    // colorAdditionExpressionIsResolvedCorrectly; aqui, que um tema de fundo claro carrega e resolve.
     void lightThemeLoadsWithLightBackground()
     {
         const QString json = QStringLiteral(

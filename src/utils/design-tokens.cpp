@@ -1,5 +1,7 @@
 #include "utils/design-tokens.h"
 
+#include <qmath.h>
+
 namespace kai::utils::tokens {
 namespace {
 
@@ -7,9 +9,7 @@ QMap<QString, QString> g_vars;
 Density g_density = Density::Comfortable;
 Effects g_effects;
 
-// Um tema pode ser claro OU escuro. As derivações precisam saber para qual
-// lado "empurrar" a cor (escurecer no claro, clarear no escuro) — sem isso um
-// token derivado sumiria no tema claro.
+// Tema claro ou escuro: as derivações empurram a cor para o lado certo (escurecer no claro, clarear no escuro).
 bool isDarkTheme()
 {
     const QColor base(value(QStringLiteral("bg"), QStringLiteral("#282a36")));
@@ -85,16 +85,14 @@ QString accent()
 
 QString buttonColor()
 {
-    // Cor dos botões primários. Variável de tema OPCIONAL "button_color":
-    // quando ausente, cai no accent (retrocompatível — o roxo de antes).
+    // "button_color" é variável de tema opcional; ausente, cai no accent.
     QString b = g_vars.value(QStringLiteral("button_color"));
     return b.isEmpty() ? accent() : b;
 }
 
 QString buttonFg()
 {
-    // Texto do botão primário. Variável OPCIONAL "button_fg"; quando ausente,
-    // escolhe preto/branco automaticamente pelo brilho da cor do botão.
+    // "button_fg" é opcional; ausente, escolhe preto/branco pelo brilho da cor do botão.
     QString f = g_vars.value(QStringLiteral("button_fg"));
     if (!f.isEmpty()) return f;
     return QColor(buttonColor()).lightnessF() > 0.6
@@ -105,6 +103,13 @@ QString mutedFg()
 {
     return derived(QStringLiteral("muted_fg"), [] {
         return hex(mix(QColor(fg()), QColor(bg()), 0.40));
+    });
+}
+
+QString tabInactiveFg()
+{
+    return derived(QStringLiteral("tab_inactive_fg"), [] {
+        return hex(mix(QColor(fg()), QColor(bg()), 0.26));
     });
 }
 
@@ -122,17 +127,17 @@ QString hoverBg()
     });
 }
 
+QString treeStripeBg()
+{
+    // Zebra sutil das árvores/listas (estilo CopyQ), com o mesmo desvio de app-stylesheet.cpp; exposta como token
+    // para quem pinta a linha à mão (ex.: DraggableTreeWidget).
+    return hex(mix(QColor(bg()), QColor(fg()), isDarkTheme() ? 0.035 : 0.028));
+}
+
 QString surface()
 {
-    // 0.08 (era 0.05): bug visual real reportado com print ("antes pedi
-    // pra que os campos tenham fundo, mas o fundo ficou na caixa atrás")
-    // — em temas SEM um "surface" próprio definido (ex: Dracula, o tema
-    // padrão de instalação nova — kai-dark tem "surface" explícito e por
-    // isso nunca mostrou o problema), o valor derivado era claro demais
-    // perto do bg(): o card mal se distinguia do fundo do diálogo, e os
-    // campos (bg() puro) mal se distinguiam do card — tudo parecia "sem
-    // contraste nenhum". 0.08 mantém a intenção original (derivar do
-    // tema, sem cravar cor fixa) mas com um salto perceptível de verdade.
+    // 0.08: em temas sem "surface" próprio (ex.: Dracula) o derivado ficava claro demais perto de bg() e o card
+    // mal se distinguia do fundo.
     return derived(QStringLiteral("surface"), [] {
         return hex(shift(QColor(bg()), isDarkTheme() ? 0.08 : 0.03));
     });
@@ -140,16 +145,13 @@ QString surface()
 
 QString surface2()
 {
-    // 0.15 (era 0.10) — mesmo motivo do surface() acima, mantendo a
-    // mesma distância relativa entre surface/surface2 (~quase o dobro).
+    // 0.15: mesma razão de surface(), mantendo a distância relativa entre surface e surface2.
     return derived(QStringLiteral("surface_2"), [] {
         return hex(shift(QColor(bg()), isDarkTheme() ? 0.15 : 0.06));
     });
 }
 
-// Terminal/código: no tema ESCURO afunda em relação ao fundo; no CLARO fica
-// levemente acinzentado. Antes era #1e1e1e cravado, o que deixava o tema
-// claro com um retângulo preto no meio da tela.
+// Terminal/código: afunda em relação ao fundo no tema escuro e fica levemente acinzentado no claro.
 QString terminalBg()
 {
     return derived(QStringLiteral("terminal_bg"), [] {
@@ -209,7 +211,70 @@ QString dangerBg()
     return derived(QStringLiteral("danger_bg"), [] { return QStringLiteral("#e81123"); });
 }
 
-// --- Métricas: o estilo de canto escolhido no Settings escala os raios ---
+namespace {
+bool g_gradientsEnabled = true;
+
+// "primary" -> "gradient_primary_start"; "" (só chamadas legadas em teste) -> "gradient_start".
+QString gradientKey(const QString &slot, const QString &suffix)
+{
+    return slot.isEmpty()
+        ? (QStringLiteral("gradient_") + suffix)
+        : (QStringLiteral("gradient_") + slot + QStringLiteral("_") + suffix);
+}
+} // namespace
+
+void setGradientsEnabled(bool enabled)
+{
+    g_gradientsEnabled = enabled;
+}
+
+bool gradientsEnabled()
+{
+    return g_gradientsEnabled;
+}
+
+bool hasGradient(const QString &slot)
+{
+    if (!g_gradientsEnabled) {
+        return false;
+    }
+    return !g_vars.value(gradientKey(slot, QStringLiteral("start"))).isEmpty()
+        && !g_vars.value(gradientKey(slot, QStringLiteral("end"))).isEmpty();
+}
+
+QString gradientStart(const QString &slot)
+{
+    return value(gradientKey(slot, QStringLiteral("start")), accent());
+}
+
+QString gradientEnd(const QString &slot)
+{
+    return value(gradientKey(slot, QStringLiteral("end")), surface2());
+}
+
+int gradientAngle(const QString &slot)
+{
+    return intToken(gradientKey(slot, QStringLiteral("angle")), 135);
+}
+
+QString gradientQss(const QString &property, const QString &slot)
+{
+    if (!hasGradient(slot)) {
+        return QString();
+    }
+    // Converte o ângulo CSS (0°=esquerda->direita, 90°=cima->baixo, horário) em x1/y1/x2/y2 normalizados [0,1], que o QSS do Qt usa.
+    const qreal rad = qDegreesToRadians(static_cast<qreal>(gradientAngle(slot)));
+    const qreal dx = qSin(rad);
+    const qreal dy = -qCos(rad);
+    const qreal x1 = 0.5 - dx * 0.5, y1 = 0.5 - dy * 0.5;
+    const qreal x2 = 0.5 + dx * 0.5, y2 = 0.5 + dy * 0.5;
+    return QStringLiteral("%1: qlineargradient(x1:%2, y1:%3, x2:%4, y2:%5, "
+                          "stop:0 %6, stop:1 %7);")
+        .arg(property)
+        .arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3).arg(x2, 0, 'f', 3).arg(y2, 0, 'f', 3)
+        .arg(gradientStart(slot), gradientEnd(slot));
+}
+
 int radiusSm()
 {
     switch (g_effects.cornerStyle) {
@@ -217,6 +282,11 @@ int radiusSm()
     case 2: return 8;
     default: return intToken(QStringLiteral("radius_sm"), 5);
     }
+}
+
+int radiusMdForHeight(int height)
+{
+    return qMin(radiusMd(), qMax(0, (height - 6) / 2));
 }
 
 int radiusMd()
@@ -237,8 +307,7 @@ int radiusLg()
     }
 }
 
-// Grade de 4px (8pt grid dividido): substitui os paddings avulsos
-// (16,16,16,12 vs 20,20,20,16 vs 16,16,16,16 que coexistiam).
+// Grade de 4px.
 int space(int steps)
 {
     const int unit = (g_density == Density::Compact) ? 3 : 4;
@@ -265,6 +334,31 @@ QString monoFamily()
     return value(QStringLiteral("mono_family"),
                  QStringLiteral("'JetBrains Mono','Cascadia Code','Fira Code',"
                                 "'Ubuntu Mono',Consolas,monospace"));
+}
+
+QStringList monoFamilies()
+{
+    QStringList families;
+    for (QString family : monoFamily().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        family = family.trimmed();
+        if (family.startsWith(QLatin1Char('\'')) && family.endsWith(QLatin1Char('\''))) {
+            family = family.mid(1, family.size() - 2);
+        }
+        if (!family.isEmpty()) {
+            families << family;
+        }
+    }
+    return families;
+}
+
+QFont monoFont(int pointSize)
+{
+    QFont f;
+    f.setFamilies(monoFamilies());
+    f.setStyleHint(QFont::Monospace);
+    f.setFixedPitch(true);
+    f.setPointSize(pointSize > 0 ? pointSize : fontSizePt());
+    return f;
 }
 
 int fontSizePt()      { return intToken(QStringLiteral("font_size"), 12) - (g_density == Density::Compact ? 1 : 0); }

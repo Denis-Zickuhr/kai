@@ -22,11 +22,11 @@ QString levelName(LogLevel level)
     return QStringLiteral("INFO");
 }
 
-// Estado global do arquivo de log (protegido por mutex — o Logger pode ser
-// chamado de threads distintas via sinais assíncronos).
+// Estado global do arquivo de log, protegido por mutex (o Logger é chamado de várias threads).
 QMutex g_fileMutex;
 std::unique_ptr<QFile> g_logFile;
 QString g_logFilePath;
+bool g_consoleOutputEnabled = true;
 }
 
 LoggerSink &LoggerSink::instance()
@@ -39,7 +39,7 @@ QString Logger::enableFileLogging()
 {
     QMutexLocker locker(&g_fileMutex);
     if (g_logFile) {
-        return g_logFilePath; // já habilitado (idempotente)
+        return g_logFilePath;
     }
 
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -76,24 +76,24 @@ void Logger::log(LogLevel level, const QString &tag, const QString &message)
 {
     const QString formatted = QStringLiteral("[Kai][%1] %2").arg(tag, message);
 
-    switch (level) {
-    case LogLevel::Debug:
-        qDebug().noquote() << formatted;
-        break;
-    case LogLevel::Info:
-        qInfo().noquote() << formatted;
-        break;
-    case LogLevel::Warning:
-        qWarning().noquote() << formatted;
-        break;
-    case LogLevel::Error:
-        qCritical().noquote() << formatted;
-        break;
+    if (g_consoleOutputEnabled) {
+        switch (level) {
+        case LogLevel::Debug:
+            qDebug().noquote() << formatted;
+            break;
+        case LogLevel::Info:
+            qInfo().noquote() << formatted;
+            break;
+        case LogLevel::Warning:
+            qWarning().noquote() << formatted;
+            break;
+        case LogLevel::Error:
+            qCritical().noquote() << formatted;
+            break;
+        }
     }
 
-    // Persistência em arquivo (se habilitada): registro real e
-    // inspecionável independente de o stdout/qInfo estar sendo exibido ou
-    // suprimido pelo ambiente — atende "a aplicação não emite logs".
+    // Persistência em arquivo (se habilitada), independente de stdout/qInfo estarem suprimidos.
     {
         QMutexLocker locker(&g_fileMutex);
         if (g_logFile) {
@@ -105,8 +105,7 @@ void Logger::log(LogLevel level, const QString &tag, const QString &message)
         }
     }
 
-    // Repassa para a janela de logs da aplicação, se houver
-    // algum ouvinte conectado.
+    // Repassa à janela de logs, se houver ouvinte.
     emit LoggerSink::instance().logEmitted(LogEntry{QDateTime::currentDateTime(), level, tag, message});
 }
 
@@ -128,6 +127,11 @@ void Logger::warning(const QString &tag, const QString &message)
 void Logger::error(const QString &tag, const QString &message)
 {
     log(LogLevel::Error, tag, message);
+}
+
+void Logger::setConsoleOutputEnabled(bool enabled)
+{
+    g_consoleOutputEnabled = enabled;
 }
 
 } // namespace kai::utils

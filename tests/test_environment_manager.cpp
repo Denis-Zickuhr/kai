@@ -14,9 +14,7 @@ class TestEnvironmentManager : public QObject {
     Q_OBJECT
 
 private slots:
-    // Cenário exato do caso de uso: Global PORT=3000/NODE_ENV=production,
-    // Pasta "E-Commerce" com PORT=8080. Resultado esperado:
-    // "Porta: 8080, Env: production".
+    // Global PORT=3000/NODE_ENV=production, pasta "E-Commerce" com PORT=8080 -> "Porta: 8080, Env: production".
     void precedenceFolderOverridesGlobal()
     {
         EnvironmentManager env;
@@ -48,7 +46,7 @@ private slots:
         QCOMPARE(env.value("ENV_TARGET"), QStringLiteral("param"));
     }
 
-    // spec 07: variável ausente em qualquer escopo -> fallback "" sem crash.
+    // Variável ausente em qualquer escopo -> fallback "" sem crash.
     void missingVariableFallsBackToEmptyString()
     {
         EnvironmentManager env;
@@ -96,8 +94,7 @@ private slots:
         env.setDynamicVarScope("project-b");
         QCOMPARE(env.value("TOKEN"), QStringLiteral("token-b"));
 
-        // Escopo Global ("") não vê NENHUM dos dois — escopos não herdam
-        // entre si (feedback do usuário: evitar ambiguidade).
+        // Escopo Global ("") não vê NENHUM dos dois: escopos não herdam entre si.
         env.setDynamicVarScope(QString());
         QVERIFY(!env.contains("TOKEN"));
     }
@@ -146,8 +143,7 @@ private slots:
         QCOMPARE(all.value(QString()).value("GLOBAL_TOKEN"), QStringLiteral("g"));
     }
 
-    // EnvExtractor::persist (feedback do usuário: refresh token/API key não
-    // deveria exigir reautenticar a cada boot) — round-trip JSON.
+    // EnvExtractor::persist (refresh token/API key sobrevive ao boot): round-trip JSON.
     void envExtractorPersistRoundTripsThroughJson()
     {
         EnvExtractor e;
@@ -160,8 +156,7 @@ private slots:
         QCOMPARE(back.persist, true);
     }
 
-    // ExecutionCondition::enabled — round-trip JSON e default true pra
-    // kai.json antigos sem o campo (feedback do usuário: toggle por linha).
+    // ExecutionCondition::enabled: round-trip JSON e default true pra kai.json antigos sem o campo.
     void executionConditionEnabledRoundTripsThroughJson()
     {
         ExecutionCondition c;
@@ -199,9 +194,7 @@ private slots:
         QCOMPARE(env.value("REFRESH_TOKEN"), QStringLiteral("restored-value"));
     }
 
-    // Coleções como parâmetro: o replace aceita nomes com ponto,
-    // ex {{usuarios.email}}, injetados como "param.campo" pelo MainWindow
-    // a partir da entrada escolhida da coleção.
+    // Coleções como parâmetro: nomes com ponto ({{usuarios.email}}) injetados como "param.campo" pelo MainWindow.
     void interpolateSupportsDottedCollectionFieldNames()
     {
         EnvironmentManager env;
@@ -213,7 +206,7 @@ private slots:
         QCOMPARE(output, QStringLiteral("enviar para alice@ex.com (Alice)"));
     }
 
-    // Feature 5: variáveis dinâmicas/faker resolvidas na interpolação.
+    // Variáveis dinâmicas/faker resolvidas na interpolação.
     void dynamicUuidIsResolved()
     {
         EnvironmentManager env;
@@ -260,9 +253,7 @@ private slots:
         QVERIFY(a != b);
     }
 
-    // --- Templates avançados: {% if %}/{% else %}/{% endif %} ------------
-    // Caso de uso real do pedido do usuário: um parâmetro Select (A/B)
-    // decide qual URL/valor entra no comando final.
+    // Templates {% if %}/{% else %}/{% endif %}: um parâmetro Select (A/B) decide qual URL/valor entra no comando.
 
     void ifTrueBranchChoosesTrueSide()
     {
@@ -290,10 +281,8 @@ private slots:
         QCOMPARE(out, QStringLiteral("ab"));
     }
 
-    // Operando no formato {{var}} DENTRO da condição (o usuário escreve
-    // {% if {{t}} == "s" %}, não {% if t == "s" %}). Antes o "{{t}}" era
-    // buscado literal (com chaves), virava vazio e sempre caía no else
-    // (bug relatado). Deve resolver a variável e escolher o ramo certo.
+    // Operando no formato {{var}} DENTRO da condição ({% if {{t}} == "s" %}): resolve a variável (antes era buscada
+    // literal, com chaves, virava vazio e sempre caía no else) e escolhe o ramo certo.
     void ifConditionAcceptsBracedVariableTrue()
     {
         EnvironmentManager env;
@@ -344,8 +333,7 @@ private slots:
     {
         EnvironmentManager env;
         env.setParamVars({{"ENV_TARGET", "prod"}});
-        // "prod" não é número: operador de ordem cai no fallback seguro
-        // (falso), sem crash.
+        // "prod" não é número: operador de ordem cai no fallback seguro (falso), sem crash.
         QCOMPARE(env.interpolate(QStringLiteral(R"({% if ENV_TARGET > "1" %}sim{% else %}nao{% endif %})")),
                   QStringLiteral("nao"));
     }
@@ -386,8 +374,6 @@ private slots:
         QCOMPARE(out, QStringLiteral("Bearer secret123"));
     }
 
-    // --- evaluateCondition (Command::executionConditions) ---
-
     void conditionExistsIsFalseForMissingVar()
     {
         EnvironmentManager env;
@@ -407,9 +393,8 @@ private slots:
         QVERIFY(!env.evaluateCondition(QStringLiteral("{{TOKEN}}"), QStringLiteral("not_exists"), QString()));
     }
 
-    // Caso motivador do usuário: "rodar hook de login se TOKEN for nulo OU
-    // EXPIRES_AT for menor que agora" — aqui só a metade numérica, via
-    // {{$timestamp}} (epoch "agora" embutido).
+    // Caso motivador: "rodar hook de login se TOKEN for nulo OU EXPIRES_AT < agora" — aqui só a metade numérica,
+    // via {{$timestamp}} (epoch "agora").
     void conditionLessThanNowIsTrueForPastTimestamp()
     {
         EnvironmentManager env;

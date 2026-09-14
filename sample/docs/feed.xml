@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed>
+  <!--
+    The feed of the demo project.
+    Comments that span lines fold too.
+  -->
+  <entry id="1">
+    <title>First</title>
+    <tags>
+      <tag>a</tag>
+      <tag>b</tag>
+    </tags>
+    <content><![CDATA[
+      <b>raw</b> text
+    ]]></content>
+  </entry>
+  <entry id="2">
+    <title>Second</title>
+    <empty/>
+  </entry>
+</feed>

@@ -1,0 +1,40 @@
+<h2>Panels &amp; layout</h2>
+<p>The Kai window is a board of <b>panels</b> that you can move, close and bring back. The default layout has the <b>command list on the left</b> and the <b>Output on the right</b>, half the window each, both with their tab strip showing. It is what you see until you change something; the old arrangement (list on top, Output below) is the <i>Classic</i> perspective.</p>
+<h3>The grid</h3>
+<p>Panels live in the <b>cells</b> of a grid of <b>columns × rows</b> (1 to 5 each; the default is 2 × 2). A cell with more than one panel shows them as tabs. A cell with <b>no panel disappears</b> and its neighbours take its place: with <i>Fill vertically</i> each column stacks only its filled cells top to bottom (a lone cell takes the whole column); with <i>Fill horizontally</i> the same happens with the rows, left to right; with <i>Fit</i> nothing is absorbed and you drag the handle at a cell's corner to make it take more columns or rows. <b>Settings → Layout → Panel grid</b> sets the columns, the rows and the mode, with a small preview. Making the grid smaller never loses a panel: the ones in the removed cells become tabs of the nearest cell.</p>
+<table>
+<tr><td><b>Commands</b></td><td>the tree, its search and action buttons — left</td></tr>
+<tr><td><b>Output</b></td><td>the tabs of what ran — right</td></tr>
+<tr><td><b>Document</b></td><td>the README / notes reader: a tab next to the Output, follows the selection — read it <i>while a command runs</i> — right</td></tr>
+<tr><td><b>Processes</b>, <b>History</b>, <b>Notifications</b></td><td>the screens that used to be modal windows — right</td></tr>
+<tr><td><b>Variables</b></td><td>the environments screen (packages of variables and dynamic variables), edited in place — right</td></tr>
+<tr><td><b>AI chat</b></td><td>only exists once you add a provider — right</td></tr>
+</table>
+<h3>The View menu</h3>
+<p><b>View</b> is the way back to everything: the panel list (a highlighted icon means it is on the window; clicking closes it or brings it back to the last place it was), <i>Panel position</i> (move, float, maximize, collapse, close), <i>Maximize panel</i>, <i>Rearrange panels</i>, <i>Perspectives</i> and <i>Restore layout</i>. Close every panel and the window offers a <b>Restore layout</b> button. <b>Settings → Layout</b> has it too.</p>
+<h3>Moving panels</h3>
+<ul>
+<li><b>View → Rearrange panels</b> is on by default: every cell shows its tab strip (turn it off to hide it on cells with a single panel).</li>
+<li><b>Drag a tab</b> to another cell. While you drag, the whole grid shows as dashed cells — empty ones too — plus a <b>Float</b> pill that turns the panel into a floating window; dropping on an empty cell fills it, dropping between the tabs of a cell inserts it at that position. <b>Split this group</b> (panel menu) shows all the panels of a cell at once instead of tabs.</li>
+<li>Drag a tab <b>out of the window</b> to make it a floating window.</li>
+</ul>
+<p>Moving never recreates a panel: a running command, its tabs and the Output text survive any move. The tab menu (right click or <b>⋯</b>) has the same moves without dragging.</p>
+<h3>Maximize, collapse, float</h3>
+<ul>
+<li><b>Maximize</b>: double click the tab, the menu or <b>Ctrl+Shift+M</b>. The old <i>focus mode</i> is the Output maximized.</li>
+<li><b>Collapse to the side</b> (cells on the edge of the grid only): the cell becomes a thin strip of icons on that edge; click one and the panel opens beside the content, pushing it aside; drag the divider to resize it and the strip's icons already switch panels, so the opened cell shows no tabs; click the icon again to close it. The strip comes back open after a restart.</li>
+<li><b>Float</b>: the panel gets its own window with an <i>always on top</i> pin and a <i>dock back</i> button. Floating windows <b>hide with Kai and only return with it</b> — they never appear by themselves.</li>
+</ul>
+<h3>Perspectives</h3>
+<p><b>View → Perspectives</b>: <i>Runner</i> (default), <i>Classic</i> (list on top, Output below), <i>Compact</i> (only commands), <i>HTTP</i> (commands + a wide Output on the right), <i>Reading</i> (the Document on top of the Output, next to the list), <i>Triple</i> (list | Output | Document), <i>Quad</i> (four panels in a 2 × 2 grid) and your own — <i>Save current layout…</i>. Kai never switches perspective by itself.</p>
+<h3>Runs side by side and pinned KIP</h3>
+<p>Drag a tab <b>out of the Output bar</b> onto a cell (or right click it → <i>Open in a panel</i>): that run gets its own live panel, so two logs are visible at once. Right click a <a href='help://kip'>KIP</a> command → <i>Pin as panel</i> to make it a permanent mini-app of the window; until you run it, it shows a <b>Run</b> button — nothing runs on its own.</p>
+<h3>Keyboard</h3>
+<table>
+<tr><td><code>Alt+1</code> … <code>Alt+9</code></td><td>focus the Nth visible panel</td></tr>
+<tr><td><code>F6</code> / <code>Shift+F6</code></td><td>next / previous panel</td></tr>
+<tr><td><code>Ctrl+Shift+M</code></td><td>maximize / restore the focused panel</td></tr>
+</table>
+<p>All remappable in <b>Settings → Shortcuts</b>.</p>
+<div class='tip'>In a small window the board <b>scrolls</b> instead of squeezing the panels: each cell keeps a comfortable size and forms (Variables, Processes, History…) keep the width they need.</div>
+<div class='tip'>The layout is personal: it lives in <code>layout.json</code> in your config folder and is never exported or part of a project.</div>

@@ -19,8 +19,7 @@ namespace kai::utils {
 namespace {
 constexpr const char *kLogTag = "ThemeManager";
 
-// Casa "${nome_var}" ou "${nome_var + #rrggbb}" / "${nome_var - #rrggbb}"
-// (espaços opcionais em torno do operador,).
+// Casa "${nome_var}" ou "${nome_var + #rrggbb}" / "${nome_var - #rrggbb}" (espaços opcionais em torno do operador).
 const QRegularExpression &expressionPattern()
 {
     static const QRegularExpression pattern(
@@ -28,8 +27,7 @@ const QRegularExpression &expressionPattern()
     return pattern;
 }
 
-// Casa cada operação individual "+ #hex" / "- #hex" dentro de uma expressão,
-// permitindo múltiplas operações encadeadas (${fg - #044 + #400}).
+// Casa cada operação "+ #hex" / "- #hex" de uma expressão (encadeáveis: ${fg - #044 + #400}).
 const QRegularExpression &chainedOpPattern()
 {
     static const QRegularExpression pattern(QStringLiteral(R"(([+-])\s*(#[0-9a-fA-F]{3,6}))"));
@@ -88,8 +86,7 @@ bool ThemeManager::looksLikeHexColor(const QString &value)
 QString ThemeManager::applyColorOp(const QString &baseColor, QChar op, const QString &hexOperand)
 {
     if (!looksLikeHexColor(baseColor) || !looksLikeHexColor(hexOperand)) {
-        // Operando inválido: retorna a base inalterada em vez de crashar
-        // (resiliência).
+        // Operando inválido: devolve a base inalterada.
         return baseColor;
     }
 
@@ -117,9 +114,7 @@ QString ThemeManager::resolveExpressions(const QString &input, const QMap<QStrin
 {
     QString result = input;
 
-    // Reprocessa em múltiplas passadas para suportar expressões que
-    // referenciam variáveis já resolvidas por outra expressão. Limite de 5
-    // passadas evita loop infinito em referências circulares malformadas.
+    // Várias passadas, para expressões que referenciam variáveis resolvidas por outra expressão; o limite de 5 evita loop em referências circulares.
     for (int pass = 0; pass < 5; ++pass) {
         bool anyReplacement = false;
         QRegularExpressionMatchIterator it = expressionPattern().globalMatch(result);
@@ -138,15 +133,12 @@ QString ThemeManager::resolveExpressions(const QString &input, const QMap<QStrin
 
             QString currentValue = variables.value(varName);
 
-            // Aplica cada operação encadeada "+ #hex" / "- #hex" presente
-            // na expressão completa, em ordem.
             QRegularExpressionMatchIterator opIt = chainedOpPattern().globalMatch(fullExpression);
             while (opIt.hasNext()) {
                 const QRegularExpressionMatch opMatch = opIt.next();
                 const QChar op = opMatch.captured(1).at(0);
                 QString hexOperand = opMatch.captured(2);
                 if (hexOperand.size() == 4) {
-                    // Formato curto #rgb -> expande para #rrggbb.
                     hexOperand = QStringLiteral("#%1%1%2%2%3%3")
                         .arg(hexOperand.at(1)).arg(hexOperand.at(2)).arg(hexOperand.at(3));
                 }
@@ -171,16 +163,18 @@ QString ThemeManager::resolveExpressions(const QString &input, const QMap<QStrin
     return result;
 }
 
-QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QMap<QString, QString> &components) const
+QString ThemeManager::buildQss(const QMap<QString, QString> &themeVariables, const QMap<QString, QString> &components) const
 {
+    // Os cantos seguem a preferência do usuário (Configurações → Aparência → Cantos), não o que o arquivo do tema declara:
+    // este módulo não conhece os tokens (é do núcleo, sem widgets), então as regras base saem com `@RADIUS_MD@` e
+    // `@RADIUS_SM@` e a interface os troca pelo raio escolhido ao aplicar (ver themeStyleSheet em ui/app-stylesheet.h).
+    QMap<QString, QString> variables = themeVariables;
+    variables.insert(QStringLiteral("border_radius"), QStringLiteral("@RADIUS_MD@"));
+    variables.insert(QStringLiteral("input_radius"), QStringLiteral("@RADIUS_MD@"));
+
     QString qss;
 
-    // Regras base derivadas diretamente das variáveis (fallback para
-    // componentes não declarados explicitamente,). A família
-    // de fonte do tema é seguida por fallbacks genéricos conhecidos do
-    // sistema (fontes feias: fontes declaradas no tema mas
-    // ausentes no sistema do usuário caem silenciosamente no fallback
-    // serifado do Qt; declarar alternativas aqui evita esse resultado).
+    // Regras base derivadas das variáveis. A família de fonte do tema vem seguida de fallbacks genéricos: uma família declarada mas ausente no sistema cairia no fallback serifado do Qt.
     qss += QStringLiteral("QWidget { background-color: %1; color: %2; "
                           "font-family: '%3', 'Ubuntu', 'Noto Sans', 'DejaVu Sans', sans-serif; font-size: %4; }\n")
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")),
@@ -188,10 +182,7 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
              variables.value(QStringLiteral("font_family"), QStringLiteral("Ubuntu")),
              variables.value(QStringLiteral("font_size"), QStringLiteral("12pt")));
 
-    // Campos de texto editáveis: fundo base (bg) para "afundar" dentro dos
-    // blocos de seção (QGroupBox usa alt_bg, mais claro), criando contraste
-    // e hierarquia visual clara (repaginação — feedback do usuário). Borda
-    // sutil na cor de seleção só para delimitar o campo.
+    // Campos de texto com fundo base (bg), afundados nos blocos de seção (QGroupBox usa alt_bg); borda sutil na cor de seleção.
     qss += QStringLiteral("QLineEdit, QComboBox { "
                           "background-color: %1; border: 1px solid %2; border-radius: %3; padding: 7px 9px; }\n")
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")),
@@ -203,42 +194,27 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
                           "background-color: %1; border: none; border-radius: 0px; padding: 2px; }\n")
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
-    // Garante SEM moldura em QUALQUER área rolável e seu frame (cobre
-    // QScrollArea, QAbstractScrollArea e derivados que o Qt desenha com
-    // frame nativo claro — a "borda branca" reportada em vários forms).
+    // Sem moldura em qualquer área rolável (QScrollArea, QAbstractScrollArea e derivados): evita o frame nativo claro.
     qss += QStringLiteral(
         "QAbstractScrollArea { border: none; }\n"
         "QScrollArea { border: none; background-color: %1; }\n"
         "QFrame { border: none; }\n")
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
-    // QScrollArea e viewports sem moldura (estilo CopyQ): elimina qualquer
-    // frame nativo claro em volta de áreas roláveis (diálogos, árvore).
     qss += QStringLiteral(
         "QScrollArea { border: none; background-color: %1; }\n"
         "QAbstractScrollArea { border: none; }\n"
         "QAbstractScrollArea::viewport { border: none; background-color: %1; }\n")
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
-    // Zebra sutil (alternate-background-color) estilo CopyQ: linhas
-    // alternadas com um leve contraste sobre o fundo, facilitando a
-    // leitura da lista sem molduras. Requer setAlternatingRowColors(true)
-    // no QTreeWidget (feito em CommandTreeWidget::createTreeForRoot).
+    // Zebra sutil (alternate-background-color) estilo CopyQ; requer setAlternatingRowColors(true) no QTreeWidget (CommandTreeWidget::createTreeForRoot).
     qss += QStringLiteral(
-        "QTreeWidget, QListWidget, QTreeView, QListView { "
-        "alternate-background-color: %1; }\n")
-        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")));
+        "QTreeWidget, QListWidget, QTreeView, QListView, QTableWidget, QTableView { "
+        "alternate-background-color: %1; background-color: %2; }\n")
+        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
+             variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
-    // Espaçamento e tipografia consolidados em um único bloco
-    // ("ainda tá meio sem espaço os textos"). Regras
-    // de QToolButton/QTabBar::tab/QHeaderView::section aparecem só uma vez
-    // no arquivo inteiro para evitar que uma declaração posterior com a
-    // mesma especificidade sobrescreva silenciosamente um valor já maior
-    // definido aqui (bug de especificidade CSS que limitava o efeito de
-    // ajustes anteriores). Valores generosos em toda a interface: itens de
-    // árvore/lista com respiro vertical amplo, botões com altura mínima
-    // maior, abas com peso visual forte, tabelas editáveis com header e
-    // linhas maiores.
+    // Espaçamento e tipografia num bloco só: as regras de QToolButton/QTabBar::tab/QHeaderView::section aparecem uma vez no arquivo, para uma declaração posterior de mesma especificidade não sobrescrever um valor maior.
     qss += QStringLiteral(
         "QTreeWidget::item, QListWidget::item { padding: 6px 8px; min-height: 20px; }\n"
         "QTableWidget::item { padding: 5px; }\n"
@@ -251,45 +227,27 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         "background-color: transparent; border: 1px solid transparent; border-radius: %4; }\n"
         "QToolButton:hover, QPushButton:hover { background-color: %2; border: 1px solid %2; }\n"
         "QToolButton:checked, QToolButton:pressed, QPushButton:pressed { background-color: %5; }\n"
-        // QTabBar (o CONTÊINER da barra, não os itens ::tab individuais) sem
-        // regra própria cai no frame nativo do estilo Fusion — uma linha
-        // clara/branca no topo da barra que destoa do tema escuro (bug
-        // relatado: linha branca entre o cabeçalho do OutputPanel e a barra
-        // de abas "Output" logo abaixo).
+        // O contêiner QTabBar sem regra própria cai no frame nativo do Fusion: uma linha clara no topo da barra.
         "QTabBar { border: none; background: transparent; }\n"
         "QTabBar::tab { font-size: %1; font-weight: 600; min-width: 90px; padding: 8px 16px; "
         "border: none; background-color: %3; margin-right: 1px; }\n"
-        // Aba selecionada estilo CopyQ: fundo mais claro (fundo base) com
-        // uma barra de acento embaixo; não-selecionadas ficam num tom mais
-        // escuro (alt_bg), criando a separação visual do CopyQ.
+        // Aba selecionada estilo CopyQ: fundo base com barra de acento embaixo; as demais em alt_bg.
         "QTabBar::tab:selected { background-color: %7; border-bottom: 2px solid %5; }\n"
         "QTabBar::tab:!selected { color: %6; }\n"
-        "QTabBar::tab:hover:!selected { background-color: %5; }\n"
+        // Hover usa %2 (sel_bg), não %5 (accent): os ícones das abas são recoloridos com accent_color e um hover na mesma cor os deixava invisíveis.
+        "QTabBar::tab:hover:!selected { background-color: %2; }\n"
         "QLabel { padding: 2px; background: transparent; border: none; }\n"
         "QComboBox { min-height: 24px; padding: 6px 10px; }\n"
         "QCheckBox { spacing: 8px; padding: 3px; }\n"
         "QDialog { padding: 4px; }\n"
         "QFormLayout, QVBoxLayout, QHBoxLayout { spacing: 8px; }\n"
-        // Campos embutidos em células de tabela via setCellWidget. Bug real
-        // corrigido aqui: "textos cortados dentro de tabelas". O
-        // padding genérico de QLineEdit somado à altura de linha fixa da
-        // tabela sobrava pouco espaço vertical; seletor mais específico
-        // reduz o padding só dentro de QTableWidget.
-        // Campos embutidos em células de tabela via setCellWidget: SEM
-        // borda e ocupando a célula inteira, para o texto/valor não ser
-        // cortado verticalmente (bug reportado: "texto cropado" nas
-        // tabelas de variáveis). Fundo transparente para herdar a zebra
-        // da linha; padding horizontal leve, vertical zero (a altura da
-        // linha já dá o respiro).
+        // Campos embutidos em células (setCellWidget): sem borda, ocupando a célula inteira, fundo transparente para herdar a zebra; padding vertical zero (a altura da linha dá o respiro) para o texto não cortar.
         "QTableWidget QLineEdit { padding: 0px 6px; margin: 0px; min-height: 0px; "
         "border: none; background: transparent; }\n"
         "QTableWidget QComboBox { padding: 0px 6px; margin: 0px; min-height: 0px; border: none; }\n"
-        // Contraste de foco/seleção em campos DENTRO de tabelas (feedback do
-        // usuário: ao focar/selecionar tudo o contraste ficava ruim). Ao
-        // focar, o campo embutido ganha um fundo sólido (bg) e uma seleção
-        // de texto com o acento, garantindo legibilidade sobre a zebra.
+        // Foco em campo dentro de tabela: fundo sólido (bg) e seleção de texto no acento, para legibilidade sobre a zebra.
         "QTableWidget QLineEdit:focus { background: %8; selection-background-color: %5; "
-        "selection-color: %6; border: 1px solid %5; border-radius: 4px; }\n")
+        "selection-color: %6; border: 1px solid %5; border-radius: @RADIUS_SM@; }\n")
         .arg(variables.value(QStringLiteral("font_size"), QStringLiteral("12pt")),
              variables.value(QStringLiteral("sel_bg"), QStringLiteral("#44475a")),
              variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
@@ -299,57 +257,29 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         .arg(variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")))
         .arg(variables.value(QStringLiteral("input_focus_bg"), QStringLiteral("#2b2d3a")));
 
-    // Altura de linha maior em tabelas editáveis (item
-    // reportado: KeyValueEditorWidget/ParameterEditorWidget com pouco
-    // espaço). QTableWidget não expõe uma propriedade QSS direta de
-    // row-height; a altura real da linha é ajustada programaticamente via
-    // QHeaderView::setDefaultSectionSize no setupUi de cada editor.
-
-    // Visibilidade de foco de teclado em toda a interface
-    // (feedback do usuário: "melhorar a visibilidade do foco atual em
-    // todo o sistema" + "borda muito dura, suavizar"). Foco de 1px na cor
-    // de acento (em vez de 2px), evitando o efeito de "borda dura"
-    // reportado, mas mantendo o campo/controle focado claramente
-    // destacado. Widgets de container (árvore/lista) recebem o mesmo
-    // tratamento sutil.
+    // Foco de teclado: 1px na cor de acento (2px parecia borda dura); containers (árvore/lista) recebem o mesmo tratamento sutil.
     qss += QStringLiteral(
         "QLineEdit:focus, QComboBox:focus, QTableWidget:focus { "
         "border: 1px solid %1; }\n"
         "QToolButton:focus, QPushButton:focus { border: 1px solid %1; }\n")
         .arg(variables.value(QStringLiteral("accent_color"), QStringLiteral("#bd93f9")));
 
-    // Widgets adicionais (QCheckBox, QTabWidget, QDialog, QScrollBar) que,
-    // sem regra própria, caem no fallback nativo do Qt — geralmente com
-    // bordas brancas/cinza claras que destoam de temas escuros (bug
-    // reportado: "bordas brancas feias").
+    // QTabWidget, QDialog e QScrollBar sem regra própria caem no fallback nativo claro, que destoa de temas escuros.
     qss += QStringLiteral(
         "QMainWindow { background-color: %1; }\n"
-        "QWidget#rootContainer { background-color: %1; border-radius: 8px; border: 1px solid %1; }\n"
-        // Diálogos com a decoração NATIVA do sistema (barra de título +
-        // moldura do WM), garantindo drag/resize/fechar funcionais e uma
-        // borda visível fornecida pelo próprio window manager. O conteúdo
-        // interno já é escuro e sem bordas brancas (regras acima). Só
-        // definimos o fundo escuro do tema aqui.
+        "QWidget#rootContainer { background-color: %1; border-radius: @RADIUS_MD@; border: 1px solid %1; }\n"
+        // Diálogos usam a moldura própria do Kai (ui/shared/dialog-frame.h; borda/raio em app-stylesheet.cpp): aqui só o fundo.
         "QDialog { background-color: %1; }\n"
         "QMessageBox { background-color: %1; }\n"
         "QMainWindow::separator { background-color: %1; width: 0px; height: 0px; }\n"
-        // QSplitter handle: causa raiz da "borda branca" reportada 10x —
-        // sem regra própria, o Qt desenha a divisória nativa clara entre
-        // os painéis (árvore/sidebar e navegação/saída). Pintamos o handle
-        // com a própria cor de fundo (invisível em repouso) e só um leve
-        // realce na cor de seleção ao passar o mouse, eliminando a linha
-        // branca dura sem perder a área arrastável.
+        // QSplitter handle: sem regra, o Qt desenha a divisória nativa clara; pinta com o fundo (invisível em repouso) e realce na cor de seleção no hover, mantendo a área arrastável.
         "QSplitter::handle { background-color: %1; }\n"
         "QSplitter::handle:horizontal { width: 6px; }\n"
         "QSplitter::handle:vertical { height: 6px; }\n"
         "QSplitter::handle:hover { background-color: %2; }\n"
-        // Pane das abas sem borda dura: só o fundo, deixando o conteúdo
-        // fluir sem a moldura clara de 1px que destoava do tema escuro.
+        // Pane das abas sem borda dura (só o fundo).
         "QTabWidget::pane { border: none; border-top: 1px solid %2; }\n"
-        // (Checkbox NÃO é estilizada aqui: o estilo único vem do
-        // app-stylesheet global — caixa transparente + tick do qrc. Este
-        // bloco antigo pintava um fundo cheio de accent SEM o check, causando
-        // o "fundo feio" relatado. Removido para não sobrescrever o global.)
+        // QCheckBox não é estilizada aqui: o estilo único vem do app-stylesheet global.
         "QScrollBar:vertical, QScrollBar:horizontal { background-color: %1; border: none; }\n"
         "QScrollBar::handle { background-color: %2; border-radius: %3; }\n"
         "QToolBar { border: none; spacing: 8px; padding: 6px; }\n"
@@ -360,48 +290,20 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         "QMenu { padding: 4px; border: 1px solid %1; }\n"
         "QMenu::item { padding: 7px 18px; border-radius: %3; }\n"
         "QMenu::item:selected { background-color: %2; }\n"
-        // Seções de formulário como BLOCOS com contraste (repaginação —
-        // feedback do usuário: melhorar contraste entre blocos e padding).
-        // Fundo alternativo (alt_bg) levemente destacado do fundo base,
-        // cantos arredondados, título em destaque na cor de acento e
-        // padding interno generoso. Sem borda dura — o contraste de fundo
-        // já separa os blocos visualmente.
-        "QGroupBox { background-color: %1; border: none; border-radius: 8px; "
+        // Seções de formulário como blocos: alt_bg destacado do fundo, cantos arredondados, título na cor de acento, padding generoso e sem borda dura.
+        "QGroupBox { background-color: %1; border: none; border-radius: @RADIUS_MD@; "
         "margin-top: 14px; padding: 14px 12px 12px 12px; font-weight: 600; }\n"
         "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; "
-        "left: 12px; top: 2px; padding: 0px 4px; color: %4; font-size: 10pt; }\n"
-        // Botões de diálogo (OK/Cancel): SEM ícones nativos (o estilo do
-        // Qt injeta um check/► verde e um X que destoavam do app — bug
-        // reportado: "ícones feios e fora de padrão"). Os ícones são
-        // removidos programaticamente (stripDialogButtonIcons), e aqui só
-        // estilizamos: cantos arredondados, sem borda dura (borda na cor do
-        // próprio fundo do botão = invisível), hover na cor de acento; o
-        // botão default/primário (OK) recebe fundo de acento com texto
-        // contrastante e negrito, destacando a ação primária.
-        "QDialogButtonBox QPushButton { min-width: 88px; padding: 7px 18px; border-radius: %3; "
-        "border: 1px solid %2; background-color: %2; icon-size: 0px; }\n"
-        "QDialogButtonBox QPushButton:hover { border: 1px solid %4; background-color: %4; color: %1; }\n"
-        "QDialogButtonBox QPushButton:default { background-color: %4; color: %1; border: 1px solid %4; "
-        "font-weight: 600; }\n"
-        "QDialogButtonBox QPushButton:default:hover { background-color: %4; }\n")
+        "left: 12px; top: 2px; padding: 0px 4px; color: %4; font-size: 10pt; }\n")
+        // Botões de diálogo (QDialogButtonBox): em buildModernStylesheet() (app-stylesheet.cpp).
         .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
              variables.value(QStringLiteral("sel_bg"), QStringLiteral("#44475a")),
              variables.value(QStringLiteral("border_radius"), QStringLiteral("4px")),
              variables.value(QStringLiteral("accent_color"), QStringLiteral("#bd93f9")));
 
-    // Redesign visual estilo CopyQ (polimento final): itens de
-    // árvore com hover sutil e item selecionado com borda de destaque na
-    // cor de acento (não só background), scrollbar mais fina e discreta,
-    // e cantos consistentemente arredondados em toda a interface.
+    // Polimento estilo CopyQ: hover sutil nos itens, selecionado preenchido na cor de seleção, scrollbar fina e cantos arredondados.
     qss += QStringLiteral(
-        // Zebra sutil (alternate row) e seleção AZUL SÓLIDA sem borda,
-        // estilo CopyQ: a linha selecionada é totalmente preenchida pela
-        // cor de seleção do tema, sem contorno duro; hover apenas escurece
-        // levemente. Sem bordas em nenhum estado de item.
-        // Zebra sutil (alternate row) e seleção AZUL SÓLIDA sem borda,
-        // estilo CopyQ: a linha selecionada é totalmente preenchida pela
-        // cor de seleção do tema, sem contorno duro; hover apenas escurece
-        // levemente. Sem bordas em nenhum estado de item.
+        // Zebra sutil (alternate row) e seleção sólida sem borda (estilo CopyQ); hover só escurece levemente.
         // %1=hover_bg  %2=selection_bg(accent)  %3=selection_fg(bg)
         // %4=accent(scrollbar hover)  %5=combo_popup_bg(alt_bg)
         "QTreeWidget::item, QListWidget::item, QTreeView::item, QListView::item { "
@@ -416,15 +318,11 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         "QScrollBar::handle:hover { background-color: %4; }\n"
         "QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; border: none; }\n"
         "QComboBox::drop-down { border: none; width: 22px; }\n"
-        // Chevron (seta pra baixo) indicando que é um dropdown (feedback do
-        // usuário). Usa um SVG com cor explícita (QSS não resolve
-        // currentColor dos ícones Lucide padrão).
+        // Chevron do dropdown: SVG com cor explícita (o QSS não resolve currentColor dos ícones Lucide).
         "QComboBox::down-arrow { image: url(:/icons/lucide/chevron-down-fg.svg); width: 14px; height: 14px; }\n"
         "QComboBox QAbstractItemView { background-color: %5; border: 1px solid %5; "
         "border-radius: %6; selection-background-color: %2; outline: none; }\n"
-        // Remove o retângulo pontilhado de foco (dotted focus rect) que o
-        // Qt desenha em itens de árvore/lista/tabela e parece uma borda
-        // tênue clara.
+        // Remove o retângulo pontilhado de foco que o Qt desenha em itens de árvore/lista/tabela.
         "QAbstractItemView { outline: none; }\n")
         .arg(variables.value(QStringLiteral("sel_bg"), QStringLiteral("#44475a")) + QStringLiteral("55"),
              variables.value(QStringLiteral("accent_color"), QStringLiteral("#bd93f9")),
@@ -454,19 +352,12 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
     for (auto it = components.constBegin(); it != components.constEnd(); ++it) {
         const QString selector = selectorFor.value(it.key());
         if (selector.isEmpty()) {
-            continue; // componente desconhecido, ignorado silenciosamente
+            continue;
         }
         qss += QStringLiteral("%1 { %2 }\n").arg(selector, it.value());
     }
 
-    // ---- Modernização dos inputs (feedback do usuário: "modernize TODOS
-    // os inputs; mais espaço, fonte maior, mais bonito") ----
-    // Inserido POR ÚLTIMO para vencer as regras anteriores e as do tema
-    // (mesma especificidade => a última vence). Foco em: campos mais
-    // altos e espaçosos, cantos arredondados, e — crucial — o POPUP do
-    // QComboBox e do QCompleter (a QAbstractItemView do dropdown) que sem
-    // regra própria cai no fallback nativo branco com texto desalinhado
-    // (bug reportado: "combo de busca com fundo branco e texto fora").
+    // Modernização dos inputs, inserida por último para vencer as regras anteriores e as do tema (mesma especificidade: a última vence). Inclui o popup do QComboBox/QCompleter, que sem regra cai no fallback nativo branco.
     {
         const QString bg = variables.value(QStringLiteral("bg"), QStringLiteral("#282a36"));
         const QString altBg = variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c"));
@@ -477,33 +368,28 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         const QString radius = variables.value(QStringLiteral("border_radius"), QStringLiteral("8px"));
 
         qss += QStringLiteral(
-            // Campos e botões mais altos, espaçosos e arredondados.
-            "QLineEdit, QComboBox { min-height: 30px; padding: 9px 12px; border-radius: 8px; "
+            "QLineEdit, QComboBox { min-height: 30px; padding: 9px 12px; border-radius: @RADIUS_MD@; "
             "border: 1px solid %4; background-color: %1; selection-background-color: %6; selection-color: %7; }\n"
             "QLineEdit:hover, QComboBox:hover { border: 1px solid %5; }\n"
             "QLineEdit:focus, QComboBox:focus { border: 1px solid %5; }\n"
-            "QPlainTextEdit, QTextEdit { border-radius: 8px; padding: 10px; border: 1px solid %4; background-color: %1; }\n"
-            "QPushButton { min-height: 30px; padding: 9px 18px; border-radius: 8px; "
+            "QPlainTextEdit, QTextEdit { border-radius: @RADIUS_MD@; padding: 10px; border: 1px solid %4; background-color: %1; }\n"
+            "QPushButton { min-height: 30px; padding: 9px 18px; border-radius: @RADIUS_MD@; "
             "background-color: %2; border: 1px solid %4; font-weight: 600; }\n"
             "QPushButton:hover { background-color: %4; border: 1px solid %5; }\n"
             "QPushButton:pressed { background-color: %5; }\n"
             "QPushButton:default { background-color: %5; color: %7; border: 1px solid %5; }\n"
-            "QToolButton { min-height: 30px; padding: 7px; border-radius: 8px; }\n"
+            "QToolButton { min-height: 30px; padding: 7px; border-radius: @RADIUS_MD@; }\n"
             "QToolButton:hover { background-color: %4; }\n"
-            // Seta do combo com área confortável.
             "QComboBox::drop-down { border: none; width: 26px; }\n"
-            // POPUP do QComboBox: fundo do tema, item alto, selecionado com
-            // acento — elimina o fundo branco nativo e alinha o texto.
+            // Popup do QComboBox: fundo do tema, item alto, selecionado com acento (elimina o fundo branco nativo).
             "QComboBox QAbstractItemView { background-color: %2; color: %3; "
-            "border: 1px solid %5; border-radius: 8px; padding: 4px; outline: none; "
+            "border: 1px solid %5; border-radius: @RADIUS_MD@; padding: 4px; outline: none; "
             "selection-background-color: %6; selection-color: %7; }\n"
-            "QComboBox QAbstractItemView::item { min-height: 28px; padding: 6px 10px; border-radius: 6px; }\n"
-            // POPUP do QCompleter (busca): é uma QListView flutuante; sem
-            // esta regra vem branca com o texto colado na borda.
+            "QComboBox QAbstractItemView::item { min-height: 28px; padding: 6px 10px; border-radius: @RADIUS_SM@; }\n"
+            // Popup do QCompleter (QListView flutuante): sem a regra vem branco, com o texto colado na borda.
             "QCompleter QAbstractItemView, QListView#completerPopup { background-color: %2; color: %3; "
-            "border: 1px solid %5; border-radius: 8px; padding: 4px; outline: none; "
+            "border: 1px solid %5; border-radius: @RADIUS_MD@; padding: 4px; outline: none; "
             "selection-background-color: %6; selection-color: %7; }\n"
-            // Espaçamento geral um pouco mais generoso.
             "QCheckBox { spacing: 10px; padding: 5px; }\n"
             "QComboBox QAbstractItemView { font-size: %8; }\n")
             .arg(bg, altBg, fg, selBg, accent, selBg)   // %1..%6 (obs: %6 selBg p/ selection-bg)
@@ -540,8 +426,7 @@ bool ThemeManager::loadThemeFromFile(const QString &filePath)
     const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
 
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        // Tema inválido: mantém o tema anterior carregado (/
-        // nunca crasha, nunca perde o estado visual anterior).
+        // Tema inválido: mantém o tema anterior carregado.
         const QString error = QStringLiteral("Tema '%1' inválido: %2").arg(filePath, parseError.errorString());
         utils::Logger::error(kLogTag, error);
         emit themeLoadFailed(filePath, error);
@@ -594,9 +479,7 @@ void ThemeManager::handleFileChanged(const QString &path)
 {
     utils::Logger::info(kLogTag, QStringLiteral("Alteração detectada em '%1', recarregando tema (live reload).").arg(path));
 
-    // QFileSystemWatcher pode remover o path do watch após certas operações
-    // de escrita (ex: editores que salvam via rename); reagendamos o watch
-    // se o arquivo ainda existir, mesmo que o parsing falhe.
+    // O QFileSystemWatcher pode remover o path após escritas via rename (editores): reagenda o watch se o arquivo ainda existir, mesmo que o parse falhe.
     if (!loadThemeFromFile(path)) {
         utils::Logger::warning(kLogTag,
             QStringLiteral("Live reload falhou para '%1'; mantendo tema anterior.").arg(path));

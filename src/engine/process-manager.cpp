@@ -31,19 +31,14 @@ void ProcessManager::track(const QString &commandId, std::unique_ptr<ProcessRunn
                 it->second.status = (result.exitCode == 0 && !result.crashed) ? ProcessStatus::Success
                                                                                 : ProcessStatus::Error;
                 it->second.lastCrashed = result.crashed;
+                it->second.lastStoppedByRequest = result.stoppedByRequest;
                 const ProcessStatus newStatus = it->second.status;
                 utils::Logger::info(kLogTag,
                     QStringLiteral("Processo '%1' finalizado com status %2.")
                         .arg(commandId, newStatus == ProcessStatus::Success ? "Success" : "Error"));
 
-                // Emite de forma assíncrona (QueuedConnection): estamos
-                // dentro do stack de sinais do próprio QProcess::finished
-                // (via ProcessRunner). Emitir statusChanged() de forma
-                // síncrona aqui faz a UI (MainWindow -> ProcessListDialog)
-                // destruir QListWidgetItem's e potencialmente o próprio
-                // ProcessRunner ainda em uso mais acima no stack,
-                // resultando em segfault. Adiar para o próximo ciclo do
-                // event loop evita essa reentrância perigosa.
+                // Assíncrono (QueuedConnection): estamos dentro de QProcess::finished; emitir síncrono deixaria a UI
+                // destruir itens e o próprio ProcessRunner ainda em uso mais acima na pilha (segfault).
                 QMetaObject::invokeMethod(this, [this, commandId, newStatus]() {
                     emit statusChanged(commandId, newStatus);
                 }, Qt::QueuedConnection);
@@ -56,11 +51,8 @@ void ProcessManager::track(const QString &commandId, std::unique_ptr<ProcessRunn
 
     utils::Logger::info(kLogTag, QStringLiteral("Rastreando processo background '%1'.").arg(commandId));
 
-    // Mesma proteção contra reentrância: track() é chamado de dentro do
-    // handler de ExecutionPipeline::backgroundProcessStarted, que por sua
-    // vez roda dentro do stack de sinais do ProcessRunner::started. Adia a
-    // notificação para não reentrar na UI enquanto ainda estamos "dentro"
-    // do processo que está sendo rastreado.
+    // Mesma proteção contra reentrância: track() roda dentro de ExecutionPipeline::backgroundProcessStarted, que está
+    // na pilha de ProcessRunner::started.
     QMetaObject::invokeMethod(this, [this, commandId]() {
         emit statusChanged(commandId, ProcessStatus::Running);
     }, Qt::QueuedConnection);
@@ -77,6 +69,17 @@ void ProcessManager::stop(const QString &commandId)
     it->second.runner->stop();
 }
 
+void ProcessManager::forceStop(const QString &commandId)
+{
+    auto it = m_processes.find(commandId);
+    if (it == m_processes.end()) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Tentativa de forçar parada de processo não rastreado: '%1'.").arg(commandId));
+        return;
+    }
+    it->second.runner->forceStop();
+}
+
 void ProcessManager::remove(const QString &commandId)
 {
     auto it = m_processes.find(commandId);
@@ -84,8 +87,6 @@ void ProcessManager::remove(const QString &commandId)
         return;
     }
     it->second.runner->stop();
-    // ERASE de fato: sem isto a entrada morta persistia em m_processes e
-    // trackedCommandIds() a devolvia pra sempre.
     m_processes.erase(it);
     utils::Logger::info(kLogTag,
         QStringLiteral("Processo '%1' encerrado e removido do rastreamento.").arg(commandId));
@@ -109,6 +110,12 @@ ProcessStatus ProcessManager::statusOf(const QString &commandId) const
 {
     const auto it = m_processes.find(commandId);
     return it != m_processes.end() ? it->second.status : ProcessStatus::Error;
+}
+
+bool ProcessManager::lastRunStoppedByRequest(const QString &commandId) const
+{
+    const auto it = m_processes.find(commandId);
+    return it != m_processes.end() && it->second.lastStoppedByRequest;
 }
 
 bool ProcessManager::lastRunCrashed(const QString &commandId) const

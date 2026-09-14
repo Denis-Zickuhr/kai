@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/notification-gate.h"
+#include "ui/shared/notification-gate.h"
 
 using namespace kai::ui;
 
@@ -29,9 +29,7 @@ private slots:
 
     void specificEventToggleOffNeverNotifies()
     {
-        // Master ligado, mas ESTE evento em particular está desligado —
-        // ex: usuário desligou "processo concluído com sucesso" mas
-        // deixou "falha de comando" ligado.
+        // Master ligado, mas ESTE evento está desligado (ex: "processo concluído com sucesso" desligado, "falha de comando" ligado).
         QVERIFY(!shouldShowNotification(true, true, /*eventToggleOn=*/false, true, false));
     }
 
@@ -45,8 +43,7 @@ private slots:
 
     void windowFocusedWithOverrideStillNotifies()
     {
-        // Mesmo cenário, mas o usuário pediu explicitamente pra notificar
-        // mesmo em foco (pedido do usuário: configurável, não hard-coded).
+        // Mesmo cenário, com notifyEvenWhenFocused ligado: notifica mesmo em foco.
         QVERIFY(shouldShowNotification(true, true, true, /*notifyEvenWhenFocused=*/true,
                                         /*windowIsActive=*/true));
     }

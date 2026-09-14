@@ -2,7 +2,7 @@
 #include <QPlainTextEdit>
 #include <QTemporaryDir>
 
-#include "ui/command-json-editor-dialog.h"
+#include "ui/features/command-editor/command-json-editor-dialog.h"
 #include "core/config-manager.h"
 #include "core/models.h"
 
@@ -59,7 +59,7 @@ private slots:
         cmd.id = QStringLiteral("c_1");
         cmd.folderId = QStringLiteral("f_1");
         cmd.name = QStringLiteral("Build");
-        cmd.type = CommandType::Shell;
+        cmd.type = CommandType::Command;
         cmd.command = QStringLiteral("make release");
 
         CommandJsonEditorDialog dialog(&cmd, QStringLiteral("f_1"), nullptr);
@@ -85,7 +85,6 @@ private slots:
             "  \"is_background\": true\n"
             "}"));
 
-        // Aceita via o slot de validação (mesmo caminho do botão OK).
         QMetaObject::invokeMethod(&dialog, "handleAcceptRequested");
 
         const Command built = dialog.buildCommand();

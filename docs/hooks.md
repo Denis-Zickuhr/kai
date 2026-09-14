@@ -30,7 +30,7 @@ A hook can also carry its own **execution conditions** — a guard that
 decides whether it actually runs, based on comparing interpolated values
 (env vars, `{{$timestamp}}`, literals). Useful for "only run this login
 hook if the token is missing or expired". See the
-[`kai.json` manifesto](manifesto/kai-json-manifesto.md#8-execution-conditions)
+[Kai manifesto](../assets/manifesto/kai-manifesto.md#92-execution-conditions)
 for the full syntax.
 
 ## Tip

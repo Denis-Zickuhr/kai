@@ -36,6 +36,7 @@
     <file alias="chevron-down.svg">lucide/chevron-down.svg</file>
     <file alias="chevron-left.svg">lucide/chevron-left.svg</file>
     <file alias="chevron-right.svg">lucide/chevron-right.svg</file>
+    <file alias="chevron-right-fg.svg">lucide/chevron-right-fg.svg</file>
     <file alias="chevron-up.svg">lucide/chevron-up.svg</file>
     <file alias="chevron-up-fg.svg">lucide/chevron-up-fg.svg</file>
     <file alias="circle-alert.svg">lucide/circle-alert.svg</file>
@@ -63,6 +64,7 @@
     <file alias="code-xml.svg">lucide/code-xml.svg</file>
     <file alias="code.svg">lucide/code.svg</file>
     <file alias="cog.svg">lucide/cog.svg</file>
+    <file alias="columns-2.svg">lucide/columns-2.svg</file>
     <file alias="command.svg">lucide/command.svg</file>
     <file alias="compass.svg">lucide/compass.svg</file>
     <file alias="component.svg">lucide/component.svg</file>
@@ -80,6 +82,7 @@
     <file alias="download.svg">lucide/download.svg</file>
     <file alias="drill.svg">lucide/drill.svg</file>
     <file alias="droplet.svg">lucide/droplet.svg</file>
+    <file alias="ellipsis.svg">lucide/ellipsis.svg</file>
     <file alias="euro.svg">lucide/euro.svg</file>
     <file alias="expand.svg">lucide/expand.svg</file>
     <file alias="external-link.svg">lucide/external-link.svg</file>
@@ -172,6 +175,7 @@
     <file alias="minimize-2.svg">lucide/minimize-2.svg</file>
     <file alias="minimize.svg">lucide/minimize.svg</file>
     <file alias="minus.svg">lucide/minus.svg</file>
+    <file alias="minus-on.svg">lucide/minus-on.svg</file>
     <file alias="monitor.svg">lucide/monitor.svg</file>
     <file alias="moon.svg">lucide/moon.svg</file>
     <file alias="mouse-pointer-click.svg">lucide/mouse-pointer-click.svg</file>
@@ -189,6 +193,7 @@
     <file alias="package-search.svg">lucide/package-search.svg</file>
     <file alias="package-x.svg">lucide/package-x.svg</file>
     <file alias="package.svg">lucide/package.svg</file>
+    <file alias="palette.svg">lucide/palette.svg</file>
     <file alias="panel-bottom-close.svg">lucide/panel-bottom-close.svg</file>
     <file alias="panel-bottom-open.svg">lucide/panel-bottom-open.svg</file>
     <file alias="panel-bottom.svg">lucide/panel-bottom.svg</file>
@@ -228,6 +233,7 @@
     <file alias="rotate-3d.svg">lucide/rotate-3d.svg</file>
     <file alias="rotate-ccw.svg">lucide/rotate-ccw.svg</file>
     <file alias="rotate-cw.svg">lucide/rotate-cw.svg</file>
+    <file alias="rows-2.svg">lucide/rows-2.svg</file>
     <file alias="rss.svg">lucide/rss.svg</file>
     <file alias="satellite-dish.svg">lucide/satellite-dish.svg</file>
     <file alias="save-all.svg">lucide/save-all.svg</file>
@@ -291,6 +297,7 @@
     <file alias="triangle-alert.svg">lucide/triangle-alert.svg</file>
     <file alias="undo-2.svg">lucide/undo-2.svg</file>
     <file alias="undo.svg">lucide/undo.svg</file>
+    <file alias="unfold-vertical.svg">lucide/unfold-vertical.svg</file>
     <file alias="unlink.svg">lucide/unlink.svg</file>
     <file alias="upload.svg">lucide/upload.svg</file>
     <file alias="user-check.svg">lucide/user-check.svg</file>

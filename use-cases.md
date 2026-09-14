@@ -68,7 +68,7 @@ injecting it into the main command.
   "project_name": "My Local API",
   "env_vars": { "API_KEY": "12345" },
   "commands": [
-    { "name": "Start Server", "type": "shell", "command": "npm start" }
+    { "name": "Start Server", "type": "command", "command": "npm start" }
   ]
 }
 ```

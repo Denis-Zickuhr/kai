@@ -1,0 +1,23 @@
+<h2>Notificações e logs</h2>
+<h3>O que o Kai notifica</h3>
+<p>As notificações são nativas do desktop (bandeja do sistema). Se o seu sistema não tem ícone de bandeja, elas simplesmente não aparecem. Em <b>Configurações → Notificações</b> há uma chave geral e uma por evento:</p>
+<ul>
+<li>Um comando <b>falhou</b> ao executar — cobre pre-hooks, o comando principal (erro, crash ou HTTP ≥ 400) e post-hooks, inclusive execuções disparadas por <a href='help://scheduling'>auto-run</a>.</li>
+<li>Um processo em background <b>travou</b> ou saiu com erro.</li>
+<li>Um processo em background <b>terminou com sucesso</b> (desligado por padrão).</li>
+<li>Um arquivo de configuração corrompido foi <b>restaurado de um backup</b>.</li>
+<li>A <b>primeira linha ERROR</b> numa <a href='help://output'>saída formatada</a> — uma vez por execução (desligado por padrão).</li>
+<li><b>Notificar mesmo com a janela do Kai em foco</b> — por padrão o Kai fica quieto quando você já está olhando para ele, já que a árvore mostra o selo vermelho.</li>
+</ul>
+<p>Um comando parado de propósito (Parar, kill, reset) não é falha e nunca notifica.</p>
+<h3>Envie as suas</h3>
+<ul>
+<li>De um script no terminal: <code>kai raise --level warning --title Backup "disco quase cheio"</code>.</li>
+<li>De Python ou Node: <code>kai.notify("pronto", title="Backup")</code> — veja <a href='help://languages'>Python, Node e PHP</a>.</li>
+<li>De um programa KIP: a mensagem <code>notify</code>.</li>
+<li>Para um comando agendado: <b>Notificar ao executar</b> (veja <a href='help://scheduling'>Agendamentos</a>).</li>
+</ul>
+<h3>O histórico</h3>
+<p>A linha de status embaixo mostra quantas notificações estão <b>não lidas</b>; clique nela para abrir o histórico e lê-las. Elas ficam guardadas entre sessões.</p>
+<h3>Logs do aplicativo</h3>
+<p><b>Arquivo → Logs</b> abre o log do próprio Kai (o que o Kai fez — não a saída dos seus comandos). Filtre pelo nível mínimo (Debug, Info, Aviso, Erro), veja o caminho do arquivo de log ou limpe a visualização. É o primeiro lugar para olhar quando algo se comporta mal.</p>

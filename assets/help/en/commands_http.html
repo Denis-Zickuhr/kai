@@ -1,23 +1,44 @@
 <h2>HTTP Commands</h2>
-<p>An <b>HTTP</b> command makes a request and shows the formatted response (JSON with a navigable tree).</p>
-<h3>Fields</h3>
-<table><tr><td><b>Method</b></td><td>GET/POST/PUT/PATCH/DELETE</td></tr><tr><td><b>URL</b></td><td>accepts variables: <code>{{BASE_URL}}/users</code></td></tr><tr><td><b>Headers</b></td><td>key/value pairs (also interpolated)</td></tr><tr><td><b>Body</b></td><td>JSON (the <i>Format JSON</i> button prettifies it)</td></tr></table>
-<h3>Example</h3>
-<pre>{
-  "name": "Authenticate",
-  "type": "http",
-  "http_config": {
-    "method": "POST",
-    "url": "{{BASE_URL}}/auth/login",
-    "headers": { "Content-Type": "application/json" },
-    "body": "{\"user\":\"{{USER}}\",\"pass\":\"{{PASS}}\"}",
-    "env_extractors": [ { "json_path": "token", "env_var": "AUTH_TOKEN" } ]
-  }
-}</pre>
+<p>An <b>HTTP</b> command makes a request and shows the formatted response. In the editor it has four pages: <b>General</b> (method, URL, body), <b>Request</b> (headers, query parameters, authentication), <b>Connection</b> and <b>Response</b> (extractors, assertions, save to file).</p>
+<h3>Method and URL</h3>
+<p>GET, POST, PUT, PATCH, DELETE, QUERY, HEAD and OPTIONS are in the list; the field is editable, so any other verb (<code>PROPFIND</code>…) can be typed. The URL accepts variables: <code>{{BASE_URL}}/users</code>.</p>
+<h3>Headers, query and authentication</h3>
+<p>Headers and query parameters are tables; each row has a checkbox to turn it off without deleting it. <b>Authentication</b> is a choice: <b>Basic</b>, <b>Bearer token</b>, <b>API key</b> (header or query), <b>None</b> or <b>Inherit</b> from the folders. Use a variable marked <b>Secret</b> (<code>{{API_TOKEN}}</code>) instead of typing a token. An <code>Authorization</code> header written by hand always wins.</p>
+<h3>Share headers with a folder</h3>
+<p>A folder's <b>HTTP</b> tab holds headers, authentication and connection options that <b>every HTTP command in it and in its subfolders inherits</b>. A header with the same name set closer to the command replaces the inherited one; in the command's <b>Request</b> page the inherited headers are listed with their folder — untick one to turn it off for that command.</p>
+<h3>Body</h3>
+<table><tr><td><b>None / Raw</b></td><td>no body / the text as typed (no Content-Type is added)</td></tr><tr><td><b>JSON / XML</b></td><td>the text with the matching Content-Type; JSON has a validity check and a <i>Format</i> button</td></tr><tr><td><b>Form</b></td><td>urlencoded rows</td></tr><tr><td><b>Multipart</b></td><td>rows; tick <i>File</i> to upload a file</td></tr><tr><td><b>File</b></td><td>the content of one file</td></tr><tr><td><b>GraphQL</b></td><td>query + variables (JSON)</td></tr></table>
+<h3>Connection</h3>
+<p>Redirects (followed by default, the chain is shown in the Request tab), TLS verification, proxy (<code>system</code> reads <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code>/<code>NO_PROXY</code>, or <code>none</code>, or a URL), timeout (off by default: <b>Enable</b> it to limit this request or folder only; while a request waits the output shows the elapsed time and whether there is a timeout) and the cookie jar. With no response at all (timeout, refused connection) the <b>Request</b> tab opens with the reason. Cookies live in memory while Kai is open and are shared by all requests; <b>File → Clear HTTP cookies</b> empties them. Every option can stay on <i>Inherit</i>.</p>
+<h3>Response</h3>
+<p>JSON is a collapsible tree (<b>Copy</b>, <b>Pop out</b>); XML is indented; images, PDFs and other binary content get a <b>Content</b> tab with a preview and a <b>Save to file…</b> button. The <b>Request</b> tab shows what was sent, the redirects and the time to the first byte; <b>Headers</b> shows the response headers.</p>
 <h3>Extract a value into a variable</h3>
-<p>Configure an <b>Env Extractor</b> to grab a field from the JSON response and store it in a dynamic variable (e.g. <code>data.token → AUTH_TOKEN</code>), used by the following commands:</p>
-<pre>Authorization: Bearer {{AUTH_TOKEN}}</pre>
-<h3>Import from cURL</h3>
-<p><b>Import cURL</b> button: paste a <code>curl</code> command and Kai fills in method/url/headers/body. See <a href='help://import_curl'>cURL Import</a>.</p>
-<h3>Response, Request and Headers tabs</h3>
-<p>The <b>Response</b> tab shows the JSON reply as a collapsible tree, with <b>Copy</b> and <b>Pop out</b> buttons. The <b>Request</b> tab shows exactly what was sent — method, URL, headers, body — useful once the call has already run. <b>Headers</b> shows the response headers.</p>
+<p>Configure an <b>extractor</b> to grab a field from the JSON response into a dynamic variable (e.g. <code>data.token → AUTH_TOKEN</code>), used by the following commands: <code>Authorization: Bearer {{AUTH_TOKEN}}</code>.</p>
+<h3>Assertions</h3>
+<p>Checks on the response, in the same format as <a href='help://hooks'>execution conditions</a>: <code>{{RESPONSE_STATUS}}</code> <i>equals</i> <code>201</code>. When any is on, they decide success (so a 404 can be expected). Variables: <code>RESPONSE_STATUS</code>, <code>RESPONSE_TIME_MS</code>, <code>RESPONSE_SIZE</code>, <code>RESPONSE_CONTENT_TYPE</code>, <code>RESPONSE_BODY</code>, <code>RESPONSE_HEADER_&lt;NAME&gt;</code> and your extracted variables. They stay available to the next commands and hooks.</p>
+<h3>Save the response to a file</h3>
+<p>On the Response page, give a path: successful (2xx) responses are written to it as they arrive instead of being kept in memory.</p>
+<h3>Stop and event streams</h3>
+<p>The <b>Stop</b> button cancels a request in flight. A <code>text/event-stream</code> response (Server-Sent Events) is shown as the events arrive and runs until the server closes it or you press Stop; raise the <b>Timeout</b> (it counts the time without data) for slow streams.</p>
+<h3>Quick edit</h3>
+<p>The <b>Quick edit</b> button (side bar or shortcut) opens method, URL, body, query, headers and authentication without the full editor. New HTTP commands start with <code>Content-Type</code> and <code>Accept: application/json</code> and a JSON body; <code>Host</code> is sent automatically from the URL.</p>
+<h3>Copy as cURL or code</h3>
+<p>The <b>Copy as…</b> button copies the request as cURL, Python (requests) or JavaScript (fetch), with the variables resolved. The opposite direction: <a href='help://import_curl'>cURL Import</a>.</p>
+<h3>Example</h3>
+<pre>- name: "Create user"
+  type: "http"
+  http_config:
+    method: "POST"
+    url: "{{BASE_URL}}/users"
+    auth:
+      type: "bearer"
+      token: "{{API_TOKEN}}"
+    body_type: "json"
+    body: "{\"name\": \"{{NAME}}\"}"
+    env_extractors:
+      - json_path: "id"
+        env_var: "USER_ID"
+    assertions:
+      - left: "{{RESPONSE_STATUS}}"
+        op: "eq"
+        right: "201"</pre>

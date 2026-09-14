@@ -1,0 +1,15 @@
+<h2>Settings</h2>
+<p>Menu <b>Settings</b>. Changes apply when you press <b>OK</b> (the <b>Storage</b> page is the exception: its actions are immediate).</p>
+<table>
+<tr><td><b>General</b></td><td>interface <b>language</b> (English/Portuguese; restart to translate the whole main window), <b>start Kai with the system</b>, the <b>graceful stop timeout</b> (how long Stop waits after asking a process to exit before forcing it), <b>max log size</b> per command.</td></tr>
+<tr><td><b>Appearance</b></td><td>the active <a href='help://themes'>theme</a> and <i>Import theme…</i>; window behaviour — hide when it loses focus, start visible, open as fixed size / remember last size / maximized / fullscreen; visual effects (shadows, translucent window, liquid glass blur, animations, theme gradients — all off by default, enable them to match your environment).</td></tr>
+<tr><td><b>Layout</b></td><td><b>density</b> (comfortable/compact), <b>corners</b> (straight, soft, rounded — every window and dialog follows it), tree connector lines, a background image for the command list and its opacity, where each group of action buttons goes (top, bottom, left, right or hidden), and the <b>Output position</b>.</td></tr>
+<tr><td><b>Shortcuts</b></td><td>the global show/hide shortcut and a searchable table of every action — see <a href='help://shortcuts'>Keyboard shortcuts</a>. <i>Restore Defaults</i> resets it.</td></tr>
+<tr><td><b>Execution Profiles</b></td><td>the targets a command can run through (WSL, containers…) — see <a href='help://terminal_targets'>Terminals &amp; WSL</a>.</td></tr>
+<tr><td><b>Languages</b></td><td>the Python, Node and PHP interpreters — see <a href='help://languages'>Python, Node &amp; PHP</a>.</td></tr>
+<tr><td><b>Storage</b></td><td>every command, folder and collection in one filterable table, with bulk <b>duplicate</b> and <b>delete</b>. Deleting a folder moves its contents up one level instead of deleting them. Applies immediately.</td></tr>
+<tr><td><b>Notifications</b></td><td>the master switch and one switch per event — see <a href='help://notifications'>Notifications &amp; logs</a>.</td></tr>
+<tr><td><b>KIP</b></td><td>wait times (first message, field updates, after Cancel), remembering the last answers (and a button to forget them all), opening the Details drawer on failure, and the size of the KIP own window (follow the general setting, normal, maximized or fullscreen) — see <a href='help://kip'>KIP</a>.</td></tr>
+</table>
+<h3>Where things are stored</h3>
+<p>Settings, commands, collections, history and notifications are JSON files in your user config folder (<code>~/.config/kai/</code> on Linux, <code>%APPDATA%\Kai\</code> on Windows). A corrupted file is restored from an automatic backup and Kai tells you. Themes live in <code>themes/</code> there.</p>

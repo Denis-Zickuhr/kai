@@ -4,8 +4,8 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 
-#include "ui/env-var-autocomplete.h"
-#include "ui/inline-code-field.h"
+#include "ui/features/environments/env-var-autocomplete.h"
+#include "ui/shared/inline-code-field.h"
 
 using namespace kai::ui;
 
@@ -143,6 +143,105 @@ private slots:
         QVERIFY(!popup->isVisible());
         // Nada foi inserido além do que o usuário já tinha digitado.
         QCOMPARE(field->toPlainText(), QStringLiteral("{{a"));
+
+        delete field;
+    }
+
+    // Autocomplete de bloco condicional (pedido do usuário: "digita um {% e
+    // já sugere os comandos possíveis (if, if else)") — só ativo quando
+    // supportConditionals=true.
+    void percentTriggerSuggestsConditionalBlocksWhenEnabled()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+        QVERIFY(popup->isVisible());
+        auto *list = popup->findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        QCOMPARE(list->count(), 2); // "if" e "if / else"
+
+        delete field;
+    }
+
+    // Sem supportConditionals (default), "{%" nunca abre popup — não muda
+    // o comportamento dos campos que já usavam este componente antes.
+    void percentTriggerDoesNothingWhenConditionalsDisabled()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{QStringLiteral("X")}; });
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup == nullptr || !popup->isVisible());
+
+        delete field;
+    }
+
+    // Selecionar "if" insere o snippet completo com o cursor posicionado
+    // DENTRO dele (logo após "if "), pronto pra digitar a condição — não no
+    // fim do texto inserido, diferente do caso de {{var}}.
+    void selectingIfInsertsSnippetWithCursorAtCondition()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+
+        // Primeiro item da lista é "if" (ver conditionalSnippets()).
+        QTest::keyClick(field->editor(), Qt::Key_Return);
+        QTest::qWait(30);
+
+        QCOMPARE(field->toPlainText(), QStringLiteral("{% if  %}\n{% endif %}"));
+        QCOMPARE(field->editor()->textCursor().position(), 6); // logo após "{% if "
+        QVERIFY(!popup->isVisible());
+
+        // A condição pode ser digitada normalmente a partir daqui.
+        QTest::keyClicks(field->editor(), QStringLiteral("VAR"));
+        QCOMPARE(field->toPlainText(), QStringLiteral("{% if VAR %}\n{% endif %}"));
+
+        delete field;
+    }
+
+    // "if / else" (segundo item) insere a variante com bloco else.
+    void selectingIfElseInsertsSnippetWithElseBranch()
+    {
+        auto *field = new InlineCodeField();
+        field->show();
+        attachEnvVarAutocomplete(field->editor(), []() { return QStringList{}; },
+            /*supportConditionals=*/true);
+        field->editor()->setFocus();
+
+        QTest::keyClicks(field->editor(), QStringLiteral("{%"));
+        QTest::qWait(30);
+        QWidget *popup = findPopup(field);
+        QVERIFY(popup != nullptr);
+        auto *list = popup->findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        list->setCurrentRow(1); // "if / else"
+
+        QTest::keyClick(field->editor(), Qt::Key_Return);
+        QTest::qWait(30);
+
+        QCOMPARE(field->toPlainText(),
+            QStringLiteral("{% if  %}\n\n{% else %}\n\n{% endif %}"));
 
         delete field;
     }

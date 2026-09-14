@@ -34,6 +34,10 @@ public:
     // delegado ao próprio ProcessRunner).
     void stop(const QString &commandId);
 
+    // Encerramento IMEDIATO (botão "Forçar parada"): SIGKILL direto, sem
+    // esperar terminate — delegado a ProcessRunner::forceStop().
+    void forceStop(const QString &commandId);
+
     // Encerra E ESQUECE o processo: para o runner e REMOVE a entrada do
     // rastreamento. Diferente de stop(), que mantém a entrada (com status
     // Success/Error) para consulta posterior. Usado quando a sessão é
@@ -56,6 +60,10 @@ public:
     // rastreado ou que nunca finalizou: false (fallback seguro).
     bool lastRunCrashed(const QString &commandId) const;
 
+    // A última finalização foi um encerramento PEDIDO (Parar/Forçar/kill/reset):
+    // não deve virar notificação de erro nem marcar o comando como falho.
+    bool lastRunStoppedByRequest(const QString &commandId) const;
+
     // Retorna o ProcessRunner rastreado para `commandId`, ou nullptr se não
     // rastreado. Usado pelo Terminal Drawer para permitir interação via
     // stdin em processos background reconectados (terminal
@@ -73,6 +81,7 @@ private:
         // Ver lastRunCrashed(): reflete ProcessResult::crashed da última
         // finalização, senão a informação se perde ao virar só Success/Error.
         bool lastCrashed = false;
+        bool lastStoppedByRequest = false;
     };
 
     std::map<QString, TrackedProcess> m_processes;

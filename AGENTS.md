@@ -4,6 +4,15 @@ You are a software engineer specialized in C++20 and Qt 6, responsible for
 building **Kai**. Read the files under `specs/` carefully before
 implementing any feature.
 
+## 0. Product philosophy — read first
+Before designing or implementing any feature, or when a request has more
+than one reasonable design, consult `docs/philosophy.md`: it defines what
+Kai is and is not (light, native, tray-resident, never self-acting, a
+complete-but-light HTTP client, portable/versionable, fail-safe). Use it as
+the reference for scope and trade-off decisions. If a request conflicts with
+it, say so and ask before building. If the philosophy itself has to change,
+update that file in the same change.
+
 ## 1. Non-negotiable code principles
 - **C++20 architecture:** use modern features (`std::optional`,
   `std::variant`, concepts, smart pointers) and avoid manual memory
@@ -101,3 +110,24 @@ overriding a `QLineEdit`/`QComboBox`/etc.'s global rule needs to redeclare
 the radius with the token, otherwise the element goes square regardless of
 the user's setting. Exception: perfect circles (e.g. a status dot), where
 the radius is half the side by geometric definition.
+
+## 10. UI conventions — REQUIRED
+- **Short text.** Labels, placeholders, empty states and tooltips are a few
+  words ("No headers added yet", "Path (optional)"). No explanatory
+  paragraphs, no "how this works" hints inside forms: explanations live in
+  `docs/` and the in-app Help. If something looks obvious to someone who uses
+  Kai (like "Inherit"), it gets no sentence.
+- **Lists of rows are tables in the original pattern:** a read-only table with
+  no header showing only the item's name, pencil/trash per row
+  (`makeRowActionsCell`), a `+ Add` in the card header and a `RowEditDialog`
+  to create/edit (see `OutputRespondersEditorWidget`, `HttpEntriesEditorWidget`).
+  Never edit cells inline and never add a header row.
+- **Fields:** small uppercase label above the field (`layout_helpers::
+  wrapWithLabel`), never `QFormLayout` rows.
+- **Backgrounds:** the global QSS paints every plain `QWidget`/`QLabel`/
+  `QCheckBox` dark. A container or label sitting on a card needs a transparent
+  background (`makeTransparentHost` in `ui/features/http/http-ui.h`, or the
+  `#objectName { background: transparent; }` pattern), or it shows as a black band.
+- **Before reporting UI work done,** render it (offscreen `grab()` with the
+  user's theme/corner style) and look at it, then hand over the test checklist.
+

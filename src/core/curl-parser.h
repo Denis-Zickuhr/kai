@@ -15,8 +15,9 @@ struct CurlParseResult {
 
 // Converte um comando `curl` (colado como texto) num HttpConfig do Kai.
 // Suporta as flags mais comuns: -X/--request, -H/--header, -d/--data/
-// --data-raw/--data-binary/--data-urlencode, --url, -u/--user (vira header
-// Authorization Basic), e a URL posicional. Continuações de linha com '\'
+// --data-raw/--data-binary/--data-urlencode, -F/--form (multipart, com
+// arquivos via @caminho), --url, -u/--user (vira autenticação Basic), -I/--head,
+// -k/--insecure, -x/--proxy, -m/--max-time, -b/--cookie, e a URL posicional. Continuações de linha com '\'
 // são normalizadas. Método é inferido como POST quando há corpo e nenhum
 // -X foi informado.
 CurlParseResult parseCurl(const QString &curlText);

@@ -2,9 +2,10 @@
 #include <QSplitter>
 #include <QTemporaryDir>
 
+#include "non-fresh-config.h"
 #include "core/config-manager.h"
 #include "ui/main-window.h"
-#include "ui/terminal-drawer.h"
+#include "ui/features/output/terminal-drawer.h"
 
 using namespace kai::ui;
 using kai::core::ConfigManager;
@@ -49,6 +50,10 @@ private slots:
 
     void resizingVerticalSplitterGivesMoreSpaceToOutputPanel()
     {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        useNonFreshConfig(tempDir); // config vazia = boas-vindas = splitters ocultos (100x30, sem layout)
+
         MainWindow window;
         window.show();
         window.resize(1200, 800);
@@ -97,7 +102,7 @@ private slots:
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
-        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+        useNonFreshConfig(tempDir); // config vazia = boas-vindas = Saída oculta
 
         {
             ConfigManager config;
@@ -194,7 +199,7 @@ private slots:
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
-        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+        useNonFreshConfig(tempDir); // config vazia = boas-vindas = Saída oculta
 
         {
             ConfigManager config;
@@ -229,6 +234,102 @@ private slots:
         QCOMPARE(sizes.size(), 2);
         QVERIFY2(sizes.at(0) < sizes.at(1),
                   "outputSplitterSizes salvo (300/900) não foi restaurado — splitter voltou ao default 50/50");
+    }
+
+    // Bug relatado: ao maximizar/minimizar/restaurar a janela, a proporção
+    // entre a Saída e a lista de comandos se perdia (a lista ficava sempre
+    // maior). A proporção escolhida pelo usuário deve sobreviver a qualquer
+    // sequência de resizes.
+    void outputProportionSurvivesWindowStateChanges_data()
+    {
+        QTest::addColumn<QString>("position");
+        QTest::addColumn<double>("target");
+        QTest::newRow("bottom") << QStringLiteral("bottom") << 0.6;
+        // Nas laterais a lista tem largura mínima grande: um alvo menor evita
+        // esbarrar nela e confundir "limite" com "proporção perdida".
+        QTest::newRow("right") << QStringLiteral("right") << 0.3;
+        QTest::newRow("left") << QStringLiteral("left") << 0.3;
+    }
+
+    void outputProportionSurvivesWindowStateChanges()
+    {
+        QFETCH(QString, position);
+        QFETCH(double, target);
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        useNonFreshConfig(tempDir);
+        {
+            ConfigManager config;
+            SettingsData data;
+            data.outputPosition = position;
+            data.terminalCollapsed = false;
+            QVERIFY(config.saveSettings(data));
+        }
+
+        MainWindow window;
+        window.resize(1200, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *terminal = window.findChild<TerminalDrawer *>();
+        QVERIFY(terminal != nullptr);
+        terminal->setExpanded(true);
+        QTest::qWait(50);
+
+        QSplitter *outer = nullptr;
+        for (auto *splitter : window.findChildren<QSplitter *>()) {
+            if (splitter->count() == 2 && splitter->indexOf(terminal) >= 0) {
+                outer = splitter;
+            }
+        }
+        QVERIFY(outer != nullptr);
+        const int idx = outer->indexOf(terminal);
+        const auto ratio = [&]() {
+            const QList<int> s = outer->sizes();
+            return double(s.at(idx)) / double(s.at(0) + s.at(1));
+        };
+
+        // "Arrasta" o divisor até ~60% para a Saída.
+        const int total = outer->sizes().at(0) + outer->sizes().at(1);
+        QList<int> wanted{0, 0};
+        wanted[idx] = qRound(total * target);
+        wanted[1 - idx] = total - wanted[idx];
+        outer->setSizes(wanted);
+        emit outer->splitterMoved(wanted.at(0), 1);
+        QTest::qWait(50);
+        const double chosen = ratio();
+        QVERIFY2(qAbs(chosen - target) < 0.03, qPrintable(QString::number(chosen)));
+
+        const QList<QSize> windowSizes{QSize(1600, 1000), QSize(1100, 700), QSize(1400, 900), QSize(1200, 800)};
+        for (const QSize &size : windowSizes) {
+            window.resize(size);
+            QTest::qWait(50);
+            QVERIFY2(qAbs(ratio() - chosen) < 0.03,
+                     qPrintable(QStringLiteral("%1x%2 -> %3 (esperado %4)")
+                                    .arg(size.width()).arg(size.height()).arg(ratio()).arg(chosen)));
+        }
+
+        window.showMaximized();
+        QTest::qWait(100);
+        QVERIFY2(qAbs(ratio() - chosen) < 0.03, qPrintable(QString::number(ratio())));
+        window.showNormal();
+        QTest::qWait(100);
+        QVERIFY2(qAbs(ratio() - chosen) < 0.03, qPrintable(QString::number(ratio())));
+
+        window.hide();
+        window.resize(1000, 700);
+        window.show();
+        QTest::qWait(100);
+        QVERIFY2(qAbs(ratio() - chosen) < 0.03, qPrintable(QString::number(ratio())));
+
+        // Recolher e reabrir a Saída devolve a mesma proporção, mesmo com a
+        // janela de outro tamanho que na hora de recolher.
+        terminal->setExpanded(false);
+        QTest::qWait(50);
+        window.resize(1500, 950);
+        QTest::qWait(50);
+        terminal->setExpanded(true);
+        QTest::qWait(100);
+        QVERIFY2(qAbs(ratio() - chosen) < 0.03, qPrintable(QString::number(ratio())));
     }
 };
 

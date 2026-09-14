@@ -1,0 +1,48 @@
+commands:
+  - command: "bash ./emit-logs.sh structured"
+    formatted_output: true
+    name: "1. Structured logs (one JSON per line)"
+    type: "command"
+  - command: "bash ./emit-logs.sh mixed"
+    formatted_output: true
+    name: "2. JSON + plain text + stack trace (raw groups)"
+    type: "command"
+  - command: "bash ./emit-logs.sh prefixed"
+    formatted_output: true
+    name: "3. Prefix before the JSON (timestamp / tag)"
+    type: "command"
+  - command: "bash ./emit-logs.sh shapes"
+    formatted_output: true
+    name: "4. Key aliases, nested fields, unicode, long message"
+    type: "command"
+  - command: "bash ./emit-logs.sh wrapped"
+    formatted_output: true
+    name: "5. JSON broken across lines (rebuilt into one card)"
+    type: "command"
+  - command: "bash ./emit-logs.sh error"
+    formatted_output: true
+    name: "6. Ends with ERROR/FATAL (exit 1, first-error notification)"
+    type: "command"
+  - command: "bash ./emit-logs.sh stream {{COUNT}}"
+    formatted_output: true
+    name: "7. Live stream (follow, filter by level, search)"
+    params:
+      - default: "60"
+        label: "Number of lines"
+        name: "COUNT"
+        type: "text"
+    type: "command"
+  - command: "bash ./emit-logs.sh volume {{COUNT}}"
+    formatted_output: true
+    name: "8. Volume (virtualized list)"
+    params:
+      - default: "5000"
+        label: "Number of lines"
+        name: "COUNT"
+        type: "text"
+    type: "command"
+  - command: "bash ./emit-logs.sh structured"
+    name: "9. Same as 1, but normal output (compare)"
+    type: "command"
+icon: "scroll-text"
+project_name: "Kai Formatted Output Demo"

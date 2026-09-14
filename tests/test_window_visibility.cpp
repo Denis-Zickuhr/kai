@@ -3,7 +3,10 @@
 #include <QCoreApplication>
 #include <QTemporaryDir>
 
+#include "non-fresh-config.h"
 #include "ui/main-window.h"
+#include "ui/features/output/terminal-drawer.h"
+#include "ui/features/output/pty-terminal-widget.h"
 #include "core/config-manager.h"
 
 using namespace kai::ui;
@@ -33,6 +36,20 @@ private slots:
         QMetaObject::invokeMethod(&window, "toggleVisibility");
         QTest::qWait(50);
         QVERIFY(window.isVisible());
+    }
+
+    // Bug: clicar no ícone da janela na barra de tarefas não minimizava. Com
+    // FramelessWindowHint o Qt trata os hints como "customizados" e NÃO aplica
+    // os padrões; sem WindowMinimizeButtonHint/WindowSystemMenuHint o Windows
+    // cria a janela sem WS_MINIMIZEBOX/WS_SYSMENU e ignora o SC_MINIMIZE
+    // enviado pelo clique na barra de tarefas.
+    void framelessWindowKeepsNativeMinimizeHints()
+    {
+        MainWindow window;
+        const Qt::WindowFlags flags = window.windowFlags();
+        QVERIFY(flags & Qt::FramelessWindowHint);
+        QVERIFY(flags & Qt::WindowMinimizeButtonHint);
+        QVERIFY(flags & Qt::WindowSystemMenuHint);
     }
 
     void closingWindowHidesButKeepsAppRunning()
@@ -127,6 +144,53 @@ private slots:
 
         MainWindow window;
         QVERIFY(!window.isVisible());
+    }
+
+    // Pedido do usuário: "quero um novo atalho, funcionara na janela
+    // normal apenas [não global]... por padrão vai ser esc" — QShortcut
+    // comum (não QHotkey), dispara só com a janela ativa. Esc some com a
+    // janela igual ao botão X (hide simples, não fecha o app).
+    void escShortcutHidesWindow()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QVERIFY(window.isVisible());
+
+        QTest::keyClick(&window, Qt::Key_Escape);
+        QTest::qWait(50);
+        QVERIFY(!window.isVisible());
+    }
+
+    // Esc NÃO pode esconder a janela enquanto o foco está dentro de um
+    // terminal INTERATIVO — é tecla de uso comum lá dentro (ex: sair do
+    // modo de inserção do vim); sequestrá-la quebraria o programa rodando
+    // dentro do terminal.
+    void escShortcutDoesNotHideWindowWhileInteractiveTerminalFocused()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        useNonFreshConfig(tempDir); // config vazia = boas-vindas = Saída oculta
+
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        QVERIFY(drawer != nullptr);
+        drawer->setInteractiveMode(true);
+        auto *pty = drawer->findChild<PtyTerminalWidget *>();
+        QVERIFY(pty != nullptr);
+        pty->setFocus();
+        QTest::qWait(50);
+
+        QTest::keyClick(&window, Qt::Key_Escape);
+        QTest::qWait(50);
+        QVERIFY(window.isVisible());
     }
 };
 

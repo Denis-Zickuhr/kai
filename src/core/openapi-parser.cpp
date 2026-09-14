@@ -137,7 +137,7 @@ OpenApiParseResult parseOpenApi(const QString &jsonText)
                         ? QJsonDocument(example.toObject())
                         : QJsonDocument(QJsonArray{example}));
                     cfg.body = QString::fromUtf8(bodyDoc.toJson(QJsonDocument::Indented));
-                    cfg.headers.insert(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+                    cfg.headers.append({QStringLiteral("Content-Type"), QStringLiteral("application/json")});
                 }
             }
 

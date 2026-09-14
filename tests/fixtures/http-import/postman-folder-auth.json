@@ -1,0 +1,4 @@
+{
+          "info": {"name": "X", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+          "item": [{"name": "Admin", "auth": {"type": "apikey", "apikey": [{"key": "key", "value": "X-Key"}, {"key": "value", "value": "{{K}}"}, {"key": "in", "value": "query"}]},
+                    "item": [{"name": "List", "request": {"method": "GET", "url": "https://x/a"}}]}]}

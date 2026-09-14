@@ -9,12 +9,18 @@ In the command editor, **HTTP** tab, click **Import cURL** and paste a
 | `-H` / `--header` | headers |
 | `-d` / `--data*` / `--data-urlencode` | body (infers POST) |
 | `--url` | URL |
-| `-u` / `--user` | `Authorization: Basic ...` header |
-| `-A` / `--user-agent`, `-e` / `--referer` | headers |
+| `-u` / `--user` | **Basic** authentication |
+| `-A` / `--user-agent`, `-e` / `--referer`, `-b` / `--cookie` | headers |
+| `-F` / `--form` | multipart form (`name=@path` uploads a file) |
+| `-I` / `--head` | HEAD request |
+| `-k` / `--insecure` | turns TLS verification off |
+| `-x` / `--proxy`, `-m` / `--max-time` | proxy, timeout |
 
 Supports `--flag=value`, single/double quotes, escapes and line
-continuation (`\`). Irrelevant flags (`-s`, `-k`, `-L`, `--compressed`, ...)
+continuation (`\`). Irrelevant flags (`-s`, `--compressed`, `-o`, `--connect-timeout`, ...)
 are ignored without "eating" the URL.
+
+The reverse is in the HTTP page: **Copy as…** → cURL.
 
 ## Example
 

@@ -2,9 +2,10 @@
 #include <QPlainTextEdit>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QToolButton>
 #include <QWidget>
 
-#include "ui/terminal-drawer.h"
+#include "ui/features/output/terminal-drawer.h"
 
 using namespace kai::ui;
 
@@ -65,6 +66,59 @@ private slots:
         drawer->setExpanded(true);
 
         QCOMPARE(splitter.sizes(), afterManualResize);
+    }
+
+    // A Saída fica dentro da mesma moldura ("panelCard") da caixa de comandos.
+    void drawerIsWrappedInPanelCardFrame()
+    {
+        TerminalDrawer drawer;
+        QCOMPARE(drawer.objectName(), QStringLiteral("panelCard"));
+        QVERIFY(drawer.testAttribute(Qt::WA_StyledBackground));
+    }
+
+    // Colapsada, a fileira de ações do cabeçalho some e sobra só o chevron;
+    // expandida, tudo volta.
+    void collapsedHeaderKeepsOnlyTheChevron()
+    {
+        auto *sibling = new QWidget();
+        auto *drawer = new TerminalDrawer();
+        QSplitter splitter(Qt::Vertical);
+        splitter.addWidget(sibling);
+        splitter.addWidget(drawer);
+        splitter.resize(400, 800);
+
+        auto *toggle = drawer->findChild<QToolButton *>(QStringLiteral("terminalDrawerToggle"));
+        // Abas + ações (e a faixa de overflow) vivem na linha rolável; o
+        // chevron fica fora dela.
+        auto *scroll = drawer->findChild<QWidget *>(QStringLiteral("outputHeaderScroll"));
+        QVERIFY(toggle != nullptr);
+        QVERIFY(scroll != nullptr);
+        QVERIFY(!scroll->isAncestorOf(toggle));
+
+        drawer->setExpanded(false);
+        QVERIFY(!toggle->isHidden());
+        QVERIFY2(scroll->isHidden(), "abas e ações deveriam sumir com o painel colapsado");
+
+        drawer->setExpanded(true);
+        QVERIFY2(!scroll->isHidden(), "abas e ações deveriam voltar ao expandir");
+        QVERIFY(!toggle->isHidden());
+    }
+
+    // Saída na lateral, colapsada: coluna estreita (só o chevron), não os 96px
+    // mínimos de antes, para dar o máximo de espaço aos comandos.
+    void collapsedSideColumnIsNarrow()
+    {
+        auto *sibling = new QWidget();
+        auto *drawer = new TerminalDrawer();
+        QSplitter splitter(Qt::Horizontal);
+        splitter.addWidget(sibling);
+        splitter.addWidget(drawer);
+        splitter.resize(900, 400);
+        drawer->setDrawerPosition(DrawerPosition::Right);
+
+        drawer->setExpanded(false);
+        QVERIFY2(drawer->maximumWidth() < 80,
+                 qPrintable(QStringLiteral("largura colapsada=%1").arg(drawer->maximumWidth())));
     }
 };
 

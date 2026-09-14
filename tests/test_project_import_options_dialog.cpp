@@ -1,6 +1,7 @@
 #include <QTest>
+#include <QComboBox>
 
-#include "ui/project-import-options-dialog.h"
+#include "ui/features/collections/project-import-options-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -26,14 +27,33 @@ private slots:
     {
         const QString wslPath = QStringLiteral("//wsl.localhost/Ubuntu/home/user/projects/dotfiles");
         ProjectImportOptionsDialog dialog(wslPath, {});
-        // PROJECT_PATH já vem pré-simplificado (prefixo WSL removido) —
-        // pedido do usuário: "por padrão vejo que faça sentido omitir o
-        // path do wsl mesmo".
+        // Fora do Windows, PROJECT_PATH já vem sem o prefixo WSL; no Windows o UNC é o único path que o Kai enxerga.
+#if defined(Q_OS_WIN)
+        QCOMPARE(dialog.projectPath(), QStringLiteral(R"(\\wsl.localhost\Ubuntu\home\user\projects\dotfiles)"));
+#else
         QCOMPARE(dialog.projectPath(), QStringLiteral("/home/user/projects/dotfiles"));
+#endif
+    }
+
+    void formatComboStartsOnTheFormatShownInTheField()
+    {
+        ProjectImportOptionsDialog dialog(QStringLiteral("//wsl.localhost/Ubuntu/home/user/p"), {});
+        QComboBox *formatCombo = nullptr;
+        for (QComboBox *combo : dialog.findChildren<QComboBox *>()) {
+            if (combo->findData(QStringLiteral("posix")) >= 0) {
+                formatCombo = combo;
+            }
+        }
+        QVERIFY(formatCombo);
+        // "Sem conversão" com um path já convertido era o bug.
+        QVERIFY(formatCombo->currentData().toString() != QStringLiteral("native"));
     }
 
     void projectPathDefaultsToUnchangedWhenNotWsl()
     {
+#if defined(Q_OS_WIN)
+        QSKIP("no Windows o formato padrão é o do Windows");
+#endif
         const QString plainPath = QStringLiteral("/home/user/projects/dotfiles");
         ProjectImportOptionsDialog dialog(plainPath, {});
         QCOMPARE(dialog.projectPath(), plainPath);

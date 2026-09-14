@@ -13,6 +13,10 @@ Global variables live in **packages** (Insomnia/Postman vibe). Only one is
 The ⚙ button next to the picker opens the screen to **create / duplicate /
 rename / delete** packages and edit their variables.
 
+## Import a `.env` file
+
+**Import .env…** (below the variable list) adds the `KEY=VALUE` lines of a `.env` file to the selected package. It understands `export KEY=VALUE`, quoted values (`"…"` with `\n` escapes, `'…'` literal) and `#` comments; nothing is expanded. Variables that already exist are updated. Mark the sensitive ones as secret afterwards.
+
 ## Secret variables
 
 Check the **Secret** column to mask the value in the UI (useful for

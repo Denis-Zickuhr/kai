@@ -36,6 +36,7 @@
     <file alias="chevron-down.svg">lucide/chevron-down.svg</file>
     <file alias="chevron-left.svg">lucide/chevron-left.svg</file>
     <file alias="chevron-right.svg">lucide/chevron-right.svg</file>
+    <file alias="chevron-right-fg.svg">lucide/chevron-right-fg.svg</file>
     <file alias="chevron-up.svg">lucide/chevron-up.svg</file>
     <file alias="chevron-up-fg.svg">lucide/chevron-up-fg.svg</file>
     <file alias="circle-alert.svg">lucide/circle-alert.svg</file>
@@ -189,6 +190,7 @@
     <file alias="package-search.svg">lucide/package-search.svg</file>
     <file alias="package-x.svg">lucide/package-x.svg</file>
     <file alias="package.svg">lucide/package.svg</file>
+    <file alias="palette.svg">lucide/palette.svg</file>
     <file alias="panel-bottom-close.svg">lucide/panel-bottom-close.svg</file>
     <file alias="panel-bottom-open.svg">lucide/panel-bottom-open.svg</file>
     <file alias="panel-bottom.svg">lucide/panel-bottom.svg</file>

@@ -1,0 +1,15 @@
+{
+          "_type": "export", "__export_format": 4,
+          "resources": [
+            {"_id": "wrk_1", "_type": "workspace", "name": "My API"},
+            {"_id": "env_1", "_type": "environment", "parentId": "wrk_1", "data": {"base_url": "https://api.test", "nested": {"k": "v"}}},
+            {"_id": "fld_1", "_type": "request_group", "parentId": "wrk_1", "name": "Users",
+             "authentication": {"type": "bearer", "token": "{{ _.token }}"}},
+            {"_id": "req_2", "_type": "request", "parentId": "fld_1", "name": "Second", "method": "GET", "url": "{{ _.base_url }}/b", "metaSortKey": 2},
+            {"_id": "req_1", "_type": "request", "parentId": "fld_1", "name": "First", "method": "POST", "url": "{{ _.base_url }}/a", "metaSortKey": 1,
+             "headers": [{"name": "X-A", "value": "1"}], "parameters": [{"name": "q", "value": "z"}],
+             "body": {"mimeType": "application/json", "text": "{\"a\": 1}"},
+             "authentication": {"type": "basic", "username": "u", "password": "p"}},
+            {"_id": "req_3", "_type": "request", "parentId": "wrk_1", "name": "Gql", "method": "POST", "url": "https://x/g",
+             "body": {"mimeType": "application/graphql", "text": "{\"query\": \"{ a }\", \"variables\": {\"id\": 1}}"}}
+          ]}

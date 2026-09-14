@@ -58,7 +58,7 @@ private slots:
                 QCOMPARE(ep.config.url, QStringLiteral("https://api.loja.com/v1/users"));
                 QVERIFY(ep.config.body.contains(QStringLiteral("name")));
                 QVERIFY(ep.config.body.contains(QStringLiteral("age")));
-                QCOMPARE(ep.config.headers.value("Content-Type"), QStringLiteral("application/json"));
+                QCOMPARE(httpEntryValue(ep.config.headers, QStringLiteral("Content-Type")), QStringLiteral("application/json"));
             }
         }
         QVERIFY(foundPost);

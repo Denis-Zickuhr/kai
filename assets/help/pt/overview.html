@@ -1,2 +1,26 @@
 <h2>Visão geral do Kai</h2>
-<p><b>Kai</b> é um executor de comandos nativo (C++/Qt6) para devs: roda scripts Shell e requisições HTTP, encadeia automações (hooks), injeta variáveis por ambiente e tudo com atalho global e baixo consumo.</p><h3>Fluxo típico</h3><ol><li>Crie <b>pastas</b> e dentro delas <b>comandos</b> (Shell ou HTTP).</li><li>Defina <b>variáveis</b> num <b>Environment</b> (pacote selecionável no topo).</li><li>Rode com duplo-clique; acompanhe a saída no Terminal Drawer.</li><li>Automatize com <b>hooks</b> (pre/post) e reutilize via <b>CLI</b>.</li></ol><div class='tip'>Dica: use a busca (Ctrl+F) para achar comandos por nome.</div><p>Veja também: <a href='help://commands_shell'>Comandos Shell</a>, <a href='help://commands_http'>Comandos HTTP</a>, <a href='help://environments'>Environments</a>.</p>
+<p>O <b>Kai</b> é um executor de comandos nativo para devs: mantém os comandos que você roda todo dia — shell, Python, Node, requisições HTTP — a um atalho global de distância, injeta variáveis por ambiente, mostra a saída ao vivo e nunca deixa processos órfãos.</p>
+<h3>Fluxo típico</h3>
+<ol>
+<li>Crie <b>pastas</b> (elas viram abas) e, dentro delas, <b>comandos</b> — veja <a href='help://organizing'>Pastas, árvore e busca</a>.</li>
+<li>Escreva o comando: uma <a href='help://commands_shell'>linha de shell</a>, <a href='help://languages'>código Python, Node ou PHP</a> ou uma <a href='help://commands_http'>requisição HTTP</a>. Peça valores com <a href='help://parameters'>parâmetros</a>.</li>
+<li>Defina <b>variáveis</b> num <a href='help://environments'>ambiente</a> (o seletor no topo) e use como <code>{{VAR}}</code>.</li>
+<li>Rode com duplo clique ou <b>Enter</b>; acompanhe a <a href='help://output'>Saída</a> ao vivo.</li>
+<li>Automatize: <a href='help://hooks'>hooks</a>, <a href='help://scheduling'>agendamentos</a>, <a href='help://responders'>auto-respostas</a> e a <a href='help://cli'>linha de comando</a>.</li>
+</ol>
+<h3>A janela principal</h3>
+<ul>
+<li><b>Barra superior:</b> menus <b>Arquivo</b> (importar, exportar, histórico de execuções, logs, ocultar, fechar), <b>Item</b> (nova pasta / comando / coleção), <b>Configurações</b> e <b>Ajuda</b>; o seletor de ambiente fica à direita.</li>
+<li><b>Abas e árvore:</b> uma aba por pasta, com os comandos e subpastas numa árvore; a barra lateral ao lado executa, para, edita e cria coisas.</li>
+<li><b>Painel de saída:</b> o resultado do comando selecionado (embaixo por padrão; pode ficar à esquerda ou à direita em <a href='help://settings'>Configurações → Layout</a>).</li>
+<li><b>Linha de status:</b> quantos comandos estão rodando (clique para a <a href='help://processes'>lista de processos</a>), se a última execução deu certo e as <a href='help://notifications'>notificações</a> não lidas.</li>
+</ul>
+<div class='tip'>Use <b>Ctrl+F</b> para buscar comandos pelo nome. O <a href='help://shortcuts'>atalho global</a> mostra ou oculta o Kai de qualquer lugar.</div>
+<h3>Por onde continuar</h3>
+<table>
+<tr><td><a href='help://commands_shell'>Comandos</a></td><td>o que um comando faz e suas opções</td></tr>
+<tr><td><a href='help://languages'>Python, Node e PHP</a></td><td>código no lugar da linha de shell, mais os módulos embutidos <code>kai</code> e <code>kip</code></td></tr>
+<tr><td><a href='help://kip'>KIP</a></td><td>transforme um comando num mini app com formulários, progresso e resultado</td></tr>
+<tr><td><a href='help://kai_json'>kai.yml</a></td><td>guarde os comandos de um projeto num arquivo versionável</td></tr>
+<tr><td><a href='help://settings'>Configurações</a></td><td>aparência, layout, notificações, interpretadores e mais</td></tr>
+</table>

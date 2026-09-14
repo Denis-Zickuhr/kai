@@ -1,0 +1,83 @@
+commands:
+  - command: "echo \"{{GREETING}} on port {{PORT}}\""
+    description: "language omitted = native: a shell line, with {{VAR}} interpolated by Kai."
+    name: "1. Native (shell) — the default"
+    type: "command"
+  - command: |-
+      import os
+      name = 'kai'
+      print(f"{{name}} -> {name}")
+      print('{{GREETING}} is NOT interpolated; the variable is in the environment:', os.environ['GREETING'])
+      print("quotes ' \" $HOME `ls` ünïcödé ✓")
+    description: "The code reaches python3 untouched: f-string braces, quotes, $ and backticks are safe. GREETING arrives through os.environ."
+    language: "python"
+    name: "2. Python — braces and quotes survive"
+    type: "command"
+  - command: |-
+      name = input('Your name: ')
+      print(f'Hi, {name}!')
+    description: "No `python3 -c` quoting, and input() works: type the answer in the output panel's input field."
+    language: "python"
+    name: "3. Python — stdin is free"
+    type: "command"
+  - command: |-
+      import os
+      print('WHO =', os.environ['WHO'])
+    description: "Parameters arrive as environment variables, like everything else."
+    language: "python"
+    name: "4. Python — parameter as an environment variable"
+    params:
+      - default: "world"
+        label: "Who?"
+        name: "WHO"
+        type: "text"
+    type: "command"
+  - command: |-
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let i = 1; i <= 3; i++) {
+        console.log(`step ${i} of 3 (port ${process.env.PORT})`);
+        await sleep(500);
+      }
+      console.log('done ✓');
+    description: "Node code runs inside an async function, so await works at the top level. PORT comes from process.env."
+    language: "node"
+    name: "5. Node — top-level await"
+    type: "command"
+  - command: |-
+      import sys
+      print(sys.version.split()[0])
+    description: "The interpreter is a shell line: this one has arguments (like `uv run python` would). Empty = the global one from Settings → Languages."
+    interpreter: "env PYTHONHASHSEED=0 python3"
+    language: "python"
+    name: "6. Python — custom interpreter"
+    type: "command"
+  - command: |-
+      try {
+        await kai.notify('Hello from Node through the kai module', { title: 'Languages demo', level: 'info' });
+        console.log('active environment:', await kai.env.active());
+        console.log('environments:', (await kai.env.list()).join(', '));
+        console.log('commands registered:', (await kai.commands()).length);
+      } catch (error) {
+        console.log('Kai app not reachable:', error.message);
+      }
+    description: "The global `kai` object: sends a tray notification, lists the environments and the registered commands. Needs the Kai app running (it is the app that runs this, so it is)."
+    language: "node"
+    name: "7. Node — talk to the Kai app (kai module)"
+    type: "command"
+  - command: |-
+      import runpy
+      runpy.run_path('showcase.py', run_name='__main__')
+    declared_env_vars:
+      - name: "SHOWCASE_LAST_PROJECT"
+    description: "A long interactive Python program: a menu you keep returning to, a 4-step wizard with Back, dependent fields, chips, validation, checklist and retry, plus tools that use the kai module (environments, processes, notifications, run another command). The program lives in showcase.py; you can also paste its content into the command field."
+    icon: "wand-sparkles"
+    kip: true
+    language: "python"
+    name: "8. Showcase (Python: kip + kai modules)"
+    type: "command"
+    working_dir: "{{PROJECT_PATH}}"
+env_vars:
+  GREETING: "hello"
+  PORT: "8080"
+icon: "code"
+project_name: "Kai Languages Demo"

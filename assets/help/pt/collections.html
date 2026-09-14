@@ -1,2 +1,8 @@
-<h2>Coleções & Parâmetros</h2>
-<p><b>Parâmetros</b> pedem valores antes de executar (texto, select, bool, arquivo). Um <b>select</b> pode puxar opções de uma <b>Coleção</b>.</p><h3>Exemplo</h3><p>Comando <code>echo {{cliente.value}}</code> com um parâmetro <code>cliente</code> do tipo select ligado à coleção <b>Clientes</b> (campo exibido: <code>value</code>). Ao rodar, você escolhe o cliente e o Kai injeta <code>{{cliente.value}}</code>, <code>{{cliente.key}}</code> etc.</p><h3>Importar dados</h3><p>Coleções aceitam import de CSV/JSON; entradas vazias são ignoradas.</p>
+<h2>Coleções</h2>
+<p>Uma <b>Coleção</b> é a sua própria tabela de dados (clientes, servidores, ambientes — o que precisar) que um <a href='help://parameters'>parâmetro select</a> pode usar como lista de opções. Crie em <b>Item → Nova Coleção</b>; ela pertence a uma pasta/aba.</p>
+<h3>Schema e entradas</h3>
+<p>Você define os campos (colunas) — um é a <b>chave</b>, um o <b>valor</b>, mais quaisquer outros — e depois as entradas. Dá para marcar favoritos, filtrar e <b>importar entradas de CSV ou JSON</b> (entradas totalmente vazias são ignoradas).</p>
+<h3>Exemplo</h3>
+<p>Um comando <code>echo {{cliente.value}}</code> com um parâmetro <code>cliente</code> do tipo select ligado à coleção <b>Clientes</b> (campo exibido: <code>value</code>). Ao rodar, você escolhe o cliente e o Kai injeta <code>{{cliente.value}}</code> (o campo exibido) <i>e</i> <code>{{cliente.key}}</code> mais todos os outros campos da entrada.</p>
+<h3>Versionando junto do projeto</h3>
+<p>Coleções podem morar dentro do <a href='help://kai_json'>kai.yml</a> de um projeto; o parâmetro referencia a coleção <b>pelo nome</b>. Ao <a href='help://export_import'>exportar</a>, as entradas ficam de fora a menos que você ative — elas podem ter dado de verdade.</p>

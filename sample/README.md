@@ -1,6 +1,6 @@
 # Sample — Kai's test environment
 
-Each subfolder here is a local project with a `kai.json` at its root, so
+Each subfolder here is a local project with a `kai.yml` at its root, so
 you can try out the project selector, parameter types, collections and
 per-folder variable resolution by hand — without touching your real
 config.
@@ -8,22 +8,49 @@ config.
 ## Available projects
 
 - **`sample/api`** — "Kai API Tester": HTTP commands (GET/POST), response
+- **`sample/http`** — HTTP showcase (needs internet, uses httpbin.org): headers/auth/options inherited from the project and from subfolders (an API key in `Auth`, none in `Public`), turning an inherited header off or overriding it, query tables, JSON/XML/form/multipart/binary/GraphQL bodies, assertions (including an expected 404), token extraction and reuse, redirects, cookies, timeout, HEAD/OPTIONS/PATCH/DELETE, image preview and download to a file.
   variable extraction (`env_extractors`), and a Collection (`Endpoints`)
   used as the source of a `select` parameter.
+- **`sample/docs`** — "Kai Docs & Notes": a README plus `config.json`, `services.yml` and `feed.xml` for the documentation viewer (colors and folding for JSON/YAML/XML, collapse/expand all, `Ctrl+Shift+[` / `]`), and project notes of every type (MD, JSON, YAML, XML) in the *Notes* section.
 - **`sample/links`** — "Kai Web Shortcuts": shell commands that open URLs
   in the default browser (background), a parameter fed by a Collection
   (`Servers`), and an "app mode" example (Chromium/Chrome/Edge).
 - **`sample/shell`** — "Kai Shell & Controls Demo": a showcase of the 4
-  parameter types (text, select, bool, file), dynamic variables (`$uuid`,
+  parameter types (text, select, bool, file, plus a `select` whose options come
+  from a script via `options_script`), dynamic variables (`$uuid`,
   `$timestamp`...), a masked secret variable, a custom `working_dir`, a
   background process, and a Collection (`Customers`).
+- **`sample/languages`** — "Kai Languages Demo": commands in Python and Node
+  (the text is code, no `python3 -c` quoting), `{{VAR}}` vs. environment
+  variables, a parameter read through `os.environ`, a free stdin, top-level
+  `await` in Node and a per-command interpreter. Needs `python3`/`node`.
+  Command 7 uses the injected **`kai` module** from Node; command 8 is
+  **`showcase.py`**, a long interactive Python program (menu you keep returning
+  to, a 4-step wizard with Back/dependent fields/chips/retry, environment and
+  process tools, notifications, run-another-command) that uses both the `kip`
+  and `kai` modules — see the docstring at the top of the file.
+- **`sample/kip`** — "Kai KIP Demos": programs that speak the Kai Interface
+  Protocol in plain bash (no helper): wizard, confirm, cascading fields, checklist,
+  table, login with `set-env`, a hand-written raw-JSON example and a
+  "command doesn't support KIP" case, plus a Python and a Node wizard written
+  directly in the command with Kai's injected `kip` module (and a PHP one with the
+  class `Kip`), plus a plain `.py` file that finds the module on disk. See its own README.
+- **`sample/logs`** — "Kai Formatted Output Demo": Grafana/Loki-style formatted
+  output (`formatted_output`). One script (`emit-logs.sh`) emits each shape the view
+  understands: a JSON per line with levels and extra fields, JSON mixed with plain
+  text and stack traces (grouped), a prefix before the JSON, key aliases (`severity`,
+  `@timestamp`...), nested fields/unicode/very long messages, a JSON broken across
+  several physical lines (rebuilt into one card), a run that ends in ERROR/FATAL
+  (first-error notification), a live stream (filters, search, follow) and a
+  5,000-line volume test. Command 9 is the same as 1 with normal output, to compare.
+  Needs `bash`.
 
 ## Usage
 
 1. Open Kai.
 2. In the project selector, pick one of the folders above (e.g.
    `sample/shell`).
-3. The project is imported using the `project_name` from its `kai.json`
+3. The project is imported using the `project_name` from its `kai.yml`
    (e.g. "Kai Shell & Controls Demo").
 4. Run the numbered commands in order — each one demonstrates a different
    Kai feature in isolation.

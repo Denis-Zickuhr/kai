@@ -1,0 +1,198 @@
+commands:
+  - command: "./deploy.sh"
+    description: "Select + flags, danger confirm (production), progress, done with actions."
+    icon: "rocket"
+    kip: true
+    name: "1. Deploy wizard"
+    type: "command"
+  - command: |
+      command -v kip >/dev/null 2>&1 || { echo "kip is injected only in POSIX shells (Linux, macOS, WSL targets) of a command with KIP on" >&2; exit 127; }
+
+      # Waits for Kai's answer (left in $KIP_MSG); Cancel exits with 130 by itself.
+      answer() { kip get "$KIP_MSG" "$1"; }
+
+      kip hello --title "Deploy" --version "1.4.2"
+
+      while true; do
+          kip prompt --id target --title "Where to deploy?" \
+              --description "Pick the environment and a few options. Your last choices are remembered." \
+              --submit-label "Next" \
+              --field select env "Environment" --required --default staging \
+                  --option dev:Development --option staging:Staging:"Mirror of production" \
+                  --option prod:Production:"Customer facing" \
+              --field flags opts "Options" \
+                  --flag dry:"Dry run":false --flag notify:"Notify the team":true
+          kip recv
+          env=$(answer values.env)
+          dry=$(answer values.opts.dry)
+
+          if [ "$env" = prod ]; then
+              kip confirm --id sure --title "Deploy to production?" \
+                  --text "Version 1.4.2 goes live for every customer. This cannot be undone from here." \
+                  --danger --confirm-label "Deploy now" --cancel-label "Not now" --back
+              kip recv
+              [ "$(answer type)" = back ] && continue
+              if [ "$(answer values.confirmed)" != true ]; then
+                  kip done --level warning --title "Deploy cancelled" --text "Nothing was deployed."
+                  exit 0
+              fi
+          fi
+          break
+      done
+
+      suffix=''; [ "$dry" = true ] && suffix=' (dry run)'
+      kip message info "Deploying version 1.4.2 to ${env}${suffix}…"
+      for pct in 10 25 40 60 80 100; do
+          kip progress "$pct" "Uploading artifacts… ${pct}%"
+          sleep 0.5
+      done
+      kip done --title "Deployed to ${env}" --text "Version 1.4.2 is live${suffix}." \
+          --action open_url:"Open the site":https://example.com \
+          --action copy:"Copy release id":"rel-$(date +%s)"
+    description: "The same wizard as command 1, written with the `kip` function Kai injects into a native shell command with KIP on (no kai binary: it also works in WSL and containers) instead of hand-written JSON."
+    icon: "rocket"
+    kip: true
+    name: "1b. Deploy wizard (injected `kip` function)"
+    type: "command"
+  - command: "./db-restore.sh"
+    description: "Table field, destructive confirm with Back, steps checklist."
+    icon: "database"
+    kip: true
+    name: "2. Database restore"
+    type: "command"
+  - command: "./k8s-navigator.sh"
+    description: "Cascading fields: changing the context updates the namespace and pod lists."
+    icon: "boxes"
+    kip: true
+    name: "3. Cluster navigator"
+    type: "command"
+  - command: "./scaffold.sh"
+    description: "Text, list, folder picker and flags; try an invalid name (e.g. 'My App') for the round trip."
+    icon: "folder-plus"
+    kip: true
+    name: "4. Scaffold a project"
+    type: "command"
+  - command: "./onboarding.sh"
+    description: "Live checklist, notification and a warning result. Opens in its own window."
+    icon: "list-checks"
+    kip: true
+    kip_window: true
+    name: "5. Team onboarding (own window)"
+    type: "command"
+  - command: "./login.sh"
+    declared_env_vars:
+      - name: "KAI_DEMO_TOKEN"
+    description: "Secret field. Password: kai. Exports KAI_DEMO_TOKEN; then run command 7."
+    icon: "key-round"
+    kip: true
+    name: "6. Sign in (exports a token)"
+    type: "command"
+  - command: "echo \"KAI_DEMO_TOKEN={{KAI_DEMO_TOKEN}}\""
+    description: "Not KIP: prints the token that command 6 exported."
+    icon: "terminal"
+    name: "7. Show the token (plain command)"
+    type: "command"
+  - command: "./convert.sh"
+    description: "File picker, options, progress, reveal the output."
+    icon: "wand-sparkles"
+    kip: true
+    name: "8. Convert a file"
+    type: "command"
+  - command: "./lookup.sh"
+    description: "Query, result table (select a cell, Ctrl+C), copy action."
+    icon: "search"
+    kip: true
+    name: "9. Customer lookup"
+    type: "command"
+  - command: "./raw-protocol.sh"
+    description: "The smallest KIP program: JSON lines printed by hand, no functions at all; see the script."
+    icon: "file-search"
+    kip: true
+    name: "10. Raw protocol (minimal)"
+    type: "command"
+  - command: "./not-kip.sh"
+    description: "Marked as KIP but the program doesn't speak it: Kai shows the 'doesn't support KIP' screen."
+    icon: "hammer"
+    kip: true
+    name: "11. Not a KIP program"
+    type: "command"
+  - command: "./branches.sh"
+    description: "Paged, filterable list plus chips (ctx / sync / PR / delete): small buttons that run an ephemeral action and show the result in a box. Demo data only."
+    icon: "git-branch"
+    kip: true
+    name: "12. Branch picker with chips (quiver-style)"
+    type: "command"
+  - command: |-
+      import kip
+
+      values = kip.prompt([
+          {'name': 'env', 'type': 'select', 'label': 'Environment', 'options': ['dev', 'staging', 'prod'], 'required': True},
+          {'name': 'dry', 'type': 'flags', 'label': 'Options', 'options': [{'name': 'dry', 'label': 'Dry run'}]},
+      ], id='where', title='Where to?')
+
+      if values['env'] == 'prod' and not kip.confirm('Deploy to production?', danger=True, confirm_label='Deploy'):
+          kip.done(title='Cancelled', level='warning')
+      else:
+          kip.progress(50, 'Deploying...')
+          kip.done(title='Deployed to ' + values['env'], text='dry run' if values['dry']['dry'] else None)
+    description: "The command text IS the program: Kai injects the kip module, so a wizard is a few lines."
+    icon: "wand-sparkles"
+    kip: true
+    language: "python"
+    name: "13. Python KIP (no file, `import kip`)"
+    type: "command"
+  - command: |-
+      const values = await kip.prompt([
+        { name: 'env', type: 'select', label: 'Environment', options: ['dev', 'staging', 'prod'], required: true },
+      ], { id: 'where', title: 'Where to?' });
+
+      kip.progress(50, 'Deploying...');
+      kip.done({ title: 'Deployed to ' + values.env });
+    description: "Same wizard in Node: the global kip, promises and top-level await."
+    icon: "wand-sparkles"
+    kip: true
+    language: "node"
+    name: "14. Node KIP (global `kip`, top-level await)"
+    type: "command"
+  - command: |-
+      import runpy
+      runpy.run_path('table-browser.py', run_name='__main__')
+    description: "List tables, open one, page through its items, filter, and create / edit / duplicate / delete items — Python in Kai, fake in-memory data."
+    icon: "table"
+    kip: true
+    language: "python"
+    name: "15. Table browser (DynamoDB style)"
+    type: "command"
+  - command: |-
+      kip prompt --id where --title "Where to?" --field select env Environment --options dev,staging,prod --required
+      kip recv
+      target=$(kip get "$KIP_MSG" values.env)
+      kip progress 50 "Deploying..."
+      kip done --title "Deployed to $target"
+    description: "Same wizard as 13, in the shell: a native command with KIP on gets the `kip` function (same verbs as `kai kip`, no kai binary), then kip recv + kip get."
+    icon: "terminal"
+    kip: true
+    name: "16. Shell KIP (injected `kip` function)"
+    type: "command"
+  - command: |-
+      $values = Kip::prompt([
+          ['name' => 'env', 'type' => 'select', 'label' => 'Environment', 'options' => ['dev', 'staging', 'prod'], 'required' => true],
+      ], ['id' => 'where', 'title' => 'Where to?']);
+
+      Kip::progress(50, 'Deploying...');
+      Kip::done('Deployed to ' . $values['env']);
+    description: "Same wizard in PHP: the class Kip is injected (static methods, options as arrays), no require and no file."
+    icon: "wand-sparkles"
+    kip: true
+    language: "php"
+    name: "17. PHP KIP (class `Kip`)"
+    type: "command"
+  - command: "python3 external-tool.py"
+    description: "A plain .py file next to kai.yml, called from a native command with KIP on: Kai exports PYTHONPATH, so `import kip` works inside the file with no bootstrap and no sys.path hack."
+    icon: "file-code"
+    kip: true
+    name: "18. External script file (modules found on disk)"
+    type: "command"
+    working_dir: "{{PROJECT_PATH}}"
+icon: "wand-sparkles"
+project_name: "Kai KIP Demos"

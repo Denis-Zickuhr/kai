@@ -1,0 +1,69 @@
+collections:
+  - entries:
+      - favorite: true
+        id: "ep_1"
+        tags:
+          - "core"
+        values:
+          nome: "Auth Service"
+          url: "https://auth.exemplo.dev"
+      - favorite: false
+        id: "ep_2"
+        tags:
+          - "finance"
+        values:
+          nome: "Payment Gateway"
+          url: "https://pay.exemplo.dev"
+    icon: "server"
+    name: "Endpoints"
+    schema:
+      - label: "Nome do Serviço"
+        name: "nome"
+        type: "text"
+      - label: "URL Base"
+        name: "url"
+        type: "text"
+commands:
+  - http_config:
+      body: ""
+      env_extractors: []
+      headers:
+        Accept: "application/json"
+        User-Agent: "Kai-Client/1.0"
+      method: "GET"
+      url: "{{API_BASE}}/get?app={{APP_NAME}}&env=dev"
+    name: "1. HTTP GET — Health Check"
+    type: "http"
+  - http_config:
+      body: |-
+        {
+          "app": "{{APP_NAME}}",
+          "nonce": "{{$randomInt}}",
+          "service": "{{servico.nome}}"
+        }
+      env_extractors:
+        - env_var: "EXTRACTED_APP_NAME"
+          json_path: "json.app"
+        - env_var: "EXTRACTED_REQ_ID"
+          json_path: "headers.X-Request-Id"
+      headers:
+        Content-Type: "application/json"
+        X-Request-Id: "{{$uuid}}"
+      method: "POST"
+      url: "{{API_BASE}}/post"
+    name: "2. HTTP POST — Autenticar e Extrair Token/Headers"
+    params:
+      - collection: "Endpoints"
+        collection_display_field: "nome"
+        label: "Microserviço Alvo"
+        name: "servico"
+        type: "select"
+    type: "http"
+  - command: "echo \"Variável EXTRACTED_APP_NAME: {{EXTRACTED_APP_NAME}} | EXTRACTED_REQ_ID: {{EXTRACTED_REQ_ID}}\""
+    name: "3. Validar Variáveis Extraídas (Shell)"
+    type: "command"
+env_vars:
+  API_BASE: "https://httpbin.org"
+  APP_NAME: "KaiAPI"
+icon: "globe"
+project_name: "Kai API Tester"

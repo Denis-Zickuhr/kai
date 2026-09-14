@@ -1,23 +1,44 @@
 <h2>Comandos HTTP</h2>
-<p>Um comando <b>HTTP</b> faz uma requisição e mostra a resposta formatada (JSON com árvore navegável).</p>
-<h3>Campos</h3>
-<table><tr><td><b>Método</b></td><td>GET/POST/PUT/PATCH/DELETE</td></tr><tr><td><b>URL</b></td><td>aceita variáveis: <code>{{BASE_URL}}/users</code></td></tr><tr><td><b>Headers</b></td><td>pares chave/valor (também interpolados)</td></tr><tr><td><b>Body</b></td><td>JSON (o botão <i>Formatar JSON</i> embeleza)</td></tr></table>
-<h3>Exemplo</h3>
-<pre>{
-  "name": "Autenticar",
-  "type": "http",
-  "http_config": {
-    "method": "POST",
-    "url": "{{BASE_URL}}/auth/login",
-    "headers": { "Content-Type": "application/json" },
-    "body": "{\"user\":\"{{USER}}\",\"pass\":\"{{PASS}}\"}",
-    "env_extractors": [ { "json_path": "token", "env_var": "AUTH_TOKEN" } ]
-  }
-}</pre>
+<p>Um comando <b>HTTP</b> faz uma requisição e mostra a resposta formatada. No editor ele tem quatro páginas: <b>Geral</b> (método, URL, corpo), <b>Requisição</b> (headers, parâmetros de query, autenticação), <b>Conexão</b> e <b>Resposta</b> (extratores, asserções, salvar em arquivo).</p>
+<h3>Método e URL</h3>
+<p>GET, POST, PUT, PATCH, DELETE, QUERY, HEAD e OPTIONS estão na lista; o campo é editável, então qualquer outro verbo (<code>PROPFIND</code>…) pode ser digitado. A URL aceita variáveis: <code>{{BASE_URL}}/users</code>.</p>
+<h3>Headers, query e autenticação</h3>
+<p>Headers e parâmetros de query são tabelas; cada linha tem uma caixa para desligá-la sem apagar. A <b>autenticação</b> é uma escolha: <b>Basic</b>, <b>Token Bearer</b>, <b>Chave de API</b> (header ou query), <b>Nenhuma</b> ou <b>Herdar</b> das pastas. Use uma variável marcada como <b>Secreta</b> (<code>{{API_TOKEN}}</code>) em vez de digitar o token. Um header <code>Authorization</code> escrito à mão sempre vence.</p>
+<h3>Compartilhe headers com uma pasta</h3>
+<p>A aba <b>HTTP</b> de uma pasta guarda headers, autenticação e opções de conexão que <b>todo comando HTTP dela e das subpastas herda</b>. Um header de mesmo nome definido mais perto do comando substitui o herdado; na página <b>Requisição</b> do comando os herdados aparecem com a pasta de origem — desmarque um para desligá-lo naquele comando.</p>
+<h3>Corpo</h3>
+<table><tr><td><b>Nenhum / Texto cru</b></td><td>sem corpo / o texto como digitado (nenhum Content-Type é acrescentado)</td></tr><tr><td><b>JSON / XML</b></td><td>o texto com o Content-Type correspondente; o JSON tem validação e o botão <i>Formatar</i></td></tr><tr><td><b>Formulário</b></td><td>linhas urlencoded</td></tr><tr><td><b>Multipart</b></td><td>linhas; marque <i>Arquivo</i> para enviar um arquivo</td></tr><tr><td><b>Arquivo</b></td><td>o conteúdo de um arquivo</td></tr><tr><td><b>GraphQL</b></td><td>query + variáveis (JSON)</td></tr></table>
+<h3>Conexão</h3>
+<p>Redirecionamentos (seguidos por padrão; a cadeia aparece na aba Requisição), verificação de TLS, proxy (<code>system</code> lê <code>HTTPS_PROXY</code>/<code>HTTP_PROXY</code>/<code>NO_PROXY</code>, ou <code>none</code>, ou uma URL), tempo limite (desligado por padrão: <b>Ative</b> para limitar só esta requisição ou pasta; enquanto a requisição espera, a saída mostra o tempo decorrido e se há limite) e o jar de cookies. Sem nenhuma resposta (tempo esgotado, conexão recusada) a aba <b>Requisição</b> abre com o motivo. Os cookies ficam na memória enquanto o Kai está aberto e são compartilhados entre as requisições; <b>Arquivo → Limpar cookies HTTP</b> os apaga. Cada opção pode ficar em <i>Herdar</i>.</p>
+<h3>Resposta</h3>
+<p>O JSON é uma árvore recolhível (<b>Copiar</b>, <b>Destacar</b>); o XML é indentado; imagens, PDFs e outros conteúdos binários ganham uma aba <b>Conteúdo</b> com pré-visualização e o botão <b>Salvar em arquivo…</b>. A aba <b>Requisição</b> mostra o que foi enviado, os redirecionamentos e o tempo até o primeiro byte; <b>Headers</b> mostra os headers da resposta.</p>
 <h3>Extrair um valor para uma variável</h3>
-<p>Configure um <b>Env Extractor</b> pra pegar um campo do JSON de resposta e guardar numa variável dinâmica (ex.: <code>data.token → AUTH_TOKEN</code>), usada pelos próximos comandos:</p>
-<pre>Authorization: Bearer {{AUTH_TOKEN}}</pre>
-<h3>Importar de cURL</h3>
-<p>Botão <b>Importar cURL</b>: cole um comando <code>curl</code> e o Kai preenche método/url/headers/body. Veja <a href='help://import_curl'>Importar cURL</a>.</p>
-<h3>Abas Resposta, Requisição e Headers</h3>
-<p>A aba <b>Resposta</b> mostra o JSON retornado como árvore colapsável, com botões <b>Copiar</b> e <b>Destacar</b>. A aba <b>Requisição</b> mostra exatamente o que foi enviado — método, URL, headers, body — útil depois que a chamada já rodou. <b>Headers</b> mostra os headers da resposta.</p>
+<p>Configure um <b>extrator</b> para pegar um campo do JSON de resposta numa variável dinâmica (ex.: <code>data.token → AUTH_TOKEN</code>), usada pelos próximos comandos: <code>Authorization: Bearer {{AUTH_TOKEN}}</code>.</p>
+<h3>Asserções</h3>
+<p>Verificações sobre a resposta, no mesmo formato das <a href='help://hooks'>condições de execução</a>: <code>{{RESPONSE_STATUS}}</code> <i>igual a</i> <code>201</code>. Com alguma ligada, elas decidem o sucesso (então um 404 pode ser o esperado). Variáveis: <code>RESPONSE_STATUS</code>, <code>RESPONSE_TIME_MS</code>, <code>RESPONSE_SIZE</code>, <code>RESPONSE_CONTENT_TYPE</code>, <code>RESPONSE_BODY</code>, <code>RESPONSE_HEADER_&lt;NOME&gt;</code> e as variáveis extraídas. Elas continuam disponíveis para os próximos comandos e hooks.</p>
+<h3>Salvar a resposta em um arquivo</h3>
+<p>Na página Resposta, informe um caminho: respostas bem-sucedidas (2xx) são gravadas nele conforme chegam, em vez de ficarem na memória.</p>
+<h3>Parar e fluxos de eventos</h3>
+<p>O botão <b>Parar</b> cancela uma requisição em andamento. Uma resposta <code>text/event-stream</code> (Server-Sent Events) aparece conforme os eventos chegam e continua até o servidor fechar ou você apertar Parar; aumente o <b>Tempo limite</b> (ele conta o tempo sem dados) para fluxos lentos.</p>
+<h3>Edição rápida</h3>
+<p>O botão <b>Edição rápida</b> (barra lateral ou atalho) abre método, URL, corpo, query, headers e autenticação sem o editor completo. Comandos HTTP novos já vêm com <code>Content-Type</code> e <code>Accept: application/json</code> e corpo JSON; o <code>Host</code> é enviado automaticamente a partir da URL.</p>
+<h3>Copiar como cURL ou código</h3>
+<p>O botão <b>Copiar como…</b> copia a requisição como cURL, Python (requests) ou JavaScript (fetch), com as variáveis resolvidas. O caminho inverso: <a href='help://import_curl'>Importar cURL</a>.</p>
+<h3>Exemplo</h3>
+<pre>- name: "Criar usuário"
+  type: "http"
+  http_config:
+    method: "POST"
+    url: "{{BASE_URL}}/users"
+    auth:
+      type: "bearer"
+      token: "{{API_TOKEN}}"
+    body_type: "json"
+    body: "{\"name\": \"{{NAME}}\"}"
+    env_extractors:
+      - json_path: "id"
+        env_var: "USER_ID"
+    assertions:
+      - left: "{{RESPONSE_STATUS}}"
+        op: "eq"
+        right: "201"</pre>

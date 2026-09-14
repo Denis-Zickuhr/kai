@@ -92,6 +92,13 @@ DIST="$OUT/kai-windows"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 cp "$EXE" "$DIST/kai.exe"
+# kai.com: o `kai` de console (o terminal o acha antes do kai.exe; ver src/console-shim.cpp).
+COM="$(dirname "$EXE")/kai.com"
+if [[ ! -f "$COM" ]]; then
+    echo "[ERRO] kai.com não encontrado após o build." >&2
+    exit 1
+fi
+cp "$COM" "$DIST/kai.com"
 cp -r "$SRC/assets" "$DIST/assets"
 
 # AVISOS DE LICENÇA junto do binário. Obrigatório, não cortesia: o QHotkey é

@@ -140,6 +140,30 @@ private slots:
         QVERIFY(CollectionField::fromJson(legacyField).visible);
     }
 
+    // "secret" (feedback do usuário: coleções podem guardar dado sensível de
+    // verdade) precisa sobreviver ao round-trip; schema antigo (sem a chave)
+    // assume NÃO secreto (retrocompat).
+    void schemaFieldSecretRoundTrip()
+    {
+        Collection col;
+        col.id = QStringLiteral("c_sec");
+        col.name = QStringLiteral("Tokens");
+        CollectionField f1;
+        f1.name = QStringLiteral("token"); f1.secret = true;
+        CollectionField f2;
+        f2.name = QStringLiteral("label"); f2.secret = false;
+        col.schema = {f1, f2};
+
+        const Collection back = Collection::fromJson(col.toJson());
+        QCOMPARE(back.schema.size(), 2);
+        QCOMPARE(back.schema.at(0).secret, true);
+        QCOMPARE(back.schema.at(1).secret, false);
+
+        QJsonObject legacyField;
+        legacyField["name"] = QStringLiteral("x");
+        QVERIFY(!CollectionField::fromJson(legacyField).secret);
+    }
+
 private:
     std::unique_ptr<QTemporaryDir> m_tempDir;
 

@@ -1,0 +1,788 @@
+project_name: "HTTP showcase"
+icon: "globe"
+env_vars:
+  API_BASE: "https://httpbin.org"
+  APP_NAME: "kai-sample"
+  API_TOKEN: "demo-token-123"
+  API_KEY: "demo-key-456"
+  BASIC_USER: "ana"
+  BASIC_PASSWORD: "secret"
+
+# Inherited by EVERY http command below (and by every subfolder, unless it overrides):
+# nothing here is repeated per request.
+http_defaults:
+  headers:
+    - name: "Accept"
+      value: "application/json"
+    - name: "X-Client"
+      value: "{{APP_NAME}}"
+  auth:
+    type: "bearer"
+    token: "{{API_TOKEN}}"
+  options:
+    timeout_sec: 20
+
+folders:
+  - path: "Auth"
+    icon: "key-round"
+    # Own authentication for this subfolder: an API key instead of the project's bearer token.
+    http_defaults:
+      headers:
+        - name: "X-Area"
+          value: "auth"
+      auth:
+        type: "api_key"
+        key_name: "X-API-Key"
+        key_value: "{{API_KEY}}"
+  - path: "Public"
+    icon: "unlock"
+    # "none" cuts the inherited authentication for everything in here.
+    http_defaults:
+      auth:
+        type: "none"
+  - path: "Bodies"
+    icon: "braces"
+  - path: "Responses"
+    icon: "file-text"
+  - path: "Connection"
+    icon: "globe"
+    http_defaults:
+      options:
+        use_cookies: true
+        max_redirects: 5
+  - path: "Grid"
+    icon: "table"
+  - path: "Stress"
+    icon: "flask-conical"
+
+collections:
+  - name: "Stores"
+    icon: "store"
+    schema:
+      - name: "name"
+        label: "Name"
+        type: "text"
+      - name: "region"
+        label: "Region"
+        type: "text"
+    entries:
+      - id: "st_1"
+        favorite: true
+        tags: ["hq"]
+        values:
+          name: "Main store"
+          region: "south"
+      - id: "st_2"
+        favorite: false
+        tags: []
+        values:
+          name: "A store with a really long display name to see how the picker wraps it"
+          region: "north"
+
+commands:
+  # ---------------------------------------------------------------- root: inheritance
+  - name: "1. Inherited headers + bearer"
+    type: "http"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/anything"
+      query_params:
+        - name: "app"
+          value: "{{APP_NAME}}"
+        - name: "debug"
+          value: "1"
+          enabled: false
+      assertions:
+        - name: "OK"
+          left: "{{RESPONSE_STATUS}}"
+          op: "eq"
+          right: "200"
+  - name: "2. Turn one inherited header off"
+    type: "http"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/headers"
+      # A disabled row with the name of an inherited header removes it for this command only.
+      headers:
+        - name: "X-Client"
+          value: ""
+          enabled: false
+        - name: "X-Extra"
+          value: "only here"
+  - name: "3. Override an inherited header"
+    type: "http"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/headers"
+      headers:
+        - name: "Accept"
+          value: "text/html"
+
+  # ---------------------------------------------------------------- Auth (own API key from the folder)
+  - name: "Folder API key"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/headers"
+  - name: "Basic auth (own block)"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/basic-auth/{{BASIC_USER}}/{{BASIC_PASSWORD}}"
+      auth:
+        type: "basic"
+        username: "{{BASIC_USER}}"
+        password: "{{BASIC_PASSWORD}}"
+      assertions:
+        - name: "Authenticated"
+          left: "{{RESPONSE_STATUS}}"
+          op: "eq"
+          right: "200"
+  - name: "Bearer (own block)"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/bearer"
+      auth:
+        type: "bearer"
+        token: "{{API_TOKEN}}"
+  - name: "API key in the query"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/anything"
+      auth:
+        type: "api_key"
+        key_name: "key"
+        key_value: "{{API_KEY}}"
+        key_in: "query"
+  - name: "Extract a token, then use it"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {"token": "session-{{$uuid}}"}
+      env_extractors:
+        - json_path: "json.token"
+          env_var: "SESSION_TOKEN"
+      assertions:
+        - name: "Got a token"
+          left: "{{SESSION_TOKEN}}"
+          op: "exists"
+  - name: "Use the extracted token"
+    type: "http"
+    folder: "Auth"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/bearer"
+      auth:
+        type: "bearer"
+        token: "{{SESSION_TOKEN}}"
+
+  # ---------------------------------------------------------------- Public (no auth at all)
+  - name: "No authentication"
+    type: "http"
+    folder: "Public"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/headers"
+
+  # ---------------------------------------------------------------- Bodies
+  - name: "JSON"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {"app": "{{APP_NAME}}", "nonce": "{{$uuid}}"}
+  - name: "XML"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "xml"
+      body: |
+        <order><id>{{$randomInt}}</id><app>{{APP_NAME}}</app></order>
+  - name: "Form (urlencoded)"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "form"
+      form_fields:
+        - name: "user"
+          value: "ana"
+        - name: "note"
+          value: "spaces & symbols"
+        - name: "skipped"
+          value: "1"
+          enabled: false
+  - name: "Multipart + file upload"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "multipart"
+      form_fields:
+        - name: "title"
+          value: "Sample upload"
+        - name: "attachment"
+          value: "{{PROJECT_PATH}}/files/note.txt"
+          file: true
+  - name: "Binary file as the body"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "PUT"
+      url: "{{API_BASE}}/put"
+      headers:
+        - name: "Content-Type"
+          value: "application/json"
+      body_type: "file"
+      body_file: "{{PROJECT_PATH}}/files/payload.json"
+  - name: "GraphQL"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "graphql"
+      body: "query($id: ID!) { user(id: $id) { name } }"
+      graphql_variables: |
+        {"id": "42"}
+  - name: "PATCH"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "PATCH"
+      url: "{{API_BASE}}/patch"
+      body_type: "json"
+      body: |
+        {"status": "done"}
+  - name: "DELETE"
+    type: "http"
+    folder: "Bodies"
+    http_config:
+      method: "DELETE"
+      url: "{{API_BASE}}/delete"
+
+  # ---------------------------------------------------------------- Responses
+  - name: "Assertions: status, header, time, body"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/anything"
+      assertions:
+        - name: "Status 200"
+          left: "{{RESPONSE_STATUS}}"
+          op: "eq"
+          right: "200"
+        - name: "JSON content type"
+          left: "{{RESPONSE_HEADER_CONTENT_TYPE}}"
+          op: "contains"
+          right: "json"
+        - name: "Under 10 s"
+          left: "{{RESPONSE_TIME_MS}}"
+          op: "lt"
+          right: "10000"
+        - name: "Echoes the path"
+          left: "{{RESPONSE_BODY}}"
+          op: "contains"
+          right: "/anything"
+  - name: "Expect a 404"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/status/404"
+      # With an assertion on, the assertion decides success: a 404 is the expected outcome here.
+      assertions:
+        - name: "Not found"
+          left: "{{RESPONSE_STATUS}}"
+          op: "eq"
+          right: "404"
+  - name: "XML response"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/xml"
+      headers:
+        - name: "Accept"
+          value: "application/xml"
+  - name: "Image (preview + save)"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/image/png"
+      headers:
+        - name: "Accept"
+          value: "image/png"
+  - name: "Download to a file"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/image/jpeg"
+      headers:
+        - name: "Accept"
+          value: "image/jpeg"
+      response_file: "{{HOME}}/kai-sample-image.jpg"
+  - name: "Gzip"
+    type: "http"
+    folder: "Responses"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/gzip"
+
+  # ---------------------------------------------------------------- Connection
+  - name: "Redirect chain"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/redirect/3"
+  - name: "Do not follow redirects"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/redirect/1"
+      options:
+        follow_redirects: false
+      assertions:
+        - name: "Stopped at the redirect"
+          left: "{{RESPONSE_STATUS}}"
+          op: "eq"
+          right: "302"
+  - name: "Cookies: set"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/cookies/set?session=abc123"
+      options:
+        follow_redirects: false
+  - name: "Cookies: read (run the one above first)"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/cookies"
+  - name: "Cookies: ignored"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/cookies"
+      options:
+        use_cookies: false
+  - name: "Timeout (fails after 2 s)"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/delay/5"
+      options:
+        timeout_sec: 2
+  - name: "HEAD"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "HEAD"
+      url: "{{API_BASE}}/get"
+  - name: "OPTIONS"
+    type: "http"
+    folder: "Connection"
+    http_config:
+      method: "OPTIONS"
+      url: "{{API_BASE}}/get"
+
+  # ---------------------------------------------------------------- Grid (a parameter with N rows)
+  - name: "Update prices (JSON array)"
+    type: "http"
+    folder: "Grid"
+    # Without a row_template, {{products}} is the typed JSON array: [{"sku":"A-1","price":19.9,"active":true}]
+    params:
+      - name: "products"
+        label: "Products"
+        type: "grid"
+        columns:
+          - name: "sku"
+            label: "SKU"
+            type: "text"
+          - name: "price"
+            label: "Price"
+            type: "number"
+            default: "0"
+          - name: "active"
+            label: "Active"
+            type: "bool"
+            default: "true"
+          - name: "currency"
+            label: "Currency"
+            type: "select"
+            options: ["BRL:BRL", "USD:USD", "EUR:EUR"]
+            default: "BRL"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {"products": {{products}}}
+      assertions:
+        - name: "Sent as an array"
+          left: "{{RESPONSE_BODY}}"
+          op: "contains"
+          right: "products"
+  - name: "Update prices (row template)"
+    type: "http"
+    folder: "Grid"
+    # Each row goes through row_template and the rows are joined by row_separator.
+    # {{column|json}} is the JSON literal (text quoted, number and bool bare).
+    params:
+      - name: "products"
+        label: "Products"
+        type: "grid"
+        row_template: '{"sku":{{sku|json}},"price":{{price|json}}}'
+        row_separator: ","
+        columns:
+          - name: "sku"
+            label: "SKU"
+            type: "text"
+          - name: "price"
+            label: "Price"
+            type: "number"
+            default: "0"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {"batch": "{{$uuid}}", "count": {{products__count}}, "items": [{{products}}]}
+  - name: "Grid as a form body (one line per row)"
+    type: "http"
+    folder: "Grid"
+    # {{name}} can be any text: here each row becomes "sku=price" and rows are joined by a newline.
+    params:
+      - name: "prices"
+        label: "Prices"
+        type: "grid"
+        row_template: "{{sku}}={{price}}"
+        row_separator: "\\n"
+        columns:
+          - name: "sku"
+            label: "SKU"
+            type: "text"
+          - name: "price"
+            label: "Price"
+            type: "number"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      headers:
+        - name: "Content-Type"
+          value: "text/plain"
+      body_type: "raw"
+      body: "{{prices}}"
+
+  # ---------------------------------------------------------------- Stress (worst-case form)
+  - name: "Mega form (every parameter type)"
+    type: "http"
+    folder: "Stress"
+    params:
+      # -- loose fields, long labels and descriptions
+      - name: "title"
+        label: "A deliberately very long label to see how the form wraps and elides it"
+        type: "text"
+        required: true
+        description: "A long help text that goes on and on, just to check how the placeholder behaves when it does not fit"
+      - name: "note"
+        label: "Optional note"
+        type: "textarea"
+        optional: true
+      - name: "qty"
+        label: "Quantity"
+        type: "number"
+        default: "3"
+      - name: "dry_run"
+        label: "Dry run"
+        type: "bool"
+        default: "true"
+      # -- selects
+      - name: "env"
+        label: "Environment"
+        type: "select"
+        required: true
+        default: "staging"
+        options: ["dev", "staging", "production"]
+      - name: "plan"
+        label: "Plan (label:value)"
+        type: "select"
+        options: ["Free tier — up to 3 projects:free", "Professional — everything unlocked, billed monthly:pro", "Enterprise:ent"]
+      - name: "services"
+        label: "Services (many, multi select)"
+        type: "select"
+        multi_select: true
+        options: ["api", "worker", "scheduler", "web", "mailer", "billing", "search", "cache", "queue", "auth", "gateway", "reports", "exports", "audit"]
+      - name: "folders"
+        label: "Folders (from a script)"
+        type: "select"
+        options_script: "printf 'Alpha:a\\nBeta:b\\nGamma:c\\n'"
+      - name: "empty_choice"
+        label: "Select with an empty script"
+        type: "select"
+        optional: true
+        options_script: "true"
+      - name: "store"
+        label: "Store (collection)"
+        type: "select"
+        collection: "Stores"
+        collection_display_field: "name"
+      # -- files
+      - name: "attachment"
+        label: "File"
+        type: "file"
+        optional: true
+      - name: "out_dir"
+        label: "Folder (posix path)"
+        type: "file"
+        pick_mode: "folder"
+        file_path_format: "posix"
+        optional: true
+      - name: "either"
+        label: "File or folder"
+        type: "file"
+        pick_mode: "both"
+        optional: true
+      # -- code
+      - name: "meta"
+        label: "Metadata (JSON)"
+        type: "json"
+        default: '{"source": "kai", "tags": ["a", "b"]}'
+      # -- dates
+      - name: "day"
+        label: "Day"
+        type: "date"
+        date_mode: "date"
+        date_format: "br_date"
+      - name: "at"
+        label: "Date and time (custom format)"
+        type: "date"
+        date_mode: "datetime"
+        date_format: "custom"
+        date_format_custom: "dd.MM.yy HH:mm"
+      - name: "window"
+        label: "Period (range)"
+        type: "date"
+        date_mode: "datetime"
+        date_range: true
+        date_format: "iso_datetime"
+        optional: true
+      - name: "hour"
+        label: "Time"
+        type: "date"
+        date_mode: "time"
+        date_format: "time_24h_short"
+        optional: true
+      # -- grids
+      - name: "items"
+        label: "Items (6 columns, required)"
+        type: "grid"
+        required: true
+        columns:
+          - name: "sku"
+            label: "SKU"
+            type: "text"
+          - name: "description"
+            label: "A long description column"
+            type: "text"
+          - name: "price"
+            label: "Price"
+            type: "number"
+            default: "0"
+          - name: "taxable"
+            label: "Taxable"
+            type: "bool"
+            default: "true"
+          - name: "category"
+            label: "Category"
+            type: "select"
+            options: ["Hardware:hw", "Software:sw", "A category with a very long name:long"]
+            default: "hw"
+          - name: "available_from"
+            label: "Available from"
+            type: "date"
+            date_mode: "date"
+      - name: "tags"
+        label: "Tags (optional grid, row template)"
+        type: "grid"
+        optional: true
+        row_template: '"{{key}}={{value}}"'
+        row_separator: ","
+        columns:
+          - name: "key"
+            label: "Key"
+            type: "text"
+          - name: "value"
+            label: "Value"
+            type: "text"
+      - name: "matrix"
+        label: "Wide grid (10 columns)"
+        type: "grid"
+        optional: true
+        columns:
+          - name: "c1"
+            label: "Column one"
+            type: "text"
+          - name: "c2"
+            label: "Column two"
+            type: "number"
+          - name: "c3"
+            label: "Column three"
+            type: "bool"
+          - name: "c4"
+            label: "Column four"
+            type: "text"
+          - name: "c5"
+            label: "Column five"
+            type: "number"
+          - name: "c6"
+            label: "Column six"
+            type: "select"
+            options: ["x", "y", "z"]
+          - name: "c7"
+            label: "Column seven"
+            type: "text"
+          - name: "c8"
+            label: "Column eight"
+            type: "date"
+            date_mode: "datetime"
+          - name: "c9"
+            label: "Column nine"
+            type: "number"
+          - name: "c10"
+            label: "Column ten"
+            type: "text"
+      # -- grouped (collapsed section)
+      - name: "retries"
+        label: "Retries"
+        type: "number"
+        default: "2"
+        group: "Advanced"
+      - name: "region"
+        label: "Region"
+        type: "select"
+        options: ["eu", "us", "sa"]
+        group: "Advanced"
+      - name: "debug"
+        label: "Debug"
+        type: "bool"
+        group: "Advanced"
+      - name: "extra_rows"
+        label: "Extra rows (grid inside a group)"
+        type: "grid"
+        group: "Advanced"
+        columns:
+          - name: "k"
+            label: "Key"
+            type: "text"
+          - name: "v"
+            label: "Value"
+            type: "number"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {
+          "title": "{{title}}",
+          "note": "{{note}}",
+          "qty": {{qty}},
+          "dry_run": {{dry_run}},
+          "env": "{{env}}",
+          "plan": "{{plan}}",
+          "services": "{{services}}",
+          "folder": "{{folders}}",
+          "store": "{{store}}",
+          "attachment": "{{attachment}}",
+          "out_dir": "{{out_dir}}",
+          "meta": {{meta}},
+          "day": "{{day}}",
+          "at": "{{at}}",
+          "window": ["{{window}}", "{{window.end}}"],
+          "hour": "{{hour}}",
+          "items": {{items}},
+          "tags": [{{tags}}],
+          "matrix": {{matrix}},
+          "advanced": {"retries": {{retries}}, "region": "{{region}}", "debug": {{debug}}, "rows": {{extra_rows}}}
+        }
+  - name: "Grid: required, empty, and a pasted batch"
+    type: "http"
+    folder: "Stress"
+    # Try: clear every row (OK stays blocked), then paste a spreadsheet block (tab or ; separated, with a bad number).
+    params:
+      - name: "rows"
+        label: "Rows"
+        type: "grid"
+        required: true
+        columns:
+          - name: "sku"
+            label: "SKU"
+            type: "text"
+          - name: "price"
+            label: "Price"
+            type: "number"
+            default: "0"
+          - name: "active"
+            label: "Active"
+            type: "bool"
+            default: "true"
+    http_config:
+      method: "POST"
+      url: "{{API_BASE}}/post"
+      body_type: "json"
+      body: |
+        {"count": {{rows__count}}, "rows": {{rows}}}
+  - name: "Only optional parameters"
+    type: "http"
+    folder: "Stress"
+    params:
+      - name: "a"
+        label: "Optional A"
+        type: "text"
+        optional: true
+      - name: "b"
+        label: "Optional B"
+        type: "number"
+        optional: true
+      - name: "g"
+        label: "Optional grid"
+        type: "grid"
+        optional: true
+        columns:
+          - name: "x"
+            label: "X"
+            type: "text"
+    http_config:
+      method: "GET"
+      url: "{{API_BASE}}/anything"
+      query_params:
+        - name: "a"
+          value: "{{a}}"
+        - name: "b"
+          value: "{{b}}"

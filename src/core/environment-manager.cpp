@@ -83,12 +83,30 @@ void EnvironmentManager::clearParamVars()
     m_paramVars.clear();
 }
 
+void EnvironmentManager::setBuiltinVar(const QString &name, const QString &value)
+{
+    m_builtinVars.insert(name, value);
+}
+
+void EnvironmentManager::clearBuiltinVar(const QString &name)
+{
+    m_builtinVars.remove(name);
+}
+
+void EnvironmentManager::setInterpolationOnlyVar(const QString &name, const QString &value)
+{
+    m_interpolationOnlyVars.insert(name, value);
+}
+
 QMap<QString, QString> EnvironmentManager::resolvedEnv() const
 {
     // Precedência: Global < Pasta/Projeto < Dinâmicas < Parâmetros.
     // QMap::insert/operator[] em sequência já garante que o último escopo
     // aplicado sobrescreve os anteriores para chaves em comum.
-    QMap<QString, QString> resolved = m_globalVars;
+    QMap<QString, QString> resolved = m_builtinVars;
+    for (auto it = m_globalVars.constBegin(); it != m_globalVars.constEnd(); ++it) {
+        resolved[it.key()] = it.value();
+    }
 
     for (auto it = m_folderVars.constBegin(); it != m_folderVars.constEnd(); ++it) {
         resolved[it.key()] = it.value();
@@ -108,7 +126,7 @@ QMap<QString, QString> EnvironmentManager::resolvedEnv() const
 
 bool EnvironmentManager::contains(const QString &name) const
 {
-    return m_globalVars.contains(name) || m_folderVars.contains(name) ||
+    return m_builtinVars.contains(name) || m_interpolationOnlyVars.contains(name) || m_globalVars.contains(name) || m_folderVars.contains(name) ||
            m_dynamicVarsByScope.value(m_currentDynamicScope).contains(name) ||
            m_paramVars.contains(name);
 }
@@ -119,6 +137,11 @@ QString EnvironmentManager::value(const QString &name) const
     const auto it = resolved.constFind(name);
     if (it != resolved.constEnd()) {
         return it.value();
+    }
+    // Precedência mais baixa que qualquer variável do usuário, como as embutidas.
+    const auto only = m_interpolationOnlyVars.constFind(name);
+    if (only != m_interpolationOnlyVars.constEnd()) {
+        return only.value();
     }
 
     // Fallback seguro: nunca lança exceção, apenas loga e retorna "".

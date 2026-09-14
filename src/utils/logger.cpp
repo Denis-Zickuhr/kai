@@ -27,6 +27,7 @@ QString levelName(LogLevel level)
 QMutex g_fileMutex;
 std::unique_ptr<QFile> g_logFile;
 QString g_logFilePath;
+bool g_consoleOutputEnabled = true;
 }
 
 LoggerSink &LoggerSink::instance()
@@ -76,19 +77,21 @@ void Logger::log(LogLevel level, const QString &tag, const QString &message)
 {
     const QString formatted = QStringLiteral("[Kai][%1] %2").arg(tag, message);
 
-    switch (level) {
-    case LogLevel::Debug:
-        qDebug().noquote() << formatted;
-        break;
-    case LogLevel::Info:
-        qInfo().noquote() << formatted;
-        break;
-    case LogLevel::Warning:
-        qWarning().noquote() << formatted;
-        break;
-    case LogLevel::Error:
-        qCritical().noquote() << formatted;
-        break;
+    if (g_consoleOutputEnabled) {
+        switch (level) {
+        case LogLevel::Debug:
+            qDebug().noquote() << formatted;
+            break;
+        case LogLevel::Info:
+            qInfo().noquote() << formatted;
+            break;
+        case LogLevel::Warning:
+            qWarning().noquote() << formatted;
+            break;
+        case LogLevel::Error:
+            qCritical().noquote() << formatted;
+            break;
+        }
     }
 
     // Persistência em arquivo (se habilitada): registro real e
@@ -128,6 +131,11 @@ void Logger::warning(const QString &tag, const QString &message)
 void Logger::error(const QString &tag, const QString &message)
 {
     log(LogLevel::Error, tag, message);
+}
+
+void Logger::setConsoleOutputEnabled(bool enabled)
+{
+    g_consoleOutputEnabled = enabled;
 }
 
 } // namespace kai::utils

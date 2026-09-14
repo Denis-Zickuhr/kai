@@ -5,9 +5,24 @@
 #include <QCheckBox>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QToolButton>
+#include <QMenu>
+#include <QTimer>
+#include <QApplication>
+#include <QCalendarWidget>
+#include <QDialogButtonBox>
+#include <QPushButton>
+#include <QLabel>
+#include <QSignalSpy>
 
-#include "ui/parameter-form-dialog.h"
-#include "ui/inline-code-field.h"
+#include "ui/features/command-editor/parameter-form-dialog.h"
+#include "ui/shared/grid-param-field.h"
+#include "ui/shared/inline-code-field.h"
+#include "utils/translation-manager.h"
+#include <QJsonArray>
+#include <QJsonObject>
+#include "ui/shared/collapsible-section-card.h"
+#include "ui/shared/collection-chip-picker.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -43,6 +58,39 @@ private slots:
 
         const QMap<QString, QString> values = dialog.values();
         QCOMPARE(values.value(QStringLiteral("nome")), QStringLiteral("valor de teste"));
+    }
+
+    // Diretriz da tela de Params: "use texto de placeholder... pra guiar o
+    // usuário quando o campo estiver vazio". Sem description no parâmetro,
+    // cai no texto genérico; COM description, ela vira o placeholder (dica
+    // melhor que a genérica).
+    void textFieldPlaceholderFallsBackToGenericTextWithoutDescription()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("nome");
+        p.type = ParameterType::Text;
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *field = dialog.findChild<QLineEdit *>();
+        QVERIFY(field != nullptr);
+        QVERIFY(!field->placeholderText().isEmpty());
+    }
+
+    void textFieldPlaceholderUsesDescriptionWhenPresent()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("ambiente");
+        p.type = ParameterType::Text;
+        p.description = QStringLiteral("Nome do ambiente alvo (ex: staging)");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *field = dialog.findChild<QLineEdit *>();
+        QVERIFY(field != nullptr);
+        QCOMPARE(field->placeholderText(), QStringLiteral("Nome do ambiente alvo (ex: staging)"));
     }
 
     void fillingTextParameterWithSpecialCharactersDoesNotCrash()
@@ -311,6 +359,713 @@ private slots:
         QCOMPARE(dialog.values().value(QStringLiteral("envs")), QStringLiteral("dev,qa,prod"));
     }
 
+    // Pedido do usuário: "faça a injeção dos rótulos do select" — além do
+    // valor, o multi-select de opções fixas também injeta os RÓTULOS
+    // marcados (CSV) em "<nome>__labels".
+    void multiSelectInjectsCheckedLabels()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("Desenvolvimento:dev"), QStringLiteral("Qualidade:qa"),
+                     QStringLiteral("Produção:prod")};
+        p.multiSelect = true;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("envs")] = QStringLiteral("dev,prod");
+
+        ParameterFormDialog dialog(params, nullptr, initial);
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("envs")), QStringLiteral("dev,prod"));
+        QCOMPARE(values.value(QStringLiteral("envs__labels")),
+                 QStringLiteral("Desenvolvimento,Produção"));
+    }
+
+    // Diretriz da tela de Params: "o usuário deve conseguir usar... 'Espaço'
+    // para marcar/desmarcar os checkboxes, sem precisar do mouse." Foca o
+    // item via teclado (down arrow, nativo do QAbstractItemView) e aperta
+    // Espaço — sem NENHUM clique de mouse.
+    void spaceKeyTogglesCheckedStateOfFocusedMultiSelectItem()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("dev"), QStringLiteral("qa"), QStringLiteral("prod")};
+        p.multiSelect = true;
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *list = dialog.findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        list->setFocus();
+        list->setCurrentRow(0);
+        QCOMPARE(list->item(0)->checkState(), Qt::Unchecked);
+
+        QTest::keyClick(list, Qt::Key_Space);
+        QCOMPARE(list->item(0)->checkState(), Qt::Checked);
+
+        QTest::keyClick(list, Qt::Key_Space);
+        QCOMPARE(list->item(0)->checkState(), Qt::Unchecked);
+    }
+
+    // "Foco Automático: ao abrir o pop-over da lista, o foco deve ir
+    // automaticamente para o campo de texto 'Filtrar opções...'" — adaptado
+    // pro caso deste form (a lista já vive sempre visível dentro do grupo,
+    // sem popover próprio): expandir o GRUPO que contém o multi-select foca
+    // o filtro dele.
+    void expandingGroupFocusesItsMultiSelectFilterField()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("dev"), QStringLiteral("qa")};
+        p.multiSelect = true;
+        p.group = QStringLiteral("Acesso");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+        QApplication::setActiveWindow(&dialog);
+        auto *card = dialog.findChild<CollapsibleSectionCard *>();
+        QVERIFY(card != nullptr);
+        QVERIFY(!card->isExpanded()); // colapsado por padrão
+
+        auto *filter = dialog.findChild<QLineEdit *>();
+        QVERIFY(filter != nullptr);
+        QVERIFY(!filter->hasFocus());
+
+        card->setExpanded(true);
+        QVERIFY(filter->hasFocus());
+    }
+
+    // Idem para o select de seleção única: injeta "<nome>__label" com o
+    // rótulo exibido, distinto do valor injetado em "<nome>".
+    void singleSelectInjectsChosenLabel()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("cliente");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("Produção:prod"), QStringLiteral("Qualidade:qa")};
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *field = dialog.findChild<QComboBox *>();
+        QVERIFY(field != nullptr);
+        field->setCurrentIndex(1);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("cliente")), QStringLiteral("qa"));
+        QCOMPARE(values.value(QStringLiteral("cliente__label")), QStringLiteral("Qualidade"));
+    }
+
+    // Bug reportado: seleção múltipla (opções fixas OU vinculadas a
+    // coleção) salvava o CSV inteiro como UMA entrada de histórico, então
+    // nenhum valor individual era reconhecido depois (CollectionSelectorDialog
+    // e a ordenação por uso comparam ids individuais). updatedUsageHistory
+    // deve gravar cada valor escolhido como entrada separada.
+    void updatedUsageHistorySplitsMultiSelectValuesIndividually()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("dev"), QStringLiteral("qa"), QStringLiteral("prod")};
+        p.multiSelect = true;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("envs")] = QStringLiteral("dev,prod");
+
+        ParameterFormDialog dialog(params, nullptr, initial);
+        const QStringList updated = dialog.updatedUsageHistory().value(QStringLiteral("envs"));
+        // Cada valor escolhido vira uma entrada INDIVIDUAL, não o CSV inteiro.
+        QVERIFY(!updated.contains(QStringLiteral("dev,prod")));
+        QVERIFY(updated.contains(QStringLiteral("dev")));
+        QVERIFY(updated.contains(QStringLiteral("prod")));
+        QCOMPARE(updated.count(), 2);
+    }
+
+    // Bug reportado: "se eu executar um cmd de coleções ele não lembra o
+    // ultimo valor executado (multiplas entries)". A pré-seleção de um
+    // parâmetro ligado a uma coleção comparava o initialValue INTEIRO
+    // (CSV, ex: "id1,id2") contra o id de UMA entrada só — nunca batia
+    // quando mais de um valor tinha sido escolhido da última vez, então
+    // m_collectionSelectionByParam ficava vazio e values() devolvia "".
+    void collectionParamRemembersMultipleLastSelectedValues()
+    {
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.schema = {CollectionField{QStringLiteral("name"), QStringLiteral("Nome"),
+            CollectionFieldType::Text, true, false}};
+        CollectionEntry e1;
+        e1.id = QStringLiteral("id1");
+        e1.values[QStringLiteral("name")] = QStringLiteral("Alice");
+        CollectionEntry e2;
+        e2.id = QStringLiteral("id2");
+        e2.values[QStringLiteral("name")] = QStringLiteral("Bob");
+        col.entries = {e1, e2};
+
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("usuario");
+        p.type = ParameterType::Select;
+        p.collectionId = col.id;
+        p.collectionDisplayField = QStringLiteral("name");
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("usuario")] = QStringLiteral("id1,id2");
+
+        ParameterFormDialog dialog(params, nullptr, initial, {}, {col});
+        const QMap<QString, QString> values = dialog.values();
+        // As DUAS entradas salvas da última execução devem ser lembradas,
+        // não só a primeira (ou nenhuma).
+        QCOMPARE(values.value(QStringLiteral("usuario")), QStringLiteral("id1,id2"));
+    }
+
+    // Bug relatado: "ele ta renderizando o id, era pra renderizar o nome".
+    // Sem collectionDisplayField explícito, numa coleção com o schema
+    // PADRÃO [Key, Value] (Collection::defaultSchema), a chip devia
+    // mostrar o campo Value (texto amigável), não cair cegamente no
+    // PRIMEIRO campo do schema (que é o Key, um identificador).
+    void collectionChipShowsValueFieldNotKeyFieldWhenNoDisplayFieldConfigured()
+    {
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.schema = Collection::defaultSchema(); // [Key, Value], nessa ordem
+        CollectionEntry e1;
+        e1.id = QStringLiteral("id1");
+        e1.values[QStringLiteral("key")] = QStringLiteral("ep_1"); // parece um id
+        e1.values[QStringLiteral("value")] = QStringLiteral("Alice Employee");
+        col.entries = {e1};
+
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("usuario");
+        p.type = ParameterType::Select;
+        p.collectionId = col.id;
+        // collectionDisplayField DELIBERADAMENTE não configurado.
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("usuario")] = QStringLiteral("id1");
+
+        ParameterFormDialog dialog(params, nullptr, initial, {}, {col});
+        auto *picker = dialog.findChild<CollectionChipPickerWidget *>();
+        QVERIFY(picker != nullptr);
+        const QList<QLabel *> labels = picker->findChildren<QLabel *>();
+        QVERIFY2(!labels.isEmpty(), "nenhuma chip renderizada");
+        bool foundValueText = false;
+        for (QLabel *lbl : labels) {
+            if (lbl->text() == QStringLiteral("Alice Employee")) { foundValueText = true; break; }
+            QVERIFY2(lbl->text() != QStringLiteral("ep_1"),
+                     "chip mostrou o campo Key (parece um id) em vez do Value");
+        }
+        QVERIFY2(foundValueText, "chip não mostrou o campo Value esperado");
+    }
+
+    // Feature pedida pelo usuário: "possibilidade de criar grupo de dados,
+    // o que irá começar colapsados". Parâmetros com o mesmo `group` (não
+    // vazio) caem dentro de um ÚNICO CollapsibleSectionCard nomeado com o
+    // grupo, colapsado por padrão; parâmetros sem grupo continuam soltos
+    // no form (fora de qualquer card).
+    void parametersWithSameGroupAreBundledIntoOneCollapsedCard()
+    {
+        QVector<Parameter> params;
+        Parameter ungrouped;
+        ungrouped.name = QStringLiteral("solto");
+        ungrouped.type = ParameterType::Text;
+        params << ungrouped;
+
+        Parameter a;
+        a.name = QStringLiteral("a");
+        a.type = ParameterType::Text;
+        a.group = QStringLiteral("Avançado");
+        params << a;
+
+        Parameter b;
+        b.name = QStringLiteral("b");
+        b.type = ParameterType::Text;
+        b.group = QStringLiteral("Avançado");
+        params << b;
+
+        ParameterFormDialog dialog(params, nullptr);
+
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 1);
+        CollapsibleSectionCard *card = cards.first();
+        QVERIFY(!card->isExpanded()); // colapsado por padrão
+
+        // Os dois campos do grupo estão DENTRO do card; o campo solto está
+        // fora (é filho do diálogo, não do card).
+        const auto fieldsInCard = card->findChildren<QLineEdit *>();
+        QCOMPARE(fieldsInCard.size(), 2);
+
+        auto *soltoField = dialog.findChild<QLineEdit *>();
+        QVERIFY(soltoField != nullptr);
+        QVERIFY(card->findChildren<QLineEdit *>().indexOf(soltoField) < 0);
+    }
+
+    // Achado real (screenshot): um grupo cujos parâmetros aparecem no MEIO
+    // de uma sequência de parâmetros soltos acabava sempre renderizado no
+    // FIM do form (depois de TODOS os soltos), mesmo quando declarado antes
+    // de alguns deles — a ordem visual devia seguir a ordem de `params`, com
+    // o card aparecendo na posição do PRIMEIRO parâmetro do grupo.
+    void groupPositionRespectsDeclarationOrderAmongLooseParams()
+    {
+        QVector<Parameter> params;
+        Parameter p1;
+        p1.name = QStringLiteral("par1");
+        p1.type = ParameterType::Text;
+        p1.defaultValue = QStringLiteral("v1");
+        params << p1;
+
+        Parameter a;
+        a.name = QStringLiteral("a");
+        a.type = ParameterType::Text;
+        a.defaultValue = QStringLiteral("va");
+        a.group = QStringLiteral("Acesso");
+        params << a;
+
+        Parameter b;
+        b.name = QStringLiteral("b");
+        b.type = ParameterType::Text;
+        b.defaultValue = QStringLiteral("vb");
+        b.group = QStringLiteral("Acesso");
+        params << b;
+
+        Parameter p4;
+        p4.name = QStringLiteral("par4");
+        p4.type = ParameterType::Text;
+        p4.defaultValue = QStringLiteral("v4");
+        params << p4;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        QLineEdit *field1 = nullptr;
+        QLineEdit *field4 = nullptr;
+        for (QLineEdit *le : dialog.findChildren<QLineEdit *>()) {
+            if (le->text() == QStringLiteral("v1")) { field1 = le; }
+            if (le->text() == QStringLiteral("v4")) { field4 = le; }
+        }
+        QVERIFY(field1 != nullptr);
+        QVERIFY(field4 != nullptr);
+
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 1);
+        CollapsibleSectionCard *card = cards.first();
+
+        // Ordem visual esperada: par1 (solto) -> card "Acesso" -> par4 (solto).
+        const int y1 = field1->mapTo(&dialog, QPoint(0, 0)).y();
+        const int yCard = card->mapTo(&dialog, QPoint(0, 0)).y();
+        const int y4 = field4->mapTo(&dialog, QPoint(0, 0)).y();
+        QVERIFY(y1 < yCard);
+        QVERIFY(yCard < y4);
+    }
+
+    // Diretrizes da tela de Params (pedido do usuário): "campos obrigatórios
+    // devem ter uma pequena marcação (como um asterisco vermelho sutil) ao
+    // lado do rótulo". Depois ajustado (outro achado real: "campos
+    // obrigatórios por padrão não ficou legal... apenas diante seleção de
+    // flag pro parâmetro") — `required` é OPT-IN, não mais "!optional
+    // implica obrigatório". Um param com `required=true` mostra o asterisco;
+    // um `optional=true` nunca mostra, mesmo se `required` também estiver
+    // ligado (optional sempre vence).
+    void theFormListsWhichFieldBlocksOkAndWhy()
+    {
+        QVector<Parameter> params;
+        Parameter title;
+        title.name = QStringLiteral("title");
+        title.label = QStringLiteral("Title");
+        title.type = ParameterType::Text;
+        title.required = true;
+        params << title;
+        Parameter rows;
+        rows.name = QStringLiteral("rows");
+        rows.label = QStringLiteral("Rows");
+        rows.type = ParameterType::Grid;
+        rows.required = true;
+        GridColumn col;
+        col.name = QStringLiteral("x");
+        rows.gridColumns = {col};
+        params << rows;
+        Parameter day;
+        day.name = QStringLiteral("day");
+        day.label = QStringLiteral("Day");
+        day.type = ParameterType::Date;
+        day.required = true;
+        params << day;
+        Parameter fine;
+        fine.name = QStringLiteral("fine");
+        fine.type = ParameterType::Text;
+        params << fine;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *grid = dialog.findChild<GridParamField *>();
+        QVERIFY(grid);
+        grid->setRows(QJsonArray()); // o grid abre com uma linha em branco
+        const auto problems = dialog.validationProblems();
+        QCOMPARE(problems.size(), 3);
+        QCOMPARE(problems.at(0).label, QStringLiteral("Title"));
+        QCOMPARE(problems.at(0).reason, kai::utils::tr(QStringLiteral("params.error.required")));
+        QCOMPARE(problems.at(1).label, QStringLiteral("Rows"));
+        QCOMPARE(problems.at(1).reason, kai::utils::tr(QStringLiteral("params.error.grid_rows")));
+        QCOMPARE(problems.at(2).reason, kai::utils::tr(QStringLiteral("params.error.date")));
+
+        auto *banner = dialog.findChild<QLabel *>(QStringLiteral("paramProblems"));
+        QVERIFY(banner);
+        QVERIFY(!banner->isHidden());
+        QVERIFY(banner->text().contains(QStringLiteral("Title")));
+        QVERIFY(banner->text().contains(QStringLiteral("Rows")));
+        QVERIFY(!banner->text().contains(QStringLiteral("fine")));
+
+        grid->setRows(QJsonArray{QJsonObject{{QStringLiteral("x"), QStringLiteral("1")}}});
+        const auto remaining = dialog.validationProblems();
+        QCOMPARE(remaining.size(), 2);
+        QCOMPARE(remaining.at(0).label, QStringLiteral("Title"));
+        QCOMPARE(remaining.at(1).paramName, QStringLiteral("day"));
+        QVERIFY(!banner->text().contains(QStringLiteral("Rows")));
+    }
+
+    void theProblemListIsHiddenWhenEverythingIsFilled()
+    {
+        Parameter p;
+        p.name = QStringLiteral("a");
+        p.label = QStringLiteral("A");
+        p.type = ParameterType::Text;
+        p.required = true;
+        p.defaultValue = QStringLiteral("ok");
+        ParameterFormDialog dialog({p}, nullptr);
+        QVERIFY(dialog.validationProblems().isEmpty());
+        auto *banner = dialog.findChild<QLabel *>(QStringLiteral("paramProblems"));
+        QVERIFY(banner);
+        QVERIFY(banner->isHidden());
+    }
+
+    static Parameter stepParam(const QString &name, const QString &step, bool required = false)
+    {
+        Parameter p;
+        p.name = name;
+        p.label = name.toUpper();
+        p.type = ParameterType::Text;
+        p.step = step;
+        p.required = required;
+        return p;
+    }
+
+    void withoutStepsTheFormIsASinglePage()
+    {
+        ParameterFormDialog dialog({stepParam(QStringLiteral("a"), QString())}, nullptr);
+        QCOMPARE(dialog.stepCount(), 1);
+        QVERIFY(!dialog.findChild<QPushButton *>(QStringLiteral("paramStepBack")));
+        QVERIFY(!dialog.findChild<QPushButton *>(QStringLiteral("paramStepChip")));
+    }
+
+    void stepsSplitTheFormIntoPagesWithBackAndNext()
+    {
+        // "d" não tem etapa: vai para a primeira página.
+        const QVector<Parameter> params = {stepParam(QStringLiteral("a"), QStringLiteral("One")),
+                                           stepParam(QStringLiteral("b"), QStringLiteral("Two"), true),
+                                           stepParam(QStringLiteral("c"), QStringLiteral("Three")),
+                                           stepParam(QStringLiteral("d"), QString(), true)};
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+        QCOMPARE(dialog.stepCount(), 3);
+        QCOMPARE(dialog.currentStep(), 0);
+
+        auto *box = dialog.findChild<QDialogButtonBox *>();
+        QPushButton *primary = box->button(QDialogButtonBox::Ok);
+        auto *back = dialog.findChild<QPushButton *>(QStringLiteral("paramStepBack"));
+        QVERIFY(back);
+        const QString nextText = kai::utils::tr(QStringLiteral("params.step.next"));
+        const QString okText = QStringLiteral("OK");
+        QVERIFY(!back->isEnabled());
+        QCOMPARE(primary->text(), nextText);
+
+        // O obrigatório sem etapa ("d") mora na primeira página e bloqueia o "Próximo" dela.
+        QVERIFY(!primary->isEnabled());
+        const auto problems = dialog.validationProblems();
+        QCOMPARE(problems.size(), 2);
+        QCOMPARE(problems.at(0).paramName, QStringLiteral("b"));
+        QCOMPARE(problems.at(0).step, 1);
+        QCOMPARE(problems.at(1).paramName, QStringLiteral("d"));
+        QCOMPARE(problems.at(1).step, 0);
+        auto *banner = dialog.findChild<QLabel *>(QStringLiteral("paramProblems"));
+        QVERIFY(banner->text().contains(QStringLiteral("D")));
+        QVERIFY(!banner->text().contains(QStringLiteral(">B<"))); // "b" é da página 2: ainda não é problema desta
+
+        // Preenchida a página 1, "Próximo" abre a 2, que agora bloqueia por causa do "b".
+        for (QLineEdit *edit : dialog.findChildren<QLineEdit *>()) {
+            if (edit->isVisibleTo(&dialog) && edit->text().isEmpty()) { edit->setText(QStringLiteral("x")); }
+        }
+        QVERIFY(primary->isEnabled());
+        primary->click();
+        QCOMPARE(dialog.currentStep(), 1);
+        QVERIFY(back->isEnabled());
+        QVERIFY(!primary->isEnabled());
+        QVERIFY(banner->text().contains(QStringLiteral("B")));
+
+        for (QLineEdit *edit : dialog.findChildren<QLineEdit *>()) {
+            if (edit->isVisibleTo(&dialog) && edit->text().isEmpty()) { edit->setText(QStringLiteral("y")); }
+        }
+        QVERIFY(primary->isEnabled());
+        primary->click();
+        QCOMPARE(dialog.currentStep(), 2);
+        QCOMPARE(primary->text(), okText); // última página: volta a ser o OK
+        QVERIFY(primary->isEnabled());
+
+        QSignalSpy accepted(&dialog, &QDialog::accepted);
+        back->click();
+        QCOMPARE(dialog.currentStep(), 1);
+        QCOMPARE(primary->text(), nextText);
+        QCOMPARE(accepted.count(), 0); // "Próximo" nunca aceita o diálogo
+        primary->click();
+        primary->click();
+        QCOMPARE(accepted.count(), 1);
+
+        // Os valores de TODAS as páginas saem juntos.
+        const auto values = dialog.values();
+        QVERIFY(values.contains(QStringLiteral("a")));
+        QCOMPARE(values.value(QStringLiteral("b")), QStringLiteral("y"));
+        QCOMPARE(values.value(QStringLiteral("d")), QStringLiteral("x"));
+        QCOMPARE(values.value(QStringLiteral("a")), QStringLiteral("x"));
+    }
+
+    void aStepChipOnlyOpensPagesWhoseEarlierPagesAreValid()
+    {
+        const QVector<Parameter> params = {stepParam(QStringLiteral("a"), QStringLiteral("One"), true),
+                                           stepParam(QStringLiteral("b"), QStringLiteral("Two"))};
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+        const auto chips = dialog.findChildren<QPushButton *>(QStringLiteral("paramStepChip"));
+        QCOMPARE(chips.size(), 2);
+        QVERIFY(chips.at(0)->isEnabled());
+        QVERIFY(!chips.at(1)->isEnabled()); // a página 1 ainda tem um obrigatório vazio
+        for (QLineEdit *edit : dialog.findChildren<QLineEdit *>()) {
+            if (edit->isVisibleTo(&dialog)) { edit->setText(QStringLiteral("ok")); break; }
+        }
+        QVERIFY(chips.at(1)->isEnabled());
+        chips.at(1)->click();
+        QCOMPARE(dialog.currentStep(), 1);
+        chips.at(0)->click();
+        QCOMPARE(dialog.currentStep(), 0);
+    }
+
+    void clickingAProblemLinkOpensThePageOfThatField()
+    {
+        const QVector<Parameter> params = {stepParam(QStringLiteral("a"), QStringLiteral("One")),
+                                           stepParam(QStringLiteral("b"), QStringLiteral("Two"), true)};
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+        QCOMPARE(dialog.currentStep(), 0);
+        auto *banner = dialog.findChild<QLabel *>(QStringLiteral("paramProblems"));
+        emit banner->linkActivated(QStringLiteral("b"));
+        QCOMPARE(dialog.currentStep(), 1);
+        emit banner->linkActivated(QStringLiteral("a"));
+        QCOMPARE(dialog.currentStep(), 0);
+    }
+
+    void requiredParameterLabelShowsAsteriskOptionalDoesNot()
+    {
+        QVector<Parameter> params;
+        Parameter required;
+        required.name = QStringLiteral("obrigatorio");
+        required.label = QStringLiteral("Obrigatório");
+        required.type = ParameterType::Text;
+        required.required = true;
+        params << required;
+
+        Parameter optional;
+        optional.name = QStringLiteral("opcional");
+        optional.label = QStringLiteral("Opcional");
+        optional.type = ParameterType::Text;
+        optional.optional = true;
+        optional.required = true; // optional sempre vence, mesmo marcado
+        params << optional;
+
+        ParameterFormDialog dialog(params, nullptr);
+        const auto labels = dialog.findChildren<QLabel *>();
+
+        QLabel *requiredLabel = nullptr;
+        QLabel *optionalLabel = nullptr;
+        for (QLabel *l : labels) {
+            if (l->objectName() == QStringLiteral("paramProblems")) { continue; }
+            if (l->text().contains(QStringLiteral("Obrigatório"))) { requiredLabel = l; }
+            if (l->text() == QStringLiteral("Opcional")) { optionalLabel = l; }
+        }
+        QVERIFY(requiredLabel != nullptr);
+        QVERIFY(requiredLabel->text().contains(QStringLiteral("*")));
+        QVERIFY(optionalLabel != nullptr);
+        QVERIFY(!optionalLabel->text().contains(QStringLiteral("*")));
+    }
+
+    // "O botão OK deve começar desabilitado... e só habilitar quando todos
+    // os parâmetros obrigatórios e válidos forem preenchidos." Sem default
+    // nem lastValue, um Text obrigatório começa vazio -> OK desabilitado;
+    // digitar algo habilita; apagar de volta desabilita de novo.
+    void okButtonStaysDisabledUntilRequiredTextFieldIsFilled()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("nome");
+        p.type = ParameterType::Text;
+        p.required = true;
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(buttonBox != nullptr);
+        QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+        QVERIFY(okButton != nullptr);
+        QVERIFY(!okButton->isEnabled());
+
+        auto *field = dialog.findChild<QLineEdit *>();
+        QVERIFY(field != nullptr);
+        QTest::keyClicks(field, QStringLiteral("valor"));
+        QVERIFY(okButton->isEnabled());
+
+        field->clear();
+        QVERIFY(!okButton->isEnabled());
+    }
+
+    // Um parâmetro OPCIONAL nunca bloqueia o OK, preenchido ou não — mesmo
+    // sem nenhum outro parâmetro no form.
+    void okButtonStaysEnabledWhenOnlyOptionalParametersExist()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("nome");
+        p.type = ParameterType::Text;
+        p.optional = true;
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+        QVERIFY(okButton->isEnabled());
+    }
+
+    // Achado real, com print: o badge de contagem no cabeçalho de um grupo
+    // (uma tentativa anterior mostrava "obrigatórios pendentes") foi
+    // removido a pedido do usuário ("esse contador que vc colocou do lado
+    // do acesso, ou do grupo, conta o que? REMOVA ISSO ALI, não conta
+    // nada") — a maioria dos grupos nem tem parâmetro `required`, então o
+    // badge quase sempre mostrava "0" sem dizer nada útil. O card do grupo
+    // não deve ter NENHUM badge, independente de quantos parâmetros
+    // (obrigatórios ou não) ele contém.
+    void groupCardHasNoCountBadge()
+    {
+        QVector<Parameter> params;
+        Parameter a;
+        a.name = QStringLiteral("a");
+        a.type = ParameterType::Text;
+        a.group = QStringLiteral("Acesso");
+        a.required = true;
+        params << a;
+
+        Parameter b;
+        b.name = QStringLiteral("b");
+        b.type = ParameterType::Text;
+        b.group = QStringLiteral("Acesso");
+        params << b;
+
+        ParameterFormDialog dialog(params, nullptr);
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 1);
+        CollapsibleSectionCard *card = cards.first();
+
+        auto *badge = card->findChild<QLabel *>(QStringLiteral("sectionCountBadge"));
+        QVERIFY(badge != nullptr); // o QLabel existe (parte fixa do componente)...
+        QVERIFY(!badge->isVisible()); // ...mas nunca visível neste form.
+    }
+
+    // Um select obrigatório sem default/último valor válido abre em "nada escolhido" (item vazio), em vez de
+    // pré-selecionar a 1ª opção: o valor vazio já mostra que falta escolher e qualquer opção, inclusive a
+    // primeira, libera o OK. Com default ou último valor válido, conta como preenchido desde o início.
+    void requiredSelectWithoutDefaultStartsEmptyAndBlocksOkUntilChosen()
+    {
+        Parameter select;
+        select.name = QStringLiteral("nivel");
+        select.label = QStringLiteral("Nível");
+        select.type = ParameterType::Select;
+        select.options = {QStringLiteral("Opção 1"), QStringLiteral("Opção 2")};
+        select.required = true;
+
+        ParameterFormDialog dialog({select}, nullptr);
+        QPushButton *okButton = dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+        auto *combo = dialog.findChild<QComboBox *>();
+        QVERIFY(combo != nullptr);
+        QCOMPARE(combo->count(), 3); // "nada escolhido" + as 2 opções
+        QCOMPARE(combo->currentData().toString(), QString());
+        QVERIFY(!okButton->isEnabled());
+        QCOMPARE(dialog.validationProblems().size(), 1);
+
+        // Qualquer uma das opções libera, inclusive a primeira.
+        combo->setCurrentIndex(1);
+        QVERIFY(okButton->isEnabled());
+        QCOMPARE(dialog.values().value(QStringLiteral("nivel")), QStringLiteral("Opção 1"));
+        combo->setCurrentIndex(2);
+        QVERIFY(okButton->isEnabled());
+        QCOMPARE(dialog.values().value(QStringLiteral("nivel")), QStringLiteral("Opção 2"));
+        combo->setCurrentIndex(0);
+        QVERIFY(!okButton->isEnabled());
+    }
+
+    void requiredSelectWithADefaultCountsAsFilledFromTheStart()
+    {
+        Parameter select;
+        select.name = QStringLiteral("env");
+        select.type = ParameterType::Select;
+        select.options = {QStringLiteral("dev"), QStringLiteral("staging"), QStringLiteral("prod")};
+        select.required = true;
+        select.defaultValue = QStringLiteral("staging");
+
+        ParameterFormDialog dialog({select}, nullptr);
+        QPushButton *okButton = dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+        auto *combo = dialog.findChild<QComboBox *>();
+        QCOMPARE(combo->count(), 3); // sem item "nada escolhido"
+        QCOMPARE(combo->currentText(), QStringLiteral("staging"));
+        QVERIFY(okButton->isEnabled());
+        QVERIFY(dialog.validationProblems().isEmpty());
+        QCOMPARE(dialog.values().value(QStringLiteral("env")), QStringLiteral("staging"));
+    }
+
+    void requiredSelectRemembersTheLastValueAndIgnoresAStaleOne()
+    {
+        Parameter select;
+        select.name = QStringLiteral("env");
+        select.type = ParameterType::Select;
+        select.options = {QStringLiteral("dev"), QStringLiteral("prod")};
+        select.required = true;
+
+        ParameterFormDialog remembered({select}, nullptr, {{QStringLiteral("env"), QStringLiteral("prod")}});
+        QVERIFY(remembered.validationProblems().isEmpty());
+        QCOMPARE(remembered.values().value(QStringLiteral("env")), QStringLiteral("prod"));
+
+        // Um último valor que já não é uma opção não conta: pede para escolher.
+        ParameterFormDialog stale({select}, nullptr, {{QStringLiteral("env"), QStringLiteral("gone")}});
+        QCOMPARE(stale.validationProblems().size(), 1);
+    }
+
+    void optionalSelectKeepsPreselectingTheFirstOption()
+    {
+        Parameter select;
+        select.name = QStringLiteral("x");
+        select.type = ParameterType::Select;
+        select.options = {QStringLiteral("a"), QStringLiteral("b")};
+
+        ParameterFormDialog dialog({select}, nullptr);
+        auto *combo = dialog.findChild<QComboBox *>();
+        QCOMPARE(combo->count(), 2);
+        QCOMPARE(dialog.values().value(QStringLiteral("x")), QStringLiteral("a"));
+    }
+
     // Textarea (novo tipo, pedido do usuário: "campo de texto com
     // expansão"): renderiza um InlineCodeField (por baixo, um QPlainTextEdit
     // real — é ele que este teste encontra via findChild<QPlainTextEdit*>)
@@ -408,6 +1163,243 @@ private slots:
         ParameterFormDialog dialog(params, nullptr);
         QVERIFY(dialog.findChild<QCheckBox *>() != nullptr);
         QCOMPARE(dialog.findChildren<kai::ui::InlineCodeField *>().size(), 2);
+    }
+
+    // REGRESSÃO/feature (pedido do usuário: "não gostei da cfg pick as
+    // folder, queria tipo um select com modo de seleção... arquivo, pastas
+    // ou ambos"). Parameter::pickMode == "both": clicar no botão de
+    // procurar não abre um QFileDialog direto (nenhum diálogo nativo deixa
+    // escolher arquivo OU pasta ao mesmo tempo) - abre um QMenu perguntando
+    // qual dos dois. Fecha o menu programaticamente (QApplication::
+    // activePopupWidget(), mesmo padrão já usado neste app pra testar
+    // QMessageBox::activeModalWidget()) sem escolher nada, só provando que
+    // o menu realmente aparece com as duas opções e não crasha.
+    void bothPickModeShowsFileOrFolderMenuInsteadOfDialogDirectly()
+    {
+        QVector<Parameter> params;
+        Parameter fileParam;
+        fileParam.name = QStringLiteral("caminho");
+        fileParam.type = ParameterType::File;
+        fileParam.pickMode = QStringLiteral("both");
+        params << fileParam;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *browseButton = dialog.findChild<QToolButton *>();
+        QVERIFY(browseButton != nullptr);
+
+        int menuActionCount = -1;
+        QTimer::singleShot(50, &dialog, [&menuActionCount]() {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (menu) {
+                menuActionCount = menu->actions().size();
+                menu->close();
+            }
+        });
+        QTest::mouseClick(browseButton, Qt::LeftButton);
+
+        QCOMPARE(menuActionCount, 2);
+    }
+
+    // Pedido do usuário ("adicione um parâmetro do tipo date picker...
+    // esse param abre uma janelinha de pedir data"): o botão calendário
+    // abre DatePickerDialog de verdade; escolher uma data e confirmar
+    // preenche o campo com o valor FORMATADO conforme date_format — não o
+    // texto cru do QDateTime.
+    void datePickerFillsFieldWithFormattedValue()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("quando");
+        p.type = ParameterType::Date;
+        p.dateMode = QStringLiteral("date");
+        p.dateFormat = QStringLiteral("iso_date");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            auto *calendar = picker->findChild<QCalendarWidget *>();
+            QVERIFY(calendar != nullptr);
+            calendar->setSelectedDate(QDate(2024, 3, 20));
+            auto *okButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            QVERIFY(okButton != nullptr);
+            QTest::mouseClick(okButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("quando")), QStringLiteral("2024-03-20"));
+    }
+
+    // Range: {{nome}} carrega o INÍCIO, {{nome.end}} o FIM — nunca o texto
+    // combinado "início — fim" que só existe pra leitura visual do campo.
+    void dateRangePickerFillsStartAndEndSeparately()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("janela");
+        p.type = ParameterType::Date;
+        p.dateMode = QStringLiteral("date");
+        p.dateRange = true;
+        p.dateFormat = QStringLiteral("iso_date");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            const auto calendars = picker->findChildren<QCalendarWidget *>();
+            QCOMPARE(calendars.size(), 2);
+            calendars.at(0)->setSelectedDate(QDate(2024, 3, 20));
+            calendars.at(1)->setSelectedDate(QDate(2024, 3, 25));
+            auto *okButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            QTest::mouseClick(okButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("janela")), QStringLiteral("2024-03-20"));
+        QCOMPARE(values.value(QStringLiteral("janela.end")), QStringLiteral("2024-03-25"));
+    }
+
+    // Cancelar a janelinha não altera o campo (nem crasha).
+    void cancelingDatePickerLeavesFieldUnchanged()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("quando");
+        p.type = ParameterType::Date;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("quando")] = QStringLiteral("2020-01-01");
+        ParameterFormDialog dialog(params, nullptr, initial);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            auto *cancelButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel);
+            QTest::mouseClick(cancelButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        QCOMPARE(dialog.values().value(QStringLiteral("quando")), QStringLiteral("2020-01-01"));
+    }
+
+    // --- Fonte "script" (Parameter::optionsScript) ---
+
+    void scriptSelectAsksOwnerForOptionsAndFillsComboFromTheAnswer()
+    {
+        Parameter p;
+        p.name = QStringLiteral("EXT");
+        p.type = ParameterType::Select;
+        p.optionsScript = QStringLiteral("ls extensions");
+
+        ParameterFormDialog dialog({p}, nullptr);
+        QSignalSpy spy(&dialog, &ParameterFormDialog::optionsScriptRequested);
+        QVERIFY(spy.wait(1000));
+        QCOMPARE(spy.first().at(0).toString(), QStringLiteral("EXT"));
+        QCOMPARE(spy.first().at(1).toString(), QStringLiteral("ls extensions"));
+
+        // Até o script responder o campo existe, mas não tem valor nem escolha possível.
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QString());
+
+        dialog.setScriptOptions(QStringLiteral("EXT"),
+            {QStringLiteral("ctx"), QString(), QStringLiteral("Git PR:pr"), QStringLiteral("  sync  ")}, QString());
+        QComboBox *combo = nullptr;
+        for (QComboBox *c : dialog.findChildren<QComboBox *>()) {
+            if (c->isEnabled() && c->count() == 3) { combo = c; }
+        }
+        QVERIFY(combo != nullptr); // linha vazia ignorada, espaços aparados
+        combo->setCurrentIndex(combo->findText(QStringLiteral("Git PR")));
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QStringLiteral("pr"));
+    }
+
+    void scriptSelectKeepsLastValueWhenItIsStillAnOption()
+    {
+        Parameter p;
+        p.name = QStringLiteral("EXT");
+        p.type = ParameterType::Select;
+        p.optionsScript = QStringLiteral("ls");
+
+        ParameterFormDialog dialog({p}, nullptr, {{QStringLiteral("EXT"), QStringLiteral("sync")}});
+        dialog.setScriptOptions(QStringLiteral("EXT"), {QStringLiteral("ctx"), QStringLiteral("sync")}, QString());
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QStringLiteral("sync"));
+    }
+
+    void scriptSelectSupportsMultiSelect()
+    {
+        Parameter p;
+        p.name = QStringLiteral("EXT");
+        p.type = ParameterType::Select;
+        p.multiSelect = true;
+        p.optionsScript = QStringLiteral("ls");
+
+        ParameterFormDialog dialog({p}, nullptr);
+        dialog.setScriptOptions(QStringLiteral("EXT"),
+            {QStringLiteral("ctx"), QStringLiteral("pr"), QStringLiteral("sync")}, QString());
+        auto *list = dialog.findChild<QListWidget *>();
+        QVERIFY(list != nullptr);
+        list->item(0)->setCheckState(Qt::Checked);
+        list->item(2)->setCheckState(Qt::Checked);
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QStringLiteral("ctx,sync"));
+    }
+
+    void scriptFailureShowsTheMessageAndLeavesTheValueEmpty()
+    {
+        Parameter p;
+        p.name = QStringLiteral("EXT");
+        p.type = ParameterType::Select;
+        p.optionsScript = QStringLiteral("boom");
+
+        ParameterFormDialog dialog({p}, nullptr);
+        dialog.show();
+        dialog.setScriptOptions(QStringLiteral("EXT"), {}, QStringLiteral("boom: command not found"));
+        bool shown = false;
+        for (QLabel *label : dialog.findChildren<QLabel *>()) {
+            if (label->text().contains(QStringLiteral("command not found")) && label->isVisible()) { shown = true; }
+        }
+        QVERIFY(shown);
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QString());
+    }
+
+    void requiredScriptSelectBlocksOkUntilTheUserPicks()
+    {
+        Parameter p;
+        p.name = QStringLiteral("EXT");
+        p.type = ParameterType::Select;
+        p.required = true;
+        p.optionsScript = QStringLiteral("ls");
+
+        ParameterFormDialog dialog({p}, nullptr);
+        QVERIFY(!dialog.allRequiredFieldsFilled());
+        dialog.setScriptOptions(QStringLiteral("EXT"), {QStringLiteral("ctx"), QStringLiteral("pr")}, QString());
+        QVERIFY(!dialog.allRequiredFieldsFilled()); // abre em "nada escolhido"
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QString());
+        QComboBox *combo = nullptr;
+        for (QComboBox *c : dialog.findChildren<QComboBox *>()) {
+            if (c->isEnabled() && c->count() == 3) { combo = c; }
+        }
+        QVERIFY(combo != nullptr);
+        combo->setCurrentIndex(1);
+        QVERIFY(dialog.allRequiredFieldsFilled());
+        QCOMPARE(dialog.values().value(QStringLiteral("EXT")), QStringLiteral("ctx"));
     }
 };
 

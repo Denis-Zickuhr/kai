@@ -6,7 +6,7 @@
 #include <QImageReader>
 #include <QTemporaryDir>
 
-#include "ui/icon-picker-widget.h"
+#include "ui/shared/icon-picker-widget.h"
 
 using namespace kai::ui;
 

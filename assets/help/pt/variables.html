@@ -1,2 +1,16 @@
 <h2>Variáveis {{VAR}}</h2>
-<p>Shell, URL, Headers e Body suportam <code>{{VAR}}</code>.</p><h3>Precedência</h3><pre>Global  &lt;  Pasta/Projeto  &lt;  Dinâmica (HTTP)  &lt;  Parâmetros</pre><p>A da direita sobrescreve a da esquerda. Variável ausente vira string vazia (com aviso no log) — o Kai nunca trava por isso.</p><p>Veja <a href='help://environments'>Environments</a> e <a href='help://dynamic_vars'>Variáveis dinâmicas</a>.</p>
+<p>O <code>{{VAR}}</code> é substituído logo antes de um comando rodar. Funciona em <b>comandos nativos</b>, no diretório de trabalho, na URL / headers / body de HTTP, na resposta de uma <a href='help://responders'>auto-resposta</a> e nos valores das <a href='help://hooks'>condições de execução</a>. Em <a href='help://languages'>código Python/Node</a> ele <i>não</i> é substituído — leia as variáveis de ambiente.</p>
+<p>Os nomes aceitam letras, dígitos, <code>_</code> e <code>.</code> (o ponto alcança um campo de uma entrada de <a href='help://collections'>coleção</a>: <code>{{cliente.email}}</code>); o prefixo <code>$</code> é uma <a href='help://dynamic_vars'>variável dinâmica</a> (<code>{{$uuid}}</code>). Digitar <code>{{</code> num editor sugere as variáveis disponíveis.</p>
+<h3>Precedência</h3>
+<pre>Global  &lt;  Pasta/Projeto  &lt;  Dinâmica (HTTP)  &lt;  Parâmetros</pre>
+<p>A da direita sobrescreve a da esquerda. Variável ausente vira string vazia (com aviso no log) — o Kai nunca trava por isso.</p>
+<h3>Texto condicional</h3>
+<p>Um bloco pode escolher qual texto sobrevive, antes de as variáveis serem substituídas:</p>
+<pre>docker compose up {% if {{BUILD}} == "true" %}--build{% else %}--no-build{% endif %} {{service}}</pre>
+<ul>
+<li><code>{% if A op B %}</code> … <code>{% else %}</code> opcional … <code>{% endif %}</code>; os blocos podem ser aninhados.</li>
+<li>Operadores: <code>==</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>. Com números dos dois lados a comparação é numérica (<code>{% if {{PORT}} &gt; 1000 %}</code>); os operadores de ordem exigem números, senão a condição é falsa.</li>
+<li>Os operandos são <code>{{VAR}}</code>, texto entre aspas ou um número. <b>Sem operador</b> a condição é verdadeira quando o valor não é vazio, nem <code>false</code>, nem <code>0</code>: <code>{% if {{VERBOSE}} %}-v{% endif %}</code>.</li>
+<li><code>kai --dry-run</code> mostra o texto depois de os blocos serem resolvidos.</li>
+</ul>
+<p>Veja <a href='help://environments'>Environments</a> e <a href='help://parameters'>Parâmetros</a>.</p>

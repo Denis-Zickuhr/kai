@@ -1,10 +1,16 @@
 #include "ui/main-window.h"
-#include "ui/notification-gate.h"
-#include "ui/expand-collapse-bar.h"
+#include "ui/shared/notification-gate.h"
+#include "ui/shared/expand-collapse-bar.h"
 #include "ui/app-stylesheet.h"
-#include "ui/dialog-utils.h"
+#include "ui/shared/dialog-utils.h"
 #include "utils/action-shortcuts.h"
-#include "ui/export-selection-dialog.h"
+#include "ui/features/collections/export-dialog.h"
+#include "ui/features/collections/import-dialog.h"
+#include "ui/features/collections/import-selection-dialog.h"
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -45,22 +51,24 @@
 #include <QMouseEvent>
 #include "qhotkey.h"
 
-#include "ui/parameter-form-dialog.h"
-#include "ui/folder-editor-dialog.h"
-#include "ui/folder-delete-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/collection-editor-dialog.h"
-#include "ui/name-uniqueness.h"
-#include "ui/json-viewer-widget.h"
-#include "ui/loading-overlay.h"
-#include "ui/command-json-editor-dialog.h"
-#include "ui/settings-dialog.h"
-#include "ui/environment-manager-dialog.h"
-#include "ui/run-history-dialog.h"
-#include "ui/help-dialog.h"
+#include "ui/features/command-editor/parameter-form-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
+#include "ui/features/collections/folder-delete-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/collection-editor-dialog.h"
+#include "ui/shared/name-uniqueness.h"
+#include "ui/shared/json-viewer-widget.h"
+#include "ui/shared/loading-overlay.h"
+#include "ui/features/command-editor/command-json-editor-dialog.h"
+#include "ui/features/settings/settings-dialog.h"
+#include "ui/features/environments/environment-manager-dialog.h"
+#include "ui/features/history/run-history-dialog.h"
+#include "ui/features/history/notification-history-dialog.h"
+#include "ui/shared/help-dialog.h"
 #include "core/openapi-parser.h"
-#include "ui/quick-body-editor-dialog.h"
-#include "ui/welcome-screen.h"
+#include "core/yaml-bridge.h"
+#include "ui/shared/quick-body-editor-dialog.h"
+#include "ui/shared/welcome-screen.h"
 #include "utils/asset-paths.h"
 #include "utils/logger.h"
 #include "utils/design-tokens.h"
@@ -76,6 +84,46 @@ namespace kai::ui {
 
 namespace {
 constexpr const char *kLogTag = "MainWindow";
+
+#if defined(Q_OS_WIN)
+// Restaurar/focar a janela a partir de um HOTKEY GLOBAL (processo em
+// segundo plano) é um caso clássico onde SetForegroundWindow do Win32
+// FALHA SILENCIOSAMENTE — o Windows só deixa o processo que já tem o
+// foreground roubar o foco de outro; um processo em background (que é
+// exatamente o caso de um hotkey global dele mesmo) não tem essa
+// permissão por padrão. show()/showNormal()/raise()/activateWindow() do
+// Qt fazem a chamada Win32 "certa" por baixo dos panos, mas ela é
+// silenciosamente ignorada pelo SO — a janela DESMINIMIZA (o estado
+// muda) mas não vem pra frente/não recebe foco de teclado (bug
+// reportado: "não funciona, tem certeza?" — sim, existe mesmo, é uma
+// limitação conhecida do Win32, não um bug de lógica no toggleVisibility
+// em si). O truque padrão (usado por launchers tipo PowerToys Run/
+// Wox): anexar temporariamente a thread de INPUT à do processo que
+// atualmente tem o foreground (AttachThreadInput) — enquanto anexado, o
+// Windows trata as duas threads como uma só pra fins de permissão de
+// foreground, então SetForegroundWindow funciona de verdade.
+void forceForegroundOnWindows(QWidget *window)
+{
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (!hwnd) {
+        return;
+    }
+    if (::IsIconic(hwnd)) {
+        ::ShowWindow(hwnd, SW_RESTORE);
+    }
+    const HWND foregroundHwnd = ::GetForegroundWindow();
+    const DWORD foregroundThreadId = foregroundHwnd
+        ? ::GetWindowThreadProcessId(foregroundHwnd, nullptr) : 0;
+    const DWORD currentThreadId = ::GetCurrentThreadId();
+    const bool attached = foregroundThreadId != 0 && foregroundThreadId != currentThreadId
+        && ::AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
+    ::SetForegroundWindow(hwnd);
+    ::BringWindowToTop(hwnd);
+    if (attached) {
+        ::AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
+    }
+}
+#endif
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -89,7 +137,9 @@ MainWindow::MainWindow(QWidget *parent)
     // primeira renderização. Fallback en -> própria chave é garantido
     // pelo TranslationManager, então um settings.json sem idioma ou com
     // idioma inválido não quebra nada.
-    utils::TranslationManager::instance().loadLanguage(m_configManager.loadSettings().language);
+    const core::SettingsData initialSettings = m_configManager.loadSettings();
+    utils::TranslationManager::instance().loadLanguage(initialSettings.language);
+    m_outputMaxLogSizeChars = qMax(1, initialSettings.outputMaxLogSizeKb) * 1024;
 
     setupUi();
     applyOutputPosition();
@@ -197,12 +247,8 @@ void MainWindow::setupUi()
     layout->setSpacing(0);
 
     m_topBar = new TopUtilityBar(central);
-    connect(m_topBar, &TopUtilityBar::importProjectRequested, this, &MainWindow::handleImportProjectRequested);
-    connect(m_topBar, &TopUtilityBar::importOpenApiRequested, this, &MainWindow::handleImportOpenApiRequested);
-    connect(m_topBar, &TopUtilityBar::importConfigRequested, this, &MainWindow::handleImportConfigRequested);
-    connect(m_topBar, &TopUtilityBar::exportGlobalRequested, this, &MainWindow::handleExportGlobalRequested);
-    connect(m_topBar, &TopUtilityBar::exportFolderRequested, this, &MainWindow::handleExportFolderRequested);
-    connect(m_topBar, &TopUtilityBar::exportCommandRequested, this, &MainWindow::handleExportCommandRequested);
+    connect(m_topBar, &TopUtilityBar::importRequested, this, &MainWindow::handleImportRequested);
+    connect(m_topBar, &TopUtilityBar::exportRequested, this, &MainWindow::handleExportRequested);
     connect(m_topBar, &TopUtilityBar::logsRequested, this, &MainWindow::handleLogsRequested);
     connect(m_topBar, &TopUtilityBar::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_topBar, &TopUtilityBar::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
@@ -212,6 +258,7 @@ void MainWindow::setupUi()
     connect(m_topBar, &TopUtilityBar::manageEnvironmentsRequested, this, &MainWindow::handleManageEnvironmentsRequested);
     connect(m_topBar, &TopUtilityBar::showProcessListRequested, this, &MainWindow::handleShowProcessListRequested);
     connect(m_topBar, &TopUtilityBar::runHistoryRequested, this, &MainWindow::handleRunHistoryRequested);
+    connect(m_topBar, &TopUtilityBar::notificationHistoryRequested, this, &MainWindow::handleNotificationHistoryRequested);
     connect(m_topBar, &TopUtilityBar::helpRequested, this, &MainWindow::handleHelpRequested);
     connect(m_topBar, &TopUtilityBar::showWelcomeRequested, this, &MainWindow::handleShowWelcomeRequested);
     connect(m_topBar, &TopUtilityBar::hideRequested, this, &MainWindow::toggleVisibility);
@@ -237,6 +284,21 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::commandActivated, this, &MainWindow::handleCommandActivated);
     connect(m_commandTree, &CommandTreeWidget::editRequested, this, &MainWindow::handleEditRequested);
     connect(m_commandTree, &CommandTreeWidget::deleteRequested, this, &MainWindow::handleDeleteRequested);
+    // "Ocultar/Mostrar pasta" no menu de contexto da ABA (pasta raiz) —
+    // pedido do usuário: "adicione a possibilidade de ocultar pastas de
+    // raiz". Direto pelo id (não passa por currentSelectionId(), que só
+    // enxerga o item selecionado DENTRO da árvore, nunca a aba em si).
+    connect(m_commandTree, &CommandTreeWidget::toggleFolderHiddenRequested, this,
+        [this](const QString &folderId) {
+            for (core::Folder &f : m_commandsData.folders) {
+                if (f.id == folderId) {
+                    f.hidden = !f.hidden;
+                    break;
+                }
+            }
+            m_configManager.saveCommands(m_commandsData);
+            reloadCommandTree();
+        });
     connect(m_commandTree, &CommandTreeWidget::duplicateRequested, this, &MainWindow::handleDuplicateRequested);
     connect(m_commandTree, &CommandTreeWidget::quickEditBodyRequested, this, &MainWindow::handleQuickEditBodyRequested);
     connect(m_commandTree, &CommandTreeWidget::collectionEditRequested, this, &MainWindow::handleCollectionEditRequested);
@@ -308,6 +370,7 @@ void MainWindow::setupUi()
     connect(m_terminalDrawer, &TerminalDrawer::eofRequested, this, &MainWindow::handleTerminalEof);
     connect(m_terminalDrawer, &TerminalDrawer::rawTerminalInput, this, &MainWindow::handleTerminalRawInput);
     connect(m_terminalDrawer, &TerminalDrawer::terminalSizeChanged, this, &MainWindow::handleTerminalSizeChanged);
+    connect(m_terminalDrawer, &TerminalDrawer::firstErrorInFormattedOutput, this, &MainWindow::handleFirstErrorInFormattedOutput);
     // Opções de exibição da Saída: persistência GLOBAL em settings.json
     // (feedback do usuário: as opções do menu da Saída devem valer entre
     // sessões, para todos os comandos — não mais por comando). Ao alternar
@@ -522,7 +585,7 @@ void MainWindow::setupTrayIcon()
     connect(toggleAction, &QAction::triggered, this, &MainWindow::toggleVisibility);
 
     auto *importAction = menu->addAction(utils::tr(QStringLiteral("tray.import")));
-    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportProjectRequested);
+    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportRequested);
 
     menu->addSeparator();
 
@@ -544,12 +607,41 @@ void MainWindow::maybeShowNotification(NotificationEvent event, const QString &t
     // não em loop quente).
     const core::SettingsData settings = m_configManager.loadSettings();
     bool eventToggleOn = false;
+    QString eventKey;
     switch (event) {
-    case NotificationEvent::CommandFailure: eventToggleOn = settings.notifyOnCommandFailure; break;
-    case NotificationEvent::BackgroundProcessCrash: eventToggleOn = settings.notifyOnBackgroundProcessCrash; break;
-    case NotificationEvent::BackgroundProcessSuccess: eventToggleOn = settings.notifyOnBackgroundProcessSuccess; break;
-    case NotificationEvent::ConfigRecovered: eventToggleOn = settings.notifyOnConfigRecovered; break;
+    case NotificationEvent::CommandFailure:
+        eventToggleOn = settings.notifyOnCommandFailure;
+        eventKey = QStringLiteral("command_failure");
+        break;
+    case NotificationEvent::BackgroundProcessCrash:
+        eventToggleOn = settings.notifyOnBackgroundProcessCrash;
+        eventKey = QStringLiteral("background_crash");
+        break;
+    case NotificationEvent::BackgroundProcessSuccess:
+        eventToggleOn = settings.notifyOnBackgroundProcessSuccess;
+        eventKey = QStringLiteral("background_success");
+        break;
+    case NotificationEvent::ConfigRecovered:
+        eventToggleOn = settings.notifyOnConfigRecovered;
+        eventKey = QStringLiteral("config_recovered");
+        break;
+    case NotificationEvent::FirstErrorInFormattedOutput:
+        eventToggleOn = settings.notifyOnFirstErrorInFormattedOutput;
+        eventKey = QStringLiteral("first_error_in_formatted_output");
+        break;
     }
+
+    // Registra no histórico persistido SEMPRE que o evento ocorre — mesmo
+    // que o toast não vá aparecer (notificações desligadas ou janela em
+    // foco) — pedido do usuário: "queria melhorar o processamento de
+    // notificações, talvez salvar elas". O toggle de notificações só
+    // decide o TOAST, não o log.
+    core::NotificationRecord record;
+    record.eventKey = eventKey;
+    record.title = title;
+    record.body = body;
+    m_notificationHistory.append(record);
+
     if (!shouldShowNotification(trayAvailable(), settings.notificationsEnabled,
             eventToggleOn, settings.notifyEvenWhenFocused, isActiveWindow())) {
         return;
@@ -815,7 +907,19 @@ void MainWindow::setupActionShortcuts()
         // Fechar Aplicativo: encerra o app de fato (diferente do "X" da
         // janela, que apenas oculta — spec 09/closeEvent).
         {QStringLiteral("action.quit_app"), [this]() { quitApplication(); }},
-        {QStringLiteral("action.toggle_search"), [this]() { toggleSearchBar(); }},
+        // Pedido do usuário: se a Saída (Resposta/JSON ou texto simples) já
+        // está em foco, o mesmo atalho ativa/foca a busca DELA em vez de
+        // abrir a busca da árvore de comandos — só cai no comportamento
+        // antigo se a Saída não é a coisa em foco ou não tem busca própria
+        // pertinente ali (terminal interativo, painel "não executado"...).
+        {QStringLiteral("action.toggle_search"), [this]() {
+            if (m_terminalDrawer && m_terminalDrawer->isVisible()
+                && m_terminalDrawer->isAncestorOf(QApplication::focusWidget())
+                && m_terminalDrawer->focusSearch()) {
+                return;
+            }
+            toggleSearchBar();
+        }},
         {QStringLiteral("action.context_menu"), [this]() { m_commandTree->openContextMenuForCurrent(); }},
         {QStringLiteral("action.focus_output"), [this]() { toggleOutputFocus(); }},
         // NOTA: "action.toggle_edit_mode" propositalmente NÃO tem handler
@@ -840,6 +944,19 @@ void MainWindow::setupActionShortcuts()
         {QStringLiteral("action.collapse_all"), [this]() { triggerCollapseAll(); }},
         {QStringLiteral("action.hide_selected"), [this]() { triggerToggleHiddenSelected(); }},
         {QStringLiteral("action.show_hidden"), [this]() { triggerToggleShowHidden(); }},
+        // Esc (padrão) esconde a janela — mas NUNCA quando o foco está
+        // dentro de um terminal INTERATIVO (ex: vim rodando via um comando
+        // com interactive_terminal): Esc é tecla de uso comum lá dentro e
+        // sequestrá-la quebraria o programa rodando. Fora disso, mesmo
+        // comportamento de toggleVisibility() quando a janela já está
+        // visível — hide() simples.
+        {QStringLiteral("action.hide_window"), [this]() {
+            if (m_terminalDrawer && m_terminalDrawer->interactiveMode()
+                && m_terminalDrawer->isAncestorOf(QApplication::focusWidget())) {
+                return;
+            }
+            hide();
+        }},
     };
 
     for (const auto &spec : utils::actionShortcutSpecs()) {
@@ -1357,6 +1474,7 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     // a nova cor no live-reload — senão só atualizariam ao reabrir o app.
     if (m_commandTree) {
         m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections);
+        m_commandTree->refreshTreeConnectorColor(QColor(utils::tokens::accent()));
     }
 }
 
@@ -1389,10 +1507,12 @@ void MainWindow::appendToCommandLog(const QString &commandId, const QString &tex
 
     // Limita o buffer por comando para evitar crescimento ilimitado de
     // memória em processos de longa duração (mesmo espírito do
-    // setMaximumBlockCount do TerminalDrawer) — mantém os últimos ~200KB.
-    constexpr int kMaxLogSizeChars = 200000;
-    if (log.size() > kMaxLogSizeChars) {
-        log = log.right(kMaxLogSizeChars);
+    // setMaximumBlockCount do TerminalDrawer) — configurável em
+    // Configurações → Saída (bug reportado: um valor fixo de 200KB
+    // descartava o INÍCIO do log de scripts verbosos, "rodei um script
+    // grandinho e perdi logs"; default agora 1MB, ajustável).
+    if (log.size() > m_outputMaxLogSizeChars) {
+        log = log.right(m_outputMaxLogSizeChars);
     }
 }
 
@@ -1442,6 +1562,14 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // qualquer comando HTTP, aparece de novo pra shell/desconhecido.
     m_terminalDrawer->setStdoutTabVisible(
         it == m_commandsById.constEnd() || it->type != core::CommandType::Http);
+    // Saída formatada (Command::formattedOutput) — POR COMANDO (pedido do
+    // usuário), não uma preferência de exibição global.
+    m_terminalDrawer->setFormattedOutputEnabled(
+        it != m_commandsById.constEnd() && it->formattedOutput);
+    // Render Markdown (Command::renderMarkdown) — mesmo padrão POR COMANDO
+    // do formattedOutput acima, não uma preferência de exibição global.
+    m_terminalDrawer->setMarkdownOutputEnabled(
+        it != m_commandsById.constEnd() && it->renderMarkdown);
 
     m_terminalDrawer->setCommandName(displayName);
     // (removido) linha "[Saída conectada ao comando X]": boilerplate — o nome do
@@ -1452,14 +1580,31 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // já estava na tela, dobrando a saída. A ordem é sempre limpar (topo) ->
     // reinjetar o histórico -> receber os chunks novos ao vivo.
     m_terminalDrawer->appendRawText(m_commandLogs.value(commandId), false);
+    // FLUSH SÍNCRONO: appendRawText só ENFILEIRA (coalescing de 16ms
+    // pensado para chunks de streaming ao vivo, não para o replay do
+    // histórico ao reconectar). Bug relatado: comandos em modo Markdown
+    // às vezes carregavam vazios (no boot ou ao trocar de aba) — a
+    // reconexão seguinte (ex.: showEvent() reselecionando o primeiro item
+    // visível, 0ms) podia rodar clear() ANTES do timer de 16ms disparar,
+    // apagando o histórico enfileirado sem nada disparar de novo
+    // (reselecionar o MESMO item não reemite currentItemChanged). Forçar o
+    // flush aqui garante que o conteúdo já esteja no widget de saída antes
+    // de qualquer reconexão subsequente ter chance de limpar de novo.
+    m_terminalDrawer->flushPendingOutput();
     if (isInteractive) {
         m_terminalDrawer->resetInteractiveAndReplay(m_commandLogs.value(commandId));
     }
 
-    // Botão "Ver JSON" reflete o log DESTE comando (feedback do usuário:
-    // qualquer log com JSON — não só HTTP — deve oferecer a árvore, e ao
-    // reselecionar um comando já executado o botão precisa reaparecer).
-    m_terminalDrawer->setJsonAvailable(m_commandLogs.value(commandId));
+    // Botão "Ver JSON" reflete o log DESTE comando — SÓ para HTTP (pedido do
+    // usuário, revertendo uma versão anterior que detectava JSON em
+    // QUALQUER log de shell: "quero apenas para cmds http" — a Saída
+    // Formatada já cobre o caso de logs de shell estruturados, então a
+    // detecção automática por conteúdo virou ruído/falso positivo ali).
+    if (it != m_commandsById.constEnd() && it->type == core::CommandType::Http) {
+        m_terminalDrawer->setJsonAvailable(m_commandLogs.value(commandId));
+    } else {
+        m_terminalDrawer->setJsonAvailable(QString());
+    }
 
     // Reaplica o resultado HTTP estruturado (se houver) para RESTAURAR as
     // abas Headers/JSON ao reselecionar um comando HTTP já executado — antes
@@ -1690,6 +1835,10 @@ void MainWindow::applyAppearanceSettings()
     if (m_sideActionsContainer) {
         m_sideActionsContainer->refreshStyle();
     }
+
+    if (m_commandTree) {
+        m_commandTree->setTreeConnectorStyle(st.treeConnectorStyle, QColor(utils::tokens::accent()));
+    }
 }
 
 bool MainWindow::isCommandRunning(const QString &commandId) const
@@ -1748,20 +1897,22 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     // layout (feedback do usuário), mas o conteúdo ainda é
     // contextual. Selecionar um comando com histórico de log ou em
     // execução (background) reconecta e exibe o log automaticamente;
-    // selecionar uma pasta ou nada reconectado apenas limpa o conteúdo e
-    // volta ao estado Idle, sem esconder o widget.
+    // selecionar uma pasta ou nada SEMPRE limpa o conteúdo e volta ao
+    // estado Idle, sem esconder o widget — mesmo que o comando antes
+    // conectado ainda esteja rodando em background (bug reportado: "ao
+    // selecionar uma PASTA, e se um cmd está rodando dentro dela, o
+    // sistema exibe o cmd rodando, não quero isso" — antes só limpava
+    // quando o comando conectado NÃO estava mais rodando, então uma
+    // pasta selecionada continuava mostrando a saída de um comando ativo
+    // por baixo dela).
     if (itemId.isEmpty() || isFolder) {
-        if (m_connectedTerminalCommandId.isEmpty()
-            || !(m_processManager->isTracked(m_connectedTerminalCommandId)
-                 && m_processManager->statusOf(m_connectedTerminalCommandId) == engine::ProcessStatus::Running)) {
-            m_terminalDrawer->clear();
-            m_terminalDrawer->setCommandName(QString());
-            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
-            m_terminalDrawer->setInputEnabled(false);
-            m_terminalDrawer->setInteractiveMode(false);
-            m_terminalDrawer->setStdoutTabVisible(true);
-            m_connectedTerminalCommandId.clear();
-        }
+        m_terminalDrawer->clear();
+        m_terminalDrawer->setCommandName(QString());
+        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
+        m_terminalDrawer->setInputEnabled(false);
+        m_terminalDrawer->setInteractiveMode(false);
+        m_terminalDrawer->setStdoutTabVisible(true);
+        m_connectedTerminalCommandId.clear();
         return;
     }
 
@@ -1779,12 +1930,34 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
         // Comando sem histórico ainda: limpa o conteúdo em vez de forçar
         // exibição de um log vazio, evitando ruído visual para comandos
         // nunca executados. A caixa continua visível, apenas ociosa.
+        //
+        // BUG REAL CORRIGIDO ("saída formatada... traz a saída do comando
+        // pro cara errado"): este ramo limpava a tela mas NUNCA atualizava
+        // m_connectedTerminalCommandId — ficava apontando pro comando
+        // selecionado ANTES. Selecionar um comando B sem histórico ainda,
+        // vindo de um comando A conectado, deixava o backend pensando que
+        // A continuava conectado; um chunk de log NOVO de A (ainda rodando
+        // em background) então aparecia na tela sob o cabeçalho/seleção de
+        // B — e um chunk de B era descartado (o guard "!=
+        // m_connectedTerminalCommandId" no handler de log via commandId
+        // ainda achava que A era o conectado). Alinhar o id conectado (e
+        // o toggle de Saída Formatada, por-comando) aqui, mesmo sem
+        // histórico ainda, fecha a lacuna.
+        m_connectedTerminalCommandId = itemId;
+        m_terminalDrawer->setCurrentCommandId(itemId);
         m_terminalDrawer->clear();
         m_terminalDrawer->setCommandName(QString());
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
         m_terminalDrawer->setInputEnabled(false);
         m_terminalDrawer->setInteractiveMode(false);
         m_terminalDrawer->setStdoutTabVisible(true);
+        {
+            bool formattedOutput = false;
+            for (const core::Command &c : m_commandsData.commands) {
+                if (c.id == itemId) { formattedOutput = c.formattedOutput; break; }
+            }
+            m_terminalDrawer->setFormattedOutputEnabled(formattedOutput);
+        }
     }
 }
 
@@ -2171,32 +2344,64 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
         // de valores de TODAS as entradas escolhidas em {{param.campo__all}}
         // (separados por vírgula), útil para multi-seleção.
         const QStringList chosenIds = chosenRaw.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        QVector<const core::CollectionEntry *> chosenEntries;
+        // CÓPIAS por valor, não ponteiros pra dentro de colIt->entries
+        // (endurecimento defensivo: um ponteiro cru sobrevivendo além deste
+        // laço é uma UB à espreita se m_collections for tocado por
+        // qualquer motivo entre a busca e o uso — ex.: um favorito marcado
+        // há pouco tempo disparando algum caminho de persistência/replace
+        // no meio do caminho. Elimina a classe de bug inteira ao custo de
+        // uma cópia pequena por entrada escolhida).
+        QVector<core::CollectionEntry> chosenEntries;
         for (const QString &id : chosenIds) {
             const auto entryIt = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
                 [&id](const core::CollectionEntry &e) { return e.id == id; });
             if (entryIt != colIt->entries.constEnd()) {
-                chosenEntries << &(*entryIt);
+                chosenEntries << *entryIt;
             }
         }
         if (chosenEntries.isEmpty()) {
             continue;
         }
         // Primeira entrada -> {{param.campo}}.
-        const core::CollectionEntry *first = chosenEntries.first();
-        for (auto vit = first->values.constBegin(); vit != first->values.constEnd(); ++vit) {
+        const core::CollectionEntry &first = chosenEntries.first();
+        for (auto vit = first.values.constBegin(); vit != first.values.constEnd(); ++vit) {
             expandedParams.insert(QStringLiteral("%1.%2").arg(param.name, vit.key()), vit.value());
         }
-        // Todas -> {{param.campo__all}} (CSV) quando houver mais de uma.
-        if (chosenEntries.size() > 1) {
-            for (const core::CollectionField &f : colIt->schema) {
-                QStringList allVals;
-                for (const core::CollectionEntry *e : chosenEntries) {
-                    allVals << e->values.value(f.name);
-                }
-                expandedParams.insert(QStringLiteral("%1.%2__all").arg(param.name, f.name),
-                                      allVals.join(QLatin1Char(',')));
+        // Todas -> {{param.campo__all}} (CSV) — SEMPRE, mesmo com só 1
+        // entrada escolhida (bug real reportado: só era gerado com >1,
+        // então um comando usando "{{param.campo__all}}" ficava com o
+        // placeholder literal, sem substituir NADA, sempre que o usuário
+        // marcava uma única entrada — inconsistente com o multi-select de
+        // opções fixas, cujo "__labels" já era sempre gerado independente
+        // da contagem).
+        // Rótulo da entrada (pedido do usuário: "vou precisar ainda que
+        // injete o nome os rótulos tbm.. ambientes.value__label e
+        // ambientes.value__label__all") — o texto de EXIBIÇÃO da entrada
+        // (collectionDisplayField, com o mesmo fallback pro 1º campo do
+        // schema já usado no picker), à parte do valor cru do campo.
+        // Replicado por campo (não só uma chave "param__label" solta) pra
+        // bater exatamente com o padrão de nomenclatura já usado pelo
+        // usuário no dia a dia ("param.campo__sufixo").
+        const QString displayField = !param.collectionDisplayField.isEmpty()
+            ? param.collectionDisplayField
+            : (!colIt->schema.isEmpty() ? colIt->schema.first().name : QString());
+        const QString firstLabel = displayField.isEmpty() ? QString() : first.values.value(displayField);
+        QStringList allLabels;
+        if (!displayField.isEmpty()) {
+            for (const core::CollectionEntry &e : chosenEntries) {
+                allLabels << e.values.value(displayField);
             }
+        }
+        for (const core::CollectionField &f : colIt->schema) {
+            QStringList allVals;
+            for (const core::CollectionEntry &e : chosenEntries) {
+                allVals << e.values.value(f.name);
+            }
+            expandedParams.insert(QStringLiteral("%1.%2__all").arg(param.name, f.name),
+                                  allVals.join(QLatin1Char(',')));
+            expandedParams.insert(QStringLiteral("%1.%2__label").arg(param.name, f.name), firstLabel);
+            expandedParams.insert(QStringLiteral("%1.%2__label__all").arg(param.name, f.name),
+                                  allLabels.join(QLatin1Char(',')));
         }
     }
     m_envManager.setParamVars(expandedParams);
@@ -2208,6 +2413,9 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // "Rodando", com o nome do comando no título.
     m_connectedTerminalCommandId = command.id;
     m_commandLogs[command.id].clear();
+    // "Abrir último link" para TERMINAL INTERATIVO (ver handlePipelineLog):
+    // reseta a marca de "já abriu nesta execução" a cada novo run.
+    m_openedLastLinkForRun.remove(command.id);
     // Rastreia o comando de execução única ativo (shell rodando via
     // pipeline, não background) para marcá-lo como "rodando" na árvore,
     // permitir matá-lo e reconectar o stdin (bugs reportados). Só shell
@@ -2217,6 +2425,15 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // hooks e a outros comandos rodando). Limpo só no pipelineFinished.
     if (command.type == core::CommandType::Shell) {
         m_pipelineRunningIds.insert(command.id);
+        // Bug real reportado: "ao re-rodar um comando via double click ou
+        // enter, esse tempo não reseta" — CommandTreeWidget::
+        // setRunningCommandIds só reinicia o cronômetro visual de um id
+        // quando o poll periódico o vê AUSENTE antes de reaparecer; um
+        // re-disparo rápido o bastante nunca passa por esse "ausente"
+        // intermediário. Reset explícito e síncrono aqui, no instante real
+        // em que a execução começa (mesma condição de tipo que alimenta
+        // m_pipelineRunningIds — é o que popula o cronômetro visual).
+        m_commandTree->resetRunTimer(command.id);
     }
     // Marca o início desta execução para registrar a duração no histórico.
     m_runStartedAt = QDateTime::currentDateTime();
@@ -2237,6 +2454,7 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // "Saída" não faz sentido pra HTTP (feedback do usuário: "ela não é
     // útil" — HTTP já tem Resposta/Requisição/Headers).
     m_terminalDrawer->setStdoutTabVisible(command.type != core::CommandType::Http);
+    m_terminalDrawer->setFormattedOutputEnabled(command.formattedOutput);
     m_terminalDrawer->setInteractiveAcceptingInput(command.type == core::CommandType::Shell);
     m_terminalDrawer->setCommandName(command.name);
     m_terminalDrawer->setExecutionStatus(ExecutionStatus::Running);
@@ -2281,6 +2499,31 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
 {
     appendToCommandLog(commandId, text);
 
+    // "Abrir último link" para TERMINAL INTERATIVO (ver comentário do
+    // membro m_openedLastLinkForRun no header) — checa a cada chunk em vez
+    // de esperar o pipeline terminar, já que um servidor de dev interativo
+    // tipicamente nunca "termina com sucesso" (o usuário para manualmente).
+    // Abre a PRIMEIRA URL vista nesta execução, não a última — pro caso de
+    // uso real (URL impressa uma vez no início), "última" não faz sentido
+    // pra um processo que nunca acaba de imprimir coisas.
+    if (!m_openedLastLinkForRun.contains(commandId)) {
+        const auto cmdIt = m_commandsById.constFind(commandId);
+        if (cmdIt != m_commandsById.constEnd() && cmdIt->interactiveTerminal && cmdIt->openLastLink) {
+            // Varre o log ACUMULADO (não só este chunk) - uma URL longa
+            // pode ter sido cortada bem na fronteira entre dois chunks de
+            // saída.
+            static const QRegularExpression interactiveUrlRe(QStringLiteral("https?://[^\\s\"'<>\\])}]+"));
+            const QRegularExpressionMatch m = interactiveUrlRe.match(m_commandLogs.value(commandId));
+            if (m.hasMatch()) {
+                const QString url = m.captured(0);
+                m_openedLastLinkForRun.insert(commandId);
+                utils::Logger::info(kLogTag,
+                    QStringLiteral("Abrindo link impresso por '%1' (terminal interativo): %2").arg(commandId, url));
+                QDesktopServices::openUrl(QUrl(url));
+            }
+        }
+    }
+
     // JANELA DESTACADA: é um monitor FIXO do comando pelo qual foi
     // destacada. Recebe a saída DESSE comando mesmo que outro esteja
     // selecionado (bug reportado: ela espelhava o comando selecionado).
@@ -2291,8 +2534,14 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
 
     // Terminal por-comando: só ecoa no Terminal Drawer visível se este for
     // o comando atualmente conectado (ou se nenhum estiver conectado
-    // ainda, conecta automaticamente ao primeiro log recebido).
-    if (m_connectedTerminalCommandId.isEmpty()) {
+    // ainda E a seleção atual não é uma pasta, conecta automaticamente ao
+    // primeiro log recebido). Sem o segundo checagem, uma PASTA
+    // selecionada (que limpa m_connectedTerminalCommandId ao ser
+    // selecionada) reconectava sozinha assim que qualquer comando em
+    // background produzisse output novo — bug reportado: "ao selecionar
+    // uma PASTA, e se um cmd está rodando dentro dela, o sistema exibe o
+    // cmd rodando, não quero isso".
+    if (m_connectedTerminalCommandId.isEmpty() && !m_commandTree->currentSelectionIsFolder()) {
         m_connectedTerminalCommandId = commandId;
     m_terminalDrawer->setCurrentCommandId(commandId);
     // Prompt "user@<caminho>": mostra o diretório de execução do comando
@@ -2475,14 +2724,15 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
     updateRunningCommandStatus();
 
     // Botão "Ver JSON" (árvore navegável) SOB DEMANDA no cabeçalho da
-    // saída. Feedback do usuário: NÃO deve se limitar a respostas HTTP —
-    // QUALQUER comando cujo log contenha JSON (ex: um shell "testeeee" que
-    // dá echo num JSON no stdout) deve oferecer a visualização em árvore.
+    // saída — SÓ para HTTP (pedido do usuário, revertendo uma versão
+    // anterior que detectava JSON em QUALQUER log de shell: "quero apenas
+    // para cmds http" — a Saída Formatada cobre logs de shell estruturados
+    // agora, a detecção por conteúdo virou falso positivo/ruído ali).
     // Passamos o log acumulado do comando; setJsonAvailable detecta se há
     // JSON (e o JsonViewerWidget extrai o bloco balanceado do texto misto),
     // escondendo o botão quando não houver JSON algum. Vale para sucesso e
     // erro (ex: 400 com {"message": "..."}).
-    if (!m_connectedTerminalCommandId.isEmpty()) {
+    if (m_activePipelineIsHttp && !m_connectedTerminalCommandId.isEmpty()) {
         m_terminalDrawer->setJsonAvailable(m_commandLogs.value(m_connectedTerminalCommandId));
     } else {
         m_terminalDrawer->setJsonAvailable(QString());
@@ -2588,6 +2838,21 @@ void MainWindow::handleTerminalSizeChanged(int rows, int cols)
         return;
     }
     r->resizePty(rows, cols);
+}
+
+void MainWindow::handleFirstErrorInFormattedOutput()
+{
+    // Setting opt-in, default OFF (pedido do usuário: "pode adicionar uma
+    // configuração que caso ocorra um erro do tipo ERROR em view formatada
+    // ele notifica? só a primeira vez, muitas vezes pode dar spam") — a
+    // trava do "só a primeira vez por execução" já foi aplicada em
+    // OutputPanel antes de emitir este sinal; maybeShowNotification só
+    // decide SE o toggle está ligado e se deve realmente mostrar o toast.
+    const auto it = m_commandsById.constFind(m_connectedTerminalCommandId);
+    const QString commandName = it != m_commandsById.constEnd() ? it->name : m_connectedTerminalCommandId;
+    maybeShowNotification(NotificationEvent::FirstErrorInFormattedOutput,
+        utils::tr(QStringLiteral("notification.first_error_in_formatted_output.title")),
+        utils::tr(QStringLiteral("notification.first_error_in_formatted_output.body")).arg(commandName));
 }
 
 void MainWindow::handleBackgroundProcessStarted(const QString &commandId, engine::ProcessRunner *runner)
@@ -2763,17 +3028,17 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     m_failedCommandIds.remove(commandId);
     updateRunningCommandStatus();
 
-    // Stop só encerra e limpa a Saída (feedback do usuário: "o
-    // comando de stop deve só parar o comando e resetar a saída") — não
-    // reinicia a execução, diferente do botão de Reset. Só limpa se a
-    // Saída estiver conectada a este comando específico.
+    // Stop encerra o processo e desabilita a entrada, mas PRESERVA a Saída
+    // já produzida (bug reportado: "para o comando todo e caga a saída, some
+    // os logs" — apagar o log de um comando que acabou de ser interrompido
+    // destrói justamente a informação que o usuário quer ver: o que rodou
+    // até a interrupção). Só mexe se a Saída estiver conectada a este
+    // comando específico; o log em si só é limpo no INÍCIO da PRÓXIMA
+    // execução (ver runCommandWithParams), nunca aqui.
     if (m_connectedTerminalCommandId == commandId) {
-        m_terminalDrawer->clear();
-        m_terminalDrawer->setCommandName(QString());
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
         m_terminalDrawer->setInputEnabled(false);
         m_terminalDrawer->setInteractiveMode(false);
-        m_connectedTerminalCommandId.clear();
     }
 }
 
@@ -2927,13 +3192,34 @@ void MainWindow::handleTreeStructureChanged(const QVector<TreeNodePlacement> &pl
     }
 }
 
-void MainWindow::handleImportProjectRequested()
+// ENTRADA ÚNICA de importação (pedido do usuário: "só dois botões... um
+// jeito simplificado e mais fácil, porém completo, de importar, com
+// apenas um form") — substitui os 3 itens de menu antigos
+// (importProjectRequested/importOpenApiRequested/importConfigRequested).
+// ImportDialog só decide a FONTE (pasta de projeto vs arquivo) e, pra
+// arquivo, o TIPO exato por conteúdo; a partir daí delega pro fluxo
+// específico de sempre (mesma lógica, só a entrada mudou).
+void MainWindow::handleImportRequested()
 {
-    const QString directory = m_projectSelector->promptForDirectory(this);
-    if (directory.isEmpty()) {
+    ImportDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) {
         return;
     }
+    switch (dialog.kind()) {
+    case ImportDialog::Kind::Project:
+        importProjectFromDirectory(dialog.path());
+        break;
+    case ImportDialog::Kind::OpenApi:
+        importOpenApiFromFile(dialog.path());
+        break;
+    case ImportDialog::Kind::Config:
+        importConfigFromFile(dialog.path());
+        break;
+    }
+}
 
+void MainWindow::importProjectFromDirectory(const QString &directory)
+{
     // Confere/edita o path e escolhe o formato salvo como PROJECT_PATH
     // (pedido do usuário: sob WSL/WSLg o seletor nativo às vezes devolve um
     // path Windows mesmo para um projeto que roda dentro do WSL — ver
@@ -3020,23 +3306,35 @@ void MainWindow::handleImportProjectRequested()
     reloadCommandTree();
 }
 
-void MainWindow::handleImportConfigRequested()
+void MainWindow::importConfigFromFile(const QString &path)
 {
-    const QString path = QFileDialog::getOpenFileName(this,
-        utils::tr(QStringLiteral("importcfg.dialog_title")), QString(),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
-    }
-
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("importcfg.title")),
             utils::tr(QStringLiteral("importcfg.failed")).arg(file.errorString()));
         return;
     }
-    const QString jsonText = QString::fromUtf8(file.readAll());
+    QString jsonText = QString::fromUtf8(file.readAll());
     file.close();
+
+    // Suporte a YAML no import: se o arquivo escolhido é .yml/.yaml (ou, por
+    // segurança, se o conteúdo simplesmente não parece JSON), converte para
+    // JSON antes de entregar pro ConfigManager — que continua operando só
+    // com JSON internamente.
+    const QString lowerPath = path.toLower();
+    const bool isYamlExtension = lowerPath.endsWith(QStringLiteral(".yml"))
+        || lowerPath.endsWith(QStringLiteral(".yaml"));
+    if (isYamlExtension || !core::looksLikeJson(jsonText)) {
+        bool yamlOk = false;
+        QString yamlError;
+        const QString converted = core::yamlTextToJsonText(jsonText, &yamlOk, &yamlError);
+        if (!yamlOk) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("importcfg.title")),
+                utils::tr(QStringLiteral("importcfg.failed")).arg(yamlError));
+            return;
+        }
+        jsonText = converted;
+    }
 
     const core::ConfigManager::ImportResult result = core::ConfigManager::importFromJson(jsonText);
     if (!result.ok) {
@@ -3045,31 +3343,48 @@ void MainWindow::handleImportConfigRequested()
         return;
     }
 
+    // IMPORTAÇÃO SELETIVA: pergunta o que trazer, mostrando só as categorias
+    // que o arquivo realmente contém. Pedido do usuário: "quero pra
+    // importação o mesmo cenário [do export v2] (vou importar um projeto, e
+    // o kai detecta me pede se quero importar coleções, perfis, comandos,
+    // pastas e etc.)".
+    ImportSelectionDialog selectionDialog(result, this);
+    if (selectionDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const ImportSelectionDialog::Selection sel = selectionDialog.selection();
+
     // Merge por id: substitui itens existentes de mesmo id, adiciona os
     // novos (evita duplicatas ao reimportar). Import global também mescla
     // settings (env vars e terminal targets), sem sobrescrever tudo cegamente.
-    for (const core::Folder &f : result.folders) {
-        bool replaced = false;
-        for (core::Folder &existing : m_commandsData.folders) {
-            if (existing.id == f.id) { existing = f; replaced = true; break; }
+    int foldersImported = 0;
+    int commandsImported = 0;
+    if (sel.commands) {
+        for (const core::Folder &f : result.folders) {
+            bool replaced = false;
+            for (core::Folder &existing : m_commandsData.folders) {
+                if (existing.id == f.id) { existing = f; replaced = true; break; }
+            }
+            if (!replaced) {
+                m_commandsData.folders.append(f);
+            }
         }
-        if (!replaced) {
-            m_commandsData.folders.append(f);
+        foldersImported = result.folders.size();
+        for (const core::Command &c : result.commands) {
+            bool replaced = false;
+            for (core::Command &existing : m_commandsData.commands) {
+                if (existing.id == c.id) { existing = c; replaced = true; break; }
+            }
+            if (!replaced) {
+                m_commandsData.commands.append(c);
+            }
         }
-    }
-    for (const core::Command &c : result.commands) {
-        bool replaced = false;
-        for (core::Command &existing : m_commandsData.commands) {
-            if (existing.id == c.id) { existing = c; replaced = true; break; }
-        }
-        if (!replaced) {
-            m_commandsData.commands.append(c);
-        }
+        commandsImported = result.commands.size();
     }
 
     // COLEÇÕES: mesmo merge por id. A importação antiga ignorava coleções, então
     // um pacote exportado "completo" não voltava completo.
-    if (result.hasCollections) {
+    if (result.hasCollections && sel.collections) {
         for (const core::Collection &col : result.collections) {
             bool replaced = false;
             for (core::Collection &existing : m_collections) {
@@ -3095,19 +3410,110 @@ void MainWindow::handleImportConfigRequested()
         persistCollections();
     }
 
-    if (result.hasSettings) {
+    // ALVOS DE TERMINAL: TerminalProfile não tem id, só `name` — então "mesmo
+    // item" é decidido por CONTEÚDO (template/shell/pty/ícone), não pelo
+    // nome. Pedido do usuário: "exportando alvos de terminais, que terão que
+    // vir com nomes autogerados + nome original para permitir conflitos, se
+    // a config for igual a um dos atuais, não precisa trazer outro."
+    //   - conteúdo idêntico a um alvo já existente -> não duplica, apenas
+    //     remapeia referências (terminalTarget) pro nome já existente.
+    //   - nome em conflito mas conteúdo DIFERENTE -> importa com um nome
+    //     novo gerado automaticamente, preservando o alvo local intacto.
+    //   - sem conflito -> importa como veio.
+    // O remapeamento é necessário para comandos/pastas importados NO MESMO
+    // LOTE que apontavam pro nome antigo (terminalTarget é uma string solta,
+    // não uma referência por id).
+    QMap<QString, QString> terminalTargetRename;
+    if (result.hasTerminalProfiles && sel.terminalProfiles) {
         core::SettingsData settings = m_configManager.loadSettings();
-        for (auto it = result.settings.globalEnvVars.constBegin();
-             it != result.settings.globalEnvVars.constEnd(); ++it) {
-            settings.globalEnvVars[it.key()] = it.value();
+        auto sameContent = [](const core::TerminalProfile &a, const core::TerminalProfile &b) {
+            return a.commandTemplate == b.commandTemplate && a.shell == b.shell
+                && a.usePty == b.usePty && a.icon == b.icon;
+        };
+        QSet<QString> usedNames;
+        for (const core::TerminalProfile &existing : settings.terminalProfiles) {
+            usedNames.insert(existing.name);
         }
-        for (const core::TerminalProfile &t : result.settings.terminalProfiles) {
-            bool found = false;
-            for (core::TerminalProfile &existing : settings.terminalProfiles) {
-                if (existing.name == t.name) { existing = t; found = true; break; }
+        for (const core::TerminalProfile &incoming : result.settings.terminalProfiles) {
+            const core::TerminalProfile *identical = nullptr;
+            for (const core::TerminalProfile &existing : settings.terminalProfiles) {
+                if (sameContent(existing, incoming)) { identical = &existing; break; }
             }
-            if (!found) {
-                settings.terminalProfiles.append(t);
+            if (identical) {
+                if (identical->name != incoming.name) {
+                    terminalTargetRename[incoming.name] = identical->name;
+                }
+                continue;
+            }
+            const bool nameConflict = usedNames.contains(incoming.name);
+            core::TerminalProfile toAdd = incoming;
+            if (nameConflict) {
+                QString candidate = utils::tr(QStringLiteral("importcfg.terminal_target.renamed"))
+                    .arg(incoming.name);
+                int suffix = 2;
+                while (usedNames.contains(candidate)) {
+                    candidate = utils::tr(QStringLiteral("importcfg.terminal_target.renamed_n"))
+                        .arg(incoming.name).arg(suffix++);
+                }
+                toAdd.name = candidate;
+                toAdd.isDefault = false; // não rouba o alvo padrão local ao renomear
+                terminalTargetRename[incoming.name] = candidate;
+            }
+            usedNames.insert(toAdd.name);
+            settings.terminalProfiles.append(toAdd);
+        }
+        m_configManager.saveSettings(settings);
+    }
+
+    if (!terminalTargetRename.isEmpty() && sel.commands) {
+        // Reescreve terminalTarget SÓ nos itens que vieram DESTE import (por
+        // id), nunca nos que já existiam localmente — bug de revisão: antes
+        // isto rodava sobre m_commandsData.folders/.commands inteiro (local +
+        // importado), então um comando local que já usava "MyTerm" era
+        // silenciosamente desviado pro perfil importado "MyTerm (importado)"
+        // assim que houvesse um conflito de nome.
+        QSet<QString> importedFolderIds;
+        QSet<QString> importedCommandIds;
+        for (const core::Folder &f : result.folders) importedFolderIds.insert(f.id);
+        for (const core::Command &c : result.commands) importedCommandIds.insert(c.id);
+        for (core::Folder &f : m_commandsData.folders) {
+            if (!importedFolderIds.contains(f.id)) continue;
+            if (terminalTargetRename.contains(f.terminalTarget)) {
+                f.terminalTarget = terminalTargetRename.value(f.terminalTarget);
+            }
+        }
+        for (core::Command &c : m_commandsData.commands) {
+            if (!importedCommandIds.contains(c.id)) continue;
+            if (terminalTargetRename.contains(c.terminalTarget)) {
+                c.terminalTarget = terminalTargetRename.value(c.terminalTarget);
+            }
+        }
+    }
+
+    if ((result.hasSettings && sel.settings) || (result.hasEnvironments && sel.environments)) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        if (sel.settings) {
+            for (auto it = result.settings.globalEnvVars.constBegin();
+                 it != result.settings.globalEnvVars.constEnd(); ++it) {
+                settings.globalEnvVars[it.key()] = it.value();
+            }
+        }
+        // ENVIRONMENTS: bug de revisão — o checkbox existia no diálogo mas
+        // nada consumia `sel.environments`; os pacotes de ambiente do
+        // arquivo nunca eram de fato mesclados. Merge por id, mesma
+        // convenção usada pra pastas/comandos/coleções.
+        if (sel.environments) {
+            for (const core::Environment &e : result.settings.environments) {
+                bool replaced = false;
+                for (core::Environment &existing : settings.environments) {
+                    if (existing.id == e.id) { existing = e; replaced = true; break; }
+                }
+                if (!replaced) {
+                    settings.environments.append(e);
+                }
+            }
+            if (!result.settings.activeEnvironmentId.isEmpty()) {
+                settings.activeEnvironmentId = result.settings.activeEnvironmentId;
             }
         }
         m_configManager.saveSettings(settings);
@@ -3118,17 +3524,11 @@ void MainWindow::handleImportConfigRequested()
 
     QMessageBox::information(this, utils::tr(QStringLiteral("importcfg.title")),
         utils::tr(QStringLiteral("importcfg.done"))
-            .arg(result.folders.size()).arg(result.commands.size()));
+            .arg(foldersImported).arg(commandsImported));
 }
 
-void MainWindow::handleImportOpenApiRequested()
+void MainWindow::importOpenApiFromFile(const QString &path)
 {
-    const QString path = QFileDialog::getOpenFileName(this,
-        utils::tr(QStringLiteral("menu.file.import_openapi")),
-        QString(), QStringLiteral("OpenAPI/JSON (*.json);;Todos (*.*)"));
-    if (path.isEmpty()) {
-        return;
-    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("openapi.title")),
@@ -3182,74 +3582,108 @@ void MainWindow::handleImportOpenApiRequested()
         utils::tr(QStringLiteral("openapi.done")).arg(created).arg(parsed.apiTitle));
 }
 
-void MainWindow::handleExportGlobalRequested()
+void MainWindow::handleExportRequested()
 {
-    // EXPORTAÇÃO SELETIVA: primeiro O QUE exportar, depois ONDE salvar — assim o
-    // usuário não escolhe o arquivo para só então descobrir as opções. Antes ia
-    // "tudo", que na prática deixava as coleções de fora: o backup nunca era
-    // realmente completo.
-    ExportSelectionDialog selectionDialog(this);
-    if (selectionDialog.exec() != QDialog::Accepted) {
-        return;
+    // MENU ÚNICO (pedido do usuário: "queria um menu unificado para
+    // exportação, não 3 (ele deixa eu escolher o modo)") — Global sempre
+    // disponível; Pasta/Comando usam um SELETOR GLOBAL sobre TODAS as
+    // pastas/comandos do app (pedido do usuário, com foto: "esse setor de
+    // pastas é meio ruim, deveria ser o seletor global disponível no
+    // sistema com um todo" — antes só oferecia a pasta/comando que já
+    // estivesse selecionado na árvore no momento de abrir a tela).
+    QVector<ExportDialog::TargetChoice> folderChoices;
+    for (const core::Folder &f : foldersInTreeOrder(m_commandsData.folders)) {
+        folderChoices << ExportDialog::TargetChoice{f.id, folderComboLabel(m_commandsData.folders, f.id)};
     }
-    const core::ConfigManager::ExportSelection selection = selectionDialog.selection();
 
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-config.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
+    // Comandos: mesma ideia de folderComboLabel, mas pra Command — nome +
+    // caminho da pasta como hint entre parênteses (vazio pra comando na
+    // raiz, sem ancestral nenhum).
+    QVector<ExportDialog::TargetChoice> commandChoices;
+    for (const core::Command &c : m_commandsData.commands) {
+        const QStringList pathSegments = folderPathSegments(m_commandsData.folders, c.folderId);
+        const QString label = pathSegments.isEmpty()
+            ? c.name
+            : QStringLiteral("%1   (%2)").arg(c.name, pathSegments.join(QStringLiteral(" / ")));
+        commandChoices << ExportDialog::TargetChoice{c.id, label};
     }
-    const QString json = core::ConfigManager::exportSelective(
-        selection, m_configManager.loadSettings(), m_commandsData, m_collections);
-    writeExportFile(path, json);
-}
 
-void MainWindow::handleExportFolderRequested()
-{
-    const QString selectedId = m_commandTree->currentSelectionId();
-    const bool isFolder = m_commandTree->currentSelectionIsFolder();
-    const QString folderId = isFolder ? selectedId : m_commandTree->currentRootFolderId();
-    if (folderId.isEmpty()) {
-        QMessageBox::information(this, utils::tr(QStringLiteral("export.title")),
-            utils::tr(QStringLiteral("export.no_selection")));
+    const QVector<core::TerminalProfile> availableProfiles = m_configManager.loadSettings().terminalProfiles;
+    ExportDialog dlg(folderChoices, commandChoices, availableProfiles,
+        [this](const QString &folderId) { return linkedCollectionsForFolder(folderId); },
+        [this](const QString &commandId) { return linkedCollectionsForCommand(commandId); },
+        this);
+    if (dlg.exec() != QDialog::Accepted) {
         return;
     }
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-folder.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
-    }
-    writeExportFile(path, core::ConfigManager::exportFolder(folderId, m_commandsData));
-}
 
-void MainWindow::handleExportCommandRequested()
-{
-    const QString selectedId = m_commandTree->currentSelectionId();
-    if (selectedId.isEmpty() || m_commandTree->currentSelectionIsFolder()) {
-        QMessageBox::information(this, utils::tr(QStringLiteral("export.title")),
-            utils::tr(QStringLiteral("export.no_selection")));
-        return;
+    const QString format = dlg.selectedFormat();
+    const QString filter = format == QStringLiteral("yml")
+        ? utils::tr(QStringLiteral("importcfg.filter.yaml_only"))
+        : utils::tr(QStringLiteral("importcfg.filter.json_only"));
+
+    switch (dlg.selectedScope()) {
+    case ExportDialog::Scope::Global: {
+        const QString suggestedName = QStringLiteral("kai-config.%1").arg(format);
+        const QString path = QFileDialog::getSaveFileName(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        const QString json = core::ConfigManager::exportSelective(
+            dlg.globalSelection(), m_configManager.loadSettings(), m_commandsData, m_collections,
+            dlg.leanExport());
+        writeExportFile(path, json);
+        break;
     }
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-command.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
+    case ExportDialog::Scope::Folder: {
+        const QString suggestedName = QStringLiteral("kai-folder.%1").arg(format);
+        const QString path = QFileDialog::getSaveFileName(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        writeExportFile(path, core::ConfigManager::exportFolder(
+            dlg.selectedTargetId(), m_commandsData, dlg.selectedCollections(), dlg.selectedTerminalProfiles(),
+            dlg.leanExport()));
+        break;
     }
-    writeExportFile(path, core::ConfigManager::exportCommand(selectedId, m_commandsData));
+    case ExportDialog::Scope::Command: {
+        const QString suggestedName = QStringLiteral("kai-command.%1").arg(format);
+        const QString path = QFileDialog::getSaveFileName(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        writeExportFile(path, core::ConfigManager::exportCommand(
+            dlg.selectedTargetId(), m_commandsData, dlg.selectedCollections(), dlg.selectedTerminalProfiles(),
+            dlg.leanExport()));
+        break;
+    }
+    }
 }
 
 void MainWindow::writeExportFile(const QString &path, const QString &content)
 {
+    // Suporte a YAML no export: se o usuário escolheu salvar como .yml/.yaml,
+    // converte o JSON já gerado pelo ConfigManager para YAML antes de
+    // escrever — o ConfigManager continua produzindo só JSON internamente.
+    QString finalContent = content;
+    const QString lowerPath = path.toLower();
+    if (lowerPath.endsWith(QStringLiteral(".yml")) || lowerPath.endsWith(QStringLiteral(".yaml"))) {
+        const QString yaml = core::jsonTextToYamlText(content);
+        if (!yaml.isEmpty()) {
+            finalContent = yaml;
+        }
+    }
+
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("export.title")),
             utils::tr(QStringLiteral("export.save_failed")));
         return;
     }
-    file.write(content.toUtf8());
+    file.write(finalContent.toUtf8());
     if (!file.commit()) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("export.title")),
             utils::tr(QStringLiteral("export.save_failed")));
@@ -3364,6 +3798,93 @@ QString MainWindow::uniqueFolderId(const QString &candidate) const
         QStringLiteral("ID de pasta '%1' já existe; usando '%2' para evitar colisão.")
             .arg(candidate, unique));
     return unique;
+}
+
+QVector<QString> MainWindow::folderSubtreeIds(const QString &rootFolderId) const
+{
+    QVector<QString> ids = {rootFolderId};
+    QVector<QString> queue = {rootFolderId};
+    while (!queue.isEmpty()) {
+        const QString currentId = queue.takeFirst();
+        for (const core::Folder &f : m_commandsData.folders) {
+            if (f.parentId.has_value() && f.parentId.value() == currentId && !ids.contains(f.id)) {
+                ids << f.id;
+                queue << f.id;
+            }
+        }
+    }
+    return ids;
+}
+
+QVector<core::Collection> MainWindow::linkedCollectionsForFolder(const QString &folderId) const
+{
+    const QVector<QString> subtreeIds = folderSubtreeIds(folderId);
+    QSet<QString> collectionIds;
+    QVector<core::Collection> result;
+    auto addIfNew = [&](const core::Collection &col) {
+        if (!collectionIds.contains(col.id)) {
+            collectionIds.insert(col.id);
+            result.append(col);
+        }
+    };
+    // (1) Fisicamente guardada dentro da subárvore.
+    for (const core::Collection &col : m_collections) {
+        if (subtreeIds.contains(col.folderId)) {
+            addIfNew(col);
+        }
+    }
+    // (2) Referenciada por um parâmetro Select de algum comando da subárvore.
+    for (const core::Command &c : m_commandsData.commands) {
+        if (!subtreeIds.contains(c.folderId)) {
+            continue;
+        }
+        for (const core::Parameter &p : c.params) {
+            if (p.collectionId.isEmpty()) {
+                continue;
+            }
+            const auto it = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
+                [&p](const core::Collection &col) { return col.id == p.collectionId; });
+            if (it != m_collections.constEnd()) {
+                addIfNew(*it);
+            }
+        }
+    }
+    return result;
+}
+
+QVector<core::Collection> MainWindow::linkedCollectionsForCommand(const QString &commandId) const
+{
+    QSet<QString> collectionIds;
+    QVector<core::Collection> result;
+    auto addIfNew = [&](const core::Collection &col) {
+        if (!collectionIds.contains(col.id)) {
+            collectionIds.insert(col.id);
+            result.append(col);
+        }
+    };
+    const auto cmdIt = m_commandsById.constFind(commandId);
+    if (cmdIt == m_commandsById.constEnd()) {
+        return result;
+    }
+    // (1) Fisicamente guardada na MESMA pasta direta do comando (um
+    // comando não tem "descendentes", então não há subárvore aqui).
+    for (const core::Collection &col : m_collections) {
+        if (col.folderId == cmdIt->folderId) {
+            addIfNew(col);
+        }
+    }
+    // (2) Referenciada por um parâmetro Select do próprio comando.
+    for (const core::Parameter &p : cmdIt->params) {
+        if (p.collectionId.isEmpty()) {
+            continue;
+        }
+        const auto it = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
+            [&p](const core::Collection &col) { return col.id == p.collectionId; });
+        if (it != m_collections.constEnd()) {
+            addIfNew(*it);
+        }
+    }
+    return result;
 }
 
 void MainWindow::handleNewFolderRequested()
@@ -4163,6 +4684,7 @@ void MainWindow::handleSettingsRequested()
             utils::tr(QStringLiteral("mainwindow.settings.save_failed")));
         return;
     }
+    m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
 
     // As variáveis globais NÃO são mais editadas aqui — vêm do environment
     // (pacote) ativo, gerido pela tela de Environments. Não reaplicamos
@@ -4179,6 +4701,7 @@ void MainWindow::handleSettingsRequested()
     // Aparência (densidade/cantos/efeitos): aplica NA HORA, sem reiniciar.
     if (newSettings.uiDensity != currentSettings.uiDensity
         || newSettings.uiCornerStyle != currentSettings.uiCornerStyle
+        || newSettings.treeConnectorStyle != currentSettings.treeConnectorStyle
         || newSettings.fxShadows != currentSettings.fxShadows
         || newSettings.fxTranslucency != currentSettings.fxTranslucency
         || newSettings.fxBlur != currentSettings.fxBlur
@@ -4409,6 +4932,9 @@ void MainWindow::showAndRaise()
     show();
     raise();
     activateWindow();
+#if defined(Q_OS_WIN)
+    forceForegroundOnWindows(this);
+#endif
 }
 
 QStringList MainWindow::runningProcessLines()
@@ -4566,6 +5092,12 @@ void MainWindow::handleRunHistoryRequested()
     dialog.exec();
 }
 
+void MainWindow::handleNotificationHistoryRequested()
+{
+    NotificationHistoryDialog dialog(&m_notificationHistory, this);
+    dialog.exec();
+}
+
 void MainWindow::handleLogsRequested()
 {
     if (!m_logViewerDialog) {
@@ -4605,6 +5137,13 @@ void MainWindow::toggleVisibility()
         }
         raise();
         activateWindow();
+#if defined(Q_OS_WIN)
+        // Ver forceForegroundOnWindows: sem isto, um atalho GLOBAL
+        // (processo em segundo plano) frequentemente desminimiza a janela
+        // (o estado muda) mas o Windows recusa silenciosamente trazê-la
+        // pra frente/dar foco de teclado — bug real reportado.
+        forceForegroundOnWindows(this);
+#endif
     }
 }
 

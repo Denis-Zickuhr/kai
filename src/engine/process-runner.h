@@ -13,6 +13,18 @@ class QThread;
 
 namespace kai::engine {
 
+#if defined(Q_OS_WIN)
+// Mesma lógica de UNC do ProcessRunner (ver comentários na implementação em
+// process-runner.cpp), exposta pra ser reusada pelo cleanup hook em
+// ExecutionPipeline::runCleanupHooks — que roda um QProcess PRÓPRIO,
+// destacado, sem passar por ProcessRunner::start() (achado real: o cleanup
+// hook batia no MESMO travamento de UNC PATH, mas nenhuma dessas proteções
+// valia lá, porque é um caminho de código totalmente separado).
+bool isWindowsUncPath(const QString &path);
+QString wrapWindowsCommandForUncWorkingDir(const QString &command, const QString &workingDir);
+QString windowsSafeNonUncStartDir();
+#endif
+
 // Resultado final da execução de um ProcessRunner.
 struct ProcessResult {
     int exitCode = -1;

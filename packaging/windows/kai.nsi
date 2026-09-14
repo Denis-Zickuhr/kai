@@ -10,8 +10,12 @@
 !endif
 
 !define APPNAME "Kai"
-!define APPVERSION "1.0.0"
+!define APPVERSION "1.0.1"
 !define PUBLISHER "Kai"
+
+!include "LogicLib.nsh"
+!include "StrFunc.nsh"
+!include "WinMessages.nsh"
 
 Unicode true
 ; Compressão zlib (em vez de /SOLID lzma): o stub resultante é mais simples
@@ -26,6 +30,13 @@ SetCompressor /FINAL zlib
 ; ainda deve, idealmente, copiar o .exe para um caminho nativo do Windows.
 CRCCheck off
 
+; ${StrStr} (StrFunc.nsh) SÓ pode ser invocado DEPOIS de Unicode/
+; SetCompressor/CRCCheck — antes disso o NSIS ainda aceita mudar o charset
+; alvo, e a macro já gera código/dados na hora (erro real visto ao mover
+; pra cima: "Can't change target charset after data already got
+; compressed or header already changed!").
+${StrStr}
+
 Name "${APPNAME} ${APPVERSION}"
 OutFile "${KAIOUT}\kai-setup.exe"
 
@@ -33,10 +44,10 @@ OutFile "${KAIOUT}\kai-setup.exe"
 ; são um perfil clássico de falso positivo no Windows Defender (o stub é o
 ; mesmo usado por muito software indesejado, então a reputação do arquivo pesa).
 ; Declarar produto, versão, empresa e descrição reduz o escore heurístico.
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.0.1.0"
 VIAddVersionKey /LANG=1033 "ProductName"     "${APPNAME}"
-VIAddVersionKey /LANG=1033 "ProductVersion"  "1.0.0.0"
-VIAddVersionKey /LANG=1033 "FileVersion"     "1.0.0.0"
+VIAddVersionKey /LANG=1033 "ProductVersion"  "1.0.1.0"
+VIAddVersionKey /LANG=1033 "FileVersion"     "1.0.1.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Instalador do Kai - developer command runner"
 VIAddVersionKey /LANG=1033 "CompanyName"     "Kai"
 VIAddVersionKey /LANG=1033 "LegalCopyright"  "Copyright (C) 2026"
@@ -53,6 +64,35 @@ Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
+
+; DETECTA uma instalação já existente (pedido do usuário: "queria a
+; possibilidade que o setup soubesse reinstalar/atualizar o app") — antes
+; o instalador sempre corria em silêncio como se fosse a primeira vez;
+; rodar o setup por cima de uma instalação existente sobrescrevia os
+; arquivos sem avisar nada (funcionava, mas sem feedback nenhum de que
+; era uma ATUALIZAÇÃO, e sem chance de cancelar). InstallDirRegKey acima
+; já pré-preenche o diretório da instalação anterior na página seguinte;
+; aqui só adiciona a CONFIRMAÇÃO com a versão antiga/nova antes de chegar
+; lá, e reusa o mesmo InstallDir sem precisar redigitar.
+Function .onInit
+    ReadRegStr $0 HKCU "Software\${APPNAME}" "InstallDir"
+    ${If} $0 != ""
+        ReadRegStr $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion"
+        ${If} $1 == "${APPVERSION}"
+            MessageBox MB_YESNO|MB_ICONQUESTION \
+                "Kai ${APPVERSION} já está instalado em:$\r$\n$0$\r$\n$\r$\nDeseja reinstalar por cima da instalação atual?" \
+                IDYES oninit_proceed
+            Quit
+        ${Else}
+            MessageBox MB_YESNO|MB_ICONQUESTION \
+                "Kai $1 está instalado em:$\r$\n$0$\r$\n$\r$\nDeseja atualizar para a versão ${APPVERSION}?" \
+                IDYES oninit_proceed
+            Quit
+        ${EndIf}
+        oninit_proceed:
+        StrCpy $INSTDIR $0
+    ${EndIf}
+FunctionEnd
 
 Section "Install"
     ; Encerra qualquer instância do Kai já rodando ANTES de sobrescrever os
@@ -91,6 +131,29 @@ Section "Install"
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoModify" 1
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "NoRepair" 1
     WriteUninstaller "$INSTDIR\uninstall.exe"
+
+    ; Adiciona $INSTDIR ao PATH do USUÁRIO (pedido: "queria usar por linha
+    ; de comando"/"consigo rodar algo por linha de comando no term?") — sem
+    ; isto, `kai` só funcionava chamando o caminho completo do .exe. HKCU
+    ; (não HKLM): mesma política do resto do instalador, sem exigir admin.
+    ; StrStr evita duplicar a entrada numa reinstalação/atualização por
+    ; cima. WM_SETTINGCHANGE avisa o shell na hora — terminais NOVOS já
+    ; enxergam o PATH atualizado; os que já estavam abertos continuam com o
+    ; PATH antigo até reabrir (comportamento normal do Windows, não dá pra
+    ; contornar de fora do próprio processo do shell).
+    ReadRegStr $0 HKCU "Environment" "PATH"
+    ${If} $0 == ""
+        WriteRegExpandStr HKCU "Environment" "PATH" "$INSTDIR"
+    ${Else}
+        ; Delimitador nas DUAS pontas de ambos os lados — sem isto, uma
+        ; entrada no MEIO ou no INÍCIO do PATH passaria batido (StrStr só
+        ; acha substring literal, não segmento delimitado por ";").
+        ${StrStr} $1 ";$0;" ";$INSTDIR;"
+        ${If} $1 == ""
+            WriteRegExpandStr HKCU "Environment" "PATH" "$0;$INSTDIR"
+        ${EndIf}
+    ${EndIf}
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
 
 Section "Uninstall"

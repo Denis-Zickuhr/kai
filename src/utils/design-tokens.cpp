@@ -1,5 +1,7 @@
 #include "utils/design-tokens.h"
 
+#include <qmath.h>
+
 namespace kai::utils::tokens {
 namespace {
 
@@ -209,6 +211,48 @@ QString dangerBg()
     return derived(QStringLiteral("danger_bg"), [] { return QStringLiteral("#e81123"); });
 }
 
+// --- Gradiente dinâmico opcional (painel inicial) ---
+bool hasGradient()
+{
+    return !g_vars.value(QStringLiteral("gradient_start")).isEmpty()
+        && !g_vars.value(QStringLiteral("gradient_end")).isEmpty();
+}
+
+QString gradientStart()
+{
+    return value(QStringLiteral("gradient_start"), accent());
+}
+
+QString gradientEnd()
+{
+    return value(QStringLiteral("gradient_end"), surface2());
+}
+
+int gradientAngle()
+{
+    return intToken(QStringLiteral("gradient_angle"), 135);
+}
+
+QString gradientQss(const QString &property)
+{
+    if (!hasGradient()) {
+        return QString();
+    }
+    // Converte o ângulo (0°=esquerda->direita, 90°=cima->baixo, sentido
+    // horário, convenção CSS) num par de pontos x1/y1/x2/y2 normalizados
+    // [0,1] que o QSS do Qt usa (não entende "deg" diretamente).
+    const qreal rad = qDegreesToRadians(static_cast<qreal>(gradientAngle()));
+    const qreal dx = qSin(rad);
+    const qreal dy = -qCos(rad);
+    const qreal x1 = 0.5 - dx * 0.5, y1 = 0.5 - dy * 0.5;
+    const qreal x2 = 0.5 + dx * 0.5, y2 = 0.5 + dy * 0.5;
+    return QStringLiteral("%1: qlineargradient(x1:%2, y1:%3, x2:%4, y2:%5, "
+                          "stop:0 %6, stop:1 %7);")
+        .arg(property)
+        .arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3).arg(x2, 0, 'f', 3).arg(y2, 0, 'f', 3)
+        .arg(gradientStart(), gradientEnd());
+}
+
 // --- Métricas: o estilo de canto escolhido no Settings escala os raios ---
 int radiusSm()
 {
@@ -265,6 +309,31 @@ QString monoFamily()
     return value(QStringLiteral("mono_family"),
                  QStringLiteral("'JetBrains Mono','Cascadia Code','Fira Code',"
                                 "'Ubuntu Mono',Consolas,monospace"));
+}
+
+QStringList monoFamilies()
+{
+    QStringList families;
+    for (QString family : monoFamily().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        family = family.trimmed();
+        if (family.startsWith(QLatin1Char('\'')) && family.endsWith(QLatin1Char('\''))) {
+            family = family.mid(1, family.size() - 2);
+        }
+        if (!family.isEmpty()) {
+            families << family;
+        }
+    }
+    return families;
+}
+
+QFont monoFont(int pointSize)
+{
+    QFont f;
+    f.setFamilies(monoFamilies());
+    f.setStyleHint(QFont::Monospace);
+    f.setFixedPitch(true);
+    f.setPointSize(pointSize > 0 ? pointSize : fontSizePt());
+    return f;
 }
 
 int fontSizePt()      { return intToken(QStringLiteral("font_size"), 12) - (g_density == Density::Compact ? 1 : 0); }

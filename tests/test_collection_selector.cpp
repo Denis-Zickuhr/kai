@@ -4,7 +4,7 @@
 #include <QTableWidget>
 #include <QToolButton>
 
-#include "ui/collection-selector-dialog.h"
+#include "ui/features/collections/collection-selector-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;

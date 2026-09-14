@@ -183,6 +183,9 @@ private slots:
         // Exporta uma variável nova, como faria um comando de autenticação.
         preHook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
         preHook.captureEnv = true;
+        // Lista branca obrigatória (ver comentário no header/ingestCapturedEnv):
+        // sem declarar o nome, nada é capturado mais.
+        preHook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
 
         Command main;
         main.id = "main_cmd";
@@ -219,6 +222,216 @@ private slots:
 
         // O dump de ambiente (sentinela) não deve vazar para o log visível.
         QVERIFY(!combinedOutput.contains(QStringLiteral("__KAI_ENV_CAPTURE")));
+    }
+
+    // Bug real reportado: "testei a lógica de export variáveis... export
+    // TESTE=1 e não jogou a ENV pra saída". Causa: ingestCapturedEnv lia o
+    // escopo de variáveis dinâmicas AMBIENTE (EnvironmentManager::
+    // currentDynamicVarScope()) no callback `finished` do processo — se o
+    // usuário trocasse de comando/pasta selecionada ENQUANTO o processo
+    // ainda rodava, a variável capturada ia parar no escopo NOVO (errado),
+    // não no escopo de quando a execução começou. Este teste simula
+    // exatamente essa corrida: troca o escopo ambiente logo após disparar
+    // run(), antes do processo terminar.
+    void captureEnvUsesScopeFromWhenExecutionStartedNotWhenItFinishes()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Shell;
+        hook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
+        hook.captureEnv = true;
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Shell;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        env.setDynamicVarScope(QStringLiteral("project-A"));
+
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        // Simula o usuário trocando de comando/pasta ENQUANTO o hook ainda
+        // roda (o processo real leva um instante pra terminar) — isto é
+        // exatamente o que MainWindow::runSelectedCommand faz ao reselecionar
+        // outro item na árvore.
+        env.setDynamicVarScope(QStringLiteral("project-B"));
+
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        // A variável tem que estar no escopo de QUANDO A EXECUÇÃO COMEÇOU
+        // (project-A), não no escopo ambiente de quando o processo terminou
+        // (project-B) nem no Global.
+        env.setDynamicVarScope(QStringLiteral("project-A"));
+        QCOMPARE(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")), QStringLiteral("abc123xyz"));
+
+        env.setDynamicVarScope(QStringLiteral("project-B"));
+        QVERIFY(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")).isEmpty());
+
+        env.setDynamicVarScope(QString());
+        QVERIFY(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")).isEmpty());
+    }
+
+    // REGRESSÃO (bug real reportado: "testei a lógica de export variveis...
+    // export TESTE=1 e não jogou a ENV pra saída" - ainda quebrado DEPOIS do
+    // fix de sintaxe por sabor de shell, pedindo investigação de novo). Causa
+    // raiz #2: mais abaixo em run(), a resolução do alvo de terminal fazia
+    // `rawRunner->setUsePty(targetUsePty)` INCONDICIONALMENTE - mesmo com
+    // captureEnv=true, que umas linhas acima já tinha desligado o PTY DE
+    // PROPÓSITO (comentário: "o PTY ecoa o comando e converte quebras de
+    // linha, quebrando o parse"). Como QUALQUER alvo resolvido (o comando
+    // real do usuário usava "@parent", que sempre cai nalgum alvo/default) e
+    // a maioria dos alvos tem usePty=true, a captura ligava o PTY de volta
+    // silenciosamente toda vez que havia um alvo de terminal - exatamente o
+    // caso relatado. Este teste usa um alvo Posix com usePty=TRUE de
+    // propósito (o cenário que disparava o bug) e prova que a variável ainda
+    // é capturada.
+    void captureEnvStillWorksWhenResolvedTargetUsesPty()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Shell;
+        hook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
+        hook.captureEnv = true;
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
+        hook.terminalTarget = "PseudoPosixPty";
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Shell;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        TerminalProfile target;
+        target.name = "PseudoPosixPty";
+        target.shell = ShellFlavor::Posix;
+        target.usePty = true; // o caso que disparava o bug (a maioria dos alvos reais)
+        target.commandTemplate = "bash -lc {{command}}";
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setTerminalProfiles({target});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        QCOMPARE(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")), QStringLiteral("abc123xyz"));
+    }
+
+    // feat/REGRESSÃO (achado de segurança real, reportado pelo usuário:
+    // "exportar esta exportando automaticamente envs do OS, essas envs
+    // quebram o funcionamento se exportadas... preciso apenas exportar as
+    // envs ADVERSAS e incomuns"). "Export variables" agora é uma LISTA
+    // BRANCA: só nomes DECLARADOS no comando (Command::declaredEnvVars) são
+    // capturados, nunca mais "tudo que for novo no ambiente" (o
+    // comportamento antigo vazava env de sistema/distro/WSL imprevisível).
+    // Prova as duas pontas: (1) uma var declarada mas NÃO exportada pelo
+    // processo ainda vira uma variável dinâmica VAZIA (pedido explícito:
+    // "se não ficam vazias, até pra ajudar em debug" — não fica de fora
+    // silenciosamente); (2) uma var REALMENTE exportada pelo processo mas
+    // NÃO declarada no comando nunca é capturada, mesmo aparecendo no dump
+    // de ambiente.
+    void captureEnvOnlyCapturesDeclaredNamesAndBlanksUndeclaredOnes()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Shell;
+        // Exporta as DUAS: uma declarada (DECLARED_VAR) e uma NÃO declarada
+        // (UNDECLARED_VAR, que não deveria nunca aparecer capturada).
+        hook.command = "export DECLARED_VAR=yes; export UNDECLARED_VAR=leaked";
+        hook.captureEnv = true;
+        // NOT_SET_VAR: declarada mas o comando nunca exporta - deve virar
+        // dinâmica vazia, não ficar de fora.
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("DECLARED_VAR")}
+                              << DeclaredEnvVar{QStringLiteral("NOT_SET_VAR")};
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Shell;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        QCOMPARE(env.value(QStringLiteral("DECLARED_VAR")), QStringLiteral("yes"));
+        // allDynamicVars() (scope -> {var: valor}) prova EXISTÊNCIA de
+        // verdade, distinta de value() devolvendo "" tanto pra "existe mas
+        // vazia" quanto pra "nunca existiu" - a distinção que este teste
+        // precisa provar.
+        bool notSetVarExists = false;
+        bool undeclaredVarExists = false;
+        const auto allVars = env.allDynamicVars();
+        for (auto scopeIt = allVars.constBegin(); scopeIt != allVars.constEnd(); ++scopeIt) {
+            if (scopeIt.value().contains(QStringLiteral("NOT_SET_VAR"))) notSetVarExists = true;
+            if (scopeIt.value().contains(QStringLiteral("UNDECLARED_VAR"))) undeclaredVarExists = true;
+        }
+        // Declarada, nunca exportada -> existe, mas vazia (não "não encontrada").
+        QVERIFY(notSetVarExists);
+        QCOMPARE(env.value(QStringLiteral("NOT_SET_VAR")), QString());
+        // Exportada de verdade pelo processo, mas NÃO declarada -> nunca capturada.
+        QVERIFY(!undeclaredVarExists);
+    }
+
+    // Sem NENHUM nome declarado, captureEnv=true não deve capturar nada -
+    // "declarar é obrigatório", não um heurístico de melhor esforço.
+    void captureEnvWithNoDeclaredVarsCapturesNothing()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Shell;
+        hook.command = "export SOMETHING=value";
+        hook.captureEnv = true;
+        // declaredEnvVars deliberadamente vazio.
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Shell;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+
+        const auto allVars = env.allDynamicVars();
+        for (auto scopeIt = allVars.constBegin(); scopeIt != allVars.constEnd(); ++scopeIt) {
+            QVERIFY(!scopeIt.value().contains(QStringLiteral("SOMETHING")));
+        }
     }
 
     // Validação da task pre/post hooks (feedback do usuário: "hooks não
@@ -480,6 +693,41 @@ private slots:
         }
         QVERIFY2(combined.contains(QStringLiteral("export FOO='bar'")),
                  qPrintable(QStringLiteral("payload POSIX sem export -> [%1]").arg(combined)));
+    }
+
+    // REGRESSÃO (bug reportado: "testei a lógica de export variveis... export
+    // TESTE=1 e não jogou a ENV pra saída, mesmo jogando o comando pra
+    // shell... para shell normal ainda não vai"). wrapForEnvCapture() sempre
+    // gerou sintaxe POSIX (`echo '...'` + `env`) não importa o sabor real do
+    // shell que ia executar o hook - o mesmo bug já corrigido uma vez em
+    // buildTargetedCommand() (injeção de env), nunca aplicado aqui (extração
+    // de env). `env` não existe nem em cmd.exe nem em PowerShell, e aspas
+    // simples são literais em ambos (não delimitador de string) - a captura
+    // simplesmente nunca funcionava fora de um alvo Posix/WSL. Testado
+    // diretamente (método privado, ver friend em execution-pipeline.h) pois
+    // esta CI só tem bash - não dá pra provar via execução de ponta a ponta
+    // que `Get-ChildItem`/`set` são sintaxe válida de PowerShell/cmd.
+    void wrapForEnvCaptureUsesRightSyntaxPerShellFlavor()
+    {
+        ExecutionPipeline pipeline;
+
+        const QString posix = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::Posix);
+        QVERIFY2(posix.contains(QStringLiteral("\necho '")) && posix.endsWith(QStringLiteral("\nenv")),
+                 qPrintable(QStringLiteral("Posix errado -> [%1]").arg(posix)));
+
+        const QString cmd = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::Cmd);
+        QVERIFY2(cmd.endsWith(QStringLiteral("\nset")),
+                 qPrintable(QStringLiteral("Cmd sem 'set' -> [%1]").arg(cmd)));
+        QVERIFY2(!cmd.endsWith(QStringLiteral("\nenv")),
+                 "Cmd não deveria depender do `env` POSIX (não existe em cmd.exe)");
+        QVERIFY2(!cmd.contains(QLatin1Char('\'')),
+                 qPrintable(QStringLiteral("Cmd com aspas simples (literais em cmd.exe, não delimitador) -> [%1]").arg(cmd)));
+
+        const QString ps = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::PowerShell);
+        QVERIFY2(ps.contains(QStringLiteral("Get-ChildItem Env:")),
+                 qPrintable(QStringLiteral("PowerShell sem Get-ChildItem Env: -> [%1]").arg(ps)));
+        QVERIFY2(!ps.contains(QStringLiteral("\nenv")),
+                 "PowerShell não deveria depender do `env` POSIX (não existe em pwsh)");
     }
 
 

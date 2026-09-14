@@ -8,7 +8,9 @@ namespace {
 constexpr const char *kLogTag = "OutputResponder";
 }
 
-OutputResponderMatcher::OutputResponderMatcher(const QVector<core::OutputResponder> &responders)
+OutputResponderMatcher::OutputResponderMatcher(const QVector<core::OutputResponder> &responders,
+                                               core::EnvironmentManager *envManager)
+    : m_envManager(envManager)
 {
     m_rules.reserve(responders.size());
     for (const core::OutputResponder &r : responders) {
@@ -108,6 +110,12 @@ QVector<OutputResponderMatcher::Reply> OutputResponderMatcher::feed(const QStrin
             Rule &rule = m_rules[bestRule];
             Reply reply;
             reply.text = expandGroups(rule.spec.response, bestMatch);
+            // {{VAR}} (feedback do usuário: responsores não suportavam
+            // interpolação de envs) — depois dos grupos \1..\9, que usam
+            // sintaxe diferente e não conflitam.
+            if (m_envManager) {
+                reply.text = m_envManager->interpolate(reply.text);
+            }
             reply.ruleIndex = bestRule;
             replies.append(reply);
             rule.fired += 1;

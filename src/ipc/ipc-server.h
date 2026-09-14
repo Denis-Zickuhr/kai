@@ -21,6 +21,17 @@ namespace kai::ipc {
 //   {"ok":true,"message":"...","lines":[...]}
 constexpr const char *kSocketName = "kai-ipc-v1";
 
+// Nome do socket IPC efetivo: kSocketName, a menos que a env var
+// KAI_IPC_SOCKET_NAME_OVERRIDE esteja definida. Existe só pra dar
+// isolamento total a testes que abrem um client/server IPC de verdade —
+// sem isso, um teste que assume "nenhuma instância rodando" (ex:
+// test_cli_client::listWithoutInstanceReportsConnectionError) falhava
+// sempre que uma instância REAL do Kai (ex: loop de dev com `entr`) já
+// estava escutando no nome fixo, já que o client conecta no MESMO nome
+// global não importa o que mais está rodando na máquina. Produção nunca
+// define essa env var, então o comportamento de sempre não muda.
+QString ipcSocketName();
+
 // Servidor IPC: escuta num QLocalServer (named pipe no Windows, unix socket
 // no Linux) e traduz requisições JSON em sinais que a MainWindow trata.
 // Também serve de mecanismo de instância única — se o listen() falhar

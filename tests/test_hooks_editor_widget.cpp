@@ -2,7 +2,7 @@
 #include <QListWidget>
 #include <QLineEdit>
 
-#include "ui/hooks-editor-widget.h"
+#include "ui/features/command-editor/hooks-editor-widget.h"
 
 using namespace kai::ui;
 using namespace kai::core;

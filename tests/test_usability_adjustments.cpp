@@ -5,10 +5,10 @@
 #include <QToolButton>
 #include <QPushButton>
 
-#include "ui/command-tree-widget.h"
-#include "ui/action-sidebar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/fuzzy-search.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/fuzzy-search.h"
 #include "core/models.h"
 #include "utils/translation-manager.h"
 

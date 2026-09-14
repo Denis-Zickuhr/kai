@@ -21,8 +21,22 @@ struct CliOutcome {
 //   kai list
 //   kai env list
 //   kai env use <nome-do-environment>
+//   kai validate <arquivo.json|arquivo.yml>
 //   kai show
 //   kai help
 CliOutcome runCliIfRequested(const QStringList &args);
+
+// Decide, SEM construir nenhum QApplication/QCoreApplication, se `args`
+// será tratado como CLI (verbo conhecido, OU invocação solta num terminal
+// interativo — ver stdoutIsInteractiveTerminal em cli-client.cpp). Chamado
+// pelo main() ANTES de escolher entre QCoreApplication (leve, sem GUI) e
+// QApplication (só quando vai realmente abrir a janela) — achado real:
+// construir QApplication incondicionalmente pra depois descartar (CLI
+// puro) inicializa tema/plataforma gráfica à toa, e é exatamente isso que
+// disparava o aviso "QStandardPaths: wrong permissions on runtime
+// directory" em `kai list`/`kai ps`/`kai` solto (mas não em `kai ping`,
+// que já usava só QCoreApplication via o runner de CLI Path local —
+// mesma causa, reportado com print real do terminal).
+bool shouldHandleAsCli(const QStringList &args);
 
 } // namespace kai::ipc

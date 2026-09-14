@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kai.app/schema/v1.json",
+  "title": "Kai package",
+  "description": "Shape accepted by BOTH Kai import surfaces — a project kai.json/kai.yml (File → Import…, Project folder) and an Export/Import Configuration file (File → Import…, File). They share this exact schema; only the top-level identity differs (project_name for a project manifest, kai_export for an exported package) — see the manifesto's §1.1. Point an editor at this file with \"$schema\": \"https://kai.app/schema/v1.json\" at the top of your kai.json/kai.yml for inline validation and autocomplete.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional, ignored by Kai itself — only read by editors for validation/autocomplete. Point it at this file's URL."
+    },
+    "project_name": {
+      "type": "string",
+      "description": "Project-manifest identity. Name of the folder Kai creates on import. Absent ⇒ falls back to the imported directory's name. Never present together with kai_export."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Icon of the project's/export's root folder. Must be one of the names listed in kai-icons.md — an unrecognized name silently falls back to a generic icon instead of erroring."
+    },
+    "cli_path": {
+      "type": "string",
+      "description": "CLI Paths feature. Segment used to address the project's/export's ROOT from `kai <cli_path> ...` — see docs/manifesto/cli-paths.md. Only meaningful as the FIRST segment (global mode requires the root to have one); a project run in local mode (no import) doesn't need it at the root, since local mode has no cross-project namespace to disambiguate."
+    },
+    "env_vars": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Environment variables in the project's/root's scope. Every command under it (and its subfolders) can reference these as {{KEY}}."
+    },
+    "kai_export": {
+      "type": "object",
+      "description": "Export-package identity (written by File → Export…; you normally never write this by hand). Presence of this key — or its absence combined with no \"id\" fields anywhere — is how Kai tells an id-free export apart from a project manifest.",
+      "properties": {
+        "scope": { "type": "string", "enum": ["global", "folder", "command"] },
+        "version": { "type": "integer" },
+        "id_free": { "type": "boolean", "description": "true for every export produced by a current Kai version. Only relevant for the importer's own detection heuristic." }
+      }
+    },
+    "root_folder": {
+      "description": "Export-only. Present only for a folder-scope export: the exported folder's own name/icon, since it's excluded from the folders array below (it's the package's implicit top, mirroring project_name's role in a project manifest).",
+      "$ref": "#/$defs/folderMeta"
+    },
+    "settings": {
+      "type": "object",
+      "description": "Export-only (global-scope export). Kai's own app preferences (appearance, shortcuts, window, notifications, terminal profiles, environments...). Never written by hand for a project manifest."
+    },
+    "folders": {
+      "type": "array",
+      "description": "In a PROJECT manifest: optional, and only ever used to give a subfolder its own icon — {\"path\": ..., \"icon\": ...}; the subfolder itself is still created implicitly by a command's/collection's own \"folder\" key, never by an entry here alone. In an EXPORT package: the full list of subfolders (path + metadata), always written by Kai itself. \"path\" in either case is relative to the root — never includes project_name/root_folder's own name (a leading \"<root name>/\" prefix is tolerated but discouraged).",
+      "items": { "$ref": "#/$defs/folderMeta" }
+    },
+    "commands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "collections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/collection" }
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "folderMeta": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Required in the top-level folders array (identifies which folder this entry decorates). Absent on root_folder, which has no path of its own." },
+        "name": { "type": "string" },
+        "icon": { "type": "string", "description": "See kai-icons.md for the full valid list." },
+        "hidden": { "type": "boolean", "default": false },
+        "is_project": { "type": "boolean", "description": "Internal flag Kai sets on the folder created by importing a project (dynamic-variable scope boundary). A folders[] entry with is_project: true is understood, as a convenience fallback, as \"this names the root\" when project_name/icon are missing at the top level — prefer the top-level keys instead. Never meaningful on an entry that only decorates a subfolder." },
+        "order": { "type": "integer" },
+        "terminal_target": { "type": "string" },
+        "cli_path": { "type": "string", "description": "CLI Paths feature. Segment used to reach this folder from the CLI, e.g. \"zephyr\" in `kai zephyr env prod`. Absent (default) = this folder is TRANSPARENT in the CLI namespace — invisible as a segment, but doesn't block its own children that do have one (they surface at the nearest opted-in ancestor instead). See docs/manifesto/cli-paths.md." },
+        "env_vars": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "command": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "description": "Required in practice — an empty name still imports, but is meaningless in the tree and unusable as a hook target." },
+        "type": { "type": "string", "enum": ["shell", "http"], "default": "shell" },
+        "description": { "type": "string" },
+        "icon": { "type": "string", "description": "See kai-icons.md." },
+        "command": { "type": "string", "description": "Shell only. Supports {{VAR}} interpolation. Required (in practice) when type is \"shell\"." },
+        "http_config": { "$ref": "#/$defs/httpConfig", "description": "HTTP only. Required when type is \"http\"." },
+        "working_dir": { "type": "string", "default": "{{PROJECT_PATH}}", "description": "Shell only." },
+        "folder": { "type": "string", "default": "", "description": "Target subfolder, relative to the root, nestable with \"/\" (e.g. \"Integrations/Shopee\"). Omit to place the command directly in the root." },
+        "is_background": { "type": "boolean", "default": false, "description": "Shell only." },
+        "hidden": { "type": "boolean", "default": false },
+        "hide_on_run": { "type": "boolean", "default": false },
+        "capture_env": { "type": "boolean", "default": false, "description": "Must be paired with a non-empty declared_env_vars to capture anything at all." },
+        "declared_env_vars": {
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/$defs/declaredEnvVar" }
+        },
+        "open_last_link": { "type": "boolean", "default": false, "description": "Shell only." },
+        "interactive_terminal": { "type": "boolean", "default": false, "description": "Shell only. Mutually distinct from formatted_output — pick one." },
+        "formatted_output": { "type": "boolean", "default": false, "description": "Shell only. Mutually distinct from interactive_terminal — pick one." },
+        "terminal_target": { "type": "string", "default": "", "description": "Shell only. Name of a Terminal Target (Settings → Terminal Targets) — SENSITIVE: its command_template wraps every command that uses it, so an imported terminal target should always be reviewed before accepting it, not just counted." },
+        "compact_output": { "type": "boolean", "default": false },
+        "ignore_exit_code": { "type": "boolean", "default": false, "description": "Shell only." },
+        "auto_run": { "type": "boolean", "default": false },
+        "auto_run_delay_sec": { "type": "number", "default": 0 },
+        "order": { "type": "integer" },
+        "params": {
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/$defs/parameter" },
+          "description": "The key is \"params\", never \"parameters\" — a kai.json using \"parameters\" has its parameters silently ignored."
+        },
+        "responders": {
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/$defs/responder" },
+          "description": "Shell only."
+        },
+        "execution_conditions": {
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/$defs/executionCondition" }
+        },
+        "condition_combinator": { "type": "string", "enum": ["and", "or"], "default": "and" },
+        "condition_skip_behavior": { "type": "string", "enum": ["success", "failure"], "default": "success" },
+        "hooks": { "$ref": "#/$defs/hooks" },
+        "cli_path": { "type": "string", "description": "CLI Paths feature. Segment that makes this command REACHABLE/executable from the CLI, e.g. \"env\" in `kai zephyr env prod`. The last segment of any usable CLI path always resolves to a command — a folder alone is never executable, only navigable. Absent (default) = not reachable from the CLI at all, GUI-only. See docs/manifesto/cli-paths.md." }
+      },
+      "additionalProperties": false
+    },
+
+    "declaredEnvVar": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "persist": { "type": "boolean", "default": false },
+        "scope": { "type": "string", "enum": ["project", "global"], "default": "project" }
+      },
+      "additionalProperties": false
+    },
+
+    "httpConfig": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "GET" },
+        "url": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "type": "string" },
+        "env_extractors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/envExtractor" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "envExtractor": {
+      "type": "object",
+      "required": ["json_path", "env_var"],
+      "properties": {
+        "name": { "type": "string" },
+        "json_path": { "type": "string" },
+        "env_var": { "type": "string" },
+        "persist": { "type": "boolean", "default": false },
+        "scope": { "type": "string", "enum": ["project", "global"], "default": "project" }
+      },
+      "additionalProperties": false
+    },
+
+    "parameter": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "description": "Becomes {{name}} in the command. Use a valid shell-identifier shape (letters/digits/_, starting with a letter or _) if you want it usable as an env var too." },
+        "label": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "number", "bool", "select", "file", "textarea", "json", "date"], "default": "text" },
+        "default": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "string" }, "description": "select only, without a collection." },
+        "multi_select": { "type": "boolean", "default": false, "description": "select with fixed options only." },
+        "collection": { "type": "string", "description": "select only. Name of a collection in the same package — resolved to an id on import." },
+        "collection_display_field": { "type": "string", "description": "select+collection only." },
+        "initial_dir": { "type": "string", "description": "file only. Used LITERALLY — {{VAR}} is not resolved here." },
+        "pick_mode": { "type": "string", "enum": ["file", "folder", "both"], "default": "file", "description": "file only." },
+        "file_path_format": { "type": "string", "enum": ["native", "posix", "windows"], "default": "native", "description": "file only." },
+        "optional": { "type": "boolean", "default": false, "description": "Any type. Field starts hidden behind a checkbox in the GUI form; on a CLI Path, an optional parameter is never positional — it's only settable as `--name=value`." },
+        "required": { "type": "boolean", "default": false, "description": "Any type. Opt-in: shows a small required marker (*) next to the label in the GUI form, blocks the OK button until filled, and counts toward a group's pending-required badge. Off by default — set explicitly per parameter, not automatic for every non-optional field. Has no effect when `optional` is true (a field hidden behind its own checkbox is never treated as blocking)." },
+        "description": { "type": "string", "description": "CLI Paths feature. Longer explanation shown in a command's `--help` output — `label` is usually too short for that. Not shown anywhere in the GUI form (label already covers that)." },
+        "date_mode": { "type": "string", "enum": ["date", "time", "datetime"], "default": "date", "description": "date only. What the date picker popup asks for." },
+        "date_range": { "type": "boolean", "default": false, "description": "date only. Picks a start AND end value instead of one. The parameter itself ({{name}}) always carries the start; the end is injected as {{name.end}} (same convention as a collection-backed select's {{param.field}})." },
+        "date_format": { "type": "string", "enum": ["iso_date", "iso_datetime", "br_date", "us_date", "time_24h", "time_24h_short", "unix_seconds", "unix_millis", "custom"], "default": "iso_date", "description": "date only. How the picked value is written into the command. \"custom\" uses date_format_custom instead of a fixed preset." },
+        "date_format_custom": { "type": "string", "description": "date only, and only read when date_format is \"custom\". Qt date/time token template (yyyy, MM, dd, HH, mm, ss...)." },
+        "group": { "type": "string", "description": "Any type. Optional group name. Parameters sharing the exact same group are bundled into one collapsible section (collapsed by default) in the parameter-fill dialog, instead of appearing loose." }
+      },
+      "additionalProperties": false
+    },
+
+    "responder": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Required — a responder without one is discarded on import." },
+        "enabled": { "type": "boolean", "default": true },
+        "pattern": { "type": "string", "description": "Regex matched against the output; capture groups available as \\1, \\2... in response." },
+        "response": { "type": "string" },
+        "limit_triggers": { "type": "boolean", "default": false },
+        "max_triggers": { "type": "integer", "default": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "executionCondition": {
+      "type": "object",
+      "required": ["left", "op"],
+      "properties": {
+        "name": { "type": "string" },
+        "left": { "type": "string" },
+        "op": { "type": "string", "enum": ["exists", "not_exists", "eq", "ne", "gt", "ge", "lt", "le", "contains", "not_contains"] },
+        "right": { "type": "string", "description": "Ignored for exists/not_exists." }
+      },
+      "additionalProperties": false
+    },
+
+    "hooks": {
+      "type": "object",
+      "description": "Other commands to run before/after/on cleanup — referenced by NAME (not id), resolved against commands in the SAME package. A name that doesn't match any command is silently ignored (logged), never breaks the import.",
+      "properties": {
+        "pre": { "type": "array", "items": { "type": "string" } },
+        "post": { "type": "array", "items": { "type": "string" } },
+        "cleanup": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "collection": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Referenced by a parameter's \"collection\" key using this exact name." },
+        "icon": { "type": "string", "description": "See kai-icons.md." },
+        "folder": { "type": "string", "description": "Target subfolder, same convention as a command's \"folder\"." },
+        "hidden": { "type": "boolean", "default": false },
+        "schema": {
+          "type": "array",
+          "description": "Columns. Omit to use the default [key, value] schema.",
+          "items": { "$ref": "#/$defs/collectionField" }
+        },
+        "entries": {
+          "type": "array",
+          "description": "Rows. SENSITIVE if the file is meant to be shared/committed — an entry can hold real data (tokens, credentials pasted in for testing), except for values under a field marked \"secret\" in the schema above, which Kai's own exporter always strips. Consider exporting the schema only (omit this key) for anything versioned, or marking the sensitive field(s) \"secret\".",
+          "items": { "$ref": "#/$defs/collectionEntry" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "collectionField": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Stable key, used in {{collection.<name>}} and in entries[].values." },
+        "label": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "key", "value", "email", "number", "url", "bool"], "default": "text" },
+        "visible": { "type": "boolean", "default": true },
+        "secret": { "type": "boolean", "default": false, "description": "Masked as a password field in the UI. ALWAYS stripped from export, regardless of whether entries are otherwise included — the only way to take a secret value out of Kai is to copy it by hand." }
+      },
+      "additionalProperties": false
+    },
+
+    "collectionEntry": {
+      "type": "object",
+      "properties": {
+        "values": { "type": "object", "additionalProperties": { "type": "string" } },
+        "favorite": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    }
+  }
+}

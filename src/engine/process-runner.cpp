@@ -1,5 +1,7 @@
 #include "engine/process-runner.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QTimer>
 #include <QFile>
 #include <QSocketNotifier>
@@ -72,6 +74,81 @@ QString maskSecretsForLog(const QString &commandLine)
     return out;
 }
 
+#if defined(Q_OS_WIN)
+// true pra um caminho UNC (\\servidor\share\...) — é exatamente a forma
+// que o WSL usa pro Windows enxergar um diretório DENTRO do Linux (ex:
+// \\wsl.localhost\Ubuntu\home\...), quando kai.exe (Windows) é chamado a
+// partir de um cwd do WSL via interop.
+bool isUncWorkingDir(const QString &path)
+{
+    // Qt normaliza caminhos pra barra normal ("/") em QDir::currentPath()/
+    // modelos internos — um UNC vindo daí chega aqui como "//servidor/share"
+    // (barras normais), não "\\servidor\share". Sem toNativeSeparators, essa
+    // forma escapava da checagem (só reconhecia o prefixo com backslash
+    // literal), reintroduzindo o mesmo travamento de UNC PATH pros cli_paths
+    // resolvidos via cwd do WSL (achado real: reconhecia os cli_paths, mas
+    // travava ao RODAR um deles).
+    return QDir::toNativeSeparators(path).startsWith(QStringLiteral("\\\\"));
+}
+
+// Bug real reportado: "ao tentar rodar um cmd local usando o kai dentro
+// do Windows no WSL, dá erro de UNC PATH not supported... trava tudo o
+// terminal". Causa raiz: CreateProcess (via ConPTY OU QProcess::start)
+// aceita um UNC como lpCurrentDirectory/cwd em nível de SO, mas o
+// cmd.exe.exe recém-iniciado NÃO consegue representar isso na sua própria
+// noção de "diretório atual" (baseada em letra de unidade, herança do
+// DOS) — imprime "UNC paths are not supported. Defaulting to Windows
+// directory." e cai pra %SystemRoot%\System32, deixando o comando (e,
+// pelo visto, o pipe/ConPTY por trás) num estado inconsistente que trava.
+//
+// Solução PADRÃO da própria Microsoft pra isso: NUNCA passar um UNC como
+// diretório inicial do processo — em vez disso, deixar o cmd.exe nascer
+// num diretório normal (letra de unidade) e usar o PUSHD embutido dele
+// (que, ao contrário de CD, mapeia uma letra de unidade TEMPORÁRIA pro
+// UNC automaticamente) pra entrar lá de dentro do próprio comando.
+// `workingDir` some do parâmetro CreateProcess/QProcess (ver os dois
+// call-sites) sempre que for UNC — este wrapper assume esse trabalho.
+QString wrapCommandForWorkingDir(const QString &command, const QString &workingDir)
+{
+    if (workingDir.isEmpty()) {
+        return command;
+    }
+    if (!isUncWorkingDir(workingDir)) {
+        // Caminho normal (letra de unidade) — sem necessidade de pushd,
+        // o lpCurrentDirectory/QProcess::setWorkingDirectory já resolve.
+        return command;
+    }
+    QString escaped = workingDir;
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    return QStringLiteral("pushd \"%1\" && (%2) & popd").arg(escaped, command);
+}
+
+// Diretório de partida SEGURO (nunca UNC) pro cmd.exe nascer quando o
+// working dir real é UNC. Achado real (com print): passar nullptr pra
+// lpCurrentDirectory NÃO basta — CreateProcess com nullptr faz o filho
+// HERDAR o cwd do PRÓPRIO kai.exe, e esse cwd é ELE MESMO o UNC quando
+// kai.exe foi lançado via interop do WSL (o caso mais comum de origem
+// desse bug). O cmd.exe recém-nascido lê esse cwd herdado NA HORA e já
+// imprime "UNC paths are not supported... Defaulting to Windows
+// directory" ANTES de sequer processar nossa linha de comando (o pushd
+// embutido nela roda tarde demais pra evitar o aviso/reset). Por isso
+// precisamos de um diretório explícito, de letra de unidade normal,
+// como ponto de partida — o pushd dentro do comando ainda faz a
+// navegação real até o UNC depois.
+QString safeNonUncStartDir()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (!isUncWorkingDir(appDir)) {
+        return QDir::toNativeSeparators(appDir);
+    }
+    const QString winDir = qEnvironmentVariable("SystemRoot");
+    if (!winDir.isEmpty()) {
+        return winDir;
+    }
+    return QStringLiteral("C:\\");
+}
+#endif
+
 #if !defined(Q_OS_WIN)
 // Envia um sinal Unix ao grupo de processos inteiro liderado por `pid`
 // (bug real corrigido: "SIGKILL fraco" — matar apenas o PID do bash usado
@@ -121,6 +198,18 @@ void killProcessTree(qint64 pid)
 }
 #endif
 }
+
+#if defined(Q_OS_WIN)
+// Wrappers públicos (ver declaração/motivo em process-runner.h) sobre as
+// versões internas acima — mesmo TU, só reexpondo pra fora do namespace
+// anônimo.
+bool isWindowsUncPath(const QString &path) { return isUncWorkingDir(path); }
+QString wrapWindowsCommandForUncWorkingDir(const QString &command, const QString &workingDir)
+{
+    return wrapCommandForWorkingDir(command, workingDir);
+}
+QString windowsSafeNonUncStartDir() { return safeNonUncStartDir(); }
+#endif
 
 ProcessRunner::ProcessRunner(QObject *parent)
     : QObject(parent)
@@ -326,9 +415,33 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     }
     m_process->setProcessEnvironment(processEnv);
 
+#if defined(Q_OS_WIN)
+    // UNC (ver wrapCommandForWorkingDir acima) NUNCA vira o cwd nativo do
+    // processo — cmd.exe não consegue representar isso e trava/erra (bug
+    // real: "UNC PATH not supported... trava tudo o terminal", kai.exe do
+    // Windows chamado a partir de um cwd do WSL via interop). O pushd
+    // embutido no comando (mais abaixo) assume essa parte.
+    //
+    // Comando SEM working dir configurado (workingDir vazio, ex: muitos
+    // cli_paths globais) não é seguro por padrão: sem lpCurrentDirectory
+    // explícito, o filho HERDA o cwd ATUAL do próprio kai.exe — e esse cwd
+    // pode ELE MESMO ser o UNC do WSL quando kai.exe foi chamado via
+    // interop, reproduzindo o mesmo travamento mesmo sem nenhum path
+    // configurado no comando (achado real: reconhecia o cli_path, mas
+    // travava ao RODAR). Resolve explicitamente pro cwd atual pra poder
+    // detectar/tratar esse caso também, em vez de deixar em branco.
+    const QString effectiveWorkingDir = workingDir.isEmpty() ? QDir::currentPath() : workingDir;
+    // Nunca deixar em branco quando é UNC: QProcess com working dir vazio
+    // também herda o cwd do processo pai (mesma armadilha do CreateProcess
+    // com lpCurrentDirectory=nullptr — ver safeNonUncStartDir()). Preciso
+    // de um diretório de verdade, só não pode ser o UNC.
+    m_process->setWorkingDirectory(
+        isUncWorkingDir(effectiveWorkingDir) ? safeNonUncStartDir() : effectiveWorkingDir);
+#else
     if (!workingDir.isEmpty()) {
         m_process->setWorkingDirectory(workingDir);
     }
+#endif
 
     // Log com SEGREDOS MASCARADOS: a linha pode conter "export SECRET='v'"
     // (injeção de env para o alvo de terminal) — logar cru vazava o segredo
@@ -348,7 +461,20 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     m_process->setArguments({}); // limpa; usamos nativeArguments
     // '/c ' + comando cru. Envolvemos em aspas externas do cmd apenas
     // quando necessário não é preciso: o cmd /c aceita a linha inteira.
-    m_process->setNativeArguments(QStringLiteral("/c %1").arg(command));
+    //
+    // "chcp 65001 >nul & " MUDA A CODEPAGE ATIVA da sessão pra UTF-8 antes
+    // do comando de verdade rodar — mesmo fix já aplicado no caminho
+    // ConPTY/interativo (ver applyTerminalProfile mais abaixo), mas que
+    // faltava aqui, no caminho QProcess NORMAL (comando não-interativo):
+    // sem isto a sessão nasce na codepage OEM/ANSI legada do Windows (ex:
+    // 850/1252), então acentos e sequências de escape emitidos pelo
+    // processo (ex: "PRODUÇÃO", `←[?25l` em vez de ESC de verdade) chegam
+    // em bytes que decodeOut() — fixo em UTF-8 — não sabe interpretar,
+    // virando lixo visual na Saída (bug relatado: "erro de encoding").
+    // ">nul" descarta a própria mensagem de confirmação do chcp.
+    m_process->setNativeArguments(
+        QStringLiteral("/c chcp 65001 >nul & %1")
+            .arg(wrapCommandForWorkingDir(command, effectiveWorkingDir)));
 #else
     // Executa via shell para suportar pipes, redirects e loops (ex:
     // usa `for i in ...; do ...; done`), que QProcess::start() puro não
@@ -398,9 +524,18 @@ bool ProcessRunner::startWithPty(const QString &command, const QString &workingD
     return false;
 #else
     int masterFd = -1;
+    // Largura GENEROSA de propósito — mesmo raciocínio do lado ConPTY
+    // (Windows, ver comentário lá): sem um winsize explícito, forkpty herda
+    // o tamanho do terminal controlador do processo pai (ou um default do
+    // kernel) — tipicamente estreito (80 colunas), e uma saída de log JSON
+    // de uma linha só realista costuma passar disso, arriscando a mesma
+    // classe de ambiguidade de quebra de linha no pty.
+    struct winsize ws{};
+    ws.ws_col = 500;
+    ws.ws_row = 30;
     // forkpty cria o par mestre/escravo, faz fork e conecta o filho ao
     // lado escravo como seu terminal controlador — o filho enxerga um tty.
-    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, nullptr);
+    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, &ws);
 
     if (pid < 0) {
         utils::Logger::warning(kLogTag,
@@ -617,7 +752,22 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     }
 
     HPCON hPC = nullptr;
-    const COORD size{120, 30};
+    // LARGURA GENEROSA de propósito (achado real, reportado com print: um
+    // caractere duplicado no MEIO de palavras — "Cancelados" virando
+    // "Canceelados", "timeFrom" virando "timeFroom" — sempre exatamente no
+    // ponto em que a linha (um log JSON de uma linha só, tipicamente bem
+    // mais longo que 120 colunas) alcançaria a largura do pseudoconsole.
+    // É um comportamento CONHECIDO do ConPTY na ambiguidade de "deferred
+    // autowrap" (o terminal decide se já quebrou a linha ou não no exato
+    // instante em que a última coluna é preenchida): com 120 colunas fixas,
+    // qualquer linha de log realista passa dessa largura e aciona a
+    // ambiguidade. 120 colunas fazia sentido pra uma janela de terminal
+    // comum, mas aqui a saída é sempre CAPTURADA/reformatada por nós (não
+    // é um terminal visual de verdade sendo redimensionado pelo usuário),
+    // então não há motivo pra manter estreito — uma largura bem maior
+    // praticamente elimina o gatilho da ambiguidade pra qualquer linha de
+    // log realista.
+    const COORD size{500, 30};
     HRESULT hr = createPC(size, inRead, outWrite, 0, &hPC);
     // As pontas que pertencem ao ConPTY já foram duplicadas por ele.
     ::CloseHandle(inRead);
@@ -659,7 +809,13 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     // com screenshot: "Diretório" virava "Diret♦rio"). ">nul" descarta a
     // própria mensagem de confirmação do chcp, que senão apareceria antes
     // da saída real do comando.
-    QString cmdLine = QStringLiteral("cmd.exe /c chcp 65001 >nul & ") + command;
+    // Mesmo raciocínio do caminho QProcess normal (ver comentário lá):
+    // workingDir vazio herdaria o cwd ATUAL do próprio kai.exe, que pode
+    // ser o UNC do WSL quando chamado via interop — resolve explicitamente
+    // pra poder detectar/tratar esse caso também.
+    const QString effectiveWorkingDir = workingDir.isEmpty() ? QDir::currentPath() : workingDir;
+    QString cmdLine = QStringLiteral("cmd.exe /c chcp 65001 >nul & ")
+        + wrapCommandForWorkingDir(command, effectiveWorkingDir);
     std::wstring wcmd = cmdLine.toStdWString();
     std::vector<wchar_t> mutableCmd(wcmd.begin(), wcmd.end());
     mutableCmd.push_back(L'\0');
@@ -677,7 +833,18 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     }
     envBlock.push_back(L'\0');
 
-    std::wstring wcwd = workingDir.toStdWString();
+    // UNC nunca vira lpCurrentDirectory (ver wrapCommandForWorkingDir) — MAS
+    // nullptr NÃO é uma saída segura aqui: CreateProcess com nullptr faz o
+    // filho HERDAR o cwd do PRÓPRIO kai.exe, que é ELE MESMO o UNC quando
+    // kai.exe foi lançado via interop do WSL (achado real, com print: o
+    // cmd.exe recém-nascido lia esse cwd herdado e já imprimia "UNC paths
+    // are not supported" ANTES do pushd embutido no cmdLine ter chance de
+    // rodar). Por isso, quando é UNC, passamos um diretório SEGURO
+    // explícito (ver safeNonUncStartDir) em vez de nullptr — o pushd
+    // embutido no cmdLine acima assume a navegação real até o UNC depois.
+    const std::wstring wcwd = isUncWorkingDir(effectiveWorkingDir)
+        ? safeNonUncStartDir().toStdWString()
+        : effectiveWorkingDir.toStdWString();
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
@@ -685,7 +852,7 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
         nullptr, mutableCmd.data(), nullptr, nullptr, FALSE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
         envBlock.data(),
-        workingDir.isEmpty() ? nullptr : wcwd.c_str(),
+        wcwd.c_str(),
         &si.StartupInfo, &pi);
 
     ::DeleteProcThreadAttributeList(si.lpAttributeList);

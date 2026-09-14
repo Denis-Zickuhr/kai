@@ -4,7 +4,7 @@
 
 #include "core/config-manager.h"
 #include "ui/main-window.h"
-#include "ui/terminal-drawer.h"
+#include "ui/features/output/terminal-drawer.h"
 
 using namespace kai::ui;
 using kai::core::ConfigManager;

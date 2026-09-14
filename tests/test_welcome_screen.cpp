@@ -5,8 +5,8 @@
 
 #include "core/config-manager.h"
 #include "ui/main-window.h"
-#include "ui/welcome-screen.h"
-#include "ui/command-tree-widget.h"
+#include "ui/shared/welcome-screen.h"
+#include "ui/features/command-editor/command-tree-widget.h"
 
 using namespace kai::ui;
 using kai::core::ConfigManager;

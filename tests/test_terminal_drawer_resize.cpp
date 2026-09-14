@@ -4,7 +4,7 @@
 #include <QSplitter>
 #include <QWidget>
 
-#include "ui/terminal-drawer.h"
+#include "ui/features/output/terminal-drawer.h"
 
 using namespace kai::ui;
 

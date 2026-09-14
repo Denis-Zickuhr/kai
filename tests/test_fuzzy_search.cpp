@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/fuzzy-search.h"
+#include "ui/shared/fuzzy-search.h"
 
 using namespace kai::ui;
 

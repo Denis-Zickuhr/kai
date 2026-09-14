@@ -1,6 +1,7 @@
 #include "engine/execution-pipeline.h"
 #include "engine/output-responder-matcher.h"
 
+#include <QDir>
 #include <QProcess>
 
 #include <QTimer>
@@ -153,24 +154,59 @@ void ExecutionPipeline::setFolders(const QVector<core::Folder> &folders)
     m_folders = folders;
 }
 
-QString ExecutionPipeline::wrapForEnvCapture(const QString &interpolatedCommand) const
+QString ExecutionPipeline::wrapForEnvCapture(const QString &interpolatedCommand, core::ShellFlavor flavor) const
 {
-    // Roda o comando do hook e, em seguida (mesmo shell), emite o sentinela
-    // em nova linha e o ambiente completo (`env`, uma variável por linha).
-    // Usamos `echo` (não `printf`) para o sentinela porque um format de
-    // printf exigiria escapar `%` e é fonte de bug; `echo` imprime a
-    // string literal com uma quebra de linha ao final, exatamente o que
-    // precisamos. O `;` (em vez de `&&`) garante que o env seja emitido
-    // mesmo se o comando do hook retornar código != 0.
-    return QStringLiteral("%1\necho '%2'\nenv")
-        .arg(interpolatedCommand, QString::fromLatin1(kEnvSentinel));
+    // Roda o comando e, em seguida (mesmo shell), emite o sentinela em nova
+    // linha e o ambiente completo (uma variável por linha), na SINTAXE do
+    // sabor de shell que vai de fato executar isto — mesmo bug já corrigido
+    // uma vez em buildTargetedCommand (export/set -m em bash quebrava sob
+    // PowerShell), nunca aplicado aqui: esta função sempre usou sintaxe
+    // POSIX (`echo '...'` + `env`), então "Export variables" simplesmente
+    // não funcionava fora de um alvo Posix/WSL - nem sob "shell normal"
+    // (cmd.exe, o padrão sem alvo de terminal no Windows) nem sob PowerShell
+    // (`env` não existe em nenhum dos dois; aspas simples são literais em
+    // ambos, não delimitador de string).
+    const QString sentinel = QString::fromLatin1(kEnvSentinel);
+    if (flavor == core::ShellFlavor::PowerShell) {
+        // Get-ChildItem Env: dá um objeto por variável; formata cada um
+        // como NAME=VALUE (mesmo formato que ingestCapturedEnv já espera).
+        return QStringLiteral(
+            "%1\nWrite-Output '%2'\nGet-ChildItem Env: | ForEach-Object { \"$($_.Name)=$($_.Value)\" }")
+            .arg(interpolatedCommand, sentinel);
+    }
+    if (flavor == core::ShellFlavor::Cmd) {
+        // `set` (sem argumento) do cmd.exe já dumpa TODAS as variáveis como
+        // NAME=VALUE, uma por linha - equivalente exato do `env` POSIX.
+        // Sentinela sem aspas: aspas simples são caractere literal no cmd.
+        return QStringLiteral("%1\necho %2\nset").arg(interpolatedCommand, sentinel);
+    }
+    // Posix (bash/sh/WSL/docker exec bash) - comportamento original.
+    return QStringLiteral("%1\necho '%2'\nenv").arg(interpolatedCommand, sentinel);
 }
 
-void ExecutionPipeline::ingestCapturedEnv(const QString &rawOutput)
+void ExecutionPipeline::ingestCapturedEnv(const QString &rawOutput, const QString &scopeKey,
+                                           const QVector<core::DeclaredEnvVar> &declaredVars)
 {
     if (!m_envManager) {
         return;
     }
+    // LISTA BRANCA obrigatória (bug real reportado, com risco de segurança:
+    // "exportar esta exportando automaticamente envs do OS, essas envs
+    // quebram o funcionamento se exportadas... preciso apenas exportar as
+    // envs ADVERSAS e incomuns"). A versão antiga capturava TUDO que fosse
+    // novo/diferente do ambiente herdado, com uma lista de ruído hardcoded
+    // que nunca ia prever toda variável de sistema/distro/WSL possível —
+    // inevitavelmente vazava alguma coisa perigosa mais cedo ou mais tarde.
+    // Agora só os nomes DECLARADOS no comando (Command::declaredEnvVars,
+    // "algo parecido" com os extratores HTTP) são considerados; nada além
+    // deles, declarado ou não. Sem NENHUM nome declarado, não há o que
+    // procurar — nem vale a pena abrir o dump.
+    if (declaredVars.isEmpty()) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Captura de env: 'Exportar variáveis' ligado mas nenhuma variável declarada; nada capturado."));
+        return;
+    }
+
     const int sentinelPos = rawOutput.indexOf(QString::fromLatin1(kEnvSentinel));
     if (sentinelPos < 0) {
         utils::Logger::warning(kLogTag,
@@ -183,18 +219,7 @@ void ExecutionPipeline::ingestCapturedEnv(const QString &rawOutput)
     // convertem quebras de linha.
     const QStringList lines = envDump.split(QChar(u'\n'), Qt::SkipEmptyParts);
 
-    // Ruído de shell/sessão que não faz sentido injetar.
-    static const QSet<QString> kNoise = {
-        QStringLiteral("_"), QStringLiteral("SHLVL"), QStringLiteral("PWD"),
-        QStringLiteral("OLDPWD"), QStringLiteral("BASHOPTS"), QStringLiteral("BASH_EXECUTION_STRING"),
-        QStringLiteral("SHELLOPTS"), QStringLiteral("LINES"), QStringLiteral("COLUMNS"),
-    };
-
-    // Só injeta o que o hook ADICIONOU ou MUDOU frente ao ambiente
-    // herdado — na prática, o que ele produziu (ex: tokens de login).
-    const QProcessEnvironment sysEnv = QProcessEnvironment::systemEnvironment();
-
-    int captured = 0;
+    QMap<QString, QString> foundValues; // nome -> valor, só os que realmente apareceram no dump
     for (const QString &rawLine : lines) {
         QString line = rawLine;
         if (line.endsWith(QChar(u'\r'))) {
@@ -204,26 +229,36 @@ void ExecutionPipeline::ingestCapturedEnv(const QString &rawOutput)
         if (eq <= 0) {
             continue;
         }
-        const QString key = line.left(eq);
-        // Chave de env válida: [A-Za-z_][A-Za-z0-9_]* — evita capturar
-        // linhas de continuação de valores multi-linha como se fossem vars.
-        static const QRegularExpression keyRe(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$"));
-        if (!keyRe.match(key).hasMatch()) {
+        foundValues.insert(line.left(eq), line.mid(eq + 1));
+    }
+
+    int captured = 0;
+    for (const core::DeclaredEnvVar &declared : declaredVars) {
+        const QString name = declared.name.trimmed();
+        if (name.isEmpty()) {
             continue;
         }
-        const QString value = line.mid(eq + 1);
-        if (kNoise.contains(key)) {
-            continue;
+        // Nome declarado mas o processo NÃO setou: vira variável dinâmica
+        // VAZIA em vez de ficar de fora (pedido explícito: "se não ficam
+        // vazias, até pra ajudar em debug" — o inspetor de variáveis deixa
+        // óbvio que aquele nome era esperado mas nunca veio).
+        const QString value = foundValues.value(name);
+        // ESCOPO por variável declarada (mesma semântica de
+        // EnvExtractor::scope — ver comentário lá): "global" força Global
+        // independente do projeto atual; "project" usa o escopo capturado
+        // no INÍCIO da execução (ver comentário no header/chamador — bug
+        // real: trocar de projeto enquanto o comando ainda rodava jogava a
+        // variável no projeto ERRADO).
+        const QString targetScope = declared.scope == QStringLiteral("global") ? QString() : scopeKey;
+        m_envManager->setDynamicVarInScope(targetScope, name, value);
+        if (declared.persist) {
+            emit dynamicVarPersistRequested(targetScope, name, value);
         }
-        if (sysEnv.contains(key) && sysEnv.value(key) == value) {
-            continue;
-        }
-        m_envManager->setDynamicVar(key, value);
         ++captured;
     }
 
     utils::Logger::info(kLogTag,
-        QStringLiteral("Captura de env do hook: %1 variável(is) injetada(s) na sessão.").arg(captured));
+        QStringLiteral("Captura de env do hook: %1 variável(is) declarada(s) processada(s).").arg(captured));
 }
 
 QString ExecutionPipeline::effectiveTerminalProfileName(const core::Command &command) const
@@ -753,6 +788,12 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     const bool captureEnv = command.captureEnv && !command.isBackground;
     m_captureEnvActive = captureEnv;
     m_captureBuffer.clear();
+    // Escopo de variáveis dinâmicas CAPTURADO agora (síncrono, início da
+    // execução) — ver comentário em ingestCapturedEnv/header: nunca lido de
+    // novo lá dentro, que roda no callback `finished`, possivelmente bem
+    // depois de o escopo AMBIENTE (EnvironmentManager::m_currentDynamicScope)
+    // já ter mudado por causa de outra seleção do usuário.
+    const QString captureScopeKey = m_envManager ? m_envManager->currentDynamicVarScope() : QString();
 
     // Captura de env não precisa de PTY (não é interativo) e o PTY
     // atrapalharia o parse (ecoa o comando e converte quebras de linha),
@@ -774,6 +815,17 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // comportamento de terminal para comandos locais.
     const QString effTarget = effectiveTerminalProfileName(command);
     QString remoteRunId; // id do arquivo de PID remoto (kill do lado WSL)
+    // Sabor efetivo desta execução, usado por wrapForEnvCapture (abaixo) pra
+    // gerar a sintaxe certa de dump de ambiente. SEM alvo de terminal, o
+    // comando roda no shell padrão da PLATAFORMA (cmd.exe no Windows, bash
+    // no Unix — ver ProcessRunner::start) — não Posix incondicionalmente,
+    // que era o bug: "Export variables" nunca funcionava em "shell normal"
+    // (sem alvo) no Windows.
+#if defined(Q_OS_WIN)
+    core::ShellFlavor captureShellFlavor = core::ShellFlavor::Cmd;
+#else
+    core::ShellFlavor captureShellFlavor = core::ShellFlavor::Posix;
+#endif
     if (!effTarget.isEmpty()) {
         bool targetUsePty = true;
         core::ShellFlavor targetFlavor = core::ShellFlavor::Posix;
@@ -784,7 +836,21 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
                 break;
             }
         }
-        rawRunner->setUsePty(targetUsePty);
+        captureShellFlavor = targetFlavor;
+        // NÃO religa o PTY aqui quando é captura de env: mais acima já
+        // desligamos de propósito (comentário logo ali - o PTY ecoa o
+        // comando e converte quebras de linha, quebrando o parse do
+        // sentinela/dump). Bug real encontrado: esta atribuição
+        // INCONDICIONAL rodava DEPOIS e reativava o PTY sempre que o alvo
+        // resolvido (quase sempre há um - até "@parent" cai num default)
+        // tinha usePty=true, o caso comum - desfazendo aquilo em silêncio.
+        // "Export variables" então nunca encontrava o sentinela (ou
+        // encontrava dados corrompidos pelo próprio eco/wrap do PTY) toda
+        // vez que havia QUALQUER alvo de terminal resolvido - exatamente o
+        // reportado: "testei... export TESTE=1 e não jogou a ENV pra saída".
+        if (!captureEnv) {
+            rawRunner->setUsePty(targetUsePty);
+        }
         // KILL REMOTO: no WSL2 os processos Linux NÃO são filhos Windows do
         // wsl.exe, então taskkill deixa fantasmas. Geramos um runId, o shell
         // remoto grava seu PID em /tmp/kai-<runId>.pid e o stop() dispara um
@@ -808,7 +874,10 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // usuário). Só cria se o comando tem responders (custo zero caso contrário).
     std::shared_ptr<OutputResponderMatcher> matcher;
     if (!command.responders.isEmpty()) {
-        matcher = std::make_shared<OutputResponderMatcher>(command.responders);
+        // m_envManager habilita {{VAR}} na resposta (feedback do usuário:
+        // "interpolação de responsores automáticos... atualmente não
+        // suportam interpolação de envs").
+        matcher = std::make_shared<OutputResponderMatcher>(command.responders, m_envManager);
     }
 
     connect(rawRunner, &ProcessRunner::outputReady, this,
@@ -879,9 +948,10 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     }
 
     connect(rawRunner, &ProcessRunner::finished, this,
-        [this, onDone, captureEnv, id = command.id, ignoreExitCode = command.ignoreExitCode](const ProcessResult &result) {
+        [this, onDone, captureEnv, captureScopeKey, declaredEnvVars = command.declaredEnvVars,
+         id = command.id, ignoreExitCode = command.ignoreExitCode](const ProcessResult &result) {
         if (captureEnv) {
-            ingestCapturedEnv(m_captureBuffer);
+            ingestCapturedEnv(m_captureBuffer, captureScopeKey, declaredEnvVars);
             m_captureBuffer.clear();
             m_captureEnvActive = false;
         }
@@ -903,8 +973,20 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     const QString interpolatedCommand = m_envManager->interpolate(command.command);
     const QString interpolatedWorkingDir = m_envManager->interpolate(command.workingDir);
 
+    // ORDEM IMPORTA (bug real encontrado testando o próprio fix de sintaxe
+    // por sabor): com um alvo de terminal, applyTerminalProfile embrulha o
+    // comando numa invocação de shell ANINHADA (ex: template
+    // "bash -lc {{command}}" vira `bash -lc '<comando>'` — um PROCESSO
+    // FILHO separado). Se wrapForEnvCapture rodasse DEPOIS (como antes),
+    // "echo SENTINELA" + "env" ficavam FORA dessa invocação aninhada,
+    // rodando no shell EXTERNO — que nunca viu o `export` (ele aconteceu
+    // dentro do bash -lc filho, que já tinha terminado e sumido). Capturava
+    // sempre zero variáveis com qualquer alvo de terminal. Agora
+    // wrapForEnvCapture roda ANTES: o sentinela+dump entram como parte do
+    // MESMO texto que applyTerminalProfile embrulha na invocação aninhada,
+    // então tudo roda na mesma sessão de shell que o `export`.
     const QString finalCommand = captureEnv
-        ? wrapForEnvCapture(applyTerminalProfile(command, interpolatedCommand, interpolatedWorkingDir, remoteRunId))
+        ? applyTerminalProfile(command, wrapForEnvCapture(interpolatedCommand, captureShellFlavor), interpolatedWorkingDir, remoteRunId)
         : applyTerminalProfile(command, interpolatedCommand, interpolatedWorkingDir, remoteRunId);
 
     // Com alvo de terminal, o working_dir já é aplicado via `cd` DENTRO do
@@ -965,9 +1047,10 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
         // do pipeline (e até ao fechamento do app), e não pode bloquear a GUI
         // nem virar mais um runner no registry que alguém tente matar.
         const QString effTarget = effectiveTerminalProfileName(hook);
+        const QString interpolatedHookWorkingDir = m_envManager->interpolate(hook.workingDir);
         const QString script = applyTerminalProfile(
             hook, m_envManager->interpolate(hook.command),
-            m_envManager->interpolate(hook.workingDir), QString());
+            interpolatedHookWorkingDir, QString());
 
         emit logMessage(command.id,
             utils::tr(QStringLiteral("execution_pipeline.cleanup.running")).arg(hook.name.isEmpty() ? hookId : hook.name) + QStringLiteral("\n"), false);
@@ -983,7 +1066,23 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
         {
             QProcess detached;
             detached.setProgram(QStringLiteral("cmd.exe"));
-            detached.setNativeArguments(QStringLiteral("/c ") + script);
+            // MESMA armadilha de UNC do ProcessRunner (ver comentário lá):
+            // hook sem workingDir configurado herdaria o cwd do próprio
+            // kai.exe, que pode ser UNC quando chamado via interop do WSL —
+            // achado real: o cleanup hook batia nesse travamento mesmo com
+            // o ProcessRunner já corrigido, porque este é um QProcess
+            // TOTALMENTE separado. Mesma resolução: diretório seguro de
+            // partida + pushd embutido pra navegação real.
+            const QString effectiveWorkingDir = interpolatedHookWorkingDir.isEmpty()
+                ? QDir::currentPath() : interpolatedHookWorkingDir;
+            if (isWindowsUncPath(effectiveWorkingDir)) {
+                detached.setWorkingDirectory(windowsSafeNonUncStartDir());
+                detached.setNativeArguments(QStringLiteral("/c ")
+                    + wrapWindowsCommandForUncWorkingDir(script, effectiveWorkingDir));
+            } else {
+                detached.setWorkingDirectory(effectiveWorkingDir);
+                detached.setNativeArguments(QStringLiteral("/c ") + script);
+            }
             started = detached.startDetached();
         }
 #else

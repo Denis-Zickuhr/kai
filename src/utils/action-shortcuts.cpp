@@ -34,6 +34,17 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
          QStringLiteral("settings.shortcut.focus_output.desc"), {QStringLiteral("Ctrl+`")}, ShortcutScope::Window},
         {QStringLiteral("action.toggle_edit_mode"), QStringLiteral("settings.shortcut.toggle_edit_mode"),
          QStringLiteral("settings.shortcut.toggle_edit_mode.desc"), {QStringLiteral("Ctrl+E")}, ShortcutScope::Window},
+        // Pedido do usuário: "quero um novo atalho, funcionara na janela
+        // normal apenas [não global], se definido, ao apertar ocultar, por
+        // padrão vai ser esc" — DIFERENTE do atalho GLOBAL (globalHotkey,
+        // Ctrl+Shift+B por padrão), que funciona mesmo com o Kai sem foco;
+        // este é um QShortcut comum, só dispara com a janela ATIVA. Handler
+        // (ver MainWindow::setupActionShortcuts) deliberadamente não faz
+        // nada se o foco estiver dentro de um terminal INTERATIVO — Esc é
+        // uma tecla de uso comum lá dentro (ex: sair do modo de inserção do
+        // vim) e não pode ser sequestrada.
+        {QStringLiteral("action.hide_window"), QStringLiteral("settings.shortcut.hide_window"),
+         QStringLiteral("settings.shortcut.hide_window.desc"), {QStringLiteral("Esc")}, ShortcutScope::Window},
 
         // --- Já eram data-driven (grupos Item/Exibição/Execução) ---
         {QStringLiteral("action.new_collection"), QStringLiteral("settings.shortcut.new_collection"),

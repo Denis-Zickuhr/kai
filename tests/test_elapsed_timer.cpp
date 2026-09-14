@@ -1,9 +1,27 @@
 #include <QTest>
 #include <QApplication>
+#include <QTabWidget>
+#include <QTabBar>
+#include <QTreeWidget>
 
-#include "ui/command-tree-widget.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "core/models.h"
 
 using namespace kai::ui;
+using namespace kai::core;
+
+namespace {
+QTreeWidget *treeForRoot(CommandTreeWidget &widget, const QString &rootId)
+{
+    auto *tabWidget = widget.findChild<QTabWidget *>();
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        if (tabWidget->tabBar()->tabData(i).toString() == rootId) {
+            return qobject_cast<QTreeWidget *>(tabWidget->widget(i));
+        }
+    }
+    return nullptr;
+}
+} // namespace
 
 // Formato do tempo de execução exibido ao lado do ícone de run.
 // Regra do usuário: "0s -> 0m 0s -> 0h 0m 0s, onde só exibe o próximo valor do
@@ -42,6 +60,47 @@ private slots:
     void negativeIsClampedToZero()
     {
         QCOMPARE(CommandTreeWidget::formatElapsed(-5), QStringLiteral("0s"));
+    }
+
+    // Bug real reportado: "ao re-rodar um comando via double click ou
+    // enter, esse tempo não reseta". setRunningCommandIds() sozinho só
+    // reinicia o cronômetro de um id AUSENTE do conjunto anterior — chamar
+    // de novo com o MESMO id ainda "rodando" (caso de um re-disparo rápido,
+    // onde nenhum poll intermediário viu o id sumir) não reinicia nada,
+    // reproduzindo o bug relatado. resetRunTimer() (chamado pelo
+    // MainWindow no instante síncrono em que a execução começa de
+    // verdade) reinicia INCONDICIONALMENTE, corrigindo isso.
+    void resetRunTimerRestartsElapsedTimeEvenWhileStillRunning()
+    {
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Raiz");
+
+        Command c;
+        c.id = QStringLiteral("c_1");
+        c.folderId = QStringLiteral("f_root");
+        c.name = QStringLiteral("Comando");
+        c.command = QStringLiteral("sleep 5");
+
+        CommandTreeWidget widget;
+        widget.setData({root}, {c});
+        QTreeWidget *tree = treeForRoot(widget, QStringLiteral("f_root"));
+        QVERIFY(tree != nullptr);
+        QTreeWidgetItem *item = tree->topLevelItem(0);
+        QVERIFY(item != nullptr);
+
+        widget.setRunningCommandIds({c.id});
+        QCOMPARE(item->text(1), QStringLiteral("0s"));
+
+        // Deixa o tempo passar de verdade (>=2s) antes de re-disparar.
+        QTest::qWait(2200);
+        QVERIFY(item->text(1) != QStringLiteral("0s")); // avançou (2s/3s...)
+
+        // Re-disparo rápido: setRunningCommandIds({c.id}) sozinho, com o id
+        // JÁ presente no conjunto anterior, NÃO reiniciaria (reproduz o bug
+        // relatado) — é resetRunTimer() que precisa fazer isso.
+        widget.resetRunTimer(c.id);
+        QCOMPARE(item->text(1), QStringLiteral("0s"));
     }
 };
 

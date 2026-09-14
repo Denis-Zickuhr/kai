@@ -3,8 +3,8 @@
 #include <QFile>
 #include <QDir>
 
-#include "ui/project-detection-strategy.h"
-#include "ui/project-selector.h"
+#include "ui/features/collections/project-detection-strategy.h"
+#include "ui/features/collections/project-selector.h"
 #include "core/models.h"
 
 using namespace kai::ui;

@@ -4,11 +4,17 @@
 #include <QLineEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QComboBox>
+#include <QApplication>
+#include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPushButton>
 
-#include "ui/key-value-editor-widget.h"
-#include "ui/terminal-profiles-editor-widget.h"
-#include "ui/parameter-editor-widget.h"
-#include "ui/table-utils.h"
+#include "ui/shared/key-value-editor-widget.h"
+#include "ui/features/output/terminal-profiles-editor-widget.h"
+#include "ui/features/command-editor/parameter-editor-widget.h"
+#include "ui/shared/table-utils.h"
 
 using namespace kai::ui;
 
@@ -212,6 +218,157 @@ private slots:
         QCOMPARE(back.size(), 2);
         QCOMPARE(back.at(0).type, kai::core::ParameterType::Textarea);
         QCOMPARE(back.at(1).type, kai::core::ParameterType::Json);
+    }
+
+    // Novo tipo "date" (pedido do usuário: date picker com modo/range/
+    // formato/template custom) — round-trip via JSON e via
+    // ParameterEditorWidget, mesmo padrão do teste acima.
+    void dateParameterTypeRoundTripsThroughJsonAndWidget()
+    {
+        kai::core::Parameter date;
+        date.name = QStringLiteral("janela");
+        date.label = QStringLiteral("Janela de deploy");
+        date.type = kai::core::ParameterType::Date;
+        date.dateMode = QStringLiteral("datetime");
+        date.dateRange = true;
+        date.dateFormat = QStringLiteral("custom");
+        date.dateFormatCustom = QStringLiteral("dd.MM.yy HH:mm");
+
+        const kai::core::Parameter back = kai::core::Parameter::fromJson(date.toJson());
+        QCOMPARE(back.type, kai::core::ParameterType::Date);
+        QCOMPARE(back.dateMode, QStringLiteral("datetime"));
+        QCOMPARE(back.dateRange, true);
+        QCOMPARE(back.dateFormat, QStringLiteral("custom"));
+        QCOMPARE(back.dateFormatCustom, QStringLiteral("dd.MM.yy HH:mm"));
+        QCOMPARE(kai::core::parameterTypeToString(kai::core::ParameterType::Date), QStringLiteral("date"));
+
+        // Defaults (campo ausente no JSON) continuam retrocompatíveis.
+        QJsonObject bare;
+        bare["name"] = QStringLiteral("x");
+        bare["type"] = QStringLiteral("date");
+        const kai::core::Parameter bareBack = kai::core::Parameter::fromJson(bare);
+        QCOMPARE(bareBack.dateMode, QStringLiteral("date"));
+        QCOMPARE(bareBack.dateRange, false);
+        QCOMPARE(bareBack.dateFormat, QStringLiteral("iso_date"));
+        QVERIFY(bareBack.dateFormatCustom.isEmpty());
+
+        ParameterEditorWidget editor;
+        editor.setParameters({date});
+        const QVector<kai::core::Parameter> widgetBack = editor.parameters();
+        QCOMPARE(widgetBack.size(), 1);
+        QCOMPARE(widgetBack.at(0).type, kai::core::ParameterType::Date);
+        QCOMPARE(widgetBack.at(0).dateMode, QStringLiteral("datetime"));
+        QCOMPARE(widgetBack.at(0).dateRange, true);
+        QCOMPARE(widgetBack.at(0).dateFormatCustom, QStringLiteral("dd.MM.yy HH:mm"));
+    }
+
+    // "group" (agrupamento opcional de parâmetros, pedido do usuário) —
+    // round-trip via JSON e via ParameterEditorWidget, mesmo padrão acima.
+    void groupFieldRoundTripsThroughJsonAndWidget()
+    {
+        kai::core::Parameter p;
+        p.name = QStringLiteral("timeout");
+        p.type = kai::core::ParameterType::Number;
+        p.group = QStringLiteral("Avançado");
+
+        const kai::core::Parameter back = kai::core::Parameter::fromJson(p.toJson());
+        QCOMPARE(back.group, QStringLiteral("Avançado"));
+
+        // Sem grupo (padrão): não aparece no JSON nem quebra o round-trip.
+        kai::core::Parameter noGroup;
+        noGroup.name = QStringLiteral("x");
+        noGroup.type = kai::core::ParameterType::Text;
+        const QJsonObject json = noGroup.toJson();
+        QVERIFY(!json.contains(QStringLiteral("group")));
+        QVERIFY(kai::core::Parameter::fromJson(json).group.isEmpty());
+
+        ParameterEditorWidget editor;
+        editor.setParameters({p});
+        const QVector<kai::core::Parameter> widgetBack = editor.parameters();
+        QCOMPARE(widgetBack.size(), 1);
+        QCOMPARE(widgetBack.at(0).group, QStringLiteral("Avançado"));
+    }
+
+    // "required" (marcação de obrigatório opt-in, achado real: "campos
+    // obrigatórios por padrão não ficou legal... apenas diante seleção de
+    // flag") — round-trip via JSON e via ParameterEditorWidget, mesmo
+    // padrão do teste de "group" acima. Precisa ser exportável/importável
+    // (pedido explícito do usuário) e default false (opt-in de verdade).
+    void requiredFieldRoundTripsThroughJsonAndWidget()
+    {
+        kai::core::Parameter p;
+        p.name = QStringLiteral("ambiente");
+        p.type = kai::core::ParameterType::Text;
+        p.required = true;
+
+        const kai::core::Parameter back = kai::core::Parameter::fromJson(p.toJson());
+        QCOMPARE(back.required, true);
+        QVERIFY(p.toJson().contains(QStringLiteral("required")));
+
+        // Sem marcar (padrão): não aparece no JSON, opt-in de verdade.
+        kai::core::Parameter noRequired;
+        noRequired.name = QStringLiteral("x");
+        noRequired.type = kai::core::ParameterType::Text;
+        const QJsonObject json = noRequired.toJson();
+        QVERIFY(!json.contains(QStringLiteral("required")));
+        QVERIFY(!kai::core::Parameter::fromJson(json).required);
+
+        ParameterEditorWidget editor;
+        editor.setParameters({p});
+        const QVector<kai::core::Parameter> widgetBack = editor.parameters();
+        QCOMPARE(widgetBack.size(), 1);
+        QCOMPARE(widgetBack.at(0).required, true);
+    }
+
+    // Pedido do usuário: "por hora está muito solto... um select livre ia
+    // ser perfeito, aceita texto livre, mas permite escolher entre as
+    // opções já usadas naquele cmd". O campo Grupo do ParameterRowDialog
+    // vira um combo EDITÁVEL: (a) sugere os nomes de grupo já usados pelos
+    // OUTROS parâmetros do mesmo comando, e (b) ainda aceita texto livre pra
+    // criar um grupo novo. Interação real com o diálogo modal (não dá pra
+    // acessar ParameterRowDialog diretamente — vive num namespace anônimo em
+    // parameter-editor-widget.cpp), mesmo padrão de QTimer::singleShot +
+    // activeModalWidget já usado em test_parameter_form_dialog.cpp.
+    void groupComboSuggestsNamesAlreadyUsedByOtherParamsInSameCommand()
+    {
+        kai::core::Parameter existing;
+        existing.name = QStringLiteral("timeout");
+        existing.type = kai::core::ParameterType::Number;
+        existing.group = QStringLiteral("Avançado");
+
+        ParameterEditorWidget editor;
+        editor.setParameters({existing});
+
+        // handleAddRowClicked() abre o ParameterRowDialog modal pra um NOVO
+        // parâmetro — captura ele via activeModalWidget() assim que abre.
+        QTimer::singleShot(50, [&editor]() {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+
+            auto *groupCombo = dialog->findChild<QComboBox *>();
+            QVERIFY(groupCombo != nullptr);
+            QVERIFY(groupCombo->isEditable());
+
+            // Sugestão do grupo já usado por "timeout" está na lista.
+            QVERIFY(groupCombo->findText(QStringLiteral("Avançado")) >= 0);
+
+            // Mas o campo também aceita texto LIVRE (grupo novo).
+            groupCombo->setCurrentText(QStringLiteral("Depuração"));
+
+            auto *nameField = dialog->findChild<QLineEdit *>();
+            QVERIFY(nameField != nullptr);
+            nameField->setText(QStringLiteral("novo_param"));
+
+            auto *buttonBox = dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(buttonBox != nullptr);
+            buttonBox->button(QDialogButtonBox::Ok)->click();
+        });
+        editor.handleAddRowClicked();
+
+        const QVector<kai::core::Parameter> params = editor.parameters();
+        QCOMPARE(params.size(), 2);
+        QCOMPARE(params.at(1).name, QStringLiteral("novo_param"));
+        QCOMPARE(params.at(1).group, QStringLiteral("Depuração"));
     }
 };
 

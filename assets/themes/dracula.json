@@ -19,7 +19,10 @@
     "notification_bg": "#44475a",
     "notification_fg": "#f8f8f2",
     "num_fg": "#a4ffff",
-    "find_fg": "#ffffa5"
+    "find_fg": "#ffffa5",
+    "gradient_start": "#bd93f9",
+    "gradient_end": "#ff79c6",
+    "gradient_angle": "135"
   },
   "components": {
     "main_window": "background: ${bg}; color: ${fg};",

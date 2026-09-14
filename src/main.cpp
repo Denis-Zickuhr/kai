@@ -1,9 +1,10 @@
 #include <QApplication>
 
 #include "ui/main-window.h"
-#include "ui/no-scroll-combo-filter.h"
+#include "ui/shared/no-scroll-combo-filter.h"
 #include "ipc/cli-client.h"
 #include "ipc/ipc-server.h"
+#include "cli/cli-local-executor.h"
 #include "utils/logger.h"
 
 #ifdef Q_OS_WIN
@@ -20,10 +21,22 @@ namespace {
 // stdout ia para o vazio e nada aparecia no cmd/PowerShell — bug reportado
 // ("no windows o ipc não printa nada", e por consequência o `kai ps` também
 // parecia não listar nada).
-// Solução: quando há argumentos de CLI, anexamos ao console do processo PAI
-// e reabrimos stdout/stderr nele. Se não houver console pai (execução por
-// duplo clique/atalho), AttachConsole falha e seguimos silenciosos, como
-// antes.
+// Solução: anexamos ao console do processo PAI (se houver) e reabrimos
+// stdout/stderr nele. Se não houver console pai (execução por duplo
+// clique/atalho), AttachConsole simplesmente devolve false (documentado,
+// sem efeito colateral) e seguimos silenciosos, como antes.
+//
+// Chamado incondicionalmente (não só quando argc>1 — ver main()): bug real
+// reportado depois ("se eu rodar o kai do Windows a partir do WSL, via
+// interop, não quero que abra a GUI") — kai.exe SOLTO (sem argumento
+// nenhum) nunca tentava anexar console, então mesmo debaixo de um console
+// de verdade (cmd/PowerShell, OU o console que o WSL cria pro processo
+// Windows via interop) o app não tinha como saber disso e sempre abria a
+// GUI. Tentando anexar SEMPRE (mesmo sem argumento), stdoutIsInteractiveTerminal
+// (ver ipc/cli-client.cpp) consegue detectar corretamente um console real
+// atrás também no caso solto — e continua caindo em GUI normalmente
+// quando não há console nenhum (duplo-clique/atalho), sem mudança de
+// comportamento aí.
 void attachParentConsoleForCli()
 {
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
@@ -42,11 +55,11 @@ void attachParentConsoleForCli()
 int main(int argc, char *argv[])
 {
 #ifdef Q_OS_WIN
-    // Antes de qualquer escrita: se parece invocação de CLI (tem argumento
-    // que não é flag do Qt), tenta anexar o console do shell que chamou.
-    if (argc > 1) {
-        attachParentConsoleForCli();
-    }
+    // Antes de qualquer escrita: tenta SEMPRE anexar o console do processo
+    // pai, mesmo sem argumento nenhum (ver comentário na função — precisa
+    // tentar mesmo na invocação solta, pra detectar um console de verdade
+    // atrás dela, ex: `kai.exe` chamado via WSL interop).
+    attachParentConsoleForCli();
 #endif
     // Mitigação para bug conhecido de "dead keys" em apps Qt sob
     // Wayland/WSLg (relatado em issues do próprio WSLg e de outros apps Qt):
@@ -79,20 +92,115 @@ int main(int argc, char *argv[])
         qputenv("QT_QPA_PLATFORM", QByteArray("xcb"));
     }
 
+    // --- CLI Paths, modo LOCAL (kai <cli_path...> dentro de um diretório
+    // com kai.json/kai.yml) ---
+    // Decidido ANTES de construir QUALQUER QCoreApplication/QApplication —
+    // Qt só permite UMA instância de aplicação por processo, e o modo
+    // local roda sob QCoreApplication de propósito (sem exigir nenhuma
+    // plataforma gráfica/display — é o ponto central da portabilidade:
+    // funciona em CI headless sem QT_QPA_PLATFORM=offscreen nenhum). Se
+    // não for este caso (nenhum kai.json/kai.yml no diretório atual, ou o
+    // 1º argumento já é um verbo conhecido como "run"/"list"/etc.), segue
+    // pro fluxo de sempre logo abaixo, sem nenhum efeito colateral.
+    //
+    // Monta os args À MÃO (não QCoreApplication::arguments(), que exige
+    // uma instância já construída — exatamente o que ainda não decidimos
+    // qual classe será).
+    QStringList rawArgs;
+    rawArgs.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        rawArgs << QString::fromLocal8Bit(argv[i]);
+    }
+    // `kai global <cli_path...>` — FORÇA resolução global mesmo dentro de
+    // uma pasta com kai.json/kai.yml próprio (que teria prioridade local,
+    // ver bloco de baixo). Pedido do usuário: "se tiver uma pasta com
+    // comandos locais, aí como listo e uso os globais?" — sem esta
+    // válvula de escape, não tinha como. "global"/"--global"/"-g" já
+    // eram verbos RESERVADOS (ver core::reservedCliVerbs) esperando por
+    // isto — nunca tinham sido ligados a nada até agora. Checado ANTES do
+    // bloco local de propósito: precisa ganhar dele.
+    if (rawArgs.size() >= 2
+        && (rawArgs.at(1) == QStringLiteral("global")
+            || rawArgs.at(1) == QStringLiteral("--global")
+            || rawArgs.at(1) == QStringLiteral("-g"))) {
+        QStringList strippedArgs;
+        strippedArgs << rawArgs.at(0) << rawArgs.mid(2);
+        QCoreApplication globalApp(argc, argv);
+        Q_UNUSED(globalApp);
+        QCoreApplication::setApplicationName(QStringLiteral("kai"));
+        return kai::cli::runGlobalCliDiscover(strippedArgs).exitCode;
+    }
+
+    if (kai::cli::looksLikeLocalCliPathAttempt(rawArgs)) {
+        QCoreApplication localApp(argc, argv);
+        Q_UNUSED(localApp); // precisa existir (event loop pro pipeline), nunca usada diretamente
+        QCoreApplication::setApplicationName(QStringLiteral("kai"));
+        return kai::cli::runLocalCliPath(rawArgs).exitCode;
+    }
+
+    // --- CLI Paths GLOBAIS: sem kai.json/kai.yml local (bloco acima já
+    // teria pego o caso local), mas AINDA assim num terminal interativo —
+    // pedido do usuário: "se a gente for rodar o kai onde nem tem kai
+    // file, ele já lista os globais do [cli_]path" (só os marcados com
+    // cli_path em QUALQUER pasta do app, nunca por nome puro — isso
+    // continua sendo `kai run <nome>`). looksLikeGlobalCliPathAttempt já
+    // exclui verbos reservados (run/list/ps/etc.), então não compete com
+    // o bloco de IPC logo abaixo. Se não houver NENHUM cli_path
+    // configurado em lugar nenhum (raiz vazia), runGlobalCliDiscover
+    // devolve handled=false e cai no fallback de IPC de sempre (ajuda +
+    // tenta uma instância rodando), reaproveitando a MESMA
+    // QCoreApplication já construída aqui.
+    if (kai::cli::looksLikeGlobalCliPathAttempt(rawArgs)) {
+        QCoreApplication globalApp(argc, argv);
+        Q_UNUSED(globalApp);
+        QCoreApplication::setApplicationName(QStringLiteral("kai"));
+        const kai::cli::LocalExecutionOutcome globalOutcome = kai::cli::runGlobalCliDiscover(rawArgs);
+        if (globalOutcome.handled) {
+            return globalOutcome.exitCode;
+        }
+        const kai::ipc::CliOutcome ipcOutcome = kai::ipc::runCliIfRequested(rawArgs);
+        return ipcOutcome.handled ? ipcOutcome.exitCode : 0;
+    }
+
+    // --- CLI "de IPC" (kai run/list/env/show/ps/attach/kill/help/...) e o
+    // "discover" solto num terminal (kai sem argumento nenhum, ver
+    // shouldHandleAsCli) --- MESMO motivo do bloco acima: decidido ANTES de
+    // QUALQUER Application construída. Achado real, com print do usuário:
+    // construir QApplication (que inicializa tema/ícone/plataforma gráfica)
+    // só pra descartar em seguida (CLI puro, nunca abre janela) disparava
+    // "QStandardPaths: wrong permissions on runtime directory" em `kai
+    // list`/`kai ps`/`kai` solto sob WSLg — mas não em `kai ping` (CLI Path
+    // local, que já usava só QCoreApplication). QCoreApplication também
+    // basta: runCliIfRequested só fala com o IPC via QLocalSocket, nunca
+    // cria widget nenhum.
+    if (kai::ipc::shouldHandleAsCli(rawArgs)) {
+        QCoreApplication cliApp(argc, argv);
+        Q_UNUSED(cliApp);
+        QCoreApplication::setApplicationName(QStringLiteral("kai"));
+        const kai::ipc::CliOutcome outcome = kai::ipc::runCliIfRequested(rawArgs);
+        return outcome.handled ? outcome.exitCode : 0;
+    }
+
+    // Chegou até aqui: não é nenhum modo CLI (local nem IPC) — abre a GUI
+    // normalmente. runCliIfRequested já não precisa ser chamado de novo
+    // aqui: shouldHandleAsCli acima já decidiu isso com a MESMA lógica,
+    // antes de qualquer Application existir (ver bloco acima).
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("kai"));
     QApplication::setQuitOnLastWindowClosed(false); // Kai vive na bandeja mesmo com a janela oculta.
 
-    // --- Modo CLI (kai run/list/env/show/help) ---
-    // Se os argumentos forem um verbo de CLI, agimos como cliente: falamos
-    // com a instância do Kai já rodando via IPC, imprimimos a resposta e
-    // saímos SEM subir a GUI (feature CLI/IPC — vibe CopyQ).
-    {
-        const kai::ipc::CliOutcome outcome = kai::ipc::runCliIfRequested(app.arguments());
-        if (outcome.handled) {
-            return outcome.exitCode;
-        }
-    }
+    // Força o estilo base Fusion em TODAS as plataformas — bug real
+    // reportado com foto: no Windows (sem isto), o app herda o estilo
+    // NATIVO (windowsvista/windows11), que desenha indicadores de
+    // checkbox/radio via API de tema do próprio Windows — uma limitação
+    // documentada do Qt: certos QStyle nativos (windowsvista, macintosh)
+    // não respeitam QSS pra ::indicator, então NENHUMA das regras de tema
+    // (borda de accent, ícone de check, trilho do switch) tinha efeito
+    // nenhum lá, caindo pro visual cru do SO. No Linux isto nunca
+    // apareceu porque o padrão já era Fusion (dependendo do ambiente) —
+    // fixar explicitamente garante o MESMO visual em qualquer SO, do
+    // jeito que todo o resto do app já assume.
+    QApplication::setStyle(QStringLiteral("Fusion"));
 
     // Impede que QComboBox/spin boxes troquem de valor com o scroll do
     // mouse quando não estão focados (feedback do usuário: selects

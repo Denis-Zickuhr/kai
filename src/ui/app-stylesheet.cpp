@@ -1,6 +1,6 @@
 #include "ui/app-stylesheet.h"
 
-#include "ui/table-utils.h"
+#include "ui/shared/table-utils.h"
 #include "utils/design-tokens.h"
 
 #include <QColor>
@@ -183,9 +183,25 @@ QString buildModernStylesheet()
     // LISTRAS SUTIS: alternate-background-color derivado do fundo com um desvio
     // mínimo, em vez de alt_bg (que é um salto grande de luminância).
     const QString stripe = hex(shiftToward(QColor(bg), QColor(fg), isDark ? 0.035 : 0.028));
+    // Exibição em árvore refinada (pedido do usuário: "mais respiro"):
+    // padding vertical um degrau maior que o padY genérico dos outros
+    // widgets. A seleção volta a ser só PREENCHIMENTO sólido, sem borda —
+    // numa QTreeWidget de VÁRIAS colunas (a árvore de comandos tem colunas
+    // extras pros botões inline de cada linha) uma borda por ::item vira
+    // uma CAIXA POR CÉLULA, não um contorno único ao redor da linha
+    // inteira (bug relatado com print: "virou vários segmentos" em vez de
+    // um destaque único). Nada de regras QSS pra `QTreeView::branch` aqui:
+    // aquela área NUNCA é pintada pelo QSS (é código do próprio
+    // QTreeView) — por isso as setas customizadas não apareciam antes; as
+    // linhas de conexão + o indicador de expandir/colapsar agora são
+    // desenhados em C++ por DraggableTreeWidget::drawBranches (ver
+    // ui/shared/draggable-tree-widget.h), com estilo configurável em
+    // Settings → Aparência → "Linhas da árvore" (Nativa/Nenhuma/Contínua).
+    const int treePadY = padY + 1;
     qss += QStringLiteral(
         "QTreeWidget, QTreeView, QListWidget, QListView, QTableWidget, QTableView {"
-        " background-color: %1; border: none; outline: none; alternate-background-color: %8; }\n"
+        " background-color: %1; border: none; outline: none; alternate-background-color: %8;"
+        " show-decoration-selected: 1; }\n"
         "QTreeView::item, QListView::item, QTreeWidget::item, QListWidget::item {"
         " padding: %2px %3px; border-radius: %4px; }\n"
         "QTreeView::item:hover, QListView::item:hover,"
@@ -199,7 +215,7 @@ QString buildModernStylesheet()
         " background-color: %6; color: %7; border: none; }\n"
         "QTableWidget::item:selected, QTableView::item:selected {"
         " background-color: %6; color: %7; }\n")
-        .arg(bg).arg(padY).arg(padX).arg(rSm).arg(hover).arg(sel).arg(accent).arg(stripe);
+        .arg(bg).arg(treePadY).arg(padX).arg(rSm).arg(hover).arg(sel).arg(accent).arg(stripe);
 
     // --- Abas: indicador de accent, sem moldura 3D ---
     qss += QStringLiteral(
@@ -255,14 +271,22 @@ QString buildModernStylesheet()
         "QCheckBox, QRadioButton { spacing: %11px; background: transparent; }\n"
         "QCheckBox::indicator, QRadioButton::indicator { width: %7px; height: %7px;"
         " border: 1.5px solid %3; border-radius: %8px; background: transparent; }\n"
-        "QCheckBox::indicator:unchecked { background: transparent; image: none; }\n"
+        // DESMARCADO com fundo PREENCHIDO (%9, a cor de fundo BASE do app —
+        // já usada aqui mesmo pro anel interno do radio marcado, então
+        // nenhum novo parâmetro no .arg() chain) em vez de transparent —
+        // bug real reportado com foto: dentro de um card com fundo
+        // "surface"/"surface2" (survey de opções de export, por exemplo), a
+        // borda fina sobre fundo transparente ficava quase invisível, a
+        // ponto de o checkbox desmarcado sumir de vista por completo. Mesmo
+        // raciocínio já usado pro trilho do switch desligado (ver bloco
+        // TOGGLE SWITCH abaixo: "ficava perto demais de surface2... some
+        // sob o card").
+        "QCheckBox::indicator:unchecked { background: %9; image: none; }\n"
         "QRadioButton::indicator { border-radius: %12px; }\n"
         "QCheckBox::indicator:hover, QRadioButton::indicator:hover {"
         " border: 1.5px solid %10; }\n"
         "QCheckBox::indicator:checked { background: transparent; border: 1.5px solid %10;"
         " image: url(:/icons/lucide/check-on.svg); }\n"
-        "QRadioButton::indicator:checked { background: %10; border: 4px solid %9;"
-        " outline: 1.5px solid %10; }\n"
         "QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {"
         " border: 1.5px solid %13; background: transparent; }\n"
         "QCheckBox:disabled, QRadioButton:disabled { color: %13; }\n"
@@ -349,12 +373,51 @@ QString buildModernStylesheet()
         .arg(padX)                           // %23 padding horizontal do editor
         .arg(tk::controlHeight());           // %24 altura do editor de célula
 
+    // QRadioButton::indicator:checked — regra PRÓPRIA (em vez de espremida
+    // na cadeia %N acima, mesmo motivo do badge "Pulado" abaixo: não
+    // precisar renumerar ~18 argumentos existentes). border-radius
+    // REPETIDO aqui (a regra base QRadioButton::indicator já declara o
+    // seu) e com um raio MAIOR, não o mesmo da base — achado real com
+    // foto (diálogo de Exportar, JSON/YAML): o radio desmarcado saía
+    // redondo certinho, mas MARCADO virava "quadrado arredondado" — a
+    // borda do estado marcado é bem mais grossa (4px vs 1.5px), o que
+    // INFLA a caixa renderizada além do content-box; com o MESMO raio da
+    // base (metade do content-box original) isso já não cobre metade da
+    // caixa INFLADA. space(3) (~12px) cobre a inflação sem precisar
+    // calcular o crescimento exato da borda em cada densidade.
+    qss += QStringLiteral(
+        "QRadioButton::indicator:checked { background: %1; border: 4px solid %2;"
+        " border-radius: %3px; outline: 1.5px solid %1; }\n")
+        .arg(accent, bg).arg(tk::space(3));
+
     // --- TOGGLE SWITCH (kaiRole="switch") ---
     // Repaginação visual do Settings (mockup enviado pelo usuário): flags
     // booleanas viram um "pill switch" (trilho + bolinha) em vez da caixa de
     // checkbox padrão — reaproveita o MESMO QCheckBox/bool por trás (só
     // troca a pele via propriedade), sem novo widget/estado. SVG assado por
     // cor (ver themedSwitchSvgPath), igual à estratégia do check normal.
+    //
+    // ESTE BLOCO TEM QUE VIR DEPOIS de QUALQUER outro bloco que estilize
+    // QCheckBox::indicator em geral (ver o bloco "CHECKBOX/RADIO" logo
+    // acima de buildModernStylesheet, no trecho de tooltip/checkbox/
+    // splitter/header) — o QSS engine do Qt não implementa a cascata CSS
+    // por especificidade de forma confiável aqui; regras posteriores no
+    // MESMO qss concatenado ganham de empates, então o switch precisa ser
+    // o ÚLTIMO a declarar `QCheckBox[...]::indicator` pra sua largura/
+    // altura/borda/fundo sempre vencerem, sem depender de especificidade.
+    //
+    // BUG REAL CORRIGIDO (achado com foto, "quadrado errado de fundo" no
+    // diálogo de Exportar): uma sessão anterior adicionou um SEGUNDO
+    // bloco de tema pra QCheckBox::indicator/QRadioButton::indicator bem
+    // aqui, sem perceber que o app JÁ tinha um (o bloco "CHECKBOX/RADIO"
+    // citado acima, mais antigo — borda fina + check-on.svg, fundo
+    // transparente). Os dois brigavam pelas mesmas propriedades ao mesmo
+    // tempo, produzindo um resultado inconsistente/glitchado em vez de
+    // "sem estilo nenhum" (o bug original, ANTES de qualquer um dos dois
+    // blocos existir, era mesmo o indicador nativo cru do Fusion). O
+    // bloco duplicado foi removido — o tema original já cobre
+    // QCheckBox/QRadioButton (e também QListView/QTreeView::indicator)
+    // sozinho.
     {
         // 0.4 -> 0.7: o trilho DESLIGADO ficava perto demais de surface2 (o
         // mesmo fundo dos cards ao redor), praticamente some sob o card —
@@ -370,6 +433,21 @@ QString buildModernStylesheet()
             "QCheckBox[kaiRole=\"switch\"] { spacing: %3px; }\n"
             "QCheckBox[kaiRole=\"switch\"]::indicator { width: 36px; height: 20px;"
             " border: none; background: transparent; image: url(%1); }\n"
+            // Bug real reportado (print: switches viravam bolinhas cruas,
+            // sem a pílula): o bloco CHECKBOX/RADIO acima já declara
+            // `QCheckBox::indicator:unchecked { image: none; ... }` (sem
+            // condição de kaiRole) — essa regra bate em QUALQUER checkbox
+            // desmarcado, switches inclusive, e o switch só tinha override
+            // explícito pro estado :checked, nunca pro :unchecked. Sem um
+            // `[kaiRole="switch"]::indicator:unchecked` próprio aqui, o
+            // switch desmarcado (o estado PADRÃO da maioria destas flags)
+            // caía de volta pro `image: none` + fundo/borda genéricos do
+            // checkbox comum, que aparentam uma bolinha por causa do
+            // border-radius do checkbox padrão. Mesmo tratamento simétrico
+            // do :checked logo abaixo resolve, sem precisar mexer no bloco
+            // genérico (que outros checkboxes normais ainda usam).
+            "QCheckBox[kaiRole=\"switch\"]::indicator:unchecked { image: url(%1); border: none;"
+            " background: transparent; }\n"
             "QCheckBox[kaiRole=\"switch\"]::indicator:checked { image: url(%2); }\n"
             "QCheckBox[kaiRole=\"switch\"]:disabled { color: %4; }\n")
             .arg(svgOff, svgOn).arg(tk::space(2)).arg(muted);
@@ -422,12 +500,27 @@ QString buildModernStylesheet()
         // (pedido do usuário: tirar a bordinha roxa, usar a cor da caixinha).
         // ALTURA EXPLÍCITA (%18): sem isto, cada ::tab usa a altura do seu
         // próprio sizeHint (ícone + texto + padding), quase sempre MENOR que
-        // a QTabBar (fixa em tk::controlHeight(), ver OutputPanel::setupUi) —
-        // o rótulo então ficava colado no topo da aba, com um vão sobrando
+        // a QTabBar (fixa em m_barHeight, ver OutputPanel::setupUi) — o
+        // rótulo então ficava colado no topo da aba, com um vão sobrando
         // embaixo (relatado: "a aba tem os itens desalinhados, embaixo tem
         // um espaço maior que em cima"). Fixando a altura do próprio ::tab
         // igual à da barra (descontada a margem vertical), o Qt centraliza
         // ícone+texto dentro dela de verdade.
+        //
+        // BUG REAL encontrado depois (relatado de novo: "o focus da saída
+        // ainda está desalinhado com o outer da aba"), com número na mão
+        // medido via amostragem de pixel + QTabBar::tabRect(): esta conta
+        // ignorava que "height" no QSS é a altura do CONTEÚDO — o retângulo
+        // final pintado da aba soma margin (2+2=4, ver "margin: 2px 1px"
+        // abaixo) + padding (%12 em cima e embaixo, 2×) + este height. Com
+        // o valor antigo (controlHeight()-4 = 28) a soma dava 4+8+28=40,
+        // mas a QTabBar SÓ tinha 36px de altura (tinha um desconto de
+        // space(1) em OutputPanel::setupUi que não existe mais) — a aba
+        // pintava 4px além do fim da barra, cortada/vazando de forma
+        // desigual (o motivo real do "desalinhado"). Agora a QTabBar
+        // preenche a caixinha INTEIRA (m_barHeight, sem desconto) e esta
+        // conta subtrai margin+padding de m_barHeight pra fechar exato:
+        // altura da barra − margin (2+2) − padding (%12 × 2).
         "QTabBar#outputTabs::tab { padding: %12px %13px; color: %14;"
         " background: transparent; border: none; border-radius: %3px;"
         " margin: 2px 1px; height: %18px; font-size: %5pt; font-weight: 500; }\n"
@@ -451,10 +544,11 @@ QString buildModernStylesheet()
         // em m_barHeight e o texto centraliza), %13 = padding horizontal.
         .arg(tk::space(1)).arg(tk::space(3))
         .arg(muted).arg(fg).arg(hover).arg(border)
-        // %18 = altura do ::tab = altura da QTabBar (tk::controlHeight(), ver
-        // OutputPanel::setupUi) menos a margem vertical (2px em cima + 2px
-        // embaixo) — ver comentário acima da regra.
-        .arg(tk::controlHeight() - 4);
+        // %18 = altura de CONTEÚDO do ::tab: altura real da QTabBar
+        // (m_barHeight = controlHeight() + space(2)) menos a margem
+        // vertical (2px + 2px) e menos o padding vertical (%12, 2×) — ver
+        // comentário acima da regra pro porquê exato.
+        .arg(tk::controlHeight() + tk::space(2) - 4 - 2 * tk::space(1));
 
     // Badge "Pulado" (Execution Condition não atendida — ver
     // OutputStatus::Skipped): regra própria, em vez de espremida na cadeia

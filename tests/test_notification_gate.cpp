@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/notification-gate.h"
+#include "ui/shared/notification-gate.h"
 
 using namespace kai::ui;
 

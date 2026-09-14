@@ -11,21 +11,22 @@
 #include "core/config-manager.h"
 #include "core/environment-manager.h"
 #include "core/run-history.h"
+#include "core/notification-history.h"
 #include "core/models.h"
 #include "engine/execution-pipeline.h"
 #include "engine/process-manager.h"
-#include "ui/command-tree-widget.h"
-#include "ui/expand-collapse-bar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/action-group-container.h"
-#include "ui/fuzzy-search.h"
-#include "ui/terminal-drawer.h"
-#include "ui/project-selector.h"
-#include "ui/project-import-options-dialog.h"
-#include "ui/top-utility-bar.h"
-#include "ui/action-sidebar.h"
-#include "ui/process-list-dialog.h"
-#include "ui/log-viewer-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/expand-collapse-bar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/action-group-container.h"
+#include "ui/shared/fuzzy-search.h"
+#include "ui/features/output/terminal-drawer.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/features/collections/project-import-options-dialog.h"
+#include "ui/shared/top-utility-bar.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/features/history/process-list-dialog.h"
+#include "ui/features/output/log-viewer-dialog.h"
 #include "utils/theme-manager.h"
 
 class QHotkey;
@@ -144,12 +145,13 @@ private slots:
     void handleCommandActivated(const QString &commandId);
     void handlePipelineLog(const QString &commandId, const QString &text, bool isError);
     void handlePipelineFinished(const engine::PipelineResult &result);
-    void handleImportProjectRequested();
-    void handleImportConfigRequested();
-    void handleImportOpenApiRequested();
-    void handleExportGlobalRequested();
-    void handleExportFolderRequested();
-    void handleExportCommandRequested();
+    // Menu único de importação/exportação (pedido do usuário: "só dois
+    // botões... um jeito simplificado e mais fácil, porém completo, de
+    // importar, com apenas um form" / "queria um menu unificado para
+    // exportação, não 3") — ImportDialog/ExportDialog resolvem fonte/
+    // tipo/escopo por dentro.
+    void handleImportRequested();
+    void handleExportRequested();
     void handleTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
     void handleThemeReloaded(const utils::ResolvedTheme &theme);
     void handleNewFolderRequested();
@@ -181,6 +183,7 @@ private slots:
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
     void handleRunHistoryRequested();
+    void handleNotificationHistoryRequested();
     void handleLogsRequested();
     void handleHelpRequested();
     void handleWelcomeScreenClosed();
@@ -194,6 +197,9 @@ private slots:
     // bytes de teclado prontos para o PTY, e mudança de tamanho em células.
     void handleTerminalRawInput(const QByteArray &data);
     void handleTerminalSizeChanged(int rows, int cols);
+    // Setting opt-in "notificar no primeiro ERROR da saída formatada" —
+    // ver OutputPanel::firstErrorInFormattedOutput.
+    void handleFirstErrorInFormattedOutput();
 
     void handleBackgroundProcessStarted(const QString &commandId, engine::ProcessRunner *runner);
     void handleBackgroundProcessOutput(const QString &commandId, const QString &text, bool isError);
@@ -217,7 +223,7 @@ private:
     // — mapeado internamente por maybeShowNotification, pra quem chama
     // não precisar carregar Configurações duas vezes (uma pro toggle,
     // outra dentro do método).
-    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered };
+    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered, FirstErrorInFormattedOutput };
     // Notificações (pedido do usuário): mostra um toast nativo da bandeja
     // se habilitado nas Configurações E o toggle daquele evento
     // específico estiver ligado, respeitando foco/bandeja (ver
@@ -297,6 +303,12 @@ private:
     void scheduleAutoRunCommands();
     void persistCommands();
     void writeExportFile(const QString &path, const QString &content);
+    // Corpo de cada fluxo de import, sem a etapa de escolher a fonte (já
+    // resolvida pelo ImportDialog em handleImportRequested) — mesma lógica
+    // de sempre, só sem o picker próprio.
+    void importProjectFromDirectory(const QString &directory);
+    void importOpenApiFromFile(const QString &path);
+    void importConfigFromFile(const QString &path);
     void reconnectTerminalToCommand(const QString &commandId);
     // Resolve o ProcessRunner de UM comando específico por id — mesma
     // lógica repetida em handleTerminal{Interrupt,Eof,RawData,Resize}
@@ -315,6 +327,24 @@ private:
     // padrão já usado pra comandos (ver handleSaveOrUpdateCommand): se o
     // id já existe, anexa um sufixo numérico até achar um livre.
     QString uniqueFolderId(const QString &candidate) const;
+    // Ids da pasta raiz + todas as descendentes (mesma varredura usada em
+    // handleDuplicateFolderRequested) — reaproveitado pra achar coleções
+    // VINCULADAS ao exportar uma pasta (ver handleExportRequested/
+    // linkedCollectionsForFolder).
+    QVector<QString> folderSubtreeIds(const QString &rootFolderId) const;
+    // Coleções VINCULADAS a uma subárvore de pastas ou a um comando único —
+    // usado pela tela de exportação (pedido do usuário: "to selecionando
+    // uma pasta que tem coleções vinculadas, não estão dentro da PASTA,
+    // mas não aparecem o botão"). Duas formas de vínculo, unidas: (1) a
+    // coleção está fisicamente GUARDADA ali (Collection::folderId dentro da
+    // subárvore/pasta do comando) - o caso original; (2) a coleção é
+    // REFERENCIADA por algum parâmetro Select de um comando dentro do
+    // escopo (Parameter::collectionId), mesmo que a coleção em si viva
+    // fisicamente em outro lugar (ou em lugar nenhum) - o caso que estava
+    // faltando, e é o mais comum na prática ("uso a coleção X num comando
+    // desta pasta, quero versionar os dois juntos").
+    QVector<core::Collection> linkedCollectionsForFolder(const QString &folderId) const;
+    QVector<core::Collection> linkedCollectionsForCommand(const QString &commandId) const;
     QVector<core::Command> commandsInFolder(const QString &folderId) const;
     // Bloqueia nomes duplicados de Command/Collection DENTRO DA MESMA pasta
     // (feedback do usuário: pastas diferentes podem repetir nome livremente,
@@ -326,6 +356,7 @@ private:
     core::ConfigManager m_configManager;
     core::EnvironmentManager m_envManager;
     core::RunHistory m_runHistory;
+    core::NotificationHistory m_notificationHistory;
     QDateTime m_runStartedAt; // início da execução atual (para o histórico)
     core::CommandsData m_commandsData;
     QMap<QString, core::Command> m_commandsById;
@@ -335,6 +366,22 @@ private:
     QSet<QString> m_failedCommandIds;
     QMap<QString, QString> m_backgroundProcessLogs;
     QMap<QString, QString> m_commandLogs;
+    // "Abrir último link" (Command::openLastLink) para comandos de TERMINAL
+    // INTERATIVO (achado real: "a regra de auto clicar link impresso por
+    // ultimo não funciona nele") — um servidor de dev interativo (`npm
+    // start`, etc.) imprime a URL uma vez no início e continua rodando
+    // indefinidamente; a checagem normal (ver handlePipelineFinished) só
+    // dispara quando o pipeline TERMINA com sucesso, o que nunca acontece
+    // pra um processo que o usuário para manualmente. Pra terminal
+    // interativo, checa a cada chunk de saída (ver handlePipelineLog) e
+    // abre a PRIMEIRA URL vista, uma vez por execução (marcado aqui).
+    QSet<QString> m_openedLastLinkForRun;
+    // Cache de SettingsData::outputMaxLogSizeKb (em CARACTERES, já
+    // convertido) — appendToCommandLog roda a cada chunk de saída de
+    // QUALQUER comando, então lê daqui em vez de m_configManager.loadSettings()
+    // (I/O de disco) toda vez. Recalculado no construtor e sempre que
+    // Configurações é salvo com um valor novo (ver handleSettingsRequested).
+    int m_outputMaxLogSizeChars = 1024 * 1024;
     // Último resultado HTTP estruturado POR comando: as abas Headers/JSON
     // vinham só do resultado ao vivo (httpResultReady) e sumiam ao trocar de
     // aba/comando e voltar (relatado). Guardamos aqui para REAPLICAR no

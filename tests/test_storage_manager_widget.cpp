@@ -10,7 +10,7 @@
 #include <QTimer>
 #include <algorithm>
 
-#include "ui/storage-manager-widget.h"
+#include "ui/shared/storage-manager-widget.h"
 #include "core/config-manager.h"
 #include "core/models.h"
 

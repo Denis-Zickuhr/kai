@@ -11,10 +11,10 @@
 #include <QMenu>
 #include <QTimer>
 
-#include "ui/command-tree-widget.h"
-#include "ui/project-selector.h"
-#include "ui/item-actions-bar.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 
 using namespace kai::ui;
 using namespace kai::core;

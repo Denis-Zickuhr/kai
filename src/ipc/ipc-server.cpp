@@ -16,6 +16,12 @@ namespace {
 constexpr const char *kLogTag = "IpcServer";
 }
 
+QString ipcSocketName()
+{
+    const QByteArray override = qgetenv("KAI_IPC_SOCKET_NAME_OVERRIDE");
+    return override.isEmpty() ? QString::fromLatin1(kSocketName) : QString::fromLatin1(override);
+}
+
 IpcServer::IpcServer(QObject *parent)
     : QObject(parent)
     , m_server(new QLocalServer(this))
@@ -36,7 +42,7 @@ bool IpcServer::start()
     // QLocalServer::listen falha com AddressInUseError mesmo sem ninguém
     // escutando. Tentamos conectar: se conseguir, há instância viva (não
     // subimos). Se não, removemos o socket órfão e tentamos de novo.
-    const QString name = QString::fromLatin1(kSocketName);
+    const QString name = ipcSocketName();
     if (m_server->listen(name)) {
         utils::Logger::info(kLogTag, QStringLiteral("IPC escutando em '%1'.").arg(name));
         return true;

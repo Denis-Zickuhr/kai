@@ -2,7 +2,7 @@
 #include <QPlainTextEdit>
 #include <QTemporaryDir>
 
-#include "ui/command-json-editor-dialog.h"
+#include "ui/features/command-editor/command-json-editor-dialog.h"
 #include "core/config-manager.h"
 #include "core/models.h"
 

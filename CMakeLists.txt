@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(kai VERSION 1.0.0 LANGUAGES CXX C)
+project(kai VERSION 1.0.1 LANGUAGES CXX C)
 
 # Versão exibida na Ajuda (aba "Versão"). Deriva da versão do project().
 set(KAI_VERSION_STRING "${PROJECT_VERSION}")
@@ -78,10 +78,24 @@ add_library(kai-core STATIC
     src/core/environment-manager.cpp
     src/core/run-history.h
     src/core/run-history.cpp
+    src/core/notification-history.h
+    src/core/notification-history.cpp
     src/core/curl-parser.h
     src/core/curl-parser.cpp
     src/core/openapi-parser.h
     src/core/openapi-parser.cpp
+    src/core/yaml-bridge.h
+    src/core/yaml-bridge.cpp
+    src/core/date-param-format.h
+    src/core/date-param-format.cpp
+    src/core/kai-file-validator.h
+    src/core/kai-file-validator.cpp
+    src/core/cli-path-resolver.h
+    src/core/cli-path-resolver.cpp
+    src/core/cli-param-binder.h
+    src/core/cli-param-binder.cpp
+    src/core/cli-reserved-verbs.h
+    src/core/folder-path-resolver.h
     src/utils/path-format.h
     src/utils/path-format.cpp
     src/utils/asset-paths.h
@@ -124,130 +138,157 @@ add_library(kai-ui STATIC
     src/utils/action-shortcuts.cpp
     src/ui/app-stylesheet.h
     src/ui/app-stylesheet.cpp
-    src/ui/export-selection-dialog.h
-    src/ui/export-selection-dialog.cpp
-    src/ui/table-utils.h
-    src/ui/table-utils.cpp
-    src/ui/row-edit-dialog.h
-    src/ui/row-edit-dialog.cpp
-    src/ui/code-output-view.h
-    src/ui/code-output-view.cpp
-    src/ui/output-panel.h
-    src/ui/output-panel.cpp
-    src/ui/pty-terminal-widget.h
-    src/ui/pty-terminal-widget.cpp
-    src/ui/inline-code-field.h
-    src/ui/inline-code-field.cpp
-    src/ui/ansi-text-parser.h
-    src/ui/ansi-text-parser.cpp
-    src/ui/fuzzy-search.h
-    src/ui/fuzzy-search.cpp
-    src/ui/env-var-autocomplete.h
-    src/ui/env-var-autocomplete.cpp
-    src/ui/terminal-drawer.h
-    src/ui/terminal-drawer.cpp
-    src/ui/project-selector.h
-    src/ui/project-selector.cpp
-    src/ui/project-import-options-dialog.h
-    src/ui/project-import-options-dialog.cpp
-    src/ui/command-tree-widget.h
-    src/ui/command-tree-widget.cpp
-    src/ui/draggable-tree-widget.h
-    src/ui/collapsible-section-card.h
-    src/ui/collapsible-section-card.cpp
-    src/ui/parameter-form-dialog.h
-    src/ui/parameter-form-dialog.cpp
-    src/ui/key-value-editor-widget.h
-    src/ui/key-value-editor-widget.cpp
-    src/ui/terminal-profiles-editor-widget.h
-    src/ui/terminal-profiles-editor-widget.cpp
-    src/ui/parameter-editor-widget.h
-    src/ui/parameter-editor-widget.cpp
-    src/ui/output-responders-editor-widget.h
-    src/ui/output-responders-editor-widget.cpp
-    src/ui/hooks-editor-widget.h
-    src/ui/hooks-editor-widget.cpp
-    src/ui/execution-conditions-editor-widget.h
-    src/ui/execution-conditions-editor-widget.cpp
-    src/ui/env-extractors-editor-widget.h
-    src/ui/env-extractors-editor-widget.cpp
-    src/ui/dynamic-vars-inspector-widget.h
-    src/ui/dynamic-vars-inspector-widget.cpp
-    src/ui/project-detection-strategy.h
-    src/ui/project-detection-strategy.cpp
-    src/ui/folder-editor-dialog.h
-    src/ui/folder-editor-dialog.cpp
-    src/ui/folder-delete-dialog.cpp
-    src/ui/command-editor-dialog.h
-    src/ui/command-editor-dialog.cpp
-    src/ui/command-json-editor-dialog.h
-    src/ui/command-json-editor-dialog.cpp
-    src/ui/top-utility-bar.h
-    src/ui/top-utility-bar.cpp
-    src/ui/settings-dialog.h
-    src/ui/settings-dialog.cpp
-    src/ui/help-dialog.h
-    src/ui/help-dialog.cpp
-    src/ui/help-content.cpp
-    src/ui/quick-body-editor-dialog.h
-    src/ui/quick-body-editor-dialog.cpp
-    src/ui/json-editor-dialog.h
-    src/ui/json-editor-dialog.cpp
-    src/ui/json-syntax-highlighter.h
-    src/ui/json-syntax-highlighter.cpp
-    src/ui/lucide-icons.h
-    src/ui/lucide-icons.cpp
-    src/ui/icon-picker-widget.h
-    src/ui/icon-picker-widget.cpp
-    src/ui/icon-picker-dialog.h
-    src/ui/icon-picker-dialog.cpp
-    src/ui/collection-editor-dialog.h
-    src/ui/collection-editor-dialog.cpp
-    src/ui/json-viewer-widget.h
-    src/ui/json-viewer-widget.cpp
-    src/ui/foldable-json-view.h
-    src/ui/foldable-json-view.cpp
-    src/ui/loading-overlay.h
-    src/ui/loading-overlay.cpp
-    src/ui/no-scroll-combo-filter.h
-    src/ui/collection-selector-dialog.h
-    src/ui/collection-selector-dialog.cpp
-    src/ui/environment-manager-dialog.h
-    src/ui/environment-manager-dialog.cpp
-    src/ui/run-history-dialog.h
-    src/ui/run-history-dialog.cpp
+    src/ui/features/collections/export-dialog.h
+    src/ui/features/collections/export-dialog.cpp
+    src/ui/features/collections/import-dialog.h
+    src/ui/features/collections/import-dialog.cpp
+    src/ui/features/collections/import-selection-dialog.h
+    src/ui/features/collections/import-selection-dialog.cpp
+    src/ui/features/output/log-line-view.h
+    src/ui/features/output/log-line-view.cpp
+    src/ui/shared/table-utils.h
+    src/ui/shared/table-utils.cpp
+    src/ui/shared/row-edit-dialog.h
+    src/ui/shared/row-edit-dialog.cpp
+    src/ui/shared/date-picker-dialog.h
+    src/ui/shared/date-picker-dialog.cpp
+    src/ui/features/output/code-output-view.h
+    src/ui/features/output/code-output-view.cpp
+    src/ui/features/output/output-panel.h
+    src/ui/features/output/output-panel.cpp
+    src/ui/features/output/pty-terminal-widget.h
+    src/ui/features/output/pty-terminal-widget.cpp
+    src/ui/shared/inline-code-field.h
+    src/ui/shared/inline-code-field.cpp
+    src/ui/features/output/ansi-text-parser.h
+    src/ui/features/output/ansi-text-parser.cpp
+    src/ui/shared/fuzzy-search.h
+    src/ui/shared/fuzzy-search.cpp
+    src/ui/features/environments/env-var-autocomplete.h
+    src/ui/features/environments/env-var-autocomplete.cpp
+    src/ui/features/output/terminal-drawer.h
+    src/ui/features/output/terminal-drawer.cpp
+    src/ui/features/collections/project-selector.h
+    src/ui/features/collections/project-selector.cpp
+    src/ui/features/collections/project-import-options-dialog.h
+    src/ui/features/collections/project-import-options-dialog.cpp
+    src/ui/features/command-editor/command-tree-widget.h
+    src/ui/features/command-editor/command-tree-widget.cpp
+    src/ui/shared/draggable-tree-widget.h
+    src/ui/shared/draggable-table-widget.h
+    src/ui/shared/collapsible-section-card.h
+    src/ui/shared/collapsible-section-card.cpp
+    src/ui/features/command-editor/parameter-form-dialog.h
+    src/ui/features/command-editor/parameter-form-dialog.cpp
+    src/ui/shared/key-value-editor-widget.h
+    src/ui/shared/key-value-editor-widget.cpp
+    src/ui/features/output/terminal-profiles-editor-widget.h
+    src/ui/features/output/terminal-profiles-editor-widget.cpp
+    src/ui/features/command-editor/parameter-editor-widget.h
+    src/ui/features/command-editor/parameter-editor-widget.cpp
+    src/ui/features/command-editor/output-responders-editor-widget.h
+    src/ui/features/command-editor/output-responders-editor-widget.cpp
+    src/ui/features/command-editor/hooks-editor-widget.h
+    src/ui/features/command-editor/hooks-editor-widget.cpp
+    src/ui/features/command-editor/execution-conditions-editor-widget.h
+    src/ui/features/command-editor/execution-conditions-editor-widget.cpp
+    src/ui/features/environments/env-extractors-editor-widget.h
+    src/ui/features/environments/env-extractors-editor-widget.cpp
+    src/ui/features/environments/declared-env-vars-editor-widget.h
+    src/ui/features/environments/declared-env-vars-editor-widget.cpp
+    src/ui/features/environments/dynamic-vars-inspector-widget.h
+    src/ui/features/environments/dynamic-vars-inspector-widget.cpp
+    src/ui/features/collections/project-detection-strategy.h
+    src/ui/features/collections/project-detection-strategy.cpp
+    src/ui/features/collections/folder-editor-dialog.h
+    src/ui/features/collections/folder-editor-dialog.cpp
+    src/ui/features/collections/folder-delete-dialog.cpp
+    src/ui/features/command-editor/command-editor-dialog.h
+    src/ui/features/command-editor/command-editor-dialog.cpp
+    src/ui/features/command-editor/command-json-editor-dialog.h
+    src/ui/features/command-editor/command-json-editor-dialog.cpp
+    src/ui/shared/top-utility-bar.h
+    src/ui/shared/top-utility-bar.cpp
+    src/ui/features/settings/settings-dialog.h
+    src/ui/features/settings/settings-dialog.cpp
+    src/ui/features/settings/tabs/general-tab.h
+    src/ui/features/settings/tabs/general-tab.cpp
+    src/ui/features/settings/tabs/appearance-tab.h
+    src/ui/features/settings/tabs/appearance-tab.cpp
+    src/ui/features/settings/tabs/shortcuts-tab.h
+    src/ui/features/settings/tabs/shortcuts-tab.cpp
+    src/ui/features/settings/tabs/terminals-tab.h
+    src/ui/features/settings/tabs/terminals-tab.cpp
+    src/ui/features/settings/tabs/notifications-tab.h
+    src/ui/features/settings/tabs/notifications-tab.cpp
+    src/ui/shared/help-dialog.h
+    src/ui/shared/help-dialog.cpp
+    src/ui/shared/help-content.cpp
+    src/ui/shared/quick-body-editor-dialog.h
+    src/ui/shared/quick-body-editor-dialog.cpp
+    src/ui/shared/json-editor-dialog.h
+    src/ui/shared/json-editor-dialog.cpp
+    src/ui/shared/json-syntax-highlighter.h
+    src/ui/shared/json-syntax-highlighter.cpp
+    src/ui/shared/lucide-icons.h
+    src/ui/shared/lucide-icons.cpp
+    src/ui/shared/icon-picker-widget.h
+    src/ui/shared/icon-picker-widget.cpp
+    src/ui/shared/icon-picker-dialog.h
+    src/ui/shared/icon-picker-dialog.cpp
+    src/ui/features/collections/collection-editor-dialog.h
+    src/ui/features/collections/collection-editor-dialog.cpp
+    src/ui/shared/json-viewer-widget.h
+    src/ui/shared/json-viewer-widget.cpp
+    src/ui/shared/foldable-json-view.h
+    src/ui/shared/foldable-json-view.cpp
+    src/ui/shared/loading-overlay.h
+    src/ui/shared/loading-overlay.cpp
+    src/ui/shared/no-scroll-combo-filter.h
+    src/ui/features/collections/collection-selector-dialog.h
+    src/ui/features/collections/collection-selector-dialog.cpp
+    src/ui/features/environments/environment-manager-dialog.h
+    src/ui/features/environments/environment-manager-dialog.cpp
+    src/ui/features/history/run-history-dialog.h
+    src/ui/features/history/run-history-dialog.cpp
+    src/ui/features/history/notification-history-dialog.h
+    src/ui/features/history/notification-history-dialog.cpp
     assets/icons/icons.qrc
-    src/ui/action-sidebar.h
-    src/ui/action-sidebar.cpp
-    src/ui/shortcut-capture-field.h
-    src/ui/shortcut-capture-field.cpp
-    src/ui/process-list-dialog.h
-    src/ui/process-list-dialog.cpp
-    src/ui/log-viewer-dialog.h
-    src/ui/log-viewer-dialog.cpp
+    src/ui/shared/action-sidebar.h
+    src/ui/shared/action-sidebar.cpp
+    src/ui/shared/shortcut-capture-field.h
+    src/ui/shared/shortcut-capture-field.cpp
+    src/ui/features/history/process-list-dialog.h
+    src/ui/features/history/process-list-dialog.cpp
+    src/ui/features/output/log-viewer-dialog.h
+    src/ui/features/output/log-viewer-dialog.cpp
     src/ui/main-window.h
     src/ui/main-window.cpp
-    src/ui/welcome-screen.h
-    src/ui/welcome-screen.cpp
-    src/ui/expand-collapse-bar.h
-    src/ui/expand-collapse-bar.cpp
-    src/ui/item-actions-bar.h
-    src/ui/item-actions-bar.cpp
-    src/ui/action-group-container.h
-    src/ui/action-group-container.cpp
-    src/ui/shortcuts-manager-widget.h
-    src/ui/shortcuts-manager-widget.cpp
-    src/ui/storage-manager-widget.h
-    src/ui/storage-manager-widget.cpp
+    src/ui/shared/welcome-screen.h
+    src/ui/shared/welcome-screen.cpp
+    src/ui/shared/expand-collapse-bar.h
+    src/ui/shared/expand-collapse-bar.cpp
+    src/ui/shared/item-actions-bar.h
+    src/ui/shared/item-actions-bar.cpp
+    src/ui/shared/action-group-container.h
+    src/ui/shared/action-group-container.cpp
+    src/ui/shared/shortcuts-manager-widget.h
+    src/ui/shared/shortcuts-manager-widget.cpp
+    src/ui/shared/storage-manager-widget.h
+    src/ui/shared/storage-manager-widget.cpp
 )
 
 target_include_directories(kai-ui PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(kai-ui PUBLIC kai-core kai-engine Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg QHotkey::QHotkey vterm)
 
 # Windows: dwmapi fornece DwmSetWindowAttribute, usado pelo backdrop nativo
-# (Mica/Acrylic) do modo "material líquido".
+# (Mica/Acrylic) do modo "material líquido". user32 fornece
+# SetForegroundWindow/AttachThreadInput/BringWindowToTop, usados pra
+# forçar a janela pra frente ao reexibir via atalho GLOBAL (ver
+# forceForegroundOnWindows em main-window.cpp) — normalmente já vem
+# linkada transitivamente por Qt, mas explícito evita depender disso.
 if(WIN32)
-    target_link_libraries(kai-ui PRIVATE dwmapi)
+    target_link_libraries(kai-ui PRIVATE dwmapi user32)
 endif()
 
 # --- Biblioteca "kai-ipc": servidor/cliente CLI via QLocalServer ---
@@ -260,13 +301,27 @@ add_library(kai-ipc STATIC
 target_include_directories(kai-ipc PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(kai-ipc PUBLIC kai-core Qt6::Core Qt6::Network)
 
+# --- Biblioteca "kai-cli": modo LOCAL de CLI Paths (ver src/cli/cli-local-
+# executor.h) — fica ACIMA de kai-ui na hierarquia de dependência (kai-ui
+# NÃO pode depender dela, senão vira ciclo), porque precisa reaproveitar
+# tanto ui::ProjectSelector (parser de kai.json/kai.yml, vive em kai-ui)
+# quanto engine::ExecutionPipeline (motor de execução, vive em kai-engine)
+# juntos — nenhuma das duas bibliotecas existentes pode depender da outra
+# na direção que isto exigiria.
+add_library(kai-cli STATIC
+    src/cli/cli-local-executor.h
+    src/cli/cli-local-executor.cpp
+)
+target_include_directories(kai-cli PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(kai-cli PUBLIC kai-core kai-engine kai-ui Qt6::Core Qt6::Widgets Qt6::Network)
+
 # --- Binário principal ---
 # WIN32: no Windows, marca o executável como GUI app (subsystem WINDOWS),
 # evitando que um console (terminal) seja aberto ao rodar o Kai — que é um
 # app de bandeja/GUI. Em Linux/macOS a flag é ignorada pelo CMake, sem
 # efeito no build nativo.
 add_executable(kai WIN32 src/main.cpp)
-target_link_libraries(kai PRIVATE kai-core kai-engine kai-ui kai-ipc Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+target_link_libraries(kai PRIVATE kai-core kai-engine kai-ui kai-ipc kai-cli Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
 
 # Ícone do executável no Windows: compila o recurso .rc (que referencia
 # packaging/windows/kai.ico) e o adiciona ao alvo. Sem isto, o Windows

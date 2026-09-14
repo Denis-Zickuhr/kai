@@ -1,10 +1,10 @@
 #include <QTest>
 #include <QToolButton>
 
-#include "ui/icon-picker-widget.h"
-#include "ui/icon-picker-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/shared/icon-picker-widget.h"
+#include "ui/shared/icon-picker-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;

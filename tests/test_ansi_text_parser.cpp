@@ -52,6 +52,44 @@ private slots:
         QVERIFY(hasRed);
     }
 
+    // Bug real reportado com print, duas vezes: em certos caminhos do
+    // Windows o byte ESC chega/é exibido como o glifo "←" em vez do
+    // controle invisível de sempre ("←[?25l←[K←[29;120H" em vez de
+    // sequências reconhecíveis) — o parser precisa tratar as duas grafias
+    // do lead-in igual, senão a sequência inteira vaza como texto literal.
+    void arrowGlyphLeadInIsTreatedLikeRealEscapeByte()
+    {
+        AnsiTextParser parser;
+        const QString raw = QStringLiteral(
+            "←[?25l←[K←[31mVocê está em PRODUÇÃO←[0m [y/N] ←[29;120H");
+        const QVector<AnsiSegment> segments = parser.parse(raw);
+
+        QString visibleText;
+        for (const AnsiSegment &seg : segments) {
+            visibleText += seg.text;
+        }
+        QCOMPARE(visibleText, QStringLiteral("Você está em PRODUÇÃO [y/N] "));
+        QVERIFY(!visibleText.contains(QChar(0x2190)));
+        QVERIFY(!visibleText.contains(QStringLiteral("[K")));
+        QVERIFY(!visibleText.contains(QStringLiteral("[?25l")));
+        QVERIFY(!visibleText.contains(QStringLiteral("[29;120H")));
+    }
+
+    // A sequência "←[..." pode chegar partida na fronteira de dois chunks
+    // (mesma robustez já exigida do \x1b de verdade) — não deve vazar o
+    // pedaço incompleto como texto nem quebrar o chunk seguinte.
+    void arrowGlyphLeadInSlicedAcrossChunksIsStillStripped()
+    {
+        AnsiTextParser parser;
+        auto a = parser.parse(QStringLiteral("antes ←[2"));
+        auto b = parser.parse(QStringLiteral("5l depois"));
+
+        QString visible;
+        for (const AnsiSegment &seg : a) visible += seg.text;
+        for (const AnsiSegment &seg : b) visible += seg.text;
+        QCOMPARE(visible, QStringLiteral("antes  depois"));
+    }
+
     void redForegroundCodeAppliesColorToFollowingText()
     {
         AnsiTextParser parser;

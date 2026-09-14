@@ -6,6 +6,8 @@
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
 
+#include <QPointer>
+#include <QShortcut>
 #include <QSplitter>
 #include <QTimer>
 #include <QToolButton>
@@ -435,9 +437,19 @@ void TerminalDrawer::setInteractiveMode(bool interactive)
     m_panel->setInteractiveMode(interactive);
 }
 
+bool TerminalDrawer::interactiveMode() const
+{
+    return m_panel->interactiveMode();
+}
+
 void TerminalDrawer::setStdoutTabVisible(bool visible)
 {
     m_panel->setStdoutTabVisible(visible);
+}
+
+void TerminalDrawer::setFormattedOutputEnabled(bool enabled)
+{
+    m_panel->setFormattedOutputEnabled(enabled);
 }
 
 void TerminalDrawer::feedInteractive(const QString &text)
@@ -458,6 +470,11 @@ void TerminalDrawer::setInteractiveAcceptingInput(bool accepting)
 void TerminalDrawer::focusInteractiveTerminal()
 {
     m_panel->focusInteractiveTerminal();
+}
+
+bool TerminalDrawer::focusSearch()
+{
+    return m_panel ? m_panel->focusSearch() : false;
 }
 
 void TerminalDrawer::setSkipped(bool skipped, const QString &reasonLabel)
@@ -507,10 +524,22 @@ void TerminalDrawer::detachOutput()
     m_detachedPanel = new OutputPanel(m_detachedWindow);
     m_detachedPanel->setViewOptions(m_panel->viewOptions());
     m_detachedPanel->setCommandId(m_detachedCommandId);
+    m_detachedPanel->setFormattedOutputEnabled(m_panel->formattedOutputEnabled());
     m_detachedPanel->seedOutput(m_panel->plainOutput());
     layout->addWidget(m_detachedPanel, 1);
 
     connect(m_detachedPanel, &OutputPanel::commandEntered, this, &TerminalDrawer::commandEntered);
+
+    // Ctrl+F própria pra janela destacada: o atalho de pesquisa "global"
+    // fica preso ao MainWindow (Qt::WindowShortcut só dispara com a janela
+    // PRINCIPAL ativa), então sem isto Ctrl+F não fazia nada aqui.
+    QPointer<OutputPanel> detachedPanel = m_detachedPanel;
+    auto *findShortcut = new QShortcut(QKeySequence::Find, m_detachedWindow);
+    connect(findShortcut, &QShortcut::activated, this, [detachedPanel]() {
+        if (detachedPanel) {
+            detachedPanel->focusSearch();
+        }
+    });
 
     connect(m_detachedWindow, &QObject::destroyed, this, [this]() {
         m_detachedCommandId.clear();

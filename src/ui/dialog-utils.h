@@ -17,12 +17,17 @@
 #include <QKeySequence>
 #include <QDialog>
 #include <QLabel>
+#include <QScreen>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QString>
 #include <QMessageBox>
 #include <QVector>
 #include <QStringList>
+#include <QMap>
+#include <QSet>
+#include <functional>
+#include <algorithm>
 
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
@@ -80,6 +85,56 @@ inline QString folderComboLabel(const QVector<core::Folder> &allFolders, const Q
         return indent + name;
     }
     return QStringLiteral("%1%2   (%3)").arg(indent, name, segments.join(QStringLiteral(" / ")));
+}
+
+// Ordena as pastas em PRÉ-ORDEM de árvore (raízes primeiro, cada uma
+// IMEDIATAMENTE seguida pelos próprios descendentes, alfabético entre
+// irmãos) — feedback do usuário: "sistema melhor de pesquisa, onde o nome
+// da pasta é priorizado... filtrando por 'projetos' ela aparecia por
+// último em vez de primeiro/segundo, depois dos próprios filhos". Causa
+// real: os 3 combos populavam na ordem BRUTA de armazenamento (criação/
+// arquivo), sem relação com a hierarquia. QCompleter (ver
+// makeSearchableCombo) filtra por substring mas PRESERVA a ordem do
+// modelo — com a pasta já vindo ANTES de seus filhos na lista base, o
+// filtro naturalmente a deixa primeira/logo no topo entre os resultados,
+// sem precisar de um ranqueador de relevância à parte.
+inline QVector<core::Folder> foldersInTreeOrder(const QVector<core::Folder> &allFolders)
+{
+    QMap<QString, QVector<core::Folder>> childrenByParent; // "" = raiz
+    for (const core::Folder &f : allFolders) {
+        childrenByParent[f.parentId.value_or(QString())].append(f);
+    }
+    for (auto it = childrenByParent.begin(); it != childrenByParent.end(); ++it) {
+        std::sort(it.value().begin(), it.value().end(),
+            [](const core::Folder &a, const core::Folder &b) {
+                return a.name.localeAwareCompare(b.name) < 0;
+            });
+    }
+
+    QVector<core::Folder> ordered;
+    ordered.reserve(allFolders.size());
+    QSet<QString> visited; // guarda contra ciclo em dado corrompido
+    std::function<void(const QString &)> visit = [&](const QString &parentId) {
+        for (const core::Folder &f : childrenByParent.value(parentId)) {
+            if (visited.contains(f.id)) {
+                continue;
+            }
+            visited.insert(f.id);
+            ordered.append(f);
+            visit(f.id);
+        }
+    };
+    visit(QString());
+    // Sobra defensiva: pasta órfã (parent_id aponta pra algo inexistente)
+    // não alcançada pela varredura acima — inclui no fim, não descarta.
+    if (ordered.size() < allFolders.size()) {
+        for (const core::Folder &f : allFolders) {
+            if (!visited.contains(f.id)) {
+                ordered.append(f);
+            }
+        }
+    }
+    return ordered;
 }
 
 // Trava a largura do combo FECHADO num nº de caracteres, em vez de deixar
@@ -390,19 +445,47 @@ inline bool confirmYesNo(QWidget *parent, const QString &title, const QString &t
 // (0,0) da tela — feedback do usuário. Chamar após definir o tamanho
 // (resize) e antes/depois do primeiro show; é seguro chamar mais de uma
 // vez. Se não houver pai, centraliza na tela do próprio widget.
+//
+// AJUSTE POR FALTA DE ESPAÇO (pedido do usuário: "quero que sejam
+// CENTRALIZADOS em quem abriu, se não houver espaço, ajustar"): o ponto
+// centralizado é sempre calculado primeiro, mas o resultado é então
+// pinçado (clamp) dentro da geometria DISPONÍVEL (availableGeometry, já
+// exclui taskbar/dock) da tela onde o pai está — nunca só ">= 0", porque
+// isso quebra em setups multi-monitor onde a tela relevante não começa em
+// (0,0). Se o diálogo for maior que a tela disponível (raríssimo, mas
+// possível numa janela pequena/monitor pequeno), ele fica alinhado ao
+// canto superior-esquerdo dessa área em vez de vazar pra fora.
 inline void centerOnParent(QWidget *dialog)
 {
     if (!dialog) {
         return;
     }
     QWidget *ref = dialog->parentWidget() ? dialog->parentWidget()->window() : nullptr;
-    if (ref) {
-        const QRect refGeom = ref->frameGeometry();
-        const QSize size = dialog->size();
-        const int x = refGeom.center().x() - size.width() / 2;
-        const int y = refGeom.center().y() - size.height() / 2;
-        dialog->move(qMax(0, x), qMax(0, y));
+    QScreen *screen = ref ? ref->screen() : dialog->screen();
+    if (!ref && !screen) {
+        return;
     }
+    const QRect refGeom = ref ? ref->frameGeometry() : dialog->frameGeometry();
+    const QSize size = dialog->size();
+    int x = refGeom.center().x() - size.width() / 2;
+    int y = refGeom.center().y() - size.height() / 2;
+
+    if (screen) {
+        // NÃO usar qBound aqui: qBound(min, val, max) faz Q_ASSERT(!(max <
+        // min)) no Qt6 — quando o diálogo é maior que a área disponível
+        // (max < min), o app CRASHA em build Debug em vez de só cair no
+        // canto superior-esquerdo como documentado acima (achado real: fez
+        // test_collection_editor abortar num build Debug fresco). qMax(qMin(...))
+        // não faz esse assert nunca, e dá exatamente esse fallback: se
+        // max < min, qMin já devolve max, e qMax(min, max) = min.
+        const QRect avail = screen->availableGeometry();
+        x = qMax(avail.left(), qMin(x, avail.right() - size.width() + 1));
+        y = qMax(avail.top(), qMin(y, avail.bottom() - size.height() + 1));
+    } else {
+        x = qMax(0, x);
+        y = qMax(0, y);
+    }
+    dialog->move(x, y);
 }
 
 // Torna um QComboBox PESQUISÁVEL: campo editável com filtro por substring

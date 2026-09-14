@@ -1,6 +1,7 @@
 #include "ui/env-var-autocomplete.h"
 #include "ui/fuzzy-search.h"
 #include "utils/design-tokens.h"
+#include "utils/translation-manager.h"
 
 #include <QEvent>
 #include <QKeyEvent>
@@ -15,30 +16,65 @@ namespace kai::ui {
 
 namespace {
 
-// Acha o trigger "{{" ATIVO antes do cursor (o mais recente que ainda não
-// foi fechado por "}}" nem interrompido por espaço/quebra de linha —
-// nomes de variável não têm espaço). Retorna false se não há trigger ativo
-// (popup deve ficar/ficar fechado).
-bool findActiveTrigger(const QString &text, int cursorPos, int *triggerStart, QString *query)
+enum class TriggerKind { Var, Conditional };
+
+// Um snippet de bloco condicional oferecido quando o trigger é "{%" — o
+// próprio "{%" já digitado pelo usuário NÃO entra em `prefix` (o trigger,
+// igual ao caso de {{var}}, só é substituído a partir de onde o "{%"
+// termina). O texto TYPED (a condição) fica entre `prefix` e `suffix` —
+// commitSelection posiciona o cursor logo após `prefix`, pronto pra
+// digitar a condição.
+struct ConditionalSnippet {
+    QString label;  // mostrado no popup
+    QString prefix; // ex: "if " — vem logo depois do "{%" já digitado
+    QString suffix; // ex: " %}\n{% endif %}"
+};
+
+QVector<ConditionalSnippet> conditionalSnippets()
 {
-    const int openIdx = text.lastIndexOf(QStringLiteral("{{"), cursorPos - 1);
+    return {
+        {utils::tr(QStringLiteral("template.autocomplete.if")),
+         QStringLiteral(" if "), QStringLiteral(" %}\n{% endif %}")},
+        {utils::tr(QStringLiteral("template.autocomplete.if_else")),
+         QStringLiteral(" if "), QStringLiteral(" %}\n\n{% else %}\n\n{% endif %}")},
+    };
+}
+
+// Acha o trigger ATIVO antes do cursor: "{{" (variável) ou, se
+// `supportConditionals`, também "{%" (bloco condicional) — o mais recente
+// que ainda não foi fechado nem interrompido por espaço/quebra de linha
+// (nomes de variável e a palavra-chave "if"/"else" não têm espaço no
+// meio). Retorna false se não há trigger ativo (popup deve ficar/ficar
+// fechado). Quando os dois tipos de trigger estão presentes, vale o mais
+// recente (mais próximo do cursor) dos dois.
+bool findActiveTrigger(const QString &text, int cursorPos, bool supportConditionals,
+                       int *triggerStart, QString *query, TriggerKind *kind)
+{
+    const int varOpenIdx = text.lastIndexOf(QStringLiteral("{{"), cursorPos - 1);
+    const int condOpenIdx = supportConditionals
+        ? text.lastIndexOf(QStringLiteral("{%"), cursorPos - 1) : -1;
+
+    const bool useConditional = condOpenIdx > varOpenIdx;
+    const int openIdx = useConditional ? condOpenIdx : varOpenIdx;
     if (openIdx < 0) {
         return false;
     }
+    const QString closeToken = useConditional ? QStringLiteral("%}") : QStringLiteral("}}");
     const int afterOpen = openIdx + 2;
     if (afterOpen > cursorPos) {
         return false;
     }
     const QString between = text.mid(afterOpen, cursorPos - afterOpen);
-    if (between.contains(QStringLiteral("}}"))) {
+    if (between.contains(closeToken)) {
         return false; // já fechado antes do cursor: trigger não está mais ativo
     }
     if (between.contains(QLatin1Char(' ')) || between.contains(QLatin1Char('\n'))
         || between.contains(QLatin1Char('\t'))) {
-        return false; // usuário "saiu" do nome da variável
+        return false; // usuário "saiu" do nome da variável/palavra-chave
     }
     *triggerStart = afterOpen;
     *query = between;
+    *kind = useConditional ? TriggerKind::Conditional : TriggerKind::Var;
     return true;
 }
 
@@ -123,8 +159,12 @@ private:
 struct FieldAdapter {
     std::function<QString()> text;
     std::function<int()> cursorPos;
-    // Substitui text[start:end) por `insertText` e posiciona o cursor logo após.
-    std::function<void(int start, int end, const QString &insertText)> replaceRange;
+    // Substitui text[start:end) por `insertText` e posiciona o cursor em
+    // start + cursorOffset (cursorOffset < 0, o default, significa "no fim
+    // do texto inserido" — usado pra {{var}}; um snippet condicional passa
+    // um offset explícito, pro cursor cair DENTRO do snippet, pronto pra
+    // digitar a condição).
+    std::function<void(int start, int end, const QString &insertText, int cursorOffset)> replaceRange;
     // Ponto global (canto inferior-esquerdo do cursor) para ancorar o popup.
     std::function<QPoint()> cursorGlobalPoint;
 };
@@ -134,11 +174,13 @@ class EnvVarAutocompleteController : public QObject {
 
 public:
     EnvVarAutocompleteController(QWidget *field, FieldAdapter adapter,
-                                  std::function<QStringList()> provider)
+                                  std::function<QStringList()> provider,
+                                  bool supportConditionals)
         : QObject(field)
         , m_field(field)
         , m_adapter(std::move(adapter))
         , m_provider(std::move(provider))
+        , m_supportConditionals(supportConditionals)
     {
         m_popup = new VarAutocompletePopup(field->window());
         connect(m_popup, &VarAutocompletePopup::itemChosen, this,
@@ -184,15 +226,31 @@ private:
     {
         int triggerStart = 0;
         QString query;
-        if (!findActiveTrigger(m_adapter.text(), m_adapter.cursorPos(), &triggerStart, &query)) {
+        TriggerKind kind = TriggerKind::Var;
+        if (!findActiveTrigger(m_adapter.text(), m_adapter.cursorPos(), m_supportConditionals,
+                &triggerStart, &query, &kind)) {
             m_popup->hide();
             return;
         }
         m_triggerStart = triggerStart;
-        const QStringList vars = m_provider ? m_provider() : QStringList();
+        m_triggerKind = kind;
+
         QStringList filtered;
-        for (const FuzzyMatchResult &r : FuzzyMatcher::search(query, vars)) {
-            filtered << r.text;
+        if (kind == TriggerKind::Conditional) {
+            QStringList labels;
+            for (const ConditionalSnippet &s : conditionalSnippets()) {
+                labels << s.label;
+            }
+            // Query vazio (acabou de digitar "{%") mostra as duas opções —
+            // FuzzyMatcher::search com query vazio já devolve tudo.
+            for (const FuzzyMatchResult &r : FuzzyMatcher::search(query, labels)) {
+                filtered << r.text;
+            }
+        } else {
+            const QStringList vars = m_provider ? m_provider() : QStringList();
+            for (const FuzzyMatchResult &r : FuzzyMatcher::search(query, vars)) {
+                filtered << r.text;
+            }
         }
         if (filtered.isEmpty()) {
             m_popup->hide();
@@ -203,9 +261,9 @@ private:
         m_popup->show();
     }
 
-    void commitSelection(const QString &varName)
+    void commitSelection(const QString &chosenLabel)
     {
-        if (varName.isEmpty()) {
+        if (chosenLabel.isEmpty()) {
             m_popup->hide();
             return;
         }
@@ -213,7 +271,18 @@ private:
         // onTextChanged->refresh() no meio da troca (cursor/texto ainda
         // inconsistentes entre os dois passos de replaceRange).
         m_field->blockSignals(true);
-        m_adapter.replaceRange(m_triggerStart, m_adapter.cursorPos(), varName + QStringLiteral("}}"));
+        if (m_triggerKind == TriggerKind::Conditional) {
+            for (const ConditionalSnippet &s : conditionalSnippets()) {
+                if (s.label == chosenLabel) {
+                    const QString full = s.prefix + s.suffix;
+                    m_adapter.replaceRange(m_triggerStart, m_adapter.cursorPos(), full, s.prefix.size());
+                    break;
+                }
+            }
+        } else {
+            m_adapter.replaceRange(m_triggerStart, m_adapter.cursorPos(),
+                chosenLabel + QStringLiteral("}}"), -1);
+        }
         m_field->blockSignals(false);
         m_popup->hide();
     }
@@ -221,13 +290,16 @@ private:
     QPointer<QWidget> m_field;
     FieldAdapter m_adapter;
     std::function<QStringList()> m_provider;
+    bool m_supportConditionals = false;
     VarAutocompletePopup *m_popup = nullptr;
     int m_triggerStart = 0;
+    TriggerKind m_triggerKind = TriggerKind::Var;
 };
 
 } // namespace
 
-void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()> availableVarsProvider)
+void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()> availableVarsProvider,
+                               bool supportConditionals)
 {
     if (!field) {
         return;
@@ -235,11 +307,14 @@ void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()
     FieldAdapter adapter;
     adapter.text = [field]() { return field->toPlainText(); };
     adapter.cursorPos = [field]() { return field->textCursor().position(); };
-    adapter.replaceRange = [field](int start, int end, const QString &insertText) {
+    adapter.replaceRange = [field](int start, int end, const QString &insertText, int cursorOffset) {
         QTextCursor tc = field->textCursor();
         tc.setPosition(start);
         tc.setPosition(end, QTextCursor::KeepAnchor);
         tc.insertText(insertText);
+        if (cursorOffset >= 0) {
+            tc.setPosition(start + cursorOffset);
+        }
         field->setTextCursor(tc);
     };
     adapter.cursorGlobalPoint = [field]() {
@@ -247,12 +322,14 @@ void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()
         return field->viewport()->mapToGlobal(r.bottomLeft());
     };
 
-    auto *controller = new EnvVarAutocompleteController(field, adapter, std::move(availableVarsProvider));
+    auto *controller = new EnvVarAutocompleteController(field, adapter, std::move(availableVarsProvider),
+                                                          supportConditionals);
     QObject::connect(field, &QPlainTextEdit::textChanged, controller,
                       &EnvVarAutocompleteController::onTextChanged);
 }
 
-void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> availableVarsProvider)
+void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> availableVarsProvider,
+                               bool supportConditionals)
 {
     if (!field) {
         return;
@@ -260,12 +337,12 @@ void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> ava
     FieldAdapter adapter;
     adapter.text = [field]() { return field->text(); };
     adapter.cursorPos = [field]() { return field->cursorPosition(); };
-    adapter.replaceRange = [field](int start, int end, const QString &insertText) {
+    adapter.replaceRange = [field](int start, int end, const QString &insertText, int cursorOffset) {
         QString t = field->text();
         t.remove(start, end - start);
         t.insert(start, insertText);
         field->setText(t);
-        field->setCursorPosition(start + insertText.size());
+        field->setCursorPosition(start + (cursorOffset >= 0 ? cursorOffset : insertText.size()));
     };
     adapter.cursorGlobalPoint = [field]() {
         // QLineEdit::cursorRect() é PROTECTED (diferente de
@@ -280,7 +357,8 @@ void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> ava
         return field->mapToGlobal(local);
     };
 
-    auto *controller = new EnvVarAutocompleteController(field, adapter, std::move(availableVarsProvider));
+    auto *controller = new EnvVarAutocompleteController(field, adapter, std::move(availableVarsProvider),
+                                                          supportConditionals);
     QObject::connect(field, &QLineEdit::textChanged, controller,
                       [controller](const QString &) { controller->onTextChanged(); });
 }

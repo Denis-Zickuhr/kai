@@ -5,6 +5,13 @@
 #include <QCheckBox>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QToolButton>
+#include <QMenu>
+#include <QTimer>
+#include <QApplication>
+#include <QCalendarWidget>
+#include <QDialogButtonBox>
+#include <QPushButton>
 
 #include "ui/parameter-form-dialog.h"
 #include "ui/inline-code-field.h"
@@ -408,6 +415,143 @@ private slots:
         ParameterFormDialog dialog(params, nullptr);
         QVERIFY(dialog.findChild<QCheckBox *>() != nullptr);
         QCOMPARE(dialog.findChildren<kai::ui::InlineCodeField *>().size(), 2);
+    }
+
+    // REGRESSÃO/feature (pedido do usuário: "não gostei da cfg pick as
+    // folder, queria tipo um select com modo de seleção... arquivo, pastas
+    // ou ambos"). Parameter::pickMode == "both": clicar no botão de
+    // procurar não abre um QFileDialog direto (nenhum diálogo nativo deixa
+    // escolher arquivo OU pasta ao mesmo tempo) - abre um QMenu perguntando
+    // qual dos dois. Fecha o menu programaticamente (QApplication::
+    // activePopupWidget(), mesmo padrão já usado neste app pra testar
+    // QMessageBox::activeModalWidget()) sem escolher nada, só provando que
+    // o menu realmente aparece com as duas opções e não crasha.
+    void bothPickModeShowsFileOrFolderMenuInsteadOfDialogDirectly()
+    {
+        QVector<Parameter> params;
+        Parameter fileParam;
+        fileParam.name = QStringLiteral("caminho");
+        fileParam.type = ParameterType::File;
+        fileParam.pickMode = QStringLiteral("both");
+        params << fileParam;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *browseButton = dialog.findChild<QToolButton *>();
+        QVERIFY(browseButton != nullptr);
+
+        int menuActionCount = -1;
+        QTimer::singleShot(50, &dialog, [&menuActionCount]() {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (menu) {
+                menuActionCount = menu->actions().size();
+                menu->close();
+            }
+        });
+        QTest::mouseClick(browseButton, Qt::LeftButton);
+
+        QCOMPARE(menuActionCount, 2);
+    }
+
+    // Pedido do usuário ("adicione um parâmetro do tipo date picker...
+    // esse param abre uma janelinha de pedir data"): o botão calendário
+    // abre DatePickerDialog de verdade; escolher uma data e confirmar
+    // preenche o campo com o valor FORMATADO conforme date_format — não o
+    // texto cru do QDateTime.
+    void datePickerFillsFieldWithFormattedValue()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("quando");
+        p.type = ParameterType::Date;
+        p.dateMode = QStringLiteral("date");
+        p.dateFormat = QStringLiteral("iso_date");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            auto *calendar = picker->findChild<QCalendarWidget *>();
+            QVERIFY(calendar != nullptr);
+            calendar->setSelectedDate(QDate(2024, 3, 20));
+            auto *okButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            QVERIFY(okButton != nullptr);
+            QTest::mouseClick(okButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("quando")), QStringLiteral("2024-03-20"));
+    }
+
+    // Range: {{nome}} carrega o INÍCIO, {{nome.end}} o FIM — nunca o texto
+    // combinado "início — fim" que só existe pra leitura visual do campo.
+    void dateRangePickerFillsStartAndEndSeparately()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("janela");
+        p.type = ParameterType::Date;
+        p.dateMode = QStringLiteral("date");
+        p.dateRange = true;
+        p.dateFormat = QStringLiteral("iso_date");
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            const auto calendars = picker->findChildren<QCalendarWidget *>();
+            QCOMPARE(calendars.size(), 2);
+            calendars.at(0)->setSelectedDate(QDate(2024, 3, 20));
+            calendars.at(1)->setSelectedDate(QDate(2024, 3, 25));
+            auto *okButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            QTest::mouseClick(okButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("janela")), QStringLiteral("2024-03-20"));
+        QCOMPARE(values.value(QStringLiteral("janela.end")), QStringLiteral("2024-03-25"));
+    }
+
+    // Cancelar a janelinha não altera o campo (nem crasha).
+    void cancelingDatePickerLeavesFieldUnchanged()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("quando");
+        p.type = ParameterType::Date;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("quando")] = QStringLiteral("2020-01-01");
+        ParameterFormDialog dialog(params, nullptr, initial);
+        dialog.show();
+
+        auto *pickButton = dialog.findChild<QToolButton *>();
+        QVERIFY(pickButton != nullptr);
+        QTimer::singleShot(50, &dialog, []() {
+            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(picker != nullptr);
+            auto *cancelButton = picker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel);
+            QTest::mouseClick(cancelButton, Qt::LeftButton);
+        });
+        QTest::mouseClick(pickButton, Qt::LeftButton);
+
+        QCOMPARE(dialog.values().value(QStringLiteral("quando")), QStringLiteral("2020-01-01"));
     }
 };
 

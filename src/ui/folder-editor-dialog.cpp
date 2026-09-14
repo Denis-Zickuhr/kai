@@ -311,7 +311,7 @@ void FolderEditorDialog::populateParentCombo(const QVector<core::Folder> &allFol
         ? QSet<QString>()
         : (collectDescendantIds(allFolders, excludeId) << excludeId);
 
-    for (const core::Folder &folder : allFolders) {
+    for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
         if (forbiddenIds.contains(folder.id)) {
             continue;
         }

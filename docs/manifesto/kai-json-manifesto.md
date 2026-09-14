@@ -6,10 +6,42 @@
 > binaries, scripts) and the model will have everything it needs to
 > produce a correct `kai.json`.
 >
+> Every `"icon"` value used below must come from
+> [`kai-icons.md`](./kai-icons.md) — the full, generated list of icon names
+> the app actually renders.
+>
+> A formal [JSON Schema](./kai.schema.json) describes this exact shape —
+> every key, its type, default, and whether it's required. Put
+> `"$schema": "https://kai.app/schema/v1.json"` at the top of your
+> `kai.json`/`kai.yml` for inline validation and autocomplete in any editor
+> that understands JSON Schema (VSCode does, out of the box). Kai itself
+> ignores this key — it's purely for the editor.
+>
 > This guide is about **authoring a `kai.json`** — the commands, folders,
 > parameters and collections a project imports into Kai. It has nothing
 > to do with developing Kai itself; every field, type and example below is
 > what Kai's importer actually accepts today.
+>
+> **YAML is accepted too.** Everything in this guide is written as JSON
+> examples, but a file named `kai.yml`/`kai.yaml` with the *exact same
+> structure* (block style, not flow) works identically — Kai looks for
+> `kai.json` first and falls back to `kai.yml`/`kai.yaml` if that one
+> isn't present. Same rule for the separate Export/Import Configuration
+> feature (File → Export.../Import Configuration): pick `.yml` as the
+> file's extension and Kai writes/reads YAML instead of JSON, same data,
+> same schema — just pick whichever is more pleasant to read/diff.
+> ```yaml
+> project_name: My Project
+> icon: shopping-cart
+> env_vars:
+>   PORT: "8080"
+>   NODE_ENV: development
+> commands:
+>   - name: Dev Server
+>     type: shell
+>     command: npm run dev
+>     is_background: true
+> ```
 
 ---
 
@@ -31,6 +63,79 @@ subfolder per ecosystem — see [Section 10](#10-generic-detection-without-a-kai
 
 Import is **idempotent by id design**: folder, command and collection ids
 are derived deterministically from the project name and item order.
+
+### 1.1 Export/Import Configuration uses this same format
+
+A *separate* feature (File → Export.../Import Configuration) lets you back
+up or move an existing folder/command/whole app configuration between
+machines. Its file used to be a completely different, id-based shape
+(`"id"`/`"folder_id"`/`"parent_id"` on every item, hooks by command id,
+a Select parameter's collection referenced by id) — that's gone now.
+**By default it produces exactly the same shape this whole guide
+describes**: no `id` anywhere, a folder referenced by its `folder`
+path (like `"Backend/API"`), hooks by the referenced command's `name`,
+a collection-backed `select` parameter's `collection` key holding the
+collection's *name*. The one difference from a project `kai.json`: the
+exported root folder/command doesn't get a `project_name` envelope —
+it's still wrapped in the export's own `{"kai_export": {...}, "folders":
+[...], "commands": [...], ...}` envelope, just with every item inside
+using this same path/name style instead of ids.
+
+```json
+{
+  "kai_export": { "scope": "folder", "version": 1, "id_free": true },
+  "folders": [
+    { "path": "API" }
+  ],
+  "commands": [
+    { "name": "Login", "type": "shell", "command": "gh auth login" },
+    {
+      "name": "Build", "type": "shell", "command": "make", "folder": "API",
+      "hooks": { "pre": ["Login"] },
+      "params": [
+        { "name": "target", "type": "select", "collection": "Users" }
+      ]
+    }
+  ],
+  "collections": [
+    { "name": "Users", "schema": [ { "name": "value" } ], "entries": [ { "values": { "value": "Alice" } } ] }
+  ]
+}
+```
+
+Because there's no stable id anywhere, **re-importing the same export
+file always adds new copies** — it can no longer recognize "this is the
+same item as before" and update it in place. If you specifically want
+that old update-in-place behavior back (round-tripping a backup of your
+own app on a schedule, say), uncheck **"Lean file (no ids, no default
+values)"** in the export dialog — that switches back to the old,
+verbose, id-based shape for that one export.
+
+Whichever shape a file uses, `id`/`folder_id`/`parent_id` (or `path`/
+`folder`/hook-by-name/collection-by-name) are only ever read on
+**import** — never something you need to keep synchronized by hand: the
+app generates whatever it needs internally the moment the file is
+imported.
+
+> **Don't mix the two envelopes.** A project `kai.json`/`kai.yml` (this
+> guide's main subject, imported via **File → Import Project**) and an
+> Export/Import Configuration package (§1.1, imported via **File →
+> Import Configuration**) use two genuinely different top-level shapes —
+> a real, reported confusion: a hand-written file used `"folders": [{
+> "name": "...", "icon": "...", "is_project": true }]` (the
+> Export/Import Configuration style for naming the top folder) while
+> being imported through **Import Project**, which only ever reads a
+> top-level `project_name`/`icon` — the `"folders"` array meant nothing
+> to it, so the project came in named after the directory with no icon.
+> As a convenience, **Import Project** *does* fall back to a
+> `"folders"` entry with `"is_project": true` for the name/icon when
+> `project_name`/`icon` are missing at the top level — but don't rely on
+> it: put `project_name`/`icon` directly at the top of the file, exactly
+> like the [minimal envelope](#minimal-envelope) below. A project
+> `kai.json`/`kai.yml` *can* legitimately use a `"folders"` array too —
+> but only ever to give a **subfolder** an icon via `{"path": ...,
+> "icon": ...}` (§11); never emit a `"kai_export"` header, and never put
+> `"id"`/`"is_project"` on a subfolder entry there.
 
 ### Minimal envelope
 
@@ -73,9 +178,11 @@ Each item in `commands` is an object. Fields the parser reads:
 | `folder` | string | `""` (project root) | both | Target subfolder. Nestable with `/` (e.g. `"Callbacks/Shopee"`). |
 | `hidden` | bool | `false` | both | Hidden from the tree by default (toggled back on with "Show hidden"). |
 | `hide_on_run` | bool | `false` | both | Hides the Kai window when this command fires. |
-| `capture_env` | bool | `false` | both | When used as a hook, captures the resulting environment and injects it as dynamic variables (e.g. a `gh auth`-style login that exports a token). |
-| `open_last_link` | bool | `false` | shell | Opens the last `http(s)://` URL printed in the output in the browser on success. |
-| `interactive_terminal` | bool | `false` | shell | Renders the output as a real terminal (grid of cells via libvterm) instead of a plain-text ANSI parser — needed for full-screen apps (vim, htop, a nested Claude Code). |
+| `capture_env` | bool | `false` | both | Export variables: when used as a hook (or standalone), captures the resulting environment and injects it as dynamic variables — but **only the names listed in `declared_env_vars`** (see below). With `capture_env: true` and an empty/missing `declared_env_vars`, nothing is captured at all. |
+| `declared_env_vars` | array of declared env var | `[]` | both | Required alongside `capture_env: true` — the exact environment variable names this command is allowed to export (e.g. a `gh auth`-style login that exports a token). A declared name the process never actually sets still shows up as an **empty** dynamic variable rather than being silently skipped, so it's visible in the variables inspector that it was expected. See below for the object shape. |
+| `open_last_link` | bool | `false` | shell | Opens the last `http(s)://` URL printed in the output in the browser on success. For an `interactive_terminal` command (which typically never "finishes" on its own — a dev server kept running), this instead fires on the **first** URL seen in the live output, once per run. |
+| `interactive_terminal` | bool | `false` | shell | Renders the output as a real terminal (grid of cells via libvterm) instead of a plain-text ANSI parser — needed for full-screen apps (vim, htop, a nested Claude Code). Supports mouse text selection (drag to select, release to copy; Ctrl+Shift+C also copies) and Ctrl+click on a detected URL to open it. |
+| `formatted_output` | bool | `false` | shell | Renders each line of a **non-interactive** command's output as a possible structured JSON log record (Grafana/Loki-style): a colored card by level (info/warn/error/...), timestamp, message, with the rest of the fields visible on expand. A line that isn't valid JSON stays as plain text. Mutually distinct from `interactive_terminal` — pick one or the other, not both. |
 | `terminal_target` | string | `""` | shell | Name of a terminal target (Settings → Terminal Targets) that wraps the command, e.g. to run it inside WSL. |
 | `compact_output` | bool | `false` | both | Collapses repeated blank lines and trims trailing whitespace in the output. |
 | `ignore_exit_code` | bool | `false` | shell | Always treats the command as successful, regardless of its exit code — useful for tools that return non-zero even on success (e.g. `explorer.exe` opening a folder from WSL). |
@@ -128,10 +235,38 @@ Each item in `commands` is an object. Fields the parser reads:
 `hide_on_run` — hides the Kai window while this command runs.
 
 ```json
-{ "name": "gh auth login", "type": "shell", "command": "gh auth login", "capture_env": true }
+{
+  "name": "gh auth login", "type": "shell", "command": "gh auth login",
+  "capture_env": true,
+  "declared_env_vars": [ { "name": "GH_TOKEN" } ]
+}
 ```
-`capture_env` — when used as a hook, captures the environment it exports
-as dynamic variables (a login that exports a token, for example).
+`capture_env` + `declared_env_vars` — captures the environment this
+command exports, but **only** the names explicitly declared (`GH_TOKEN`
+here) — anything else the process happens to set, expected or not, is
+never captured. Each entry in `declared_env_vars` is an object:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | — | Exact environment variable name to capture. |
+| `persist` | bool | `false` | Survives closing and reopening Kai (e.g. a long-lived refresh token). Off by default — most captured values are meant to be session-only. |
+| `scope` | `"project"` \| `"global"` | `"project"` | Where the captured value is saved: the current project (default), or `"global"` to force it into the Global scope regardless of which project triggered the capture. |
+
+```json
+{
+  "name": "Long-lived login", "type": "shell", "command": "./login.sh",
+  "capture_env": true,
+  "declared_env_vars": [
+    { "name": "API_TOKEN", "persist": true, "scope": "global" }
+  ]
+}
+```
+
+```json
+{ "name": "Tail service logs", "type": "shell", "command": "docker compose logs -f api", "formatted_output": true }
+```
+`formatted_output` — each JSON log line becomes a collapsible, colored
+card instead of a raw text line; non-JSON lines stay as plain text.
 
 ```json
 { "name": "Start tunnel", "type": "shell", "command": "ngrok http 3000", "open_last_link": true }
@@ -241,7 +376,12 @@ Each item in `params`:
 | `multi_select` | bool | Only for `select` with fixed `options`: turns it into a checkbox list; joins the checked values with a comma. |
 | `collection` | string | Name of a collection in the same `kai.json` — ties the `select` to it (see §6). |
 | `collection_display_field` | string | Schema field shown in the picker (e.g. `"value"`). |
-| `initial_dir` | string | Only for `file`: starting folder for the file picker. Not read by the project-manifest importer today — only by the native command editor. |
+| `initial_dir` | string | Only for `file`: starting folder for the file picker. |
+| `optional` | bool | Any type. The field starts hidden behind a "Provide `<label>`?" checkbox; the real field only appears once checked. Reduces form clutter for situational parameters. |
+| `date_mode` | `"date"`\|`"time"`\|`"datetime"` | Only for `date` (default `"date"`): what the picker popup asks for. |
+| `date_range` | bool | Only for `date` (default `false`): pick a start **and** end value — see §4.7. |
+| `date_format` | see §4.7 | Only for `date` (default `"iso_date"`): how the picked value is written into the command. |
+| `date_format_custom` | string | Only for `date`, and only read when `date_format` is `"custom"`. |
 
 ### 4.1 Parameter types
 
@@ -252,6 +392,9 @@ Each item in `params`:
 | `bool` | Checkbox | `"true"` or `"false"` (string). |
 | `select` | Searchable combo / list / collection picker | The chosen value (see below). |
 | `file` | Field + "..." button (native dialog) | Absolute path of the chosen file. |
+| `textarea` | Multi-line, auto-growing text field | The typed text (same as `text`, just multi-line). |
+| `json` | Small JSON snippet editor (syntax highlight/fold) | The typed JSON text, as a plain string — no validation or replace of its own; use `{{name}}` inside another field just like any text value. |
+| `date` | Opens a date/time picker popup | The picked value, formatted per `date_format` — see §4.7. |
 
 ### 4.2 Text
 
@@ -315,7 +458,65 @@ injects **all its fields** as `{{name.field}}`.
 - **Note:** in the parameter dialog, `initial_dir` is used **literally** —
   `{{PROJECT_PATH}}` and other variables are **not** resolved there. Prefer
   a real absolute path if you need to guarantee it opens in the right place.
-- The value produced is the **absolute path** of the chosen file.
+- The value produced is the **absolute path** of the chosen file (or
+  folder — see `pick_mode` below).
+- `pick_mode` (`"file"` default, `"folder"`, or `"both"`): what the picker
+  lets the user choose. `"folder"` opens a directory picker instead of a
+  file picker. `"both"` opens a small menu ("File…"/"Folder…") when the
+  browse button is clicked, since no native OS dialog lets you choose
+  either kind at once.
+  ```json
+  { "name": "TARGET", "label": "Target", "type": "file", "pick_mode": "both" }
+  ```
+- `file_path_format` (`"native"` default, `"posix"`, `"windows"`): converts
+  the path the picker returns — useful under WSL/WSLg, where the native
+  dialog returns a Windows path (`C:\...`) that's useless pasted directly
+  into a command running on the Linux side. Same importer caveat.
+
+### 4.7 Date picker (`type: "date"`)
+
+Opens a popup to pick a date instead of typing one by hand.
+
+```json
+{
+  "name": "SINCE", "label": "Since", "type": "date",
+  "date_mode": "date", "date_format": "iso_date"
+}
+```
+Used as: `journalctl --since "{{SINCE}}"`.
+
+- `date_mode` (`"date"` default, `"time"`, `"datetime"`): what the popup
+  asks for — just a calendar, just a time, or both.
+- `date_range` (default `false`): the popup shows **two** pickers side by
+  side (Start/End) instead of one. `{{name}}` always carries the **start**;
+  the end is injected as **`{{name.end}}`** — same convention as a
+  collection-tied select's `{{name.field}}` (§4.5c/§6).
+  ```json
+  {
+    "name": "WINDOW", "label": "Deploy window", "type": "date",
+    "date_mode": "datetime", "date_range": true, "date_format": "iso_datetime"
+  }
+  ```
+  Used as: `--from "{{WINDOW}}" --to "{{WINDOW.end}}"`.
+- `date_format` decides how the picked value is turned into the string
+  that actually lands in the command:
+
+  | `date_format` | Example output |
+  |---|---|
+  | `iso_date` (default) | `2024-01-15` |
+  | `iso_datetime` | `2024-01-15T10:30:00` |
+  | `br_date` | `15/01/2024` |
+  | `us_date` | `01/15/2024` |
+  | `time_24h` | `10:30:00` |
+  | `time_24h_short` | `10:30` |
+  | `unix_seconds` | `1705318200` |
+  | `unix_millis` | `1705318200000` |
+  | `custom` | whatever `date_format_custom` produces |
+
+- `date_format_custom`: only read when `date_format` is `"custom"` — a
+  template of Qt date/time tokens: `yyyy`/`yy` (year), `MM`/`M` (month),
+  `dd`/`d` (day), `HH`/`H` (24h hour), `hh`/`h` (12h hour), `mm` (minute),
+  `ss` (second), `AP` (AM/PM). Example: `"dd.MM.yy 'at' HH:mm"`.
 
 ---
 
@@ -377,6 +578,7 @@ Each item in `collections`:
 | `label` | string | Label shown in the grid. |
 | `type` | `text`\|`key`\|`value`\|`email`\|`number`\|`url`\|`bool` | Type (validation/UI). Unknown type → `text`. |
 | `visible` | bool | Whether it shows as a column in the grid (default `true`). Invisible fields stay editable. |
+| `secret` | bool | Masks the value as a password field in the UI, and **always** strips it from any export — even with "include entry data" checked (default `false`). Use it for a field that holds a real secret (token, test credential). |
 
 ### Entry
 
@@ -560,10 +762,12 @@ all, in which case the project name comes from the folder name.
 
 ## 11. Folders and organization
 
-There's no `folders` section in a project `kai.json`. The tree is built like
-this:
+A project `kai.json` normally has **no `folders` section at all** — the tree
+is built like this:
 
-- The **root folder** = `project_name`.
+- The **root folder** = `project_name` (its icon = the top-level `icon` key).
+  Gets `is_project: true` internally (see the note below) — never write that
+  key yourself in `commands`/`collections`, it's not read there.
 - **Subfolders** are created on demand from each command's/collection's
   `folder` key. Nest with `/` (e.g. `"A/B/C"` creates three levels).
   Appearance order is preserved.
@@ -578,6 +782,50 @@ this:
   ]
 }
 ```
+
+### Giving a subfolder its own icon
+
+A subfolder created this way has no icon by default. To set one, add an
+**optional** top-level `folders` array — each entry only needs `path` (the
+exact same string used in a command's/collection's `folder` key, `/`-nested)
+and `icon`. This is the one place a project `kai.json` *does* use a
+`folders` key, and it only ever carries icons — it never creates a folder by
+itself (an entry whose `path` no command/collection points to is just
+ignored, same as it works in the Export/Import Configuration format's
+`path`, §1.1).
+
+```json
+{
+  "project_name": "Monorepo",
+  "icon": "boxes",
+  "commands": [
+    { "name": "API dev", "type": "shell", "folder": "Backend/API", "command": "go run ./cmd/api" }
+  ],
+  "folders": [
+    { "path": "Backend", "icon": "server" },
+    { "path": "Backend/API", "icon": "webhook" }
+  ]
+}
+```
+
+> **`path` here never includes the project name** — it's the same string a
+> command's own `folder` key would use, always relative to the project
+> root. Writing `"path": "Monorepo/Backend"` (the full label as it appears
+> in the tree, project name included) is tolerated — that exact prefix is
+> stripped if present — but prefer the relative form above; it's the one
+> that unambiguously matches `folder` on a command/collection.
+
+> **`is_project` note.** You may see `is_project: true` on a folder object
+> elsewhere in Kai (e.g. inside an Export/Import Configuration file's
+> `folders` array, §1.1) — that's an internal flag Kai itself sets on
+> whichever folder was created *by importing a project*; it marks that
+> folder as a dynamic-variable scope boundary and is what a top-level
+> `folders` entry with `is_project: true` is understood as meaning "this is
+> the project's own root, take its `name`/`icon`" when `project_name`/`icon`
+> are missing (a convenience fallback — prefer the top-level
+> `project_name`/`icon` keys shown throughout this guide instead of relying
+> on it). It is **never** meaningful on a `folders` entry used only to give
+> a *subfolder* an icon, as shown above — leave it out there.
 
 ---
 
@@ -684,6 +932,9 @@ When producing a `kai.json`, make sure:
 - [ ] `{{VAR}}` references match `env_vars`, params, `{{PROJECT_PATH}}`, or `{{$...}}` dynamic tokens.
 - [ ] Collection fields referenced as `{{param.field}}` match the `schema`.
 - [ ] `folder` uses `/` to nest; related commands are grouped together.
+- [ ] Any `icon` value is one of the names listed in [`kai-icons.md`](./kai-icons.md) — an unrecognized name silently falls back to a generic icon instead of erroring, so it's easy to miss.
 - [ ] `working_dir` only set when different from the root (the default is already `{{PROJECT_PATH}}`).
 - [ ] `hooks` entries reference other commands **by name**, and only names that exist in the same file.
-- [ ] Valid JSON (quotes escaped inside `command`/`body`).
+- [ ] Never invent an `id`/`folder_id`/`parent_id` — this format never uses them (Kai generates its own at import time); the same now goes for an Export/Import Configuration file produced by Kai itself, unless "Lean file" was explicitly unchecked at export time.
+- [ ] Omit a key entirely when its value is the default (`false` for a flag, `""` for a string, `0`/`-1` for a number, `[]`/`{}` for a list/map) — every field documented here defaults to exactly what's missing, so there's no need to spell out `"is_background": false` on every command.
+- [ ] Valid JSON (quotes escaped inside `command`/`body`) — or valid YAML if using `kai.yml`/`kai.yaml`.

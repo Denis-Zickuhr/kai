@@ -348,7 +348,19 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     m_process->setArguments({}); // limpa; usamos nativeArguments
     // '/c ' + comando cru. Envolvemos em aspas externas do cmd apenas
     // quando necessário não é preciso: o cmd /c aceita a linha inteira.
-    m_process->setNativeArguments(QStringLiteral("/c %1").arg(command));
+    //
+    // "chcp 65001 >nul & " MUDA A CODEPAGE ATIVA da sessão pra UTF-8 antes
+    // do comando de verdade rodar — mesmo fix já aplicado no caminho
+    // ConPTY/interativo (ver applyTerminalProfile mais abaixo), mas que
+    // faltava aqui, no caminho QProcess NORMAL (comando não-interativo):
+    // sem isto a sessão nasce na codepage OEM/ANSI legada do Windows (ex:
+    // 850/1252), então acentos e sequências de escape emitidos pelo
+    // processo (ex: "PRODUÇÃO", `←[?25l` em vez de ESC de verdade) chegam
+    // em bytes que decodeOut() — fixo em UTF-8 — não sabe interpretar,
+    // virando lixo visual na Saída (bug relatado: "erro de encoding").
+    // ">nul" descarta a própria mensagem de confirmação do chcp.
+    m_process->setNativeArguments(
+        QStringLiteral("/c chcp 65001 >nul & %1").arg(command));
 #else
     // Executa via shell para suportar pipes, redirects e loops (ex:
     // usa `for i in ...; do ...; done`), que QProcess::start() puro não
@@ -398,9 +410,18 @@ bool ProcessRunner::startWithPty(const QString &command, const QString &workingD
     return false;
 #else
     int masterFd = -1;
+    // Largura GENEROSA de propósito — mesmo raciocínio do lado ConPTY
+    // (Windows, ver comentário lá): sem um winsize explícito, forkpty herda
+    // o tamanho do terminal controlador do processo pai (ou um default do
+    // kernel) — tipicamente estreito (80 colunas), e uma saída de log JSON
+    // de uma linha só realista costuma passar disso, arriscando a mesma
+    // classe de ambiguidade de quebra de linha no pty.
+    struct winsize ws{};
+    ws.ws_col = 500;
+    ws.ws_row = 30;
     // forkpty cria o par mestre/escravo, faz fork e conecta o filho ao
     // lado escravo como seu terminal controlador — o filho enxerga um tty.
-    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, nullptr);
+    const pid_t pid = ::forkpty(&masterFd, nullptr, nullptr, &ws);
 
     if (pid < 0) {
         utils::Logger::warning(kLogTag,
@@ -617,7 +638,22 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     }
 
     HPCON hPC = nullptr;
-    const COORD size{120, 30};
+    // LARGURA GENEROSA de propósito (achado real, reportado com print: um
+    // caractere duplicado no MEIO de palavras — "Cancelados" virando
+    // "Canceelados", "timeFrom" virando "timeFroom" — sempre exatamente no
+    // ponto em que a linha (um log JSON de uma linha só, tipicamente bem
+    // mais longo que 120 colunas) alcançaria a largura do pseudoconsole.
+    // É um comportamento CONHECIDO do ConPTY na ambiguidade de "deferred
+    // autowrap" (o terminal decide se já quebrou a linha ou não no exato
+    // instante em que a última coluna é preenchida): com 120 colunas fixas,
+    // qualquer linha de log realista passa dessa largura e aciona a
+    // ambiguidade. 120 colunas fazia sentido pra uma janela de terminal
+    // comum, mas aqui a saída é sempre CAPTURADA/reformatada por nós (não
+    // é um terminal visual de verdade sendo redimensionado pelo usuário),
+    // então não há motivo pra manter estreito — uma largura bem maior
+    // praticamente elimina o gatilho da ambiguidade pra qualquer linha de
+    // log realista.
+    const COORD size{500, 30};
     HRESULT hr = createPC(size, inRead, outWrite, 0, &hPC);
     // As pontas que pertencem ao ConPTY já foram duplicadas por ele.
     ::CloseHandle(inRead);

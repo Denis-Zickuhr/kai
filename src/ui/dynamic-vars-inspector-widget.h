@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QVector>
 #include <QMap>
+#include <QSet>
 #include <QString>
 #include <functional>
 
@@ -76,6 +77,13 @@ private:
 
     core::EnvironmentManager &m_envManager;
     QVector<core::Folder> m_allFolders;
+    // Nomes de projeto (Folder::isProject) que aparecem em MAIS DE UMA
+    // pasta — bug relatado: "ficou algum projeto com nome duplicado...
+    // liste o path?": dois projetos com o mesmo nome ficavam
+    // indistinguíveis no combo de escopo e na pill da tabela. Recalculado
+    // em rebuildScopeCombo() (que SEMPRE roda antes de rebuildTable() —
+    // ver os chamadores), consultado por labelForScope().
+    QSet<QString> m_duplicateProjectNames;
     std::function<QMap<QString, QMap<QString, QString>>()> m_loadPersisted;
     std::function<bool(const QMap<QString, QMap<QString, QString>> &)> m_savePersisted;
 

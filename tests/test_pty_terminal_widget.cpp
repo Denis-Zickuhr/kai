@@ -2,8 +2,11 @@
 #include <QWidget>
 #include <QSignalSpy>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QCoreApplication>
 #include <QScrollBar>
+#include <QGuiApplication>
+#include <QClipboard>
 
 #include "ui/pty-terminal-widget.h"
 #include "core/models.h"
@@ -40,6 +43,34 @@ private slots:
         widget.resize(400, 300);
         widget.feed(QStringLiteral("Hello, Kai!"));
         QVERIFY(widget.plainScreenText().contains(QStringLiteral("Hello, Kai!")));
+    }
+
+    // Bug relatado: "terminais tty não suportam ctrl+clique em links" — o
+    // widget não tinha NENHUM tratamento de mouse antes. urlAt() é a base
+    // de detecção usada tanto pelo cursor de mãozinha (hover) quanto pelo
+    // clique de verdade (mouseReleaseEvent) — mais fácil de testar sem
+    // simular eventos de mouse reais.
+    void urlAtDetectsUrlUnderColumnButNotOutsideIt()
+    {
+        PtyTerminalWidget widget;
+        widget.resize(800, 300);
+        widget.feed(QStringLiteral("veja: http://example.com/x fim"));
+
+        const int cw = widget.cellWidthPx();
+        const int ch = widget.cellHeightPx();
+        QVERIFY(cw > 0 && ch > 0);
+        const int y = ch / 2; // meio da primeira linha
+
+        // Coluna 0 ("veja: ") — fora da URL.
+        QVERIFY(widget.urlAt(QPoint(cw / 2, y)).isEmpty());
+
+        // Alguma coluna DENTRO de "http://example.com/x" (começa na coluna 6).
+        const QString hit = widget.urlAt(QPoint(cw * 10 + cw / 2, y));
+        QCOMPARE(hit, QStringLiteral("http://example.com/x"));
+
+        // Depois da URL ("fim") — fora de novo.
+        const int afterCol = 6 + QStringLiteral("http://example.com/x").length() + 1;
+        QVERIFY(widget.urlAt(QPoint(cw * afterCol + cw / 2, y)).isEmpty());
     }
 
     // O bug real que o terminal interativo resolve: um app que desenha via
@@ -188,6 +219,64 @@ private slots:
 
         QCOMPARE(widget.scrollbackLineCount(), 0);
         QCOMPARE(widget.verticalScrollBar()->maximum(), 0);
+    }
+
+    // REGRESSÃO/feature (pedido do usuário: "terminal interativo não
+    // permite selecionar texto") — clique+arraste (sem Ctrl, reservado pro
+    // link) marca uma seleção e solta o botão já copia pra área de
+    // transferência (convenção de terminais reais).
+    void dragSelectingTextCopiesItToClipboard()
+    {
+        PtyTerminalWidget widget;
+        widget.resize(800, 300);
+        widget.feed(QStringLiteral("hello world"));
+
+        const int cw = widget.cellWidthPx();
+        const int ch = widget.cellHeightPx();
+        const int y = ch / 2;
+
+        QVERIFY(!widget.hasSelection());
+
+        // Arrasta da coluna 0 até a coluna 4 (dentro de "hello").
+        QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw / 2, y));
+        QTest::mouseMove(&widget, QPoint(cw * 4 + cw / 2, y));
+        // mouseMoveEvent só reage a botão pressionado via event->buttons();
+        // QTest::mouseMove não seta isso sozinho — dispara o evento na mão.
+        {
+            QMouseEvent move(QEvent::MouseMove, QPointF(cw * 4 + cw / 2, y), QPointF(cw * 4 + cw / 2, y),
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(&widget, &move);
+        }
+        QVERIFY(widget.hasSelection());
+        QCOMPARE(widget.selectedText(), QStringLiteral("hello"));
+
+        QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw * 4 + cw / 2, y));
+        QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("hello"));
+    }
+
+    // Um clique simples (sem arrastar) limpa qualquer seleção anterior —
+    // mesmo comportamento de qualquer editor/terminal real.
+    void plainClickClearsExistingSelection()
+    {
+        PtyTerminalWidget widget;
+        widget.resize(800, 300);
+        widget.feed(QStringLiteral("hello world"));
+        const int cw = widget.cellWidthPx();
+        const int ch = widget.cellHeightPx();
+        const int y = ch / 2;
+
+        QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw / 2, y));
+        {
+            QMouseEvent move(QEvent::MouseMove, QPointF(cw * 4 + cw / 2, y), QPointF(cw * 4 + cw / 2, y),
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(&widget, &move);
+        }
+        QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw * 4 + cw / 2, y));
+        QVERIFY(widget.hasSelection());
+
+        QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw * 8 + cw / 2, y));
+        QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw * 8 + cw / 2, y));
+        QVERIFY(!widget.hasSelection());
     }
 };
 

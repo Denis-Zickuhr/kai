@@ -213,6 +213,48 @@ private slots:
         QCOMPARE(back.at(0).type, kai::core::ParameterType::Textarea);
         QCOMPARE(back.at(1).type, kai::core::ParameterType::Json);
     }
+
+    // Novo tipo "date" (pedido do usuário: date picker com modo/range/
+    // formato/template custom) — round-trip via JSON e via
+    // ParameterEditorWidget, mesmo padrão do teste acima.
+    void dateParameterTypeRoundTripsThroughJsonAndWidget()
+    {
+        kai::core::Parameter date;
+        date.name = QStringLiteral("janela");
+        date.label = QStringLiteral("Janela de deploy");
+        date.type = kai::core::ParameterType::Date;
+        date.dateMode = QStringLiteral("datetime");
+        date.dateRange = true;
+        date.dateFormat = QStringLiteral("custom");
+        date.dateFormatCustom = QStringLiteral("dd.MM.yy HH:mm");
+
+        const kai::core::Parameter back = kai::core::Parameter::fromJson(date.toJson());
+        QCOMPARE(back.type, kai::core::ParameterType::Date);
+        QCOMPARE(back.dateMode, QStringLiteral("datetime"));
+        QCOMPARE(back.dateRange, true);
+        QCOMPARE(back.dateFormat, QStringLiteral("custom"));
+        QCOMPARE(back.dateFormatCustom, QStringLiteral("dd.MM.yy HH:mm"));
+        QCOMPARE(kai::core::parameterTypeToString(kai::core::ParameterType::Date), QStringLiteral("date"));
+
+        // Defaults (campo ausente no JSON) continuam retrocompatíveis.
+        QJsonObject bare;
+        bare["name"] = QStringLiteral("x");
+        bare["type"] = QStringLiteral("date");
+        const kai::core::Parameter bareBack = kai::core::Parameter::fromJson(bare);
+        QCOMPARE(bareBack.dateMode, QStringLiteral("date"));
+        QCOMPARE(bareBack.dateRange, false);
+        QCOMPARE(bareBack.dateFormat, QStringLiteral("iso_date"));
+        QVERIFY(bareBack.dateFormatCustom.isEmpty());
+
+        ParameterEditorWidget editor;
+        editor.setParameters({date});
+        const QVector<kai::core::Parameter> widgetBack = editor.parameters();
+        QCOMPARE(widgetBack.size(), 1);
+        QCOMPARE(widgetBack.at(0).type, kai::core::ParameterType::Date);
+        QCOMPARE(widgetBack.at(0).dateMode, QStringLiteral("datetime"));
+        QCOMPARE(widgetBack.at(0).dateRange, true);
+        QCOMPARE(widgetBack.at(0).dateFormatCustom, QStringLiteral("dd.MM.yy HH:mm"));
+    }
 };
 
 QTEST_MAIN(TestTableWidgets)

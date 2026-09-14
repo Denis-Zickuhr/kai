@@ -15,6 +15,8 @@
 #include "engine/process-runner.h"
 #include "engine/http-runner.h"
 
+class TestExecutionPipeline; // ver friend em ExecutionPipeline (tests/test_execution_pipeline.cpp)
+
 namespace kai::engine {
 
 enum class PipelineStage {
@@ -39,6 +41,13 @@ struct PipelineResult {
 // abortada imediatamente e o Comando Principal NUNCA é disparado.
 class ExecutionPipeline : public QObject {
     Q_OBJECT
+
+    // Testa wrapForEnvCapture() diretamente (é privado): a sintaxe gerada
+    // pra sabores Cmd/PowerShell não pode ser validada rodando o pipeline
+    // de ponta a ponta nesta CI, que só tem bash (Get-ChildItem/Write-Output
+    // não existem aqui) - só o TEXTO gerado importa pro bug em questão
+    // ("Export variables" nunca funcionava fora de alvo Posix/WSL).
+    friend class ::TestExecutionPipeline;
 
 public:
     explicit ExecutionPipeline(QObject *parent = nullptr);
@@ -165,8 +174,16 @@ private:
     // parse das linhas KEY=VALUE emitidas depois do sentinela e injeta cada
     // uma como variável dinâmica no EnvironmentManager, disponibilizando-as
     // ao comando principal e aos hooks seguintes.
-    QString wrapForEnvCapture(const QString &interpolatedCommand) const;
-    void ingestCapturedEnv(const QString &rawOutput);
+    QString wrapForEnvCapture(const QString &interpolatedCommand, core::ShellFlavor flavor) const;
+    // `scopeKey` é o escopo de variáveis dinâmicas CAPTURADO no momento em
+    // que a execução começou (ver chamador em run()) — NUNCA lido de
+    // EnvironmentManager::currentDynamicVarScope() aqui dentro, porque esta
+    // função roda no callback `finished` do processo, possivelmente muito
+    // depois de o usuário já ter trocado de comando/pasta selecionada (o
+    // que muda o escopo AMBIENTE via setDynamicVarScope) — mesma corrida já
+    // documentada em EnvironmentManager::setDynamicVarInScope.
+    void ingestCapturedEnv(const QString &rawOutput, const QString &scopeKey,
+                            const QVector<core::DeclaredEnvVar> &declaredVars);
     // Aplica o template do alvo de terminal ao comando interpolado, se o
     // comando definir um terminalTarget existente. Caso contrário retorna
     // o comando inalterado. Quando há terminalTarget E workingDir, injeta

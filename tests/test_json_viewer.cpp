@@ -180,6 +180,34 @@ private slots:
         // Texto puro continua intacto independente do colapso.
         QVERIFY(view->toPlainText().contains(QStringLiteral("\"name\": \"Ana\"")));
     }
+
+    // Bug reportado: "estou fazendo um request que me devolve um JSON bem
+    // grande, e o sistema renderiza só um pedacinho desse json, deve exibir
+    // TUDO" — um objeto de nível 1 com centenas de linhas nascia
+    // AUTO-COLAPSADO (limiar de 40 linhas), sobrando só uma linha visível.
+    // JsonViewerWidget não deve mais auto-colapsar nada ao carregar.
+    void largeJsonBodyIsNotAutoCollapsedOnLoad()
+    {
+        QJsonObject root;
+        for (int i = 0; i < 200; ++i) {
+            root.insert(QStringLiteral("field_%1").arg(i), QStringLiteral("value_%1").arg(i));
+        }
+        const QString bigJson = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+        JsonViewerWidget w;
+        w.setJsonText(bigJson);
+        auto *view = w.findChild<FoldableJsonView *>();
+        QVERIFY(view != nullptr);
+
+        // Nenhum bloco deve estar colapsado logo após o carregamento — todo
+        // campo (field_0..field_199) precisa estar de fato visível no texto
+        // renderizado, não só presente no documento por baixo de um fold.
+        for (QTextBlock b = view->document()->firstBlock(); b.isValid(); b = b.next()) {
+            QVERIFY2(b.isVisible(), qPrintable(QStringLiteral("bloco oculto por auto-colapso: '%1'").arg(b.text())));
+        }
+        QVERIFY(view->toPlainText().contains(QStringLiteral("\"field_0\"")));
+        QVERIFY(view->toPlainText().contains(QStringLiteral("\"field_199\"")));
+    }
 };
 
 QTEST_MAIN(TestJsonViewer)

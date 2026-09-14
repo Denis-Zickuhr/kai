@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(kai VERSION 1.0.0 LANGUAGES CXX C)
+project(kai VERSION 1.0.1 LANGUAGES CXX C)
 
 # Versão exibida na Ajuda (aba "Versão"). Deriva da versão do project().
 set(KAI_VERSION_STRING "${PROJECT_VERSION}")
@@ -78,10 +78,19 @@ add_library(kai-core STATIC
     src/core/environment-manager.cpp
     src/core/run-history.h
     src/core/run-history.cpp
+    src/core/notification-history.h
+    src/core/notification-history.cpp
     src/core/curl-parser.h
     src/core/curl-parser.cpp
     src/core/openapi-parser.h
     src/core/openapi-parser.cpp
+    src/core/yaml-bridge.h
+    src/core/yaml-bridge.cpp
+    src/core/date-param-format.h
+    src/core/date-param-format.cpp
+    src/core/kai-file-validator.h
+    src/core/kai-file-validator.cpp
+    src/core/folder-path-resolver.h
     src/utils/path-format.h
     src/utils/path-format.cpp
     src/utils/asset-paths.h
@@ -124,12 +133,20 @@ add_library(kai-ui STATIC
     src/utils/action-shortcuts.cpp
     src/ui/app-stylesheet.h
     src/ui/app-stylesheet.cpp
-    src/ui/export-selection-dialog.h
-    src/ui/export-selection-dialog.cpp
+    src/ui/export-dialog.h
+    src/ui/export-dialog.cpp
+    src/ui/import-dialog.h
+    src/ui/import-dialog.cpp
+    src/ui/import-selection-dialog.h
+    src/ui/import-selection-dialog.cpp
+    src/ui/log-line-view.h
+    src/ui/log-line-view.cpp
     src/ui/table-utils.h
     src/ui/table-utils.cpp
     src/ui/row-edit-dialog.h
     src/ui/row-edit-dialog.cpp
+    src/ui/date-picker-dialog.h
+    src/ui/date-picker-dialog.cpp
     src/ui/code-output-view.h
     src/ui/code-output-view.cpp
     src/ui/output-panel.h
@@ -171,6 +188,8 @@ add_library(kai-ui STATIC
     src/ui/execution-conditions-editor-widget.cpp
     src/ui/env-extractors-editor-widget.h
     src/ui/env-extractors-editor-widget.cpp
+    src/ui/declared-env-vars-editor-widget.h
+    src/ui/declared-env-vars-editor-widget.cpp
     src/ui/dynamic-vars-inspector-widget.h
     src/ui/dynamic-vars-inspector-widget.cpp
     src/ui/project-detection-strategy.h
@@ -216,6 +235,8 @@ add_library(kai-ui STATIC
     src/ui/environment-manager-dialog.cpp
     src/ui/run-history-dialog.h
     src/ui/run-history-dialog.cpp
+    src/ui/notification-history-dialog.h
+    src/ui/notification-history-dialog.cpp
     assets/icons/icons.qrc
     src/ui/action-sidebar.h
     src/ui/action-sidebar.cpp
@@ -245,9 +266,13 @@ target_include_directories(kai-ui PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(kai-ui PUBLIC kai-core kai-engine Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg QHotkey::QHotkey vterm)
 
 # Windows: dwmapi fornece DwmSetWindowAttribute, usado pelo backdrop nativo
-# (Mica/Acrylic) do modo "material líquido".
+# (Mica/Acrylic) do modo "material líquido". user32 fornece
+# SetForegroundWindow/AttachThreadInput/BringWindowToTop, usados pra
+# forçar a janela pra frente ao reexibir via atalho GLOBAL (ver
+# forceForegroundOnWindows em main-window.cpp) — normalmente já vem
+# linkada transitivamente por Qt, mas explícito evita depender disso.
 if(WIN32)
-    target_link_libraries(kai-ui PRIVATE dwmapi)
+    target_link_libraries(kai-ui PRIVATE dwmapi user32)
 endif()
 
 # --- Biblioteca "kai-ipc": servidor/cliente CLI via QLocalServer ---

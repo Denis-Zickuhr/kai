@@ -205,6 +205,11 @@ void CollapsibleSectionCard::setAlwaysShowBody(bool alwaysShow)
     }
 }
 
+void CollapsibleSectionCard::setShowCountBadge(bool show)
+{
+    m_countBadge->setVisible(show);
+}
+
 void CollapsibleSectionCard::setActionButtonText(const QString &text)
 {
     if (!m_actionButton) {

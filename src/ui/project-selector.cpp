@@ -1,4 +1,6 @@
 #include "ui/project-selector.h"
+#include "core/yaml-bridge.h"
+#include "core/folder-path-resolver.h"
 
 #include <QFileDialog>
 #include <QFile>
@@ -62,8 +64,24 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
         return result;
     }
 
-    const QString kaiJsonPath = QDir(directoryPath).filePath(QString::fromLatin1(kKaiJsonFileName));
+    // ACEITA kai.yml/kai.yaml TAMBÉM (pedido do usuário: "kai.yml" — o
+    // mesmo argumento do export/import de config: "yaml é mais legível e
+    // bonito"). kai.json continua tendo prioridade se os dois existirem
+    // (nunca ambíguo: um projeto normalmente só tem um dos dois).
+    QString kaiJsonPath = QDir(directoryPath).filePath(QString::fromLatin1(kKaiJsonFileName));
     QFile file(kaiJsonPath);
+    bool isYaml = false;
+    if (!file.exists()) {
+        for (const char *alt : {"kai.yml", "kai.yaml"}) {
+            const QString altPath = QDir(directoryPath).filePath(QString::fromLatin1(alt));
+            if (QFile::exists(altPath)) {
+                kaiJsonPath = altPath;
+                file.setFileName(altPath);
+                isYaml = true;
+                break;
+            }
+        }
+    }
 
     if (!file.exists()) {
         // Sem detecção genérica: kai.json é obrigatório, comportamento
@@ -89,8 +107,20 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
             return result;
         }
 
-        const QByteArray raw = file.readAll();
+        QByteArray raw = file.readAll();
         file.close();
+
+        if (isYaml) {
+            bool yamlOk = false;
+            QString yamlError;
+            const QString converted = core::yamlTextToJsonText(QString::fromUtf8(raw), &yamlOk, &yamlError);
+            if (!yamlOk) {
+                result.errorMessage = utils::tr(QStringLiteral("project_selector.error.invalid_json")).arg(yamlError);
+                utils::Logger::error(kLogTag, result.errorMessage);
+                return result;
+            }
+            raw = converted.toUtf8();
+        }
 
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
@@ -102,7 +132,27 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
         }
         root = doc.object();
     }
-    const QString projectName = root.value("project_name").toString(QFileInfo(directoryPath).fileName());
+    // Fallback pra um kai.yml escrito na FORMA do Export/Import
+    // Configuration (chave "folders": [...], em vez de "project_name"/
+    // "icon" no topo) sendo importado por "Importar Projeto" por engano —
+    // confusão real reportada: o usuário tinha um "folders": [{"name":
+    // "...", "icon": "...", "is_project": true}] esperando que virasse o
+    // nome/ícone do projeto, mas o importador de projeto nunca leu essa
+    // chave (ela não existe no formato de projeto — cada pasta ali vem de
+    // "folder": "caminho" em cada comando). Sem isto, o projeto importava
+    // com nome = nome do diretório e ícone vazio, silenciosamente.
+    QJsonObject projectMetaFolder;
+    for (const QJsonValue &v : root.value(QStringLiteral("folders")).toArray()) {
+        const QJsonObject f = v.toObject();
+        if (f.value(QStringLiteral("is_project")).toBool(false)) {
+            projectMetaFolder = f;
+            break;
+        }
+    }
+    const QString fallbackName = projectMetaFolder.value(QStringLiteral("name")).toString();
+    const QString projectName = root.contains(QStringLiteral("project_name"))
+        ? root.value(QStringLiteral("project_name")).toString()
+        : (!fallbackName.isEmpty() ? fallbackName : QFileInfo(directoryPath).fileName());
 
     // Path GRAVADO como PROJECT_PATH: usa o override se fornecido (já
     // pronto, sem conversão aqui), senão cai pro `directoryPath` literal —
@@ -114,7 +164,9 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     core::Folder folder;
     folder.id = generateFolderId(projectName);
     folder.name = projectName;
-    folder.icon = root.value("icon").toString();
+    folder.icon = root.contains(QStringLiteral("icon"))
+        ? root.value(QStringLiteral("icon")).toString()
+        : projectMetaFolder.value(QStringLiteral("icon")).toString();
     // Todo projeto IMPORTADO já é, por definição, um "projeto" — vira
     // fronteira de escopo de variáveis DINÂMICAS de cara, sem precisar
     // marcar manualmente (ver EnvironmentManager::setDynamicVarScope).
@@ -126,45 +178,61 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
         folder.envVars[it.key()] = it.value().toString();
     }
 
+    // Ícone de subpasta (pedido do usuário: "se eu quiser incluir um ícone
+    // na subpasta de um projeto, dá?") — chave opcional "folders": [{
+    // "path": "Marketplaces/Amazon", "icon": "box" }], mesmo padrão (path +
+    // icon) do Export/Import Configuration id-free (ver
+    // stripIdsFromExport/resolveIdFreeImport em config-manager.cpp). Uma
+    // entrada aqui SÓ traz o ícone — a subpasta em si continua sendo
+    // criada implicitamente por qualquer comando/coleção que declare
+    // "folder": "esse mesmo path"; uma entrada sem nenhum comando
+    // apontando pra ela é ignorada (mesma regra do "path" do
+    // Export/Import Configuration: pasta intermediária vazia não aparece
+    // sozinha).
+    // Metadados de subpasta declarados explicitamente por path (hoje só
+    // "icon" é lido) — chave "path" tolera vir COM o prefixo do nome do
+    // projeto (como aparece na árvore) ou sem ele (ver
+    // FolderPathResolver::stripRootPrefix e o comentário na classe: bug
+    // real reportado, arquivo com "path": "Amazon Marketplace API/
+    // Sincronizar" pra um comando com "folder": "Sincronizar" — o ícone
+    // nunca batia, silenciosamente, até esta extração compartilhada).
+    QMap<QString, QJsonObject> explicitFolderMetaByPath;
+    for (const QJsonValue &v : root.value(QStringLiteral("folders")).toArray()) {
+        const QJsonObject f = v.toObject();
+        const QString path = core::FolderPathResolver::stripRootPrefix(
+            f.value(QStringLiteral("path")).toString(), projectName);
+        if (!path.isEmpty()) {
+            explicitFolderMetaByPath.insert(path, f);
+        }
+    }
+
     int index = 0;
-    // Cache de subpastas por CAMINHO ("A" ou "A/B"): resolve/cria a
-    // subpasta e devolve seu id. Feedback do usuário: organizar os comandos
-    // em várias pastas. O kai.json pode trazer "folder": "Marketplaces" ou
-    // "folder": "Callbacks/Shopee" (aninhado). Cada segmento vira uma
-    // Folder sob a pasta raiz do projeto, com ordem preservada.
-    QMap<QString, QString> subFolderIdByPath; // caminho -> folderId
+    // Resolução de "folder"/"path" -> id, criando subpastas sob demanda —
+    // COMPARTILHADA com o Export/Import Configuration id-free (ver
+    // core::FolderPathResolver). O kai.json pode trazer "folder":
+    // "Marketplaces" ou "folder": "Callbacks/Shopee" (aninhado); cada
+    // segmento vira uma Folder sob a pasta raiz do projeto, com ordem
+    // preservada.
     int subFolderOrder = 0;
+    int subFolderCounter = 0;
+    core::FolderPathResolver folderResolver(folder.id,
+        [&folder, &subFolderCounter]() {
+            return QStringLiteral("%1_sf_%2").arg(folder.id).arg(subFolderCounter++);
+        },
+        explicitFolderMetaByPath);
     std::function<QString(const QString &)> resolveFolder =
         [&](const QString &folderPath) -> QString {
-        const QString trimmed = folderPath.trimmed();
-        if (trimmed.isEmpty()) {
-            return folder.id; // sem "folder": vai direto na raiz do projeto
-        }
-        if (subFolderIdByPath.contains(trimmed)) {
-            return subFolderIdByPath.value(trimmed);
-        }
-        // Resolve segmento a segmento (aninhamento via '/').
-        const QStringList segments = trimmed.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        QString parentId = folder.id;
-        QString accumulated;
-        for (const QString &segRaw : segments) {
-            const QString seg = segRaw.trimmed();
-            accumulated = accumulated.isEmpty() ? seg : (accumulated + QStringLiteral("/") + seg);
-            if (subFolderIdByPath.contains(accumulated)) {
-                parentId = subFolderIdByPath.value(accumulated);
-                continue;
-            }
-            core::Folder sub;
-            sub.id = QStringLiteral("%1_sf_%2").arg(folder.id).arg(subFolderIdByPath.size());
-            sub.name = seg;
-            sub.parentId = parentId;
-            sub.isProject = false;
-            sub.order = subFolderOrder++;
-            result.subFolders << sub;
-            subFolderIdByPath.insert(accumulated, sub.id);
-            parentId = sub.id;
-        }
-        return parentId;
+        return folderResolver.resolve(folderPath,
+            [&](const QString &id, const QString &name, const QString &parentId, const QString &path) {
+                core::Folder sub;
+                sub.id = id;
+                sub.name = name;
+                sub.icon = folderResolver.explicitMetadataFor(path).value(QStringLiteral("icon")).toString();
+                sub.parentId = parentId;
+                sub.isProject = false;
+                sub.order = subFolderOrder++;
+                result.subFolders << sub;
+            });
     };
 
     // Hooks (chave "hooks": {"pre": [...], "post": [...], "cleanup": [...]})
@@ -181,72 +249,38 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     for (const QJsonValue &cmdVal : root.value("commands").toArray()) {
         const QJsonObject cmdObj = cmdVal.toObject();
 
-        core::Command command;
+        // Base = o MESMO parser usado pelo Export/Import Configuration
+        // (core::Command::fromJson) — pedido do usuário ("tem que ser
+        // GERAL aquela importação, ícone, nome e tudo, como na importação
+        // de pasta"): um parser hand-rolled à parte, campo por campo, já
+        // tinha ficado pra trás do struct real MAIS de uma vez (capture_env
+        // antes, agora icon/formatted_output/declared_env_vars) — cada
+        // campo novo em core::Command precisava ser copiado aqui à mão e
+        // nunca era. Usar fromJson elimina essa classe inteira de bug:
+        // qualquer campo que o formato do projeto grava com a MESMA chave
+        // do Export/Import Configuration passa a chegar automaticamente.
+        core::Command command = core::Command::fromJson(cmdObj);
         command.id = generateCommandId(folder.id, index++);
         command.folderId = resolveFolder(cmdObj.value("folder").toString());
-        command.name = cmdObj.value("name").toString();
-        command.description = cmdObj.value("description").toString();
-        command.type = core::commandTypeFromString(cmdObj.value("type").toString(QStringLiteral("shell")));
-        command.command = cmdObj.value("command").toString();
-        command.workingDir = cmdObj.value("working_dir").toString(QStringLiteral("{{PROJECT_PATH}}"));
-        command.isBackground = cmdObj.value("is_background").toBool(false);
-        // AUDITORIA (revisão geral de import/export pedida pelo usuário):
-        // estes 8 campos existem em core::Command e são suportados pelo
-        // pipeline normalmente, mas o parser de kai.json de projeto nunca os
-        // lia — um kai.json que os declarasse via cópia do "Exportar
-        // comando" via UI (mesmas chaves) tinha esses campos silenciosamente
-        // descartados na importação de projeto.
-        command.compactOutput = cmdObj.value("compact_output").toBool(false);
-        command.hideOnRun = cmdObj.value("hide_on_run").toBool(false);
-        command.ignoreExitCode = cmdObj.value("ignore_exit_code").toBool(false);
-        command.hidden = cmdObj.value("hidden").toBool(false);
-        command.captureEnv = cmdObj.value("capture_env").toBool(false);
-        command.openLastLink = cmdObj.value("open_last_link").toBool(false);
-        command.interactiveTerminal = cmdObj.value("interactive_terminal").toBool(false);
-        command.terminalTarget = cmdObj.value("terminal_target").toString();
-        command.autoRun = cmdObj.value("auto_run").toBool(false);
-        command.autoRunDelaySec = cmdObj.value("auto_run_delay_sec").toInt(0);
-
-        // Config HTTP (bug corrigido: comandos type=http eram importados
-        // SEM o http_config, e o pipeline abortava com "sem http_config").
-        if (cmdObj.contains("http_config") && cmdObj.value("http_config").isObject()) {
-            command.httpConfig = core::HttpConfig::fromJson(cmdObj.value("http_config").toObject());
+        // Default de working_dir É DIFERENTE aqui: um comando de projeto
+        // sem "working_dir" roda na raiz do projeto ({{PROJECT_PATH}}),
+        // não "" (que fromJson usa como default genérico).
+        if (!cmdObj.contains(QStringLiteral("working_dir"))) {
+            command.workingDir = QStringLiteral("{{PROJECT_PATH}}");
         }
 
-        // Parâmetros do comando (formulários dinâmicos). Suporta ligar um
-        // Select a uma coleção do próprio projeto por NOME (chave
-        // "collection"), resolvida para o id gerado logo abaixo.
-        for (const QJsonValue &pVal : cmdObj.value("params").toArray()) {
-            const QJsonObject pObj = pVal.toObject();
-            core::Parameter param;
-            param.name = pObj.value("name").toString();
-            param.label = pObj.value("label").toString();
-            param.type = core::parameterTypeFromString(pObj.value("type").toString(QStringLiteral("text")));
-            param.defaultValue = pObj.value("default").toString();
-            for (const QJsonValue &opt : pObj.value("options").toArray()) {
-                param.options << opt.toString();
+        // Referência de coleção por NOME nos parâmetros (chave "collection",
+        // resolvida pra id mais abaixo, depois que as coleções existirem) —
+        // fromJson só entende "collection_id" (id já resolvido), então essa
+        // parte continua sendo lida à parte, pareada por índice com
+        // command.params (mesmo array, mesma ordem).
+        const QJsonArray paramsArr = cmdObj.value(QStringLiteral("params")).toArray();
+        for (int i = 0; i < paramsArr.size() && i < command.params.size(); ++i) {
+            const QJsonObject pObj = paramsArr.at(i).toObject();
+            if (pObj.contains(QStringLiteral("collection"))) {
+                command.params[i].collectionId = pObj.value(QStringLiteral("collection")).toString();
             }
-            param.multiSelect = pObj.value("multi_select").toBool(false);
-            // Referência à coleção por nome (resolvida após montar as
-            // coleções); guardamos o nome temporariamente em collectionId.
-            param.collectionId = pObj.value("collection").toString();
-            param.collectionDisplayField = pObj.value("collection_display_field").toString();
-            command.params << param;
         }
-
-        // Auto-responsores (mesmo formato de OutputResponder::toJson —
-        // nenhuma referência por nome/id envolvida, então dá pra ler direto).
-        for (const QJsonValue &respVal : cmdObj.value("responders").toArray()) {
-            command.responders << core::OutputResponder::fromJson(respVal.toObject());
-        }
-
-        // Condição de Execução (idem — left/op/right são texto livre
-        // interpolado, sem referência a ids internos).
-        for (const QJsonValue &condVal : cmdObj.value("execution_conditions").toArray()) {
-            command.executionConditions << core::ExecutionCondition::fromJson(condVal.toObject());
-        }
-        command.conditionCombinator = cmdObj.value("condition_combinator").toString(QStringLiteral("and"));
-        command.conditionSkipBehavior = cmdObj.value("condition_skip_behavior").toString(QStringLiteral("success"));
 
         rawHooksByIndex << cmdObj.value("hooks").toObject();
         result.commands << command;
@@ -339,16 +373,16 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
             }
 
             core::Folder group;
-            group.id = QStringLiteral("%1_det_%2").arg(folder.id).arg(subFolderIdByPath.size());
+            // Sufixo "_det_" (vs "_sf_" de resolveFolder) já garante que
+            // este id nunca colide com uma subpasta declarada no kai.json,
+            // mesmo que tenham o mesmo NOME — não precisam compartilhar
+            // cache nenhum.
+            group.id = QStringLiteral("%1_det_%2").arg(folder.id).arg(subFolderCounter++);
             group.name = strategy->name();
             group.parentId = folder.id;
             group.isProject = false;
             group.order = subFolderOrder++;
             result.subFolders << group;
-            // Reserva o "caminho" no cache de subpastas (mesmo id-space de
-            // resolveFolder) só para não colidir se um "folder" do kai.json
-            // por coincidência tiver o MESMO nome do ecossistema.
-            subFolderIdByPath.insert(QStringLiteral("__detected__%1").arg(strategy->name()), group.id);
 
             for (DetectedCommand dc : detected) {
                 dc.command.id = QStringLiteral("c_%1_det_%2").arg(folder.id).arg(detectedIndex++);

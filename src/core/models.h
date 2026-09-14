@@ -38,7 +38,12 @@ enum class ParameterType {
     // este tipo é PURAMENTE um campo de autoria melhor (realce/dobra de
     // sintaxe via FoldableJsonView) — não implementa replace algum por si
     // só. Também reaproveita `defaultValue` como snippet default.
-    Json
+    Json,
+    // DATE (pedido do usuário): abre uma janelinha (DatePickerDialog) pra
+    // escolher data/hora/data+hora em vez de digitar à mão — ver os campos
+    // dateMode/dateRange/dateFormat/dateFormatCustom abaixo, que só se
+    // aplicam a este tipo.
+    Date
 };
 
 QString parameterTypeToString(ParameterType type);
@@ -86,7 +91,32 @@ struct Parameter {
     // initialDir/filePathFormat continuam valendo, só muda o QUE se
     // escolhe. Continua sendo type == File (não um ParameterType novo):
     // é uma variação do mesmo campo, não um tipo de parâmetro à parte.
+    // MANTIDO só por compatibilidade com kai.json antigos — o campo de
+    // verdade, lido/escrito pela UI, é `pickMode` logo abaixo (deriva um do
+    // outro em toJson/fromJson). Não usar diretamente em código novo.
     bool pickFolder = false;
+
+    // MODO DE SELEÇÃO (usado quando type == File — pedido do usuário:
+    // "não gostei da cfg pick as folder, queria tipo um select com modo de
+    // seleção, que fosse tipo: arquivo, pastas ou ambos"). Substitui o
+    // checkbox binário `pickFolder` por três modos:
+    //   "file"   - QFileDialog::getOpenFileName (padrão, igual antes)
+    //   "folder" - QFileDialog::getExistingDirectory (igual pickFolder=true)
+    //   "both"   - o botão de procurar abre um menu perguntando arquivo OU
+    //              pasta antes de abrir o diálogo correspondente (não dá
+    //              pra pedir os dois ao mesmo tempo num único QFileDialog
+    //              nativo - não existe esse modo nativamente no Qt/SO).
+    QString pickMode = QStringLiteral("file");
+
+    // OPCIONAL (pedido do usuário: "quero que dê pra marcar parâmetros
+    // dinâmicos como opcional... esses campos opcionais teriam uma
+    // checkbox pedindo ao user se informa ou não, se for desmarcada nem
+    // renderiza até marcar como sim"). O campo de verdade nasce ESCONDIDO
+    // no form de execução (ParameterFormDialog), atrás de uma checkbox
+    // "Informar <label>?" — só aparece quando o usuário marca que quer
+    // preenchê-lo. Reduz o form quando muitos parâmetros são situacionais
+    // (só alguns cenários precisam deles).
+    bool optional = false;
 
     // Fonte de dados de COLEÇÃO (feature "Coleções"): quando
     // preenchido, um parâmetro Select puxa suas opções das entradas da
@@ -95,6 +125,30 @@ struct Parameter {
     // uma entrada, TODOS os campos dela são injetados como {{param.campo}}.
     QString collectionId;
     QString collectionDisplayField;
+
+    // --- Campos usados quando type == Date (pedido do usuário: "adicione
+    // um parâmetro do tipo date picker... tem as opções de janela de
+    // formatado de data, se é hora ou só data ou data hora, se é range,
+    // além de formatador de paste no CMD, select com formatos e opção
+    // custom") — ver core::formatDateParamValue / ui::DatePickerDialog. ---
+
+    // "date" | "time" | "datetime" — o que a janelinha pede: só data, só
+    // hora, ou os dois juntos.
+    QString dateMode = QStringLiteral("date");
+
+    // Intervalo (duas datas: início/fim) em vez de uma só. O valor do
+    // parâmetro em si ({{nome}}) sempre carrega o INÍCIO; o fim (só quando
+    // dateRange) fica disponível como {{nome.end}} (mesma convenção de
+    // {{param.campo}} usada por Select ligado a Coleção).
+    bool dateRange = false;
+
+    // Chave do formato usado ao "colar" o valor escolhido no comando — ver
+    // core::dateFormatPresetKeys() pela lista completa de presets válidos
+    // (ISO, BR, US, Unix segundos/ms, horário 24h...). "custom" usa
+    // `dateFormatCustom` (template de tokens do Qt: yyyy, MM, dd, HH, mm,
+    // ss...) em vez de um preset fixo.
+    QString dateFormat = QStringLiteral("iso_date");
+    QString dateFormatCustom;
 
     QJsonObject toJson() const;
     static Parameter fromJson(const QJsonObject &obj);
@@ -120,8 +174,46 @@ struct EnvExtractor {
     // é o VALOR capturado que persiste, não esta flag em si por comando.
     bool persist = false;
 
+    // ESCOPO de destino (pedido do usuário: "preciso QUE escolha se... ela
+    // salva na proprio PROJETO ou Global"). "project" (padrão, igual ao
+    // comportamento de sempre) grava no escopo dinâmico AMBIENTE atual
+    // (o projeto selecionado, se houver); "global" força gravar no escopo
+    // Global mesmo com um projeto selecionado — útil pra um token/valor que
+    // faz sentido reaproveitar em QUALQUER projeto, não só o que disparou a
+    // extração.
+    QString scope = QStringLiteral("project");
+
     QJsonObject toJson() const;
     static EnvExtractor fromJson(const QJsonObject &obj);
+};
+
+// VARIÁVEL DECLARADA para "Export variables" (Command::captureEnv) — pedido
+// do usuário, reportando um bug de segurança real: "exportar esta
+// exportando automaticamente envs do OS, essas envs quebram o
+// funcionamento se exportadas... preciso apenas exportar as envs
+// ADVERSAS e incomuns". O comportamento antigo (capturar TUDO que o
+// ambiente resultante tivesse de novo/diferente do processo pai, com uma
+// lista de ruído hardcoded) inevitavelmente vazava variáveis do sistema/
+// distro/WSL que o autor da lista de ruído nunca previu, quebrando comandos
+// downstream. Agora, "algo parecido" com os extratores HTTP (mesma ideia
+// de escopo/persistência): o comando DECLARA os nomes que espera capturar;
+// ExecutionPipeline::ingestCapturedEnv só considera essa lista — nada além
+// dela nunca é capturado, declarado ou não. Um nome declarado que o
+// processo NÃO setou ainda vira uma variável dinâmica VAZIA (não fica de
+// fora) — pedido explícito: "se não ficam vazias, até pra ajudar em
+// debug", pra ficar óbvio no inspetor de variáveis que aquele nome era
+// esperado mas não veio.
+struct DeclaredEnvVar {
+    QString name;
+    // Mesma semântica de EnvExtractor::persist/scope (ver comentário lá) —
+    // "tanto pra extrator cmd, quanto pra extrator http, preciso QUE
+    // escolha se a env é persistida entre sessões e se ela salva no
+    // próprio projeto ou Global".
+    bool persist = false;
+    QString scope = QStringLiteral("project"); // "project" | "global"
+
+    QJsonObject toJson() const;
+    static DeclaredEnvVar fromJson(const QJsonObject &obj);
 };
 
 // Auto-responsor (listener) de saída: escuta o stdout/stderr de um comando em
@@ -304,14 +396,24 @@ struct Command {
     // "Ocultar/Exibir" do grupo Exibição.
     bool hidden = false;
 
-    // Captura de ambiente (feedback do usuário — hooks estilo "gh auth"):
-    // quando true e o comando roda como HOOK (pre/post) de outro comando,
-    // o pipeline captura TODAS as variáveis de ambiente resultantes da
-    // execução deste hook e as injeta como variáveis dinâmicas da sessão,
-    // ficando disponíveis para o comando principal e para os hooks
-    // seguintes (ex: um `gh auth`/`aws sso login` que exporta tokens no
-    // ambiente passa a alimentar os comandos subsequentes automaticamente).
+    // "Exportar variáveis" na UI (renomeado de "Capturar env — uso como
+    // hook": feedback do usuário — o flag nunca foi exclusivo de hook, só
+    // a redação sugeria isso). Quando true, os nomes em `declaredEnvVars`
+    // (abaixo) são capturados como variáveis DINÂMICAS no escopo de PROJETO
+    // atual (ou Global, por declaração — ver DeclaredEnvVar::scope), ficando
+    // disponíveis pro comando principal, hooks seguintes, e qualquer outro
+    // comando do mesmo projeto depois (ex: `gh auth`/`aws sso login`
+    // exportando token no ambiente alimenta os comandos seguintes
+    // automaticamente). Chave JSON mantida "capture_env" por
+    // compatibilidade com kai.json existentes.
     bool captureEnv = false;
+
+    // LISTA BRANCA de nomes que este comando pode exportar (ver comentário
+    // de DeclaredEnvVar acima) — sem isto (lista vazia), captureEnv=true
+    // não captura NADA: declarar é obrigatório, de propósito, pra nunca
+    // mais vazar env do sistema/distro sem o autor do comando ter pedido
+    // explicitamente aquele nome.
+    QVector<DeclaredEnvVar> declaredEnvVars;
 
     // Abrir último link impresso (feedback do usuário): quando true, ao
     // finalizar um comando shell com sucesso, o Kai detecta a ÚLTIMA URL
@@ -329,6 +431,18 @@ struct Command {
     // parser ANSI simples não reproduz. Só vale para type == Shell (HTTP
     // não tem processo/PTY). Ver ui::PtyTerminalWidget.
     bool interactiveTerminal = false;
+
+    // SAÍDA FORMATADA estilo Grafana/Loki (pedido do usuário): quando true,
+    // a aba "Saída" (só faz sentido pra Shell NÃO interativo — o interativo
+    // já é emulação de terminal cru via PTY) tenta interpretar cada LINHA
+    // como um registro de log JSON (chaves reconhecidas por nome comum:
+    // level/severity, message/msg, time/timestamp) e renderiza um "card"
+    // colapsável (badge de nível + timestamp + mensagem, expande pra ver os
+    // campos extras). Linha que não é um objeto JSON válido cai pro texto
+    // cru, sem quebrar a saída — ver ui::LogLineView. Por comando (e não uma
+    // preferência de exibição global) porque só faz sentido pra serviços
+    // que REALMENTE logam JSON estruturado.
+    bool formattedOutput = false;
 
     // Alvo de terminal onde o comando shell é executado (feedback
     // do usuário: escolher em qual terminal rodar, ex: WSL bridge no
@@ -457,6 +571,19 @@ struct CollectionField {
     // Default true = visível. Campos invisíveis continuam existindo/editáveis
     // no formulário, só não aparecem como coluna na tabela.
     bool visible = true;
+
+    // SECRETO (pedido do usuário, na conversa sobre a superfície sensível
+    // do formato de export/import: "sinto que as maiores vunerabilidades
+    // são coleções... [coleções] são casos de uso bem específicos" — um
+    // campo marcado secret guarda dado sensível de verdade, ex.: token,
+    // senha de teste colada numa entry). Efeitos: (1) mascarado na
+    // tabela/formulário de edição da coleção (mesmo padrão de um campo de
+    // senha — não escondido de quem tem o Kai aberto, só do "olhar de
+    // relance"/print de tela acidental); (2) SEMPRE excluído do export,
+    // mesmo com "incluir dados das entries" marcado — a única forma de
+    // levar um valor secret pra fora é copiá-lo manualmente. Default false
+    // (retrocompat: schemas antigos continuam exportando como sempre).
+    bool secret = false;
 
     QJsonObject toJson() const;
     static CollectionField fromJson(const QJsonObject &obj);

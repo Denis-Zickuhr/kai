@@ -10,8 +10,10 @@
 !endif
 
 !define APPNAME "Kai"
-!define APPVERSION "1.0.0"
+!define APPVERSION "1.0.1"
 !define PUBLISHER "Kai"
+
+!include "LogicLib.nsh"
 
 Unicode true
 ; Compressão zlib (em vez de /SOLID lzma): o stub resultante é mais simples
@@ -33,10 +35,10 @@ OutFile "${KAIOUT}\kai-setup.exe"
 ; são um perfil clássico de falso positivo no Windows Defender (o stub é o
 ; mesmo usado por muito software indesejado, então a reputação do arquivo pesa).
 ; Declarar produto, versão, empresa e descrição reduz o escore heurístico.
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.0.1.0"
 VIAddVersionKey /LANG=1033 "ProductName"     "${APPNAME}"
-VIAddVersionKey /LANG=1033 "ProductVersion"  "1.0.0.0"
-VIAddVersionKey /LANG=1033 "FileVersion"     "1.0.0.0"
+VIAddVersionKey /LANG=1033 "ProductVersion"  "1.0.1.0"
+VIAddVersionKey /LANG=1033 "FileVersion"     "1.0.1.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Instalador do Kai - developer command runner"
 VIAddVersionKey /LANG=1033 "CompanyName"     "Kai"
 VIAddVersionKey /LANG=1033 "LegalCopyright"  "Copyright (C) 2026"
@@ -53,6 +55,35 @@ Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
+
+; DETECTA uma instalação já existente (pedido do usuário: "queria a
+; possibilidade que o setup soubesse reinstalar/atualizar o app") — antes
+; o instalador sempre corria em silêncio como se fosse a primeira vez;
+; rodar o setup por cima de uma instalação existente sobrescrevia os
+; arquivos sem avisar nada (funcionava, mas sem feedback nenhum de que
+; era uma ATUALIZAÇÃO, e sem chance de cancelar). InstallDirRegKey acima
+; já pré-preenche o diretório da instalação anterior na página seguinte;
+; aqui só adiciona a CONFIRMAÇÃO com a versão antiga/nova antes de chegar
+; lá, e reusa o mesmo InstallDir sem precisar redigitar.
+Function .onInit
+    ReadRegStr $0 HKCU "Software\${APPNAME}" "InstallDir"
+    ${If} $0 != ""
+        ReadRegStr $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion"
+        ${If} $1 == "${APPVERSION}"
+            MessageBox MB_YESNO|MB_ICONQUESTION \
+                "Kai ${APPVERSION} já está instalado em:$\r$\n$0$\r$\n$\r$\nDeseja reinstalar por cima da instalação atual?" \
+                IDYES oninit_proceed
+            Quit
+        ${Else}
+            MessageBox MB_YESNO|MB_ICONQUESTION \
+                "Kai $1 está instalado em:$\r$\n$0$\r$\n$\r$\nDeseja atualizar para a versão ${APPVERSION}?" \
+                IDYES oninit_proceed
+            Quit
+        ${EndIf}
+        oninit_proceed:
+        StrCpy $INSTDIR $0
+    ${EndIf}
+FunctionEnd
 
 Section "Install"
     ; Encerra qualquer instância do Kai já rodando ANTES de sobrescrever os

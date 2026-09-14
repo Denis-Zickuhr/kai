@@ -133,6 +133,14 @@ signals:
     void commandActivated(const QString &commandId);
     void editRequested(const QString &itemId, bool isFolder);
     void deleteRequested(const QString &itemId, bool isFolder);
+    // Emitido pelo menu de contexto da ABA (pasta RAIZ) — pedido do
+    // usuário: "preciso que adicione a possibilidade de ocultar pastas de
+    // raiz" (achado real: uma pasta que ficou oculta enquanto ainda tinha
+    // pai, e depois foi órfã pela exclusão do pai, virava aba raiz sem
+    // NENHUM jeito de reverter — o form de edição de pasta não tem campo
+    // "oculta", e o atalho normal de ocultar/mostrar só enxerga o item
+    // ATUALMENTE selecionado dentro da árvore, nunca a aba em si).
+    void toggleFolderHiddenRequested(const QString &folderId);
     // Emitido pela ação "Duplicar" do menu de contexto: pede ao MainWindow
     // para criar uma cópia do comando/pasta (novo id, nome "X (cópia)").
     void duplicateRequested(const QString &itemId, bool isFolder);

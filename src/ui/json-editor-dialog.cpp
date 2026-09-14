@@ -63,9 +63,7 @@ void JsonEditorDialog::setupUi(const QJsonObject &initial)
     // dobras — NÃO read-only aqui (diferente do viewer), este é um editor
     // de verdade.
     m_jsonField = new FoldableJsonView(this);
-    QFont mono(utils::tokens::monoFamily());
-    mono.setPointSize(utils::tokens::fontSizePt());
-    m_jsonField->setFont(mono);
+    m_jsonField->setFont(utils::tokens::monoFont());
     m_jsonField->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_jsonField->setStyleSheet(QStringLiteral(
         "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3;"

@@ -69,7 +69,17 @@ QWidget *makePill(const QString &text, const QColor &color)
         " border-radius: %5px; padding: 2px 8px; font-weight: 600; font-size: 11px; }")
         .arg(color.red()).arg(color.green()).arg(color.blue())
         .arg(color.name()).arg(tk::radiusSm()));
-    label->setAlignment(Qt::AlignCenter);
+    // Alinhado à ESQUERDA (não mais centralizado): projetos com nome
+    // desambiguado por caminho ("Luzzoo  (Clientes / Luzzoo)") numa coluna
+    // apertada ficavam CENTRALIZADOS sem elidir — o Qt simplesmente corta o
+    // que não cabe dos dois lados igualmente, então o que sobrava visível
+    // era o MEIO do texto, não o início (achado real: "poderia melhorar de
+    // deixar a label mais inteligente e exibir o começo da label, ao invés
+    // do meio"). Alinhado à esquerda, o corte acontece só no final —
+    // sempre o começo (a parte mais identificável: o nome do projeto)
+    // continua visível. Tooltip com o texto completo cobre o resto.
+    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    label->setToolTip(text);
     return label;
 }
 } // namespace
@@ -161,10 +171,32 @@ void DynamicVarsInspectorWidget::rebuildScopeCombo()
     m_scopeField->addItem(utils::tr(QStringLiteral("dynamic_vars.scope.all")), kAllScopesData);
     m_scopeField->addItem(utils::tr(QStringLiteral("dynamic_vars.scope.global")), kGlobalScopeData);
 
+    // Nomes de projeto DUPLICADOS (bug relatado: "ficou algum projeto com
+    // nome duplicado... liste o path?") — dois projetos com o mesmo nome
+    // ficavam indistinguíveis no combo. Detecta ANTES de popular, pra saber
+    // quais entradas precisam do caminho completo como desempate.
+    m_duplicateProjectNames.clear();
+    {
+        QMap<QString, int> nameCounts;
+        for (const core::Folder &f : m_allFolders) {
+            if (f.isProject) {
+                nameCounts[f.name] += 1;
+            }
+        }
+        for (auto it = nameCounts.constBegin(); it != nameCounts.constEnd(); ++it) {
+            if (it.value() > 1) {
+                m_duplicateProjectNames.insert(it.key());
+            }
+        }
+    }
+
     QSet<QString> added;
     for (const core::Folder &f : m_allFolders) {
         if (f.isProject) {
-            m_scopeField->addItem(f.name, f.id);
+            const QString label = m_duplicateProjectNames.contains(f.name)
+                ? QStringLiteral("%1  (%2)").arg(f.name, folderPathSegments(m_allFolders, f.id).join(QStringLiteral(" / ")))
+                : f.name;
+            m_scopeField->addItem(label, f.id);
             added.insert(f.id);
         }
     }
@@ -189,6 +221,10 @@ QString DynamicVarsInspectorWidget::labelForScope(const QString &scopeKey) const
     }
     for (const core::Folder &f : m_allFolders) {
         if (f.id == scopeKey) {
+            if (m_duplicateProjectNames.contains(f.name)) {
+                return QStringLiteral("%1  (%2)").arg(
+                    f.name, folderPathSegments(m_allFolders, f.id).join(QStringLiteral(" / ")));
+            }
             return f.name;
         }
     }
@@ -309,6 +345,7 @@ void DynamicVarsInspectorWidget::editRowViaForm(const RowInfo &row)
     outer->addWidget(box);
 
     dialog.setMinimumWidth(380);
+    dialog.adjustSize();
     centerOnParent(&dialog);
 
     if (dialog.exec() != QDialog::Accepted) {

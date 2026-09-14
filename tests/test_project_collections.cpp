@@ -63,6 +63,71 @@ private slots:
         QVERIFY(col.sourcePath.endsWith(QStringLiteral("kai.json")));
     }
 
+    // feat (pedido do usuário: "tu atualizou o manifesto com as novas
+    // feats + kai.yml?") — Import Project agora também aceita kai.yml/
+    // kai.yaml quando não há kai.json, convertendo via o mesmo bridge
+    // YAML<->JSON já usado por Exportar/Importar Configuração.
+    void importAcceptsKaiYmlWhenKaiJsonIsAbsent()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QFile kaiYml(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(R"yaml(
+project_name: "API Clientes YAML"
+icon: "database"
+commands:
+  - name: "Build"
+    type: "shell"
+    command: "echo ok"
+)yaml");
+        kaiYml.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.name, QStringLiteral("API Clientes YAML"));
+        QCOMPARE(result.commands.size(), 1);
+        QCOMPARE(result.commands.at(0).name, QStringLiteral("Build"));
+    }
+
+    // Bug reportado: um kai.yml escrito na FORMA do Export/Import
+    // Configuration ("folders": [{"name", "icon", "is_project": true}],
+    // sem "project_name"/"icon" no topo) sendo importado via Importar
+    // Projeto ficava com o nome do DIRETÓRIO e ícone vazio — a chave
+    // "folders" não existe no formato de projeto, então era só ignorada
+    // silenciosamente. Import Project agora cai pra essa entrada quando
+    // project_name/icon estão ausentes no topo.
+    void importFallsBackToIsProjectFolderEntryForNameAndIcon()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QFile kaiYml(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(R"yaml(
+commands:
+  - name: "Sync"
+    type: "shell"
+    command: "npm run sync"
+    icon: "refresh-ccw"
+folders:
+  - icon: "box"
+    is_project: true
+    name: "Amazon Marketplace API"
+)yaml");
+        kaiYml.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.name, QStringLiteral("Amazon Marketplace API"));
+        QCOMPARE(result.folder.icon, QStringLiteral("box"));
+        QCOMPARE(result.commands.size(), 1);
+        QCOMPARE(result.commands.at(0).icon, QStringLiteral("refresh-ccw"));
+    }
+
     void paramReferencesCollectionByName()
     {
         QTemporaryDir directory;
@@ -179,6 +244,79 @@ private slots:
         }
     }
 
+    // Pedido do usuário ("se eu quiser incluir um ícone na subpasta de um
+    // projeto, dá?"): um "folders" array opcional com {"path", "icon"} dá
+    // ícone a uma subpasta específica, sem CRIAR a pasta sozinho — a pasta
+    // continua nascendo de "folder" nos comandos, como sempre.
+    void importAppliesSubFolderIconFromFoldersArrayByPath()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(R"json({
+            "project_name": "API",
+            "commands": [
+                {"name": "API dev", "type": "shell", "command": "go run", "folder": "Backend/API"}
+            ],
+            "folders": [
+                {"path": "Backend", "icon": "server"},
+                {"path": "Backend/API", "icon": "webhook"},
+                {"path": "Nao Usada", "icon": "trash"}
+            ]
+        })json");
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.subFolders.size(), 2);
+
+        auto folderByName = [&](const QString &name) -> const Folder * {
+            for (const Folder &f : result.subFolders) if (f.name == name) return &f;
+            return nullptr;
+        };
+        const Folder *backend = folderByName(QStringLiteral("Backend"));
+        const Folder *api = folderByName(QStringLiteral("API"));
+        QVERIFY(backend != nullptr && api != nullptr);
+        QCOMPARE(backend->icon, QStringLiteral("server"));
+        QCOMPARE(api->icon, QStringLiteral("webhook"));
+        // Uma entrada cujo path nenhum comando/coleção referencia não cria
+        // pasta nenhuma sozinha.
+        QVERIFY(folderByName(QStringLiteral("Nao Usada")) == nullptr);
+    }
+
+    // Bug real reportado (arquivo real anexado): "path" escrito INCLUINDO
+    // o nome do projeto como prefixo ("Amazon Marketplace API/Sincronizar"
+    // pra um comando com "folder": "Sincronizar") — o ícone nunca batia
+    // silenciosamente, já que o path de um comando NUNCA inclui a raiz.
+    // Tolerado: o prefixo "<project_name>/" é removido se presente.
+    void importAppliesSubFolderIconWhenPathIncludesProjectNamePrefix()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(R"json({
+            "project_name": "Amazon Marketplace API",
+            "icon": "box",
+            "commands": [
+                {"name": "Geral", "type": "shell", "command": "npm run sync", "folder": "Sincronizar", "icon": "refresh-ccw"}
+            ],
+            "folders": [
+                {"path": "Amazon Marketplace API/Sincronizar", "icon": "refresh-ccw"}
+            ]
+        })json");
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.subFolders.size(), 1);
+        QCOMPARE(result.subFolders.first().name, QStringLiteral("Sincronizar"));
+        QCOMPARE(result.subFolders.first().icon, QStringLiteral("refresh-ccw"));
+    }
+
     // AUDITORIA de import/export (revisão geral pedida pelo usuário): o
     // parser de kai.json de projeto lia só um subconjunto pequeno dos
     // campos de Command (o resto era descartado silenciosamente mesmo
@@ -201,15 +339,23 @@ private slots:
                     "type": "shell",
                     "command": "gh auth login",
                     "description": "Faz login",
+                    "icon": "key-round",
+                    "formatted_output": true,
                     "compact_output": true,
                     "hide_on_run": true,
                     "hidden": true,
                     "capture_env": true,
+                    "declared_env_vars": [
+                        {"name": "TOKEN", "persist": true, "scope": "global"}
+                    ],
                     "open_last_link": true,
                     "interactive_terminal": true,
                     "terminal_target": "WSL",
                     "auto_run": true,
                     "auto_run_delay_sec": 5,
+                    "params": [
+                        {"name": "scope", "label": "Scope", "type": "text", "optional": true}
+                    ],
                     "responders": [
                         {"name": "Confirmar", "pattern": "\\[y/N\\]", "response": "y"}
                     ],
@@ -230,15 +376,38 @@ private slots:
 
         const Command &c = result.commands.at(0);
         QCOMPARE(c.description, QStringLiteral("Faz login"));
+        // icon/formatted_output/declared_env_vars e Parameter::optional:
+        // bug reportado ("nome e icone não parece importar" / "tem que ser
+        // GERAL aquela importação, ícone, nome e tudo, como na importação
+        // de pasta") — o parser hand-rolled desta função nunca lia estes
+        // campos; agora reusa core::Command::fromJson (mesmo parser do
+        // Export/Import Configuration), então qualquer campo novo chega
+        // automaticamente.
+        QCOMPARE(c.icon, QStringLiteral("key-round"));
+        QCOMPARE(c.formattedOutput, true);
         QCOMPARE(c.compactOutput, true);
         QCOMPARE(c.hideOnRun, true);
         QCOMPARE(c.hidden, true);
         QCOMPARE(c.captureEnv, true);
+        QCOMPARE(c.declaredEnvVars.size(), 1);
+        if (!c.declaredEnvVars.isEmpty()) {
+            QCOMPARE(c.declaredEnvVars.first().name, QStringLiteral("TOKEN"));
+            QCOMPARE(c.declaredEnvVars.first().persist, true);
+        }
         QCOMPARE(c.openLastLink, true);
         QCOMPARE(c.interactiveTerminal, true);
         QCOMPARE(c.terminalTarget, QStringLiteral("WSL"));
         QCOMPARE(c.autoRun, true);
         QCOMPARE(c.autoRunDelaySec, 5);
+        QCOMPARE(c.params.size(), 1);
+        if (!c.params.isEmpty()) {
+            QCOMPARE(c.params.first().optional, true);
+        }
+        // working_dir sem a chave continua defaultando para
+        // {{PROJECT_PATH}} (default de PROJETO, diferente do default vazio
+        // que core::Command::fromJson usa sozinho) — não pode se perder ao
+        // reusar fromJson como base.
+        QCOMPARE(c.workingDir, QStringLiteral("{{PROJECT_PATH}}"));
         QCOMPARE(c.responders.size(), 1);
         QCOMPARE(c.responders.at(0).name, QStringLiteral("Confirmar"));
         QCOMPARE(c.executionConditions.size(), 1);

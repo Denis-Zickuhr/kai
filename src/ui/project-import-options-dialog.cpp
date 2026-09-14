@@ -48,7 +48,7 @@ ProjectImportOptionsDialog::ProjectImportOptionsDialog(const QString &initialDir
     m_parentFolderField = new QComboBox(this);
     capComboBoxWidth(m_parentFolderField);
     m_parentFolderField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
-    for (const core::Folder &folder : allFolders) {
+    for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
         m_parentFolderField->addItem(folderComboLabel(allFolders, folder.id), folder.id);
     }
     makeSearchableCombo(m_parentFolderField);

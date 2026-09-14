@@ -6,6 +6,7 @@
 
 #include "core/models.h"
 
+class QCheckBox;
 class QLineEdit;
 
 namespace kai::ui {
@@ -68,6 +69,12 @@ private:
     // na tela de seleção dedicada, por nome de parâmetro (suporta multi).
     QMap<QString, QStringList> m_collectionSelectionByParam;
     bool m_collectionsChanged = false;
+    // Parâmetros OPCIONAIS (Parameter::optional): a checkbox "Informar
+    // <label>?" de cada um, pra lembrar se estava marcada da última vez
+    // (pedido do usuário: "o sistema deve lembrar da opção selecionada se
+    // foi sim ou não pro param opcional") — ver setupUi/values() e
+    // kOptionalEnabledKeyPrefix no .cpp.
+    QMap<QString, QCheckBox *> m_optionalCheckboxByParamName;
 };
 
 } // namespace kai::ui

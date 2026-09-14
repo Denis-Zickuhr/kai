@@ -10,9 +10,12 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
+#include <QUuid>
+#include <functional>
 
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
+#include "core/folder-path-resolver.h"
 
 namespace kai::core {
 
@@ -470,6 +473,7 @@ SettingsData ConfigManager::loadSettings()
     data.outputAutoScroll  = root.value("output_autoscroll").toBool(data.outputAutoScroll);
     data.outputCompact     = root.value("output_compact").toBool(data.outputCompact);
     data.outputFontSize    = root.value("output_font_size").toInt(data.outputFontSize);
+    data.outputMaxLogSizeKb = root.value("output_max_log_size_kb").toInt(data.outputMaxLogSizeKb);
     if (root.contains("autostart")) {
         data.autostart = root.value("autostart").toBool(false);
     }
@@ -717,6 +721,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["output_autoscroll"] = data.outputAutoScroll;
     root["output_compact"] = data.outputCompact;
     root["output_font_size"] = data.outputFontSize;
+    root["output_max_log_size_kb"] = data.outputMaxLogSizeKb;
     root["autostart"] = data.autostart;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
@@ -840,6 +845,7 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.outputAutoScroll = result.settings.outputAutoScroll;
         currentSettings.outputCompact = result.settings.outputCompact;
         currentSettings.outputFontSize = result.settings.outputFontSize;
+        currentSettings.outputMaxLogSizeKb = result.settings.outputMaxLogSizeKb;
         // global_env_vars é legado (pré-Environments) — mesclado (não
         // sobrescrito) para não apagar chaves locais que o pacote importado
         // não conhecia.
@@ -876,6 +882,29 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
 }
 
 namespace {
+// Remove os valores de campos marcados "secret" de todas as entries de
+// UMA coleção, antes de serializar para export — usado em TODO caminho de
+// export que possa incluir dados de entries (global, por pasta, por
+// comando), não só o global/lean. Ver CollectionField::secret.
+Collection redactSecretFieldsForExport(Collection col)
+{
+    QStringList secretFieldNames;
+    for (const CollectionField &field : col.schema) {
+        if (field.secret) {
+            secretFieldNames << field.name;
+        }
+    }
+    if (secretFieldNames.isEmpty()) {
+        return col;
+    }
+    for (CollectionEntry &entry : col.entries) {
+        for (const QString &fieldName : secretFieldNames) {
+            entry.values.remove(fieldName);
+        }
+    }
+    return col;
+}
+
 // Coleta uma pasta, todas as suas subpastas descendentes e todos os
 // comandos pertencentes a qualquer uma delas (usado no export por pasta).
 void collectFolderSubtree(const QString &rootFolderId, const CommandsData &commands,
@@ -922,13 +951,18 @@ QJsonObject exportHeader(const QString &scope)
     header["version"] = 1;
     return header;
 }
+
+// Declaradas aqui, definidas mais abaixo (perto de appendTerminalProfilesSection)
+// — precisam ser visíveis já em exportSelective/exportGlobal, que vêm antes.
+QJsonObject stripIdsFromExport(QJsonObject root, const QString &exportRootFolderId);
 }
 
 
 QString ConfigManager::exportSelective(const ExportSelection &selection,
                                        const SettingsData &settings,
                                        const CommandsData &commands,
-                                       const QVector<Collection> &collections)
+                                       const QVector<Collection> &collections,
+                                       bool lean)
 {
     // EXPORTAÇÃO SELETIVA: reutiliza o mesmo formato do escopo "global" (para o
     // importFromJson existente continuar entendendo), mas inclui APENAS as
@@ -937,25 +971,40 @@ QString ConfigManager::exportSelective(const ExportSelection &selection,
     QJsonObject root;
     root["kai_export"] = exportHeader(QStringLiteral("global"));
 
-    if (selection.settings || selection.environments) {
+    if (selection.settings || selection.environments || selection.terminalProfiles) {
         // Parte do JSON de settings vem do export global; aqui montamos só o
-        // que foi pedido para não vazar seções não selecionadas.
+        // que foi pedido para não vazar seções não selecionadas. As três
+        // seções (preferências gerais, environments, alvos de terminal) são
+        // independentes entre si — cada uma pode ser exportada sozinha.
         const QJsonDocument full = QJsonDocument::fromJson(
             exportGlobal(settings, commands).toUtf8());
-        QJsonObject settingsObj = full.object().value("settings").toObject();
-        if (!selection.settings) {
-            // Só environments: descarta o resto das preferências.
-            const QJsonValue envs = settingsObj.value("environments");
-            const QJsonValue legacy = settingsObj.value("global_env_vars");
-            const QJsonValue active = settingsObj.value("active_environment_id");
-            settingsObj = QJsonObject();
-            if (!envs.isUndefined()) settingsObj["environments"] = envs;
-            if (!legacy.isUndefined()) settingsObj["global_env_vars"] = legacy;
-            if (!active.isUndefined()) settingsObj["active_environment_id"] = active;
-        } else if (!selection.environments) {
-            settingsObj.remove(QStringLiteral("environments"));
-            settingsObj.remove(QStringLiteral("global_env_vars"));
-            settingsObj.remove(QStringLiteral("active_environment_id"));
+        const QJsonObject fullSettingsObj = full.object().value("settings").toObject();
+        QJsonObject settingsObj;
+        if (selection.settings) {
+            settingsObj = fullSettingsObj;
+            if (!selection.environments) {
+                settingsObj.remove(QStringLiteral("environments"));
+                settingsObj.remove(QStringLiteral("global_env_vars"));
+                settingsObj.remove(QStringLiteral("active_environment_id"));
+            }
+            if (!selection.terminalProfiles) {
+                settingsObj.remove(QStringLiteral("terminal_targets"));
+            }
+        } else {
+            // `settings` (preferências gerais) não marcado: monta um objeto
+            // enxuto só com o que foi pedido, sem vazar tema/janela/atalhos.
+            if (selection.environments) {
+                const QJsonValue envs = fullSettingsObj.value("environments");
+                const QJsonValue legacy = fullSettingsObj.value("global_env_vars");
+                const QJsonValue active = fullSettingsObj.value("active_environment_id");
+                if (!envs.isUndefined()) settingsObj["environments"] = envs;
+                if (!legacy.isUndefined()) settingsObj["global_env_vars"] = legacy;
+                if (!active.isUndefined()) settingsObj["active_environment_id"] = active;
+            }
+            if (selection.terminalProfiles) {
+                const QJsonValue targets = fullSettingsObj.value("terminal_targets");
+                if (!targets.isUndefined()) settingsObj["terminal_targets"] = targets;
+            }
         }
         root["settings"] = settingsObj;
     }
@@ -979,7 +1028,10 @@ QString ConfigManager::exportSelective(const ExportSelection &selection,
             // Sem "dados de coleção": exporta a ESTRUTURA (nome/pasta/schema) e
             // zera as entries, permitindo levar o formato sem os registros.
             if (selection.collectionEntries) {
-                collectionsArr.append(col.toJson());
+                // Campos marcados "secret" NUNCA saem no export, mesmo com
+                // "incluir dados das entries" ligado — ver
+                // redactSecretFieldsForExport.
+                collectionsArr.append(redactSecretFieldsForExport(col).toJson());
             } else {
                 Collection structureOnly = col;
                 structureOnly.entries.clear();
@@ -989,6 +1041,12 @@ QString ConfigManager::exportSelective(const ExportSelection &selection,
         root["collections"] = collectionsArr;
     }
 
+    // Sem "raiz excluída" aqui (escopo global/seletivo não tem uma única
+    // pasta "topo") — todo mundo mantém o path completo desde a raiz de
+    // verdade.
+    if (lean) {
+        root = stripIdsFromExport(root, QString());
+    }
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
@@ -1064,6 +1122,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["output_autoscroll"] = settings.outputAutoScroll;
     settingsObj["output_compact"] = settings.outputCompact;
     settingsObj["output_font_size"] = settings.outputFontSize;
+    settingsObj["output_max_log_size_kb"] = settings.outputMaxLogSizeKb;
     settingsObj["autostart"] = settings.autostart;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
@@ -1122,7 +1181,404 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
-QString ConfigManager::exportFolder(const QString &folderId, const CommandsData &commands)
+namespace {
+// Mesmo formato de settingsObj["terminal_targets"] do export global (ver
+// mais abaixo) — reaproveitado aqui pra export de pasta/comando poder
+// "levar alvos juntos (como no global)" sem duplicar o parser de import
+// (que já lê "settings.terminal_targets" independente do scope do pacote).
+void appendTerminalProfilesSection(QJsonObject &root, const QVector<TerminalProfile> &terminalProfiles)
+{
+    if (terminalProfiles.isEmpty()) {
+        return;
+    }
+    QJsonArray targetsArr;
+    for (const TerminalProfile &t : terminalProfiles) {
+        QJsonObject obj;
+        obj["name"] = t.name;
+        obj["command_template"] = t.commandTemplate;
+        obj["use_pty"] = t.usePty;
+        obj["is_default"] = t.isDefault;
+        obj["shell"] = shellFlavorToString(t.shell);
+        obj["icon"] = t.icon;
+        targetsArr.append(obj);
+    }
+    QJsonObject settingsObj = root.value("settings").toObject();
+    settingsObj["terminal_targets"] = targetsArr;
+    root["settings"] = settingsObj;
+}
+
+// SEM IDS no export (pedido do usuário: "IDs tbm não devem ter no
+// export/import, visto que o APP deve gerar em runtime, certo?" —
+// confirmado explicitamente, aceitando a troca: reimportar o MESMO
+// arquivo passa a sempre ADICIONAR cópias novas, não atualizar no lugar —
+// não há mais id estável pra decidir "isto já existe"). Mesmo espírito
+// já usado pelo kai.json de projeto (ver ProjectSelector/manifesto §11):
+// pasta por CAMINHO de nomes ("folder": "A/B"), hooks pelo NOME do
+// comando, parâmetro Select pelo NOME da coleção — nada de id cru vazando
+// pro arquivo que o usuário lê/edita/versiona.
+//
+// Passo final de toda função exportXxx, aplicado no QJsonObject já
+// pronto (id-based, o formato interno de sempre) — reescreve só as
+// referências cruzadas, sem duplicar a lógica de construção de cada
+// seção. `exportRootFolderId`: para export de PASTA, o id da própria
+// pasta exportada (ela vira o "topo" implícito do pacote, path == "",
+// e não entra na lista de pastas — mesmo papel de project_name no
+// kai.json de projeto); vazio para export global/seletivo (não há pasta
+// "raiz" alguma sendo excluída, todo mundo mantém o path completo).
+QJsonObject stripIdsFromExport(QJsonObject root, const QString &exportRootFolderId)
+{
+    const QJsonArray foldersArr = root.value(QStringLiteral("folders")).toArray();
+    const QJsonArray commandsArr = root.value(QStringLiteral("commands")).toArray();
+    const bool hasCollectionsKey = root.contains(QStringLiteral("collections"));
+    const QJsonArray collectionsArr = root.value(QStringLiteral("collections")).toArray();
+
+    QMap<QString, QJsonObject> foldersById;
+    for (const QJsonValue &v : foldersArr) {
+        const QJsonObject f = v.toObject();
+        foldersById.insert(f.value(QStringLiteral("id")).toString(), f);
+    }
+    QMap<QString, QString> commandNameById;
+    for (const QJsonValue &v : commandsArr) {
+        const QJsonObject c = v.toObject();
+        commandNameById.insert(c.value(QStringLiteral("id")).toString(), c.value(QStringLiteral("name")).toString());
+    }
+    QMap<QString, QString> collectionNameById;
+    for (const QJsonValue &v : collectionsArr) {
+        const QJsonObject c = v.toObject();
+        collectionNameById.insert(c.value(QStringLiteral("id")).toString(), c.value(QStringLiteral("name")).toString());
+    }
+
+    // Caminho (nomes separados por "/") de `folderId` até — mas SEM
+    // incluir — `exportRootFolderId`. Cadeia quebrada (parent_id fora do
+    // pacote, dados corrompidos) simplesmente para onde a cadeia acaba;
+    // nunca trava.
+    std::function<QString(const QString &)> pathFor = [&](const QString &folderId) -> QString {
+        if (folderId.isEmpty() || folderId == exportRootFolderId || !foldersById.contains(folderId)) {
+            return QString();
+        }
+        QStringList parts;
+        QString cur = folderId;
+        QSet<QString> visited;
+        while (foldersById.contains(cur) && cur != exportRootFolderId && !visited.contains(cur)) {
+            visited.insert(cur);
+            const QJsonObject &f = foldersById.value(cur);
+            parts.prepend(f.value(QStringLiteral("name")).toString());
+            const QJsonValue parentVal = f.value(QStringLiteral("parent_id"));
+            if (!parentVal.isString()) {
+                break;
+            }
+            cur = parentVal.toString();
+        }
+        return parts.join(QStringLiteral("/"));
+    };
+
+    QJsonArray newFolders;
+    for (const QJsonValue &v : foldersArr) {
+        QJsonObject f = v.toObject();
+        const QString id = f.value(QStringLiteral("id")).toString();
+        if (!exportRootFolderId.isEmpty() && id == exportRootFolderId) {
+            // A própria pasta exportada não entra na lista de FILHAS — é
+            // o topo do pacote — mas seu NOME/ícone/etc não podem se
+            // perder: sem isto, um comando direto na raiz exportada
+            // ficava com folder_id VAZIO na reimportação (achado real,
+            // testado: "revise as outras cfg, todas devem ter importar
+            // se ter" — um campo simplesmente sumia sem aviso). Vira um
+            // campo à parte "root_folder", igual a project_name faz pro
+            // kai.json de projeto.
+            QJsonObject rootMeta = f;
+            rootMeta.remove(QStringLiteral("id"));
+            rootMeta.remove(QStringLiteral("parent_id"));
+            root.insert(QStringLiteral("root_folder"), rootMeta);
+            continue;
+        }
+        const QString path = pathFor(id);
+        f.remove(QStringLiteral("id"));
+        f.remove(QStringLiteral("parent_id"));
+        f.insert(QStringLiteral("path"), path);
+        newFolders.append(f);
+    }
+
+    QJsonArray newCommands;
+    for (const QJsonValue &v : commandsArr) {
+        QJsonObject c = v.toObject();
+        const QString path = pathFor(c.value(QStringLiteral("folder_id")).toString());
+        c.remove(QStringLiteral("id"));
+        c.remove(QStringLiteral("folder_id"));
+        if (!path.isEmpty()) {
+            c.insert(QStringLiteral("folder"), path);
+        }
+
+        if (c.value(QStringLiteral("hooks")).isObject()) {
+            QJsonObject hooksObj = c.value(QStringLiteral("hooks")).toObject();
+            for (const char *key : {"pre", "post", "cleanup"}) {
+                const QJsonArray idsArr = hooksObj.value(QLatin1String(key)).toArray();
+                if (idsArr.isEmpty()) {
+                    continue;
+                }
+                QJsonArray namesArr;
+                for (const QJsonValue &idv : idsArr) {
+                    namesArr.append(commandNameById.value(idv.toString(), idv.toString()));
+                }
+                hooksObj.insert(QLatin1String(key), namesArr);
+            }
+            c.insert(QStringLiteral("hooks"), hooksObj);
+        }
+
+        if (c.value(QStringLiteral("params")).isArray()) {
+            QJsonArray newParams;
+            for (const QJsonValue &pv : c.value(QStringLiteral("params")).toArray()) {
+                QJsonObject p = pv.toObject();
+                if (p.contains(QStringLiteral("collection_id"))) {
+                    const QString colId = p.value(QStringLiteral("collection_id")).toString();
+                    p.remove(QStringLiteral("collection_id"));
+                    p.insert(QStringLiteral("collection"), collectionNameById.value(colId, colId));
+                }
+                newParams.append(p);
+            }
+            c.insert(QStringLiteral("params"), newParams);
+        }
+        newCommands.append(c);
+    }
+
+    QJsonArray newCollections;
+    for (const QJsonValue &v : collectionsArr) {
+        QJsonObject c = v.toObject();
+        const QString path = pathFor(c.value(QStringLiteral("folder_id")).toString());
+        c.remove(QStringLiteral("id"));
+        c.remove(QStringLiteral("folder_id"));
+        if (!path.isEmpty()) {
+            c.insert(QStringLiteral("folder"), path);
+        }
+        // FALTAVA: id de cada ENTRY (achado numa auditoria mais ampla —
+        // "queria bem enxuto os arquivos", "IDs não deveriam ter no
+        // export/import" — CollectionEntry::toJson escreve "id" sempre,
+        // incondicional, e stripIdsFromExport nunca olhava dentro de
+        // "entries" pra removê-lo; um export "enxuto" ainda vazava um id
+        // por linha da coleção). Seguro remover: Collection::fromJson já
+        // gera um QUuid novo pra qualquer entry sem "id" na releitura.
+        if (c.value(QStringLiteral("entries")).isArray()) {
+            QJsonArray strippedEntries;
+            for (const QJsonValue &ev : c.value(QStringLiteral("entries")).toArray()) {
+                QJsonObject e = ev.toObject();
+                e.remove(QStringLiteral("id"));
+                strippedEntries.append(e);
+            }
+            c.insert(QStringLiteral("entries"), strippedEntries);
+        }
+        newCollections.append(c);
+    }
+
+    // Só reescreve a chave se ela já existia (pedido do usuário: "quero
+    // BEM enxuto os arquivos" — um export com "commands" desmarcado não
+    // deveria ganhar um "commands": [] à toa).
+    if (root.contains(QStringLiteral("folders"))) {
+        root.insert(QStringLiteral("folders"), newFolders);
+    }
+    if (root.contains(QStringLiteral("commands"))) {
+        root.insert(QStringLiteral("commands"), newCommands);
+    }
+    if (hasCollectionsKey) {
+        root.insert(QStringLiteral("collections"), newCollections);
+    }
+    QJsonObject header = root.value(QStringLiteral("kai_export")).toObject();
+    // Marca o pacote como "sem ids" — decide, na importação, qual dos dois
+    // caminhos rodar (ver resolveIdFreeImport). Detecção estrutural
+    // (ausência de "id" no primeiro item) também vale como fallback, pra
+    // um kai.yml escrito à mão sem essa chave "funcionar" igual.
+    header.insert(QStringLiteral("id_free"), true);
+    root.insert(QStringLiteral("kai_export"), header);
+    return root;
+}
+
+// Caminho inverso de stripIdsFromExport — roda ANTES do parsing normal
+// (Folder::fromJson/Command::fromJson/Collection::fromJson) em
+// importFromJson, reescrevendo o "path"/"folder"/hooks-por-nome/
+// collection-por-nome de volta para id/folder_id/hooks-por-id/
+// collection_id recém-GERADOS. Depois disto rodar, o resto de
+// importFromJson não muda NADA — ele já espera exatamente esse formato
+// id-based de sempre.
+QJsonObject resolveIdFreeImport(QJsonObject root)
+{
+    const QJsonArray foldersArr = root.value(QStringLiteral("folders")).toArray();
+    const QJsonArray commandsArr = root.value(QStringLiteral("commands")).toArray();
+    const bool hasCollectionsKey = root.contains(QStringLiteral("collections"));
+    const QJsonArray collectionsArr = root.value(QStringLiteral("collections")).toArray();
+
+    QMap<QString, QJsonObject> explicitByPath;
+    for (const QJsonValue &v : foldersArr) {
+        const QJsonObject f = v.toObject();
+        explicitByPath.insert(f.value(QStringLiteral("path")).toString(), f);
+    }
+
+    QJsonArray newFolders;
+    auto generateFolderId = []() {
+        return QStringLiteral("f_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+    };
+
+    // A PRÓPRIA pasta exportada (export de escopo Pasta) — pedido/achado
+    // real: "revise as outras cfg, todas devem ter importar se ter" — um
+    // comando direto na raiz exportada ficava com folder_id VAZIO na
+    // reimportação, já que o nome/ícone da raiz nunca eram salvos em
+    // lugar nenhum (mesmo bug que já foi corrigido uma vez pro
+    // capture_env, agora achado aqui). "root_folder" (ver
+    // stripIdsFromExport) guarda essa identidade; recria a pasta ANTES de
+    // qualquer outra resolução, pra path=="" apontar pra ela em vez de
+    // "nenhuma pasta".
+    QString rootFolderId;
+    if (root.value(QStringLiteral("root_folder")).isObject()) {
+        QJsonObject rf = root.value(QStringLiteral("root_folder")).toObject();
+        rootFolderId = generateFolderId();
+        rf.insert(QStringLiteral("id"), rootFolderId);
+        newFolders.append(rf);
+    }
+
+    // Resolução de "folder"/"path" -> id, criando pastas intermediárias sob
+    // demanda — COMPARTILHADA com o Import de Projeto (ver
+    // core::FolderPathResolver e o comentário na classe: as duas
+    // implementações divergiam em detalhe antes desta extração).
+    core::FolderPathResolver resolver(rootFolderId, generateFolderId, explicitByPath);
+    std::function<QString(const QString &)> ensurePath = [&](const QString &path) -> QString {
+        return resolver.resolve(path, [&](const QString &id, const QString &name,
+                                           const QString &parentId, const QString &p) {
+            QJsonObject f = resolver.explicitMetadataFor(p); // pasta "implícita" (só do meio-do-caminho) fica com objeto vazio — ok, fromJson cai em defaults
+            f.insert(QStringLiteral("id"), id);
+            f.insert(QStringLiteral("name"), name);
+            if (!parentId.isEmpty()) {
+                f.insert(QStringLiteral("parent_id"), parentId);
+            }
+            f.remove(QStringLiteral("path"));
+            newFolders.append(f);
+        });
+    };
+    // Garante TODAS as pastas declaradas explicitamente, mesmo uma sem
+    // nenhum comando/coleção diretamente nela (só subpastas).
+    for (const QString &path : resolver.explicitPaths()) {
+        ensurePath(path);
+    }
+
+    // ids de comando/coleção pré-gerados numa passada única (hooks/params
+    // referenciam por NOME e precisam resolver pra um id que já existe).
+    QVector<QString> commandIds;
+    QMap<QString, QString> commandIdByName;
+    for (const QJsonValue &v : commandsArr) {
+        const QString newId = QStringLiteral("c_%1")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+        commandIds.append(newId);
+        const QString name = v.toObject().value(QStringLiteral("name")).toString();
+        if (!name.isEmpty() && !commandIdByName.contains(name)) {
+            commandIdByName.insert(name, newId);
+        }
+    }
+    QVector<QString> collectionIds;
+    QMap<QString, QString> collectionIdByName;
+    for (const QJsonValue &v : collectionsArr) {
+        const QString newId = QStringLiteral("col_%1")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+        collectionIds.append(newId);
+        const QString name = v.toObject().value(QStringLiteral("name")).toString();
+        if (!name.isEmpty() && !collectionIdByName.contains(name)) {
+            collectionIdByName.insert(name, newId);
+        }
+    }
+
+    QJsonArray newCommands;
+    for (int i = 0; i < commandsArr.size(); ++i) {
+        QJsonObject c = commandsArr.at(i).toObject();
+        c.insert(QStringLiteral("id"), commandIds.at(i));
+        const QString path = c.value(QStringLiteral("folder")).toString();
+        c.remove(QStringLiteral("folder"));
+        const QString folderId = ensurePath(path);
+        if (!folderId.isEmpty()) {
+            c.insert(QStringLiteral("folder_id"), folderId);
+        }
+
+        if (c.value(QStringLiteral("hooks")).isObject()) {
+            QJsonObject hooksObj = c.value(QStringLiteral("hooks")).toObject();
+            for (const char *key : {"pre", "post", "cleanup"}) {
+                const QJsonArray namesArr = hooksObj.value(QLatin1String(key)).toArray();
+                if (namesArr.isEmpty()) {
+                    continue;
+                }
+                QJsonArray idsArr;
+                for (const QJsonValue &nv : namesArr) {
+                    // Nome sem comando correspondente NO MESMO pacote: ignorado
+                    // (mesma regra do import de projeto — ver manifesto §9).
+                    const QString resolved = commandIdByName.value(nv.toString());
+                    if (!resolved.isEmpty()) {
+                        idsArr.append(resolved);
+                    }
+                }
+                hooksObj.insert(QLatin1String(key), idsArr);
+            }
+            c.insert(QStringLiteral("hooks"), hooksObj);
+        }
+
+        if (c.value(QStringLiteral("params")).isArray()) {
+            QJsonArray newParams;
+            for (const QJsonValue &pv : c.value(QStringLiteral("params")).toArray()) {
+                QJsonObject p = pv.toObject();
+                if (p.contains(QStringLiteral("collection"))) {
+                    const QString colName = p.value(QStringLiteral("collection")).toString();
+                    p.remove(QStringLiteral("collection"));
+                    const QString resolved = collectionIdByName.value(colName);
+                    if (!resolved.isEmpty()) {
+                        p.insert(QStringLiteral("collection_id"), resolved);
+                    }
+                }
+                newParams.append(p);
+            }
+            c.insert(QStringLiteral("params"), newParams);
+        }
+        newCommands.append(c);
+    }
+
+    QJsonArray newCollections;
+    for (int i = 0; i < collectionsArr.size(); ++i) {
+        QJsonObject c = collectionsArr.at(i).toObject();
+        c.insert(QStringLiteral("id"), collectionIds.at(i));
+        const QString path = c.value(QStringLiteral("folder")).toString();
+        c.remove(QStringLiteral("folder"));
+        const QString folderId = ensurePath(path);
+        if (!folderId.isEmpty()) {
+            c.insert(QStringLiteral("folder_id"), folderId);
+        }
+        newCollections.append(c);
+    }
+
+    root.insert(QStringLiteral("folders"), newFolders);
+    root.insert(QStringLiteral("commands"), newCommands);
+    if (hasCollectionsKey) {
+        root.insert(QStringLiteral("collections"), newCollections);
+    }
+    return root;
+}
+
+// Detecta um pacote SEM ids — a marca explícita (id_free no cabeçalho,
+// ver stripIdsFromExport) OU, na ausência dela (kai.yml escrito à mão,
+// nunca passou pelo export do Kai), a AUSÊNCIA estrutural de "id" no
+// primeiro item de folders/commands.
+bool looksIdFree(const QJsonObject &root)
+{
+    const QJsonObject header = root.value(QStringLiteral("kai_export")).toObject();
+    if (header.value(QStringLiteral("id_free")).toBool(false)) {
+        return true;
+    }
+    const QJsonArray foldersArr = root.value(QStringLiteral("folders")).toArray();
+    if (!foldersArr.isEmpty()) {
+        return !foldersArr.first().toObject().contains(QStringLiteral("id"));
+    }
+    const QJsonArray commandsArr = root.value(QStringLiteral("commands")).toArray();
+    if (!commandsArr.isEmpty()) {
+        return !commandsArr.first().toObject().contains(QStringLiteral("id"));
+    }
+    return false;
+}
+} // namespace
+
+QString ConfigManager::exportFolder(const QString &folderId, const CommandsData &commands,
+                                    const QVector<Collection> &linkedCollections,
+                                    const QVector<TerminalProfile> &terminalProfiles,
+                                    bool lean)
 {
     QVector<Folder> folders;
     QVector<Command> cmds;
@@ -1140,10 +1596,27 @@ QString ConfigManager::exportFolder(const QString &folderId, const CommandsData 
     }
     root["folders"] = foldersArr;
     root["commands"] = commandsArr;
+    if (!linkedCollections.isEmpty()) {
+        QJsonArray collectionsArr;
+        for (const Collection &col : linkedCollections) {
+            collectionsArr.append(redactSecretFieldsForExport(col).toJson());
+        }
+        root["collections"] = collectionsArr;
+    }
+    appendTerminalProfilesSection(root, terminalProfiles);
+    // A própria pasta exportada (`folderId`) é o topo implícito do pacote
+    // — path == "", não entra na lista de pastas (mesmo papel do
+    // project_name no kai.json de projeto).
+    if (lean) {
+        root = stripIdsFromExport(root, folderId);
+    }
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
-QString ConfigManager::exportCommand(const QString &commandId, const CommandsData &commands)
+QString ConfigManager::exportCommand(const QString &commandId, const CommandsData &commands,
+                                     const QVector<Collection> &linkedCollections,
+                                     const QVector<TerminalProfile> &terminalProfiles,
+                                     bool lean)
 {
     QJsonObject root;
     root["kai_export"] = exportHeader(QStringLiteral("command"));
@@ -1154,8 +1627,18 @@ QString ConfigManager::exportCommand(const QString &commandId, const CommandsDat
             break;
         }
     }
-    root["folders"] = QJsonArray();
     root["commands"] = commandsArr;
+    if (!linkedCollections.isEmpty()) {
+        QJsonArray collectionsArr;
+        for (const Collection &col : linkedCollections) {
+            collectionsArr.append(redactSecretFieldsForExport(col).toJson());
+        }
+        root["collections"] = collectionsArr;
+    }
+    appendTerminalProfilesSection(root, terminalProfiles);
+    if (lean) {
+        root = stripIdsFromExport(root, QString());
+    }
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
@@ -1179,18 +1662,27 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
 
     result.scope = header.value("scope").toString();
 
-    for (const QJsonValue &v : root.value("folders").toArray()) {
+    // Pacote SEM ids (pedido do usuário: "IDs tbm não devem ter no
+    // export/import, visto que o APP deve gerar em runtime") — resolve
+    // path->folder_id, nome->hook id, nome->collection_id ANTES do parsing
+    // normal abaixo, que continua exatamente igual (só entende o formato
+    // id-based de sempre). Ids são gerados AQUI, frescos, a cada import —
+    // reimportar o mesmo arquivo sempre adiciona cópias novas, nunca
+    // atualiza no lugar (sem id estável pra reconhecer "isto já existe").
+    const QJsonObject normalizedRoot = looksIdFree(root) ? resolveIdFreeImport(root) : root;
+
+    for (const QJsonValue &v : normalizedRoot.value("folders").toArray()) {
         result.folders.append(Folder::fromJson(v.toObject()));
     }
     // COLEÇÕES no pacote: a importação antiga as ignorava, então um export
     // "completo" não voltava completo.
-    if (root.contains("collections")) {
-        for (const QJsonValue &v : root.value("collections").toArray()) {
+    if (normalizedRoot.contains("collections")) {
+        for (const QJsonValue &v : normalizedRoot.value("collections").toArray()) {
             result.collections.append(Collection::fromJson(v.toObject()));
         }
         result.hasCollections = !result.collections.isEmpty();
     }
-    for (const QJsonValue &v : root.value("commands").toArray()) {
+    for (const QJsonValue &v : normalizedRoot.value("commands").toArray()) {
         result.commands.append(Command::fromJson(v.toObject()));
     }
 
@@ -1202,6 +1694,8 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         // chave-marco, não por "o objeto settings existe".
         result.hasSettings = s.contains(QStringLiteral("active_theme"));
         result.hasEnvironments = s.contains(QStringLiteral("environments"));
+        result.hasTerminalProfiles = s.contains(QStringLiteral("terminal_targets"))
+            && !s.value(QStringLiteral("terminal_targets")).toArray().isEmpty();
         result.settings.activeTheme = s.value("active_theme").toString(result.settings.activeTheme);
         result.settings.uiDensity = s.value("ui_density").toString(result.settings.uiDensity);
         result.settings.uiCornerStyle = s.value("ui_corner_style").toInt(result.settings.uiCornerStyle);
@@ -1281,6 +1775,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.outputAutoScroll = s.value("output_autoscroll").toBool(result.settings.outputAutoScroll);
         result.settings.outputCompact = s.value("output_compact").toBool(result.settings.outputCompact);
         result.settings.outputFontSize = s.value("output_font_size").toInt(result.settings.outputFontSize);
+        result.settings.outputMaxLogSizeKb = s.value("output_max_log_size_kb").toInt(result.settings.outputMaxLogSizeKb);
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {

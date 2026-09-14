@@ -1,0 +1,162 @@
+project_name: "Kai (dev)"
+icon: terminal
+env_vars:
+  KAI_DEV_CONTAINER: kai-dev
+  KAI_BUILD_DIR: dist/dev
+
+folders:
+  - path: Docker
+    icon: container
+  - path: Build
+    icon: hammer
+  - path: Executar
+    icon: play
+  - path: Testes
+    icon: flask-conical
+  - path: Git
+    icon: git-branch
+  - path: Release
+    icon: rocket
+
+commands:
+  - name: Subir container de dev
+    folder: Docker
+    type: shell
+    icon: power
+    command: docker compose -f docker/docker-compose.yml up -d
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Derrubar container de dev
+    folder: Docker
+    type: shell
+    icon: power-off
+    command: docker compose -f docker/docker-compose.yml down
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Ver processos do Kai rodando no container
+    folder: Docker
+    type: shell
+    icon: search
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "ps aux | grep '/workspace/{{KAI_BUILD_DIR}}/bin/kai' | grep -v grep"
+
+  - name: "Build (container, incremental)"
+    folder: Build
+    type: shell
+    icon: hammer
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ninja -C {{KAI_BUILD_DIR}}"
+
+  - name: Reconfigurar + build limpo (container)
+    folder: Build
+    type: shell
+    icon: refresh-cw
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && rm -rf {{KAI_BUILD_DIR}} && cmake -B {{KAI_BUILD_DIR}} -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug && ninja -C {{KAI_BUILD_DIR}}"
+
+  - name: Build nativo (host, Release)
+    folder: Build
+    type: shell
+    icon: cpu
+    command: ./build.sh
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: "Instalar no sistema (host, ~/.local/bin)"
+    folder: Build
+    type: shell
+    icon: download
+    command: ./build.sh install
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Rodar Kai (watch automático — rebuild + relança a cada mudança)
+    folder: Executar
+    type: shell
+    icon: eye
+    command: docker exec {{KAI_DEV_CONTAINER}} bash docker/watch.sh
+    is_background: true
+
+  - name: Rodar Kai (uma vez, sem watch)
+    folder: Executar
+    type: shell
+    icon: play
+    command: docker exec -d {{KAI_DEV_CONTAINER}} bash -c "cd /workspace/{{KAI_BUILD_DIR}} && ./bin/kai > /tmp/kai.log 2>&1"
+
+  - name: Encerrar Kai rodando no container (PID exato)
+    folder: Executar
+    type: shell
+    icon: circle-stop
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "kill {{PID}}"
+    params:
+      - name: PID
+        label: "PID do processo (ver 'Ver processos do Kai')"
+        type: text
+        default: ""
+
+  - name: Rodar suíte de testes completa
+    folder: Testes
+    type: shell
+    icon: list-checks
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ctest --test-dir {{KAI_BUILD_DIR}} --output-on-failure"
+
+  - name: "Rodar 1 teste específico (CWD correto — evita falso-negativo de asset path)"
+    folder: Testes
+    type: shell
+    icon: flask-conical
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ./{{KAI_BUILD_DIR}}/bin/{{TEST_NAME}}"
+    params:
+      - name: TEST_NAME
+        label: Nome do binário de teste
+        type: text
+        default: test_i18n_sync
+
+  - name: Checar i18n (chaves faltando/órfãs)
+    folder: Testes
+    type: shell
+    icon: languages
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ./{{KAI_BUILD_DIR}}/bin/test_i18n_sync"
+
+  - name: git status
+    folder: Git
+    type: shell
+    icon: file-diff
+    command: git status --short
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: git diff --stat
+    folder: Git
+    type: shell
+    icon: file-diff
+    command: git diff --stat
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: git log (últimos 10)
+    folder: Git
+    type: shell
+    icon: scroll-text
+    command: git log --oneline -10
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Build Linux (AppImage) em dist/
+    folder: Release
+    type: shell
+    icon: package
+    command: docker compose run --rm build-linux
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Build Windows (portátil + instalador) em dist/
+    folder: Release
+    type: shell
+    icon: package
+    command: KAI_BUILD_INSTALLER=1 docker compose run --rm build-windows
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Ver release atual (assets publicados)
+    folder: Release
+    type: shell
+    icon: eye
+    command: gh release view v1.0.1 --json tagName,assets
+    working_dir: "{{PROJECT_PATH}}"
+
+  - name: Publicar artefatos na release (substitui os atuais)
+    folder: Release
+    type: shell
+    icon: upload
+    command: gh release upload v1.0.1 dist/kai-1.0.1-linux-x86_64.AppImage dist/kai-1.0.1-setup.exe dist/kai-1.0.1-windows-x86_64.zip --clobber
+    working_dir: "{{PROJECT_PATH}}"

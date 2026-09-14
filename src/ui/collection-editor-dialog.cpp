@@ -82,14 +82,21 @@ CollectionEditorDialog::CollectionEditorDialog(const core::Collection &collectio
 
 void CollectionEditorDialog::setupUi()
 {
+    // Margens/espaçamento no MESMO padrão-token (grade de 4px) já usado nos
+    // diálogos mais recentes (Export/Import) — pedido do usuário: "melhorias
+    // visuais pra deixar mais parelho, bonito e espaçoso". Antes eram
+    // valores cravados (16/16/16/12, spacing 10) fora da grade e menores
+    // que o padrão atual do app.
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(16, 16, 16, 12);
-    mainLayout->setSpacing(10);
+    mainLayout->setContentsMargins(utils::tokens::space(5), utils::tokens::space(5),
+                                    utils::tokens::space(5), utils::tokens::space(4));
+    mainLayout->setSpacing(utils::tokens::space(3));
 
     // --- Linha de identidade: Nome da coleção + Pasta destino ---
     // Permite renomear a coleção e escolher em qual pasta ela fica
     // (organização por pastas, como comandos).
     auto *identityRow = new QHBoxLayout();
+    identityRow->setSpacing(utils::tokens::space(2));
     identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.name")), this));
     m_nameField = new QLineEdit(m_collection.name, this);
     m_nameField->setPlaceholderText(utils::tr(QStringLiteral("collection.field.name.placeholder")));
@@ -97,9 +104,15 @@ void CollectionEditorDialog::setupUi()
 
     identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.folder")), this));
     m_folderCombo = new QComboBox(this);
+    capComboBoxWidth(m_folderCombo);
     m_folderCombo->addItem(utils::tr(QStringLiteral("collection.folder.root")), QString());
-    for (const core::Folder &f : m_folders) {
-        m_folderCombo->addItem(f.name, f.id);
+    // MESMO padrão dos outros seletores de pasta (feedback do usuário:
+    // "seletor de pastas das coleções ficou sem features atualizadas") —
+    // indentação + path completo como hint, ordem de árvore (pai antes
+    // dos próprios filhos, o que também deixa a busca melhor: filtrar
+    // "Projetos" traz a pasta ANTES de seus filhos, não depois).
+    for (const core::Folder &f : foldersInTreeOrder(m_folders)) {
+        m_folderCombo->addItem(folderComboLabel(m_folders, f.id), f.id);
     }
     {
         const int idx = m_folderCombo->findData(m_collection.folderId);
@@ -123,6 +136,7 @@ void CollectionEditorDialog::setupUi()
 
     // --- Barra superior: busca + favoritos + ações de schema/import ---
     auto *topBar = new QHBoxLayout();
+    topBar->setSpacing(utils::tokens::space(2));
 
     m_searchField = new QLineEdit(this);
     m_searchField->setPlaceholderText(utils::tr(QStringLiteral("collection.search.placeholder")));
@@ -224,6 +238,7 @@ void CollectionEditorDialog::setupUi()
 
     // --- Ações de linha + contador ---
     auto *rowActions = new QHBoxLayout();
+    rowActions->setSpacing(utils::tokens::space(2));
     // Ícones SEMÂNTICOS padronizados (mesmos helpers das outras tabelas):
     // "+" verde e lixeira vermelha, com o texto no tooltip.
     auto *addButton = makeAddButton(this, utils::tr(QStringLiteral("collection.entry.add")));
@@ -252,6 +267,7 @@ void CollectionEditorDialog::setupUi()
     // vez; a tabela mostra só a fatia da página atual. Trocar o tamanho da
     // página ou navegar reconstrói apenas a fatia visível (rebuildTable).
     auto *pageBar = new QHBoxLayout();
+    pageBar->setSpacing(utils::tokens::space(2));
     pageBar->addWidget(new QLabel(utils::tr(QStringLiteral("collection.selector.per_page")), this));
     m_pageSizeCombo = new QComboBox(this);
     m_pageSizeCombo->addItems({QStringLiteral("25"), QStringLiteral("50"), QStringLiteral("100")});
@@ -323,7 +339,6 @@ void CollectionEditorDialog::setupUi()
         accept();
     });
     buttonBox->addButton(advancedButton, QDialogButtonBox::ActionRole);
-    installEditModeToggleShortcut(this, advancedButton);
     installEditModeToggleShortcut(this, advancedButton);
     connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
         collectTableIntoEntries();
@@ -441,8 +456,20 @@ void CollectionEditorDialog::rebuildTable()
         // própria — pedido do usuário: estrela desenquadrava). Clicar na
         // estrela é tratado no cellClicked (alterna o favorito).
         for (int c = 0; c < schemaCount; ++c) {
-            const QString fieldName = visibleFields.at(c).name;
-            auto *item = new QTableWidgetItem(entry.values.value(fieldName));
+            const core::CollectionField &field = visibleFields.at(c);
+            const QString fieldName = field.name;
+            const QString rawValue = entry.values.value(fieldName);
+            // Campo secreto: mostra mascarado E fica NÃO-EDITÁVEL na grade
+            // — a única forma de editar um valor secreto é pelo formulário
+            // de entry (QLineEdit::Password), nunca digitando em cima do
+            // texto mascarado (senão o mascaramento embromaria o valor
+            // real, ver collectTableIntoEntries).
+            auto *item = new QTableWidgetItem(field.secret && !rawValue.isEmpty()
+                ? QStringLiteral("••••••••")
+                : rawValue);
+            if (field.secret) {
+                item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            }
             if (c == 0) {
                 item->setData(Qt::UserRole, entry.id);
                 item->setData(Qt::UserRole + 1, entry.favorite);
@@ -544,11 +571,17 @@ void CollectionEditorDialog::collectTableIntoEntries()
         if (const QTableWidgetItem *firstItem = m_table->item(row, kFirstSchemaColumn)) {
             entry.favorite = firstItem->data(Qt::UserRole + 1).toBool();
         }
-        // Campos (só os visíveis foram renderizados).
+        // Campos (só os visíveis foram renderizados). Secreto é PULADO: a
+        // célula mostra "••••••••", nunca o valor real, e regravar isto de
+        // volta destruiria o valor verdadeiro (editar um secreto só é
+        // possível pelo formulário de entry — ver rebuildTable/editEntryById).
         for (int c = 0; c < schemaCount; ++c) {
-            const QString fieldName = visibleFields.at(c).name;
+            const core::CollectionField &field = visibleFields.at(c);
+            if (field.secret) {
+                continue;
+            }
             const QTableWidgetItem *item = m_table->item(row, kFirstSchemaColumn + c);
-            entry.values[fieldName] = item ? item->text() : QString();
+            entry.values[field.name] = item ? item->text() : QString();
         }
     }
 }
@@ -614,8 +647,14 @@ void CollectionEditorDialog::editEntryById(const QString &entryId)
 
     QDialog dialog(this);
     dialog.setWindowTitle(utils::tr(QStringLiteral("collection.entry.edit")));
+    dialog.setMinimumWidth(utils::tokens::space(100)); // mais espaçoso que o default do Qt (formulário apertado)
     auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(utils::tokens::space(5), utils::tokens::space(5),
+                                utils::tokens::space(5), utils::tokens::space(4));
+    layout->setSpacing(utils::tokens::space(3));
     auto *form = new QFormLayout();
+    form->setSpacing(utils::tokens::space(2));
+    form->setHorizontalSpacing(utils::tokens::space(3));
     layout->addLayout(form);
 
     const core::CollectionEntry &entry = m_collection.entries.at(modelIndex);
@@ -648,6 +687,15 @@ void CollectionEditorDialog::editEntryById(const QString &entryId)
             fe.check->setChecked(value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0
                 || value == QStringLiteral("1"));
             form->addRow(label, fe.check);
+        } else if (f.secret) {
+            // Secreto força um QLineEdit mascarado (QLineEdit::Password),
+            // mesmo para tipos que normalmente usariam QPlainTextEdit
+            // (Value/Url) — Qt Widgets não tem um "QPlainTextEdit de
+            // senha", e um segredo cabe numa linha na prática (token,
+            // senha de teste).
+            fe.line = new QLineEdit(value, &dialog);
+            fe.line->setEchoMode(QLineEdit::Password);
+            form->addRow(label, fe.line);
         } else if (f.type == core::CollectionFieldType::Value
                    || f.type == core::CollectionFieldType::Url) {
             fe.text = new QPlainTextEdit(&dialog);
@@ -666,6 +714,7 @@ void CollectionEditorDialog::editEntryById(const QString &entryId)
     connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(box);
+    dialog.adjustSize();
     centerOnParent(&dialog);
 
     if (dialog.exec() != QDialog::Accepted) {
@@ -747,6 +796,7 @@ void CollectionEditorDialog::handleEditSchema()
     QDialog dialog(this);
     dialog.setWindowTitle(utils::tr(QStringLiteral("collection.schema.title")));
     dialog.resize(420, 360);
+    centerOnParent(&dialog);
     auto *layout = new QVBoxLayout(&dialog);
 
     auto *table = new QTableWidget(&dialog);
@@ -779,6 +829,9 @@ void CollectionEditorDialog::handleEditSchema()
             if (!f.visible) {
                 shown += QStringLiteral("  (%1)").arg(utils::tr(QStringLiteral("collection.schema.hidden_tag")));
             }
+            if (f.secret) {
+                shown += QStringLiteral("  (%1)").arg(utils::tr(QStringLiteral("collection.schema.secret_tag")));
+            }
             auto *item = new QTableWidgetItem(shown);
             item->setFlags(item->flags() & ~Qt::ItemIsEditable);
             table->setItem(r, 1, item);
@@ -804,6 +857,10 @@ void CollectionEditorDialog::handleEditSchema()
         fields.append({QStringLiteral("visible"), utils::tr(QStringLiteral("collection.schema.col.visible")),
                        RowEditDialog::FieldType::Bool,
                        f.visible ? QStringLiteral("true") : QStringLiteral("false"), {}, {}, false, {}});
+        fields.append({QStringLiteral("secret"), utils::tr(QStringLiteral("collection.schema.col.secret")),
+                       RowEditDialog::FieldType::Bool,
+                       f.secret ? QStringLiteral("true") : QStringLiteral("false"), {}, {},
+                       false, utils::tr(QStringLiteral("collection.schema.field.secret.tip"))});
         RowEditDialog d(utils::tr(QStringLiteral("collection.schema.title")), fields, &dialog);
         if (d.exec() != QDialog::Accepted) {
             return false;
@@ -816,6 +873,7 @@ void CollectionEditorDialog::handleEditSchema()
         updated.label = d.value(QStringLiteral("label"));
         updated.type = core::collectionFieldTypeFromString(d.value(QStringLiteral("type")));
         updated.visible = d.value(QStringLiteral("visible")) == QStringLiteral("true");
+        updated.secret = d.value(QStringLiteral("secret")) == QStringLiteral("true");
         schema[row] = updated;
         return true;
     };

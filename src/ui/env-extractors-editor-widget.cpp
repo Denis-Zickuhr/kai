@@ -12,6 +12,7 @@
 #include <QHeaderView>
 #include <QLineEdit>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QAbstractItemView>
@@ -94,7 +95,13 @@ QString EnvExtractorsEditorWidget::summaryFor(const core::EnvExtractor &e) const
         : e.name;
     // 🔒 sinaliza persistência entre sessões (feedback do usuário) — mesmo
     // glifo usado noutros pontos do app pra "isto sobrevive a reiniciar".
-    return e.persist ? base + QStringLiteral("  🔒") : base;
+    // "(Global)" só aparece quando difere do padrão (project) — não vale a
+    // pena marcar visualmente o caso comum.
+    QString result = base;
+    if (e.scope == QStringLiteral("global")) {
+        result += QStringLiteral("  (%1)").arg(utils::tr(QStringLiteral("env_extractor.field.scope.global")));
+    }
+    return e.persist ? result + QStringLiteral("  🔒") : result;
 }
 
 void EnvExtractorsEditorWidget::removeExtractorAt(int row)
@@ -164,6 +171,18 @@ bool EnvExtractorsEditorWidget::editRowViaForm(int row)
     persistField->setToolTip(utils::tr(QStringLiteral("env_extractor.field.persist.tip")));
     form->addRow(QString(), persistField);
 
+    // ESCOPO de destino (pedido do usuário: "preciso QUE escolha se ela
+    // salva na proprio PROJETO ou Global").
+    auto *scopeField = new QComboBox(&dialog);
+    scopeField->addItem(utils::tr(QStringLiteral("env_extractor.field.scope.project")), QStringLiteral("project"));
+    scopeField->addItem(utils::tr(QStringLiteral("env_extractor.field.scope.global")), QStringLiteral("global"));
+    scopeField->setToolTip(utils::tr(QStringLiteral("env_extractor.field.scope.tip")));
+    {
+        const int idx = scopeField->findData(e.scope.isEmpty() ? QStringLiteral("project") : e.scope);
+        scopeField->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    form->addRow(utils::tr(QStringLiteral("env_extractor.field.scope")), scopeField);
+
     auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     stripDialogButtonIcons(box);
     connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -171,6 +190,7 @@ bool EnvExtractorsEditorWidget::editRowViaForm(int row)
     outer->addWidget(box);
 
     dialog.setMinimumWidth(420);
+    dialog.adjustSize();
     centerOnParent(&dialog);
 
     if (dialog.exec() != QDialog::Accepted) {
@@ -182,6 +202,7 @@ bool EnvExtractorsEditorWidget::editRowViaForm(int row)
     updated.jsonPath = jsonPathField->text().trimmed();
     updated.envVar = envVarField->text().trimmed();
     updated.persist = persistField->isChecked();
+    updated.scope = scopeField->currentData().toString();
     m_extractors[row] = updated;
     return true;
 }

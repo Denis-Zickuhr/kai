@@ -161,13 +161,21 @@ public:
     // comentário da classe). A janela DESTACADA NÃO tem modo interativo
     // nesta versão (continua mostrando texto puro).
     void setInteractiveMode(bool interactive);
+    bool interactiveMode() const;
     // Aba "Saída": faz sentido pra shell, não pra HTTP — ver
     // OutputPanel::setStdoutTabVisible.
     void setStdoutTabVisible(bool visible);
+    // Ver OutputPanel::setFormattedOutputEnabled (Command::formattedOutput).
+    void setFormattedOutputEnabled(bool enabled);
     void feedInteractive(const QString &text);
     void resetInteractiveAndReplay(const QString &rawLog);
     void setInteractiveAcceptingInput(bool accepting);
     void focusInteractiveTerminal();
+    // Repassa ao painel EMBUTIDO (ver OutputPanel::focusSearch) — chamado
+    // pelo atalho de pesquisa configurável (MainWindow::setupActionShortcuts)
+    // quando a Saída já está em foco, em vez de tratar Ctrl+F como "abrir a
+    // busca da árvore de comandos" (pedido do usuário).
+    bool focusSearch();
     // Ver OutputPanel::setSkipped — repassa 1:1 ao painel embutido (a
     // janela destacada é um monitor fixo de um comando específico; não
     // precisa deste estado, o pulo já não gera nenhum log/resultado novo

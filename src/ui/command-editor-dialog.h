@@ -26,6 +26,7 @@ class OutputRespondersEditorWidget;
 class HooksEditorWidget;
 class ExecutionConditionsEditorWidget;
 class EnvExtractorsEditorWidget;
+class DeclaredEnvVarsEditorWidget;
 class IconPickerWidget;
 class CollapsibleSectionCard;
 
@@ -156,6 +157,7 @@ private:
     QCheckBox *m_hideOnRunField = nullptr;
     QCheckBox *m_ignoreExitCodeField = nullptr;
     QCheckBox *m_interactiveTerminalField = nullptr;
+    QCheckBox *m_formattedOutputField = nullptr;
     QComboBox *m_terminalTargetField = nullptr;
     // Wrapper (rótulo "PERFIL" + combo) — só faz sentido em modo Shell,
     // escondido em modo HTTP (ver setExecutionMode).
@@ -184,6 +186,8 @@ private:
     KeyValueEditorWidget *m_headersEditor = nullptr;
     CollapsibleSectionCard *m_extractorsCard = nullptr;
     EnvExtractorsEditorWidget *m_envExtractorsEditor = nullptr;
+    CollapsibleSectionCard *m_declaredEnvVarsCard = nullptr;
+    DeclaredEnvVarsEditorWidget *m_declaredEnvVarsEditor = nullptr;
 };
 
 } // namespace kai::ui

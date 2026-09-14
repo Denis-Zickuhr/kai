@@ -33,8 +33,14 @@ public:
     void setEnvironments(const QStringList &ids, const QStringList &names, const QString &activeId);
 
 signals:
-    void importProjectRequested();
-    void importOpenApiRequested();
+    // Menu único de importação (pedido do usuário, vendo o menu Arquivo
+    // "bagunçado" com 3 itens de import separados: "só dois botões...
+    // um jeito simplificado... com apenas um form") — substitui
+    // importProjectRequested/importOpenApiRequested/importConfigRequested;
+    // a fonte (pasta de projeto vs arquivo) e, pro caso de arquivo, o tipo
+    // exato (OpenAPI vs Configuração) são decididos DENTRO do ImportDialog,
+    // não por qual item de menu foi clicado.
+    void importRequested();
     void logsRequested();
     void newFolderRequested();
     void newCommandRequested();
@@ -47,17 +53,17 @@ signals:
     // qualquer momento, mesmo com comandos já cadastrados.
     void showWelcomeRequested();
     void runHistoryRequested();
+    void notificationHistoryRequested();
 
     // Environments como pacotes selecionáveis (feedback do usuário, vibe
     // CopyQ/Insomnia): trocar o pacote ativo e abrir a tela de gestão.
     void environmentSelected(const QString &environmentId);
     void manageEnvironmentsRequested();
 
-    // Import/Export de configuração (feedback do usuário).
-    void importConfigRequested();
-    void exportGlobalRequested();
-    void exportFolderRequested();
-    void exportCommandRequested();
+    // Menu único (pedido do usuário: "queria um menu unificado para
+    // exportação, não 3") — o escopo (global/pasta/comando) é escolhido
+    // DENTRO da tela de exportação, não por qual item de menu foi clicado.
+    void exportRequested();
 
     void hideRequested();
     void quitAppRequested();

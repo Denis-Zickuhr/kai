@@ -4,6 +4,7 @@
 #include "ui/dialog-utils.h"
 #include "ui/env-var-autocomplete.h"
 #include "core/config-manager.h"
+#include "core/date-param-format.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 #include "ui/lucide-icons.h"
@@ -131,7 +132,7 @@ public:
         m_type->addItems({QStringLiteral("text"), QStringLiteral("select"),
                           QStringLiteral("bool"), QStringLiteral("file"),
                           QStringLiteral("number"), QStringLiteral("textarea"),
-                          QStringLiteral("json")});
+                          QStringLiteral("json"), QStringLiteral("date")});
         m_type->setCurrentText(core::parameterTypeToString(param.type));
         form->addRow(utils::tr(QStringLiteral("field.label.type")), m_type);
 
@@ -236,15 +237,73 @@ public:
         m_filePathFormatLabel = new QLabel(utils::tr(QStringLiteral("params.path_format.label")), this);
         form->addRow(m_filePathFormatLabel, m_filePathFormat);
 
-        // PASTA em vez de arquivo (feedback do usuário: "às vezes o param é
-        // uma pasta") — troca o seletor de arquivo por getExistingDirectory
-        // no formulário de execução, sem virar um ParameterType novo.
-        m_pickFolder = new QCheckBox(utils::tr(QStringLiteral("params.pick_folder")), this);
-        m_pickFolder->setProperty("kaiRole", QStringLiteral("switch"));
-        m_pickFolder->setToolTip(utils::tr(QStringLiteral("params.pick_folder.tip")));
-        m_pickFolder->setChecked(param.pickFolder);
-        m_pickFolderLabel = new QLabel(QString(), this);
-        form->addRow(m_pickFolderLabel, m_pickFolder);
+        // MODO DE SELEÇÃO (feedback do usuário: "não gostei da cfg pick as
+        // folder, queria tipo um select com modo de seleção... arquivo,
+        // pastas ou ambos") — substitui o antigo checkbox binário
+        // "pick_folder" por um combo de 3 opções; "Ambos" deixa a escolha
+        // arquivo-ou-pasta pro momento em que o usuário clica em procurar
+        // no formulário de execução (ver ParameterFormDialog).
+        m_pickMode = new QComboBox(this);
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.file")), QStringLiteral("file"));
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.folder")), QStringLiteral("folder"));
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.both")), QStringLiteral("both"));
+        m_pickMode->setToolTip(utils::tr(QStringLiteral("params.pick_mode.tip")));
+        {
+            const int idx = m_pickMode->findData(param.pickMode.isEmpty() ? QStringLiteral("file") : param.pickMode);
+            m_pickMode->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        m_pickModeLabel = new QLabel(utils::tr(QStringLiteral("params.pick_mode.label")), this);
+        form->addRow(m_pickModeLabel, m_pickMode);
+
+        // --- Campos de type == date (pedido do usuário: "opções de janela
+        // de formatado de data, se é hora ou só data ou data hora, se é
+        // range, além de formatador de paste no CMD, select com formatos e
+        // opção custom") ---
+        m_dateMode = new QComboBox(this);
+        m_dateMode->addItem(utils::tr(QStringLiteral("params.date_mode.date")), QStringLiteral("date"));
+        m_dateMode->addItem(utils::tr(QStringLiteral("params.date_mode.time")), QStringLiteral("time"));
+        m_dateMode->addItem(utils::tr(QStringLiteral("params.date_mode.datetime")), QStringLiteral("datetime"));
+        {
+            const int idx = m_dateMode->findData(param.dateMode.isEmpty() ? QStringLiteral("date") : param.dateMode);
+            m_dateMode->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        m_dateModeLabel = new QLabel(utils::tr(QStringLiteral("params.date_mode.label")), this);
+        form->addRow(m_dateModeLabel, m_dateMode);
+
+        m_dateRange = new QCheckBox(utils::tr(QStringLiteral("params.date_range")), this);
+        m_dateRange->setProperty("kaiRole", QStringLiteral("switch"));
+        m_dateRange->setToolTip(utils::tr(QStringLiteral("params.date_range.tip")));
+        m_dateRange->setChecked(param.dateRange);
+        m_dateRangeLabel = new QLabel(QString(), this);
+        form->addRow(m_dateRangeLabel, m_dateRange);
+
+        m_dateFormat = new QComboBox(this);
+        for (const QString &key : core::dateFormatPresetKeys()) {
+            m_dateFormat->addItem(core::dateFormatPresetLabel(key), key);
+        }
+        m_dateFormat->setToolTip(utils::tr(QStringLiteral("params.date_format.tip")));
+        {
+            const int idx = m_dateFormat->findData(param.dateFormat.isEmpty() ? QStringLiteral("iso_date") : param.dateFormat);
+            m_dateFormat->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        m_dateFormatLabel = new QLabel(utils::tr(QStringLiteral("params.date_format.label")), this);
+        form->addRow(m_dateFormatLabel, m_dateFormat);
+
+        m_dateFormatCustom = new QLineEdit(param.dateFormatCustom, this);
+        m_dateFormatCustom->setPlaceholderText(utils::tr(QStringLiteral("params.date_format_custom.placeholder")));
+        m_dateFormatCustom->setToolTip(utils::tr(QStringLiteral("params.date_format_custom.tip")));
+        m_dateFormatCustomLabel = new QLabel(utils::tr(QStringLiteral("params.date_format_custom.label")), this);
+        form->addRow(m_dateFormatCustomLabel, m_dateFormatCustom);
+
+        // OPCIONAL (pedido do usuário): vale pra QUALQUER tipo de
+        // parâmetro (não só File, por isso fora de applyTypeVisibility) —
+        // no form de execução, o campo nasce escondido atrás de uma
+        // checkbox "Informar <label>?" (ver ParameterFormDialog::setupUi).
+        m_optional = new QCheckBox(utils::tr(QStringLiteral("params.optional")), this);
+        m_optional->setProperty("kaiRole", QStringLiteral("switch"));
+        m_optional->setToolTip(utils::tr(QStringLiteral("params.optional.tip")));
+        m_optional->setChecked(param.optional);
+        form->addRow(new QLabel(QString(), this), m_optional);
 
         auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
         stripDialogButtonIcons(box);
@@ -289,14 +348,26 @@ public:
             m_initialDir->parentWidget()->setVisible(isFile);
             m_filePathFormatLabel->setVisible(isFile);
             m_filePathFormat->setVisible(isFile);
-            m_pickFolderLabel->setVisible(isFile);
-            m_pickFolder->setVisible(isFile);
+            m_pickModeLabel->setVisible(isFile);
+            m_pickMode->setVisible(isFile);
+            const bool isDate = (t == QStringLiteral("date"));
+            m_dateModeLabel->setVisible(isDate);
+            m_dateMode->setVisible(isDate);
+            m_dateRangeLabel->setVisible(isDate);
+            m_dateRange->setVisible(isDate);
+            m_dateFormatLabel->setVisible(isDate);
+            m_dateFormat->setVisible(isDate);
+            const bool isDateCustom = isDate && m_dateFormat->currentData().toString() == QStringLiteral("custom");
+            m_dateFormatCustomLabel->setVisible(isDateCustom);
+            m_dateFormatCustom->setVisible(isDateCustom);
         };
         applyTypeVisibility();
         connect(m_type, &QComboBox::currentTextChanged, this, [applyTypeVisibility](const QString &) {
             applyTypeVisibility();
         });
         connect(m_collectionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [applyTypeVisibility](int) { applyTypeVisibility(); });
+        connect(m_dateFormat, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [applyTypeVisibility](int) { applyTypeVisibility(); });
 
         centerOnParent(this);
@@ -320,7 +391,13 @@ public:
                         && m_multiSelect->isChecked();
         p.initialDir = m_initialDir->text().trimmed();
         p.filePathFormat = m_filePathFormat->currentData().toString();
-        p.pickFolder = m_pickFolder->isChecked();
+        p.pickMode = m_pickMode->currentData().toString();
+        p.pickFolder = (p.pickMode == QStringLiteral("folder")); // compat kai.json antigo
+        p.optional = m_optional->isChecked();
+        p.dateMode = m_dateMode->currentData().toString();
+        p.dateRange = m_dateRange->isChecked();
+        p.dateFormat = m_dateFormat->currentData().toString();
+        p.dateFormatCustom = m_dateFormatCustom->text();
         return p;
     }
 
@@ -329,6 +406,14 @@ private:
     QWidget *wrapRow(QLayout *inner)
     {
         auto *w = new QWidget(this);
+        // TRANSPARENTE: sem isto, este QWidget herda a regra GLOBAL
+        // "QWidget { background-color: bg }" e pinta um retângulo QUADRADO
+        // atrás do campo (que já tem seu próprio arredondamento) - achado
+        // real, reportado: "campo de file pick... com borda quadrada ao
+        // invés de preferência". Mesmo padrão já usado em wrapWithLabel/
+        // makeFlagsSection pro mesmo tipo de bug.
+        w->setObjectName(QStringLiteral("paramEditorRowWrap"));
+        w->setStyleSheet(QStringLiteral("QWidget#paramEditorRowWrap { background: transparent; }"));
         inner->setContentsMargins(0, 0, 0, 0);
         w->setLayout(inner);
         return w;
@@ -351,8 +436,17 @@ private:
     QLabel *m_filePathFormatLabel = nullptr;
     QCheckBox *m_multiSelect = nullptr;
     QLabel *m_multiSelectLabel = nullptr;
-    QCheckBox *m_pickFolder = nullptr;
-    QLabel *m_pickFolderLabel = nullptr;
+    QComboBox *m_pickMode = nullptr;
+    QLabel *m_pickModeLabel = nullptr;
+    QComboBox *m_dateMode = nullptr;
+    QLabel *m_dateModeLabel = nullptr;
+    QCheckBox *m_dateRange = nullptr;
+    QLabel *m_dateRangeLabel = nullptr;
+    QComboBox *m_dateFormat = nullptr;
+    QLabel *m_dateFormatLabel = nullptr;
+    QLineEdit *m_dateFormatCustom = nullptr;
+    QLabel *m_dateFormatCustomLabel = nullptr;
+    QCheckBox *m_optional = nullptr;
 };
 
 } // namespace

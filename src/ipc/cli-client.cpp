@@ -1,5 +1,6 @@
 #include "ipc/cli-client.h"
 #include "ipc/ipc-server.h"
+#include "core/kai-file-validator.h"
 #include "utils/translation-manager.h"
 
 #include <QLocalSocket>
@@ -33,6 +34,7 @@ void printUsage()
           << kai::utils::tr(QStringLiteral("cli.usage.env_list")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.env_use")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.import")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.validate")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.ps")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.attach")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.kill")) << "\n"
@@ -189,6 +191,42 @@ CliOutcome runCliIfRequested(const QStringList &args)
         req["cmd"] = QStringLiteral("import");
         req["json"] = jsonContent;
         return {true, dispatch(req, false)};
+    }
+    if (verb == QStringLiteral("validate")) {
+        // Ao contrário dos outros verbos, NÃO precisa de uma instância do
+        // Kai rodando — é uma checagem estrutural puramente local do
+        // arquivo (pedido do usuário: "kai validate file, pra yml e json").
+        if (args.size() < 3) {
+            err() << kai::utils::tr(QStringLiteral("cli.error.usage.validate")) << "\n";
+            err().flush();
+            return {true, 2};
+        }
+        const QString filePath = args.at(2);
+        QFile file(filePath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            err() << kai::utils::tr(QStringLiteral("cli.error.open_file")) << filePath << "\n";
+            err().flush();
+            return {true, 1};
+        }
+        const QString text = QString::fromUtf8(file.readAll());
+        file.close();
+
+        const core::ValidationResult result = core::validateKaiFileText(text);
+        for (const core::ValidationIssue &issue : result.issues) {
+            QTextStream &stream = (issue.severity == core::ValidationSeverity::Error) ? err() : out();
+            const QString label = (issue.severity == core::ValidationSeverity::Error)
+                ? kai::utils::tr(QStringLiteral("validate.label.error"))
+                : kai::utils::tr(QStringLiteral("validate.label.warning"));
+            stream << label << " " << issue.path << ": " << issue.message << "\n";
+        }
+        (result.hasErrors() ? err() : out())
+            << kai::utils::tr(QStringLiteral("validate.summary"))
+                   .arg(result.errorCount())
+                   .arg(result.warningCount())
+            << "\n";
+        out().flush();
+        err().flush();
+        return {true, result.hasErrors() ? 1 : 0};
     }
     if (verb == QStringLiteral("help") || verb == QStringLiteral("--help") || verb == QStringLiteral("-h")) {
         printUsage();

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QMainWindow>
 #include <QSystemTrayIcon>
 #include <QMap>
 #include <QSet>
+#include <map>
+#include <memory>
 #include <QIcon>
 #include <QDateTime>
 #include <memory>
@@ -11,21 +14,28 @@
 #include "core/config-manager.h"
 #include "core/environment-manager.h"
 #include "core/run-history.h"
+#include "core/notification-history.h"
 #include "core/models.h"
 #include "engine/execution-pipeline.h"
 #include "engine/process-manager.h"
-#include "ui/command-tree-widget.h"
-#include "ui/expand-collapse-bar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/action-group-container.h"
-#include "ui/fuzzy-search.h"
-#include "ui/terminal-drawer.h"
-#include "ui/project-selector.h"
-#include "ui/project-import-options-dialog.h"
-#include "ui/top-utility-bar.h"
-#include "ui/action-sidebar.h"
-#include "ui/process-list-dialog.h"
-#include "ui/log-viewer-dialog.h"
+#include "engine/cron-scheduler.h"
+#include "engine/project-sync-manager.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/expand-collapse-bar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/status-line.h"
+#include <QHash>
+#include <QTimer>
+#include "ui/shared/action-group-container.h"
+#include "ui/shared/fuzzy-search.h"
+#include "ui/features/output/terminal-drawer.h"
+#include "ui/features/collections/import-selection-dialog.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/features/collections/project-import-options-dialog.h"
+#include "ui/shared/top-utility-bar.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/features/history/process-list-dialog.h"
+#include "ui/features/output/log-viewer-dialog.h"
 #include "utils/theme-manager.h"
 
 class QHotkey;
@@ -33,8 +43,12 @@ class QSplitter;
 class QShortcut;
 class QStackedWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace kai::ui {
+
+class ExternalRunSession;
+class QuickRunPopup;
 
 // Janela principal do Kai: usa a titlebar NATIVA do sistema operacional
 // (decisão de escopo: sem frameless customizado), com bandeja
@@ -56,6 +70,38 @@ public:
     // Executa um comando pelo NOME (case-insensitive). Retorna false + msg
     // se não encontrado/ambíguo. Não bloqueia (dispara a execução).
     bool runCommandByName(const QString &name, QString &message);
+    // `kai import [arquivo|pasta]`: importa o kai.yml sem
+    // diálogo (pasta-pai = raiz). `message` = resumo ou erro.
+    // `only` vazio = tudo; ver cliImportSelection.
+    bool importProjectFromCli(const QString &path, const QStringList &only, QString &message);
+    // `kai attach <nome|pid>`: espelha a saída de um processo que JÁ está
+    // rodando (reenvia o fim do log já impresso, depois segue ao vivo) e
+    // repassa o teclado. nullptr + `errorMessage` se não há esse processo.
+    ExternalRunSession *startAttachSession(const QString &target, QString &errorMessage);
+    // `kai ps --json`: os mesmos processos do `kai ps`, estruturados.
+    QJsonArray runningProcessItems();
+    // `kai -gdn`: aviso de fim de uma execução disparada pelo CLI em modo
+    // destacado (o CLI já foi embora; quem avisa é o app).
+    void notifyExternalRunFinished(const QString &commandId, int exitCode, qint64 elapsedMs);
+    // `kai raise`: notificação pedida pelo CLI (level = info|warning|error).
+    bool raiseNotificationFromCli(const QString &level, const QString &title, const QString &body,
+                                  QString &message);
+    // Roda `commandId` pelo app (registro de processo, histórico, painel de
+    // saída) a pedido de um cliente EXTERNO — `kai -g <path>` via IPC — e
+    // devolve uma sessão que espelha saída/fim e aceita entrada de teclado.
+    // nullptr + `errorMessage` se o comando não existe ou já está rodando
+    // (rodar de novo substituiria o runner e mataria a execução em curso).
+    // `openOutputWindow` (-w): depois de disparar, abre a saída do comando
+    // numa janela desacoplada (sem trazer a janela principal).
+    // `invocationDir` (não vazio): diretório do terminal do cliente; vale no
+    // lugar do working dir do comando quando ele pede (cliWorkingDir).
+    ExternalRunSession *startExternalRun(const QString &commandId,
+                                         const QMap<QString, QString> &paramValues,
+                                         QString &errorMessage, bool openOutputWindow = false,
+                                         const QString &invocationDir = QString());
+    // Saída guardada em memória de um comando (id real ou virtual de uma ação de
+    // pasta), limitada pelo tamanho máximo de log das configurações.
+    QString storedOutputFor(const QString &commandId) const { return m_commandLogs.value(commandId); }
     // Nomes de todos os comandos (para `kai list`).
     QStringList commandNames() const;
     // Ativa um environment pelo NOME. Retorna false + msg se não achado.
@@ -119,7 +165,9 @@ public:
 protected:
     // Auto-ocultar ao perder o foco (comportamento de launcher, configurável).
     void changeEvent(QEvent *event) override;
-
+    // A janela sem borda acompanha a preferência de cantos: reaplica a máscara
+    // arredondada a cada redimensionamento (ver updateWindowShape).
+    void resizeEvent(QResizeEvent *event) override;
 
     void closeEvent(QCloseEvent *event) override;
     // Ao exibir a janela, move o foco para a árvore de comandos, para que
@@ -140,16 +188,26 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
+    // Ação "Sincronizar com o arquivo" do menu da pasta-projeto (ver abaixo).
+    void startProjectSync(const QString &folderId, bool kaiToFile);
     void handleFilterQueryChanged(const QString &query);
     void handleCommandActivated(const QString &commandId);
     void handlePipelineLog(const QString &commandId, const QString &text, bool isError);
     void handlePipelineFinished(const engine::PipelineResult &result);
-    void handleImportProjectRequested();
-    void handleImportConfigRequested();
-    void handleImportOpenApiRequested();
-    void handleExportGlobalRequested();
-    void handleExportFolderRequested();
-    void handleExportCommandRequested();
+    // KIP (spec 11): nasceu uma sessão para o comando / o programa pediu uma
+    // notificação / respostas de prompt foram aceitas e devem ser lembradas.
+    void handleKipSessionStarted(const QString &commandId, engine::KipSession *session);
+    void handleKipNotify(const QString &commandId, const QString &title, const QString &text, core::KipLevel level);
+    void handleKipAnswersRemembered(const QString &commandId, const QJsonObject &remembered);
+    // Menu único de importação/exportação (pedido do usuário: "só dois
+    // botões... um jeito simplificado e mais fácil, porém completo, de
+    // importar, com apenas um form" / "queria um menu unificado para
+    // exportação, não 3") — ImportDialog/ExportDialog resolvem fonte/
+    // tipo/escopo por dentro.
+    void handleImportRequested();
+    void handleExportRequested();
+    // Abre o diálogo de exportar; com `targetId`, já apontando pra essa pasta/comando.
+    void showExportDialog(const QString &targetId, bool targetIsFolder);
     void handleTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
     void handleThemeReloaded(const utils::ResolvedTheme &theme);
     void handleNewFolderRequested();
@@ -159,6 +217,24 @@ private slots:
     void handleDeleteRequested(const QString &commandId, bool isFolder);
     void handleDuplicateRequested(const QString &itemId, bool isFolder);
     // Handlers de coleção (item não-executável).
+    // --- Notas (ver core::Note) ---
+    void handleNewNoteRequested();
+    void handleNoteEditRequested(const QString &noteId);
+    void handleNoteDuplicateRequested(const QString &noteId);
+    void handleNoteDeleteRequested(const QString &noteId);
+    void handleNoteActivated(const QString &noteId);
+    void handleNoteSelected(const QString &noteId);
+    void persistNotes();
+    void showNoteView(const QString &noteId, bool startEditing);
+    QVector<DocNote> docNotesFor(const QString &folderId) const;
+    QString folderDocumentDirectory(const QString &folderId) const;
+    // O ícone de documentos da barra de guias: menu com as pastas que têm documentação, mais usadas primeiro.
+    void showDocsMenu();
+    void openFolderDocs(const QString &folderId);
+    void recordDocUse(const QString &folderId);
+    void refreshDocNotes();
+    void resetDrawerForNonCommand(bool keepDocument = false);
+    bool isNoteId(const QString &id) const;
     void handleCollectionEditRequested(const QString &collectionId);
     void handleCollectionDuplicateRequested(const QString &collectionId);
     void handleCollectionDeleteRequested(const QString &collectionId);
@@ -181,6 +257,7 @@ private slots:
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
     void handleRunHistoryRequested();
+    void handleNotificationHistoryRequested();
     void handleLogsRequested();
     void handleHelpRequested();
     void handleWelcomeScreenClosed();
@@ -194,12 +271,20 @@ private slots:
     // bytes de teclado prontos para o PTY, e mudança de tamanho em células.
     void handleTerminalRawInput(const QByteArray &data);
     void handleTerminalSizeChanged(int rows, int cols);
+    // Setting opt-in "notificar no primeiro ERROR da saída formatada" —
+    // ver OutputPanel::firstErrorInFormattedOutput.
+    void handleFirstErrorInFormattedOutput();
 
     void handleBackgroundProcessStarted(const QString &commandId, engine::ProcessRunner *runner);
     void handleBackgroundProcessOutput(const QString &commandId, const QString &text, bool isError);
     void handleBackgroundProcessStatusChanged(const QString &commandId, engine::ProcessStatus status);
     void handleShowProcessListRequested();
-    void handleKillCommandRequested(const QString &commandId);
+    // `force`: false = encerramento GRACIOSO (SIGTERM -> timeout configurável
+    // -> SIGKILL, ver ProcessRunner::stop); true = encerramento IMEDIATO
+    // (SIGKILL direto, sem esperar nada, ver ProcessRunner::forceStop) —
+    // pedido do usuário: "Force" precisa ser um SIGKILL de verdade, distinto
+    // do "Parar" gracioso (antes os dois chamavam exatamente o mesmo caminho).
+    void handleKillCommandRequested(const QString &commandId, bool force = false);
     void handleResetCommandRequested(const QString &commandId);
     void handleTreeStructureChanged(const QVector<TreeNodePlacement> &placements);
     void toggleVisibility();
@@ -217,14 +302,21 @@ private:
     // — mapeado internamente por maybeShowNotification, pra quem chama
     // não precisar carregar Configurações duas vezes (uma pro toggle,
     // outra dentro do método).
-    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered };
+    enum class NotificationEvent { CommandFailure, BackgroundProcessCrash, BackgroundProcessSuccess, ConfigRecovered, FirstErrorInFormattedOutput, KipNotify };
     // Notificações (pedido do usuário): mostra um toast nativo da bandeja
     // se habilitado nas Configurações E o toggle daquele evento
     // específico estiver ligado, respeitando foco/bandeja (ver
     // notification-gate.h::shouldShowNotification — sem bandeja ou
     // master switch desligado, é no-op silencioso).
+    // `commandId` (opcional) fica no histórico para "ir para o comando".
     void maybeShowNotification(NotificationEvent event, const QString &title, const QString &body,
-                                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Warning);
+                                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Warning,
+                                const QString &commandId = QString(),
+                                const QString &eventKeyOverride = QString());
+    // A view KIP deste comando está na frente do usuário agora? (janela visível,
+    // em foco e mostrando o comando — ou a janela destacada dele em foco). O
+    // `notify` do programa só vira toast quando NÃO está (spec 11 §12.2).
+    bool isKipViewVisible(const QString &commandId) const;
     QIcon loadAppIcon() const;
     // Resolve o ProcessRunner do comando CONECTADO ao Terminal Drawer no
     // momento — mesma lógica repetida em handleTerminalInputEntered/
@@ -250,6 +342,34 @@ private:
     // Configurações. Reparenta os widgets JÁ CONSTRUÍDOS (não recria nada),
     // então conexões/estado do TerminalDrawer sobrevivem.
     void applyOutputPosition();
+    // Iguala a altura das barras horizontais de ação e do cabeçalho/rodapé da
+    // Saída (a maior altura real entre elas), em qualquer densidade.
+    void syncPanelBarHeights();
+    // Com uma coluna de ações entre a lista de comandos e a Saída (Saída na
+    // esquerda/direita), o handle interno que fica ali é desabilitado (só
+    // redimensionaria a coluna). Esta função faz a BORDA da lista, do lado que
+    // encara a Saída, arrastar o divisor externo — ver dragTreeBorder.
+    void updateTreeBorderResizeHandles();
+    // Tela de boas-vindas: só ela aparece; a lista de comandos, as barras de
+    // ação (topo/baixo/laterais) e a Saída ficam ocultas. Sair do modo devolve
+    // tudo conforme as preferências (posição dos grupos de ação etc.).
+    // Cantos da PRÓPRIA janela (sem borda nativa): raio do token de cantos
+    // (radiusMd) aplicado por máscara — reto/maximizado/tela cheia = sem máscara.
+    void updateWindowShape();
+    bool m_translucentWindow = false; // ver shouldUseTranslucentWindow (main-window.cpp)
+    // Windows 11: cantos nativos do DWM aceitos (sem máscara nem raio no QSS) e o
+    // último estilo de cantos aplicado (-1 = reaplicar).
+    bool m_nativeCorners = false;
+    int m_nativeCornerStyle = -1;
+    void setWelcomeMode(bool welcome);
+    bool m_welcomeMode = false;
+    // Layout da moldura da lista de comandos: o recuo interno depende do raio
+    // dos cantos (ver panelFrameInset) e é reaplicado ao trocar a aparência.
+    QVBoxLayout *m_treeContainerLayout = nullptr;
+    void applyFrameInsets();
+    void dragTreeBorder(bool press, int globalX);
+    int m_treeDragStartX = 0;
+    QList<int> m_treeDragStartSizes;
 
     // Handlers das ações de item/exibição/execução, extraídos das lambdas
     // dos sinais de clique para serem reusados também pelos atalhos de
@@ -270,6 +390,12 @@ private:
     void triggerCollapseAll();
     void triggerToggleHiddenSelected();
     void triggerToggleShowHidden();
+    // Filtro "exibir apenas comandos em execução" (só da sessão: não persiste,
+    // para o app nunca abrir com a árvore vazia sem o usuário ter pedido).
+    void triggerToggleRunningOnly();
+    // Easter egg do olho: registra e (se houver bandeja e notificações ligadas)
+    // mostra a notificação "Ai! meu olho!".
+    void showEyeEasterEgg();
 
     void quitApplication();
     void toggleSearchBar();
@@ -290,14 +416,83 @@ private:
     void applyActiveEnvironment();
     void refreshEnvironmentSelector();
     // Abre o formulário de parâmetros (se o comando tiver) e então executa.
-    void promptParamsAndRun(const core::Command &command);
+    void promptParamsAndRun(core::Command command);
     void runCommandWithParams(const core::Command &command, const QMap<QString, QString> &paramValues);
     // Dispara os comandos marcados com autoRun ao iniciar o Kai (cada um após
     // seu delay em segundos), usando os valores da última execução.
     void scheduleAutoRunCommands();
     void persistCommands();
     void writeExportFile(const QString &path, const QString &content);
+    // Corpo de cada fluxo de import, sem a etapa de escolher a fonte (já
+    // resolvida pelo ImportDialog em handleImportRequested) — mesma lógica
+    // de sempre, só sem o picker próprio.
+    void importProjectFromDirectory(const QString &directory);
+    // Anexa um projeto já lido (ids únicos, grava, coleções, árvore) — o
+    // mesmo fim do import pelo diálogo e pelo CLI. false se a gravação falhou.
+    bool mergeImportedProject(ProjectImportResult importResult, const QString &parentFolderId);
+
+    // Sincronização MANUAL de uma pasta-projeto com o kai.yml dela
+    // (ações do menu de contexto). Fluxo: o manager calcula um plano em
+    // segundo plano; aqui se informa, pergunta (quando o destino mudou desde
+    // o último sync) e aplica. Um sync por pasta por vez.
+    // Ligações do pipeline que não dependem de qual comando roda (HTTP, "pulado",
+    // variáveis dinâmicas persistidas): o principal e os das ações de pasta.
+    void connectPipelineAuxSignals(engine::ExecutionPipeline *pipeline);
+    void configureEnvForRun(core::EnvironmentManager &env, const core::Command &command,
+                            const QMap<QString, QString> &paramValues);
+    void prepareDrawerForRun(const core::Command &command);
+    // AÇÕES DE PASTA (ver core/folder-actions.h). Cada par (comando, pasta) é um
+    // comando VIRTUAL em m_commandsById, com id próprio, então tudo que é
+    // indexado por id (logs, painel de saída, parar/forçar/resetar) funciona
+    // sem mudança. Cada execução ganha o próprio pipeline e ambiente: o
+    // pipeline principal só aguenta uma cadeia por vez, e ações rodam em
+    // paralelo (a mesma ação em pastas diferentes, ou várias ações juntas).
+    struct ActionRun;
+    void rebuildActionCommands();
+    void startFolderAction(const core::Command &command, const QMap<QString, QString> &paramValues);
+    void handleActionFinished(const QString &actionId, const engine::PipelineResult &result);
+    void handleFolderActionActivated(const QString &commandId, const QString &folderId);
+    // Documentação da pasta selecionada (README do diretório, ou o primeiro documento que houver) na área de Saída.
+    void showFolderDocumentation(const QString &folderId);
+    void setCommandsCollapsed(bool collapsed);
+    void updateCommandsToggle();
+    void showQuickRun();
+    QuickRunPopup *m_quickRun = nullptr;
+    QMap<QString, int> m_docUsage; // id da pasta -> vezes que a documentação dela foi aberta (doc-usage.json)
+    QTimer *m_docUsageSaveTimer = nullptr;
+    bool m_docUsageSaving = false;
+    bool m_restoringUiState = false; // restaurando o recolhido da sessão anterior: não regrava
+    void handleDocKaiLink(const QString &action, const QString &target);
+    QString m_docFolderId;
+    void showFolderActionMenu(const QString &commandId, const QString &folderId, const QPoint &globalPos);
+    // Runner de um comando em execução — no pipeline principal OU no de uma
+    // ação de pasta — e os ids com runner vivo em todos eles.
+    engine::ProcessRunner *runnerFor(const QString &commandId) const;
+    QStringList allPipelineRunningCommandIds() const;
+    void handleProjectSyncPlan(const engine::SyncPlan &plan);
+    void finishProjectSync(const QString &folderId);
+    QString folderDisplayName(const QString &folderId) const;
+    void importOpenApiFromFile(const QString &path);
+    void importConfigFromFile(const QString &path);
+    bool readConfigPackage(const QString &path, core::ConfigManager::ImportResult &result, QString &error,
+                           bool *isPackage = nullptr) const;
+    void applyConfigImport(const core::ConfigManager::ImportResult &result,
+                           const ImportSelectionDialog::Selection &selection, QString &doneMessage);
+    static bool cliImportSelection(const QStringList &only, ImportSelectionDialog::Selection &selection, QString &error);
     void reconnectTerminalToCommand(const QString &commandId);
+
+    // --- Barra de guias das saídas (acima da saída; ver OutputTabsBar) ---
+    // Uma guia por comando executado nesta sessão (a ação de pasta tem a sua, por pasta). Fechar só tira a guia da
+    // barra: o processo segue rodando e o log fica guardado; clicar no comando de novo, ou iniciar uma execução, a
+    // traz de volta. Nada disto é persistido.
+    void ensureOutputTab(const QString &commandId);
+    void refreshOutputTabs();
+    void activateOutputTab(const QString &commandId);
+    void closeOutputTab(const QString &commandId);
+    void showOutputTabMenu(const QString &commandId, const QPoint &globalPos);
+    void cycleOutputTab(int direction);
+    bool hasOutputToShow(const QString &commandId) const;
+    void clearOutputPanel();
     // Resolve o ProcessRunner de UM comando específico por id — mesma
     // lógica repetida em handleTerminal{Interrupt,Eof,RawData,Resize}
     // (pipeline primeiro, depois ProcessManager).
@@ -315,6 +510,24 @@ private:
     // padrão já usado pra comandos (ver handleSaveOrUpdateCommand): se o
     // id já existe, anexa um sufixo numérico até achar um livre.
     QString uniqueFolderId(const QString &candidate) const;
+    // Ids da pasta raiz + todas as descendentes (mesma varredura usada em
+    // handleDuplicateFolderRequested) — reaproveitado pra achar coleções
+    // VINCULADAS ao exportar uma pasta (ver handleExportRequested/
+    // linkedCollectionsForFolder).
+    QVector<QString> folderSubtreeIds(const QString &rootFolderId) const;
+    // Coleções VINCULADAS a uma subárvore de pastas ou a um comando único —
+    // usado pela tela de exportação (pedido do usuário: "to selecionando
+    // uma pasta que tem coleções vinculadas, não estão dentro da PASTA,
+    // mas não aparecem o botão"). Duas formas de vínculo, unidas: (1) a
+    // coleção está fisicamente GUARDADA ali (Collection::folderId dentro da
+    // subárvore/pasta do comando) - o caso original; (2) a coleção é
+    // REFERENCIADA por algum parâmetro Select de um comando dentro do
+    // escopo (Parameter::collectionId), mesmo que a coleção em si viva
+    // fisicamente em outro lugar (ou em lugar nenhum) - o caso que estava
+    // faltando, e é o mais comum na prática ("uso a coleção X num comando
+    // desta pasta, quero versionar os dois juntos").
+    QVector<core::Collection> linkedCollectionsForFolder(const QString &folderId) const;
+    QVector<core::Collection> linkedCollectionsForCommand(const QString &commandId) const;
     QVector<core::Command> commandsInFolder(const QString &folderId) const;
     // Bloqueia nomes duplicados de Command/Collection DENTRO DA MESMA pasta
     // (feedback do usuário: pastas diferentes podem repetir nome livremente,
@@ -324,17 +537,55 @@ private:
     bool hasDuplicateCollectionName(const QString &folderId, const QString &name, const QString &excludeId) const;
 
     core::ConfigManager m_configManager;
+    QVector<core::GlobalAction> m_globalActions;
+    std::map<QString, std::shared_ptr<ActionRun>> m_actionRuns; // execuções de ação em andamento
+    QSet<QString> m_actionsRan; // ações que já rodaram nesta sessão (têm saída guardada pra carregar)
+    // Ações KIP: a sessão é filha do pipeline que a criou e a view mostra o estado final dela
+    // depois do fim do processo, então o pipeline fica vivo até a próxima execução da ação.
+    std::map<QString, QPointer<engine::ExecutionPipeline>> m_keptKipPipelines;
+    engine::KipSession *kipSessionFor(const QString &commandId) const;
+    engine::ProjectSyncManager *m_projectSync = nullptr;
+    QSet<QString> m_projectSyncBusy;
+    // Destaque de pasta dessincronizada: sem watcher, só confere (em segundo plano) ao abrir,
+    // ao focar a janela, depois de salvar edições e ao fim de um sync.
+    QTimer *m_syncDriftTimer = nullptr;
+    void scheduleSyncDriftCheck();
     core::EnvironmentManager m_envManager;
     core::RunHistory m_runHistory;
+    core::NotificationHistory m_notificationHistory;
+    engine::CronScheduler m_cronScheduler; // Etapa 4: agendador CRON
     QDateTime m_runStartedAt; // início da execução atual (para o histórico)
     core::CommandsData m_commandsData;
     QMap<QString, core::Command> m_commandsById;
     // Coleções (item não-executável na árvore), persistidas em
     // collections.json separado.
     QVector<core::Collection> m_collections;
+    QVector<core::Note> m_notes;
     QSet<QString> m_failedCommandIds;
     QMap<QString, QString> m_backgroundProcessLogs;
     QMap<QString, QString> m_commandLogs;
+    // "Abrir último link" (Command::openLastLink) para comandos de TERMINAL
+    // INTERATIVO (achado real: "a regra de auto clicar link impresso por
+    // ultimo não funciona nele") — um servidor de dev interativo (`npm
+    // start`, etc.) imprime a URL uma vez no início e continua rodando
+    // indefinidamente; a checagem normal (ver handlePipelineFinished) só
+    // dispara quando o pipeline TERMINA com sucesso, o que nunca acontece
+    // pra um processo que o usuário para manualmente. Pra terminal
+    // interativo, checa a cada chunk de saída (ver handlePipelineLog) e
+    // abre a PRIMEIRA URL vista, uma vez por execução (marcado aqui).
+    QSet<QString> m_openedLastLinkForRun;
+    // Comandos KIP cuja view deve abrir na janela própria quando a sessão nascer
+    // (`kai -gw`, mesmo mecanismo do `kip_window`).
+    QSet<QString> m_kipOpenWindowFor;
+    // Geração da sessão KIP por comando: o fechamento automático da janela (kip_auto_close)
+    // só vale para a sessão que o agendou, não para uma re-execução que veio depois.
+    QHash<QString, int> m_kipAutoCloseGeneration;
+    // Cache de SettingsData::outputMaxLogSizeKb (em CARACTERES, já
+    // convertido) — appendToCommandLog roda a cada chunk de saída de
+    // QUALQUER comando, então lê daqui em vez de m_configManager.loadSettings()
+    // (I/O de disco) toda vez. Recalculado no construtor e sempre que
+    // Configurações é salvo com um valor novo (ver handleSettingsRequested).
+    int m_outputMaxLogSizeChars = 1024 * 1024;
     // Último resultado HTTP estruturado POR comando: as abas Headers/JSON
     // vinham só do resultado ao vivo (httpResultReady) e sumiam ao trocar de
     // aba/comando e voltar (relatado). Guardamos aqui para REAPLICAR no
@@ -348,6 +599,7 @@ private:
     // pulo de uma rodada anterior.
     QMap<QString, QString> m_skippedReason;
     QString m_connectedTerminalCommandId;
+    QStringList m_outputTabOrder;   // ids das guias, na ordem da barra
     // Id do comando de EXECUÇÃO ÚNICA atualmente rodando no ExecutionPipeline
     // (não background, portanto NÃO rastreado pelo m_processManager). Usado
     // para marcá-lo como "rodando" na árvore, permitir matá-lo e reconectar
@@ -380,6 +632,7 @@ private:
     // "Mostrar ocultos" (toggle da barra de Exibição) — espelha
     // SettingsData::showHiddenCommands, aplicado em m_commandTree.
     bool m_showHiddenCommands = false;
+    bool m_showRunningOnly = false;
 
     QString m_activePipelineCommandId;
     // Se o comando de execução única ativo é HTTP (para abrir o JSON viewer
@@ -403,6 +656,7 @@ private:
     // até applyActionGroupPlacement() reparentá-los num dos dois
     // containers abaixo (ou em nenhum, se "não exibir").
     ItemActionsBar *m_itemActionsBar{nullptr};
+    StatusLine *m_statusLine{nullptr};
     ExpandCollapseBar *m_expandCollapseBar{nullptr};
     ActionSidebar *m_actionSidebar = nullptr;
     // Containers genéricos de posicionamento: upper (horizontal, acima da
@@ -452,6 +706,22 @@ private:
     // QSplitter::splitterMoved (drag do mouse), só persiste settings.json
     // quando o usuário PARA de arrastar. Ver applyOutputPosition().
     QTimer *m_outputSplitterSaveTimer = nullptr;
+    // Fração do divisor externo que pertence à Saída (0..1). É a ÚNICA fonte
+    // da proporção: só muda quando o usuário arrasta o divisor; resize da
+    // janela, maximizar/minimizar e recolher/reabrir apenas a reaplicam.
+    double m_outputRatio = 0.0;
+    bool m_applyingOutputRatio = false;
+    // Modo foco: a lista de comandos some e a Saída (com as guias dos programas ativos) ocupa tudo. O chevron fica
+    // no começo da barra de guias. Vale só para a sessão.
+    bool m_commandsCollapsed = false;
+    // Execução em segundo plano de um comando OCULTO (cron, auto-run, `kai run`): não puxa a Saída, não a expande e não
+    // cria guia. `m_quietRun` vale só durante a chamada que dispara; `m_quietRunIds` guarda os que estão rodando assim.
+    bool m_quietRun = false;
+    QSet<QString> m_quietRunIds;
+    void runInBackground(const QString &commandId);
+    QString m_appliedOutputPosition;
+    void applyOutputRatio();
+    void captureOutputRatio();
     // Shortcuts Manager v2 (ver utils::actionShortcutSpecs): UM QVector
     // cobre TODAS as ações agora (antes eram ~12 ponteiros nomeados +
     // este vetor separado pras data-driven) — cada spec pode gerar 0..N

@@ -1,6 +1,9 @@
 #include "ui/app-stylesheet.h"
 
-#include "ui/table-utils.h"
+#include <cmath>
+
+#include "ui/shared/table-utils.h"
+#include "ui/shared/tab-bar-style.h"
 #include "utils/design-tokens.h"
 
 #include <QColor>
@@ -66,7 +69,6 @@ QString themedSwitchSvgPath(bool checked, const QColor &track, const QColor &kno
 
 QString buildModernStylesheet()
 {
-    const bool isDark = QColor(tk::bg()).lightnessF() < 0.5;
     const QString bg = tk::bg();
     const QString fg = tk::fg();
     const QString muted = tk::mutedFg();
@@ -181,13 +183,40 @@ QString buildModernStylesheet()
     // preciso cobrir também :active/:!active — os seletores do core incluem
     // :selected:active, que é mais específico e venceria.
     // LISTRAS SUTIS: alternate-background-color derivado do fundo com um desvio
-    // mínimo, em vez de alt_bg (que é um salto grande de luminância).
-    const QString stripe = hex(shiftToward(QColor(bg), QColor(fg), isDark ? 0.035 : 0.028));
+    // mínimo, em vez de alt_bg (que é um salto grande de luminância). Vem de
+    // um token compartilhado (tk::treeStripeBg()) para o DraggableTreeWidget
+    // conseguir reaplicar a MESMA cor ao pintar a listra manualmente (ver
+    // command-tree-widget.cpp).
+    const QString stripe = tk::treeStripeBg();
+    // Exibição em árvore refinada (pedido do usuário: "mais respiro"):
+    // padding vertical um degrau maior que o padY genérico dos outros
+    // widgets. A seleção volta a ser só PREENCHIMENTO sólido, sem borda —
+    // numa QTreeWidget de VÁRIAS colunas (a árvore de comandos tem colunas
+    // extras pros botões inline de cada linha) uma borda por ::item vira
+    // uma CAIXA POR CÉLULA, não um contorno único ao redor da linha
+    // inteira (bug relatado com print: "virou vários segmentos" em vez de
+    // um destaque único). Nada de regras QSS pra `QTreeView::branch` aqui:
+    // aquela área NUNCA é pintada pelo QSS (é código do próprio
+    // QTreeView) — por isso as setas customizadas não apareciam antes; as
+    // linhas de conexão + o indicador de expandir/colapsar agora são
+    // desenhados em C++ por DraggableTreeWidget::drawBranches (ver
+    // ui/shared/draggable-tree-widget.h), com estilo configurável em
+    // Settings → Aparência → "Linhas da árvore" (Nativa/Nenhuma/Contínua).
+    const int treePadY = padY + 1;
     qss += QStringLiteral(
         "QTreeWidget, QTreeView, QListWidget, QListView, QTableWidget, QTableView {"
-        " background-color: %1; border: none; outline: none; alternate-background-color: %8; }\n"
-        "QTreeView::item, QListView::item, QTreeWidget::item, QListWidget::item {"
+        " background-color: %1; border: none; outline: none; alternate-background-color: %8;"
+        " show-decoration-selected: 1; }\n"
+        "QListView::item, QListWidget::item {"
         " padding: %2px %3px; border-radius: %4px; }\n"
+        // ÁRVORE SEM RAIO NAS LINHAS (pedido do usuário: "quero que ele
+        // fique totalmente colado um no outro"): diferente de listas/
+        // tabelas, os itens da árvore de comandos ficam coladas — sem
+        // cantinho arredondado entre uma linha e a seguinte, formando um
+        // bloco único e contínuo ao selecionar/hover vários itens em
+        // sequência.
+        "QTreeView::item, QTreeWidget::item {"
+        " padding: %2px %3px; border-radius: 0px; }\n"
         "QTreeView::item:hover, QListView::item:hover,"
         " QTreeWidget::item:hover, QListWidget::item:hover { background-color: %5; }\n"
         "QTreeView::item:selected, QListView::item:selected,"
@@ -199,19 +228,52 @@ QString buildModernStylesheet()
         " background-color: %6; color: %7; border: none; }\n"
         "QTableWidget::item:selected, QTableView::item:selected {"
         " background-color: %6; color: %7; }\n")
-        .arg(bg).arg(padY).arg(padX).arg(rSm).arg(hover).arg(sel).arg(accent).arg(stripe);
+        .arg(bg).arg(treePadY).arg(padX).arg(rSm).arg(hover).arg(sel).arg(accent).arg(stripe);
+
+    // TABELAS ACOMPANHAM A PREFERÊNCIA DE CANTOS. O corpo escuro da tabela era um retângulo quadrado que vazava
+    // pelos cantos arredondados do card/diálogo em volta. Agora a própria tabela é a caixa arredondada (raio da
+    // preferência) e o viewport fica transparente (senão pintaria um quadrado por cima); o recuo interno mantém
+    // o cabeçalho e as linhas dentro do arco do canto (um quadrado a `p` do canto cabe num raio r se p >= 0,3r).
+    {
+        const int tableRadius = tk::radiusMd();
+        const int tablePad = tableRadius <= 0 ? 2 : static_cast<int>(std::ceil(tableRadius * 0.3)) + 1;
+        qss += QStringLiteral(
+            "QTableWidget, QTableView, QListWidget[kaiRole=\"insetList\"] { border-radius: %1px; padding: %2px; }\n"
+            "QTableWidget QWidget#qt_scrollarea_viewport, QTableView QWidget#qt_scrollarea_viewport,"
+            " QListWidget[kaiRole=\"insetList\"] QWidget#qt_scrollarea_viewport { background: transparent; }\n"
+            // Com o viewport transparente, a trilha transparente da barra de rolagem deixava ver o fundo da janela
+            // (uma faixa preta): ela passa a ter a cor do corpo da tabela.
+            "QTableWidget QScrollBar:vertical, QTableView QScrollBar:vertical,"
+            " QListWidget[kaiRole=\"insetList\"] QScrollBar:vertical,"
+            " QTableWidget QScrollBar:horizontal, QTableView QScrollBar:horizontal,"
+            " QListWidget[kaiRole=\"insetList\"] QScrollBar:horizontal { background: %3; }\n")
+            .arg(tableRadius).arg(tablePad).arg(bg);
+    }
 
     // --- Abas: indicador de accent, sem moldura 3D ---
     qss += QStringLiteral(
         "QTabWidget::pane { border: none; background: %1; }\n"
+        // Tamanho padrão de TODAS as abas: mesma altura (a da barra, menos os 2px
+        // do sublinhado), mesmo recuo horizontal e mesma fonte das abas da
+        // Saída e das pastas raiz (ver ui/shared/tab-bar-style.h).
         "QTabBar::tab { background: transparent; color: %2; padding: %3px %4px;"
-        " border: none; border-bottom: 2px solid transparent; font-weight: 500; }\n"
+        " border: none; border-bottom: 2px solid transparent; font-weight: 500;"
+        " height: %8px; font-size: %9pt; }\n"
         "QTabBar::tab:hover { color: %5; }\n"
         "QTabBar::tab:selected { color: %5; border-bottom: 2px solid %6;"
         " font-weight: %7; }\n")
-        .arg(bg).arg(muted).arg(padY).arg(padX).arg(fg).arg(accent).arg(wTitle);
+        .arg(bg).arg(tk::tabInactiveFg()).arg(0).arg(tk::space(3)).arg(fg).arg(accent).arg(wTitle)
+        .arg(standardTabBarHeight() - 2).arg(tk::fontSizePt());
 
     // --- Scrollbars slim (o padrão do Qt é largo e datado) ---
+    // Só min-height na alça (como sempre foi): um min-width aqui entra no tamanho mínimo das áreas de rolagem com a barra
+    // horizontal escondida (QAbstractScrollArea soma o tamanho das duas barras) e alarga a coluna de ações.
+    // A alça usa o texto discreto com transparência, não a cor de BORDA: em temas escuros a borda quase não se
+    // distingue do fundo e a barra "sumia" quando a lista passava do espaço (relatado).
+    const QColor mutedColor(muted);
+    const auto withAlpha = [&mutedColor](int alpha) {
+        return QStringLiteral("rgba(%1, %2, %3, %4)").arg(mutedColor.red()).arg(mutedColor.green()).arg(mutedColor.blue()).arg(alpha);
+    };
     qss += QStringLiteral(
         "QScrollBar:vertical { background: transparent; width: %1px; margin: 0; }\n"
         "QScrollBar:horizontal { background: transparent; height: %1px; margin: 0; }\n"
@@ -219,7 +281,7 @@ QString buildModernStylesheet()
         "QScrollBar::handle:hover { background: %5; }\n"
         "QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }\n"
         "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }\n")
-        .arg(tk::space(3)).arg(border).arg(tk::space(1)).arg(tk::space(6)).arg(muted);
+        .arg(tk::space(3)).arg(withAlpha(110)).arg(tk::space(1)).arg(tk::space(6)).arg(withAlpha(190));
 
     // --- Menus com respiro e cantos ---
     qss += QStringLiteral(
@@ -255,14 +317,29 @@ QString buildModernStylesheet()
         "QCheckBox, QRadioButton { spacing: %11px; background: transparent; }\n"
         "QCheckBox::indicator, QRadioButton::indicator { width: %7px; height: %7px;"
         " border: 1.5px solid %3; border-radius: %8px; background: transparent; }\n"
-        "QCheckBox::indicator:unchecked { background: transparent; image: none; }\n"
+        // DESMARCADO com fundo PREENCHIDO (%9, a cor de fundo BASE do app —
+        // já usada aqui mesmo pro anel interno do radio marcado, então
+        // nenhum novo parâmetro no .arg() chain) em vez de transparent —
+        // bug real reportado com foto: dentro de um card com fundo
+        // "surface"/"surface2" (survey de opções de export, por exemplo), a
+        // borda fina sobre fundo transparente ficava quase invisível, a
+        // ponto de o checkbox desmarcado sumir de vista por completo. Mesmo
+        // raciocínio já usado pro trilho do switch desligado (ver bloco
+        // TOGGLE SWITCH abaixo: "ficava perto demais de surface2... some
+        // sob o card").
+        // MESMO fundo preenchido no radio desmarcado (pedido do usuário:
+        // "os radio buttons por todo o sistema não têm contraste se
+        // desativados") — a regra acima só cobria QCheckBox::indicator
+        // :unchecked; o radio ficava com borda fina sobre fundo
+        // TRANSPARENTE, sumindo sobre cards de superfície igual ao bug já
+        // corrigido pro checkbox.
+        "QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {"
+        " background: %9; image: none; }\n"
         "QRadioButton::indicator { border-radius: %12px; }\n"
         "QCheckBox::indicator:hover, QRadioButton::indicator:hover {"
         " border: 1.5px solid %10; }\n"
         "QCheckBox::indicator:checked { background: transparent; border: 1.5px solid %10;"
         " image: url(:/icons/lucide/check-on.svg); }\n"
-        "QRadioButton::indicator:checked { background: %10; border: 4px solid %9;"
-        " outline: 1.5px solid %10; }\n"
         "QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {"
         " border: 1.5px solid %13; background: transparent; }\n"
         "QCheckBox:disabled, QRadioButton:disabled { color: %13; }\n"
@@ -274,8 +351,10 @@ QString buildModernStylesheet()
         " border-radius: %8px; background: transparent; }\n"
         "QListView::indicator:hover, QTreeView::indicator:hover {"
         " border: 1.5px solid %10; }\n"
+        // Fundo cheio no marcado: o tick do qrc é branco, e sobre o fundo
+        // claro do tema light ele sumia (caixa marcada parecia vazia).
         "QListView::indicator:checked, QTreeView::indicator:checked {"
-        " background: transparent; border: 1.5px solid %10;"
+        " background: %10; border: 1.5px solid %10;"
         " image: url(:/icons/lucide/check-on.svg); }\n"
         "QSplitter::handle { background: transparent; }\n"
         "QSplitter::handle:hover { background: %11; }\n"
@@ -349,12 +428,87 @@ QString buildModernStylesheet()
         .arg(padX)                           // %23 padding horizontal do editor
         .arg(tk::controlHeight());           // %24 altura do editor de célula
 
+    // QToolTip: fonte menor que o corpo (herdava fsBody, 12pt — grande
+    // demais pra um tooltip) + largura máxima, pra strings de hint longas
+    // (ex: "settings.density.hint") quebrarem em várias linhas em vez de
+    // uma única linha gigante sem wrap (bug relatado: "as caixinhas de
+    // tooltip são muito grandes"). Regra PRÓPRIA em vez de somar %N na
+    // cadeia gigante acima (mesmo motivo do radio abaixo: não renumerar).
+    qss += QStringLiteral(
+        "QToolTip { font-size: %1pt; max-width: 320px; }\n")
+        .arg(fsSmall);
+
+    // QComboBox — popup (lista aberta): o combo FECHADO já é filho real da
+    // cascata QSS e sai temado, mas o popup (QComboBoxPrivateContainer) é
+    // uma janela top-level separada cuja regra em ThemeManager::buildQss()
+    // usava border == background (some visualmente) e cores cruas do JSON
+    // em vez dos tokens (viola a regra de border-radius do AGENTS.md).
+    // Esta regra é adicionada por ÚLTIMO (buildModernStylesheet vence,
+    // convenção já documentada no topo do arquivo), com borda e raio
+    // visíveis de verdade, então cobre/derruba a antiga.
+    qss += QStringLiteral(
+        "QComboBox QAbstractItemView { background-color: %1; color: %2;"
+        " border: 1px solid %3; border-radius: %4px; padding: %5px; outline: none; }\n"
+        "QComboBox QAbstractItemView::item { padding: %6px %7px; border-radius: %8px;"
+        " min-height: %9px; }\n"
+        "QComboBox QAbstractItemView::item:selected { background-color: %10; color: %2; }\n"
+        "QComboBox QAbstractItemView::item:hover { background-color: %11; }\n")
+        .arg(surface2).arg(fg).arg(border).arg(rMd).arg(tk::space(1))
+        .arg(tk::space(1)).arg(padX).arg(rSm).arg(tk::controlHeight() - tk::space(2))
+        .arg(sel).arg(hover);
+    // Moldura do popup transparente: quem desenha fundo/borda/raio é a lista
+    // acima (a janela é translúcida, ver ComboPopupFilter).
+    qss += QStringLiteral("QComboBoxPrivateContainer { background: transparent; border: none; }\n");
+    // Lista SEMPRE abre abaixo do campo (dropdown), no padrão do select de
+    // parâmetro. O estilo Fusion abre os combos não editáveis como "popup"
+    // sobreposto ao campo, com moldura branca própria e fora do tema.
+    qss += QStringLiteral("QComboBox { combobox-popup: 0; }\n");
+
+    // QRadioButton::indicator:checked — regra PRÓPRIA (em vez de espremida
+    // na cadeia %N acima, mesmo motivo do badge "Pulado" abaixo: não
+    // precisar renumerar ~18 argumentos existentes). border-radius
+    // REPETIDO aqui (a regra base QRadioButton::indicator já declara o
+    // seu) e com um raio MAIOR, não o mesmo da base — achado real com
+    // foto (diálogo de Exportar, JSON/YAML): o radio desmarcado saía
+    // redondo certinho, mas MARCADO virava "quadrado arredondado" — a
+    // borda do estado marcado é bem mais grossa (4px vs 1.5px), o que
+    // INFLA a caixa renderizada além do content-box; com o MESMO raio da
+    // base (metade do content-box original) isso já não cobre metade da
+    // caixa INFLADA. space(3) (~12px) cobre a inflação sem precisar
+    // calcular o crescimento exato da borda em cada densidade.
+    qss += QStringLiteral(
+        "QRadioButton::indicator:checked { background: %1; border: 4px solid %2;"
+        " border-radius: %3px; outline: 1.5px solid %1; }\n")
+        .arg(accent, bg).arg(tk::space(3));
+
     // --- TOGGLE SWITCH (kaiRole="switch") ---
     // Repaginação visual do Settings (mockup enviado pelo usuário): flags
     // booleanas viram um "pill switch" (trilho + bolinha) em vez da caixa de
     // checkbox padrão — reaproveita o MESMO QCheckBox/bool por trás (só
     // troca a pele via propriedade), sem novo widget/estado. SVG assado por
     // cor (ver themedSwitchSvgPath), igual à estratégia do check normal.
+    //
+    // ESTE BLOCO TEM QUE VIR DEPOIS de QUALQUER outro bloco que estilize
+    // QCheckBox::indicator em geral (ver o bloco "CHECKBOX/RADIO" logo
+    // acima de buildModernStylesheet, no trecho de tooltip/checkbox/
+    // splitter/header) — o QSS engine do Qt não implementa a cascata CSS
+    // por especificidade de forma confiável aqui; regras posteriores no
+    // MESMO qss concatenado ganham de empates, então o switch precisa ser
+    // o ÚLTIMO a declarar `QCheckBox[...]::indicator` pra sua largura/
+    // altura/borda/fundo sempre vencerem, sem depender de especificidade.
+    //
+    // BUG REAL CORRIGIDO (achado com foto, "quadrado errado de fundo" no
+    // diálogo de Exportar): uma sessão anterior adicionou um SEGUNDO
+    // bloco de tema pra QCheckBox::indicator/QRadioButton::indicator bem
+    // aqui, sem perceber que o app JÁ tinha um (o bloco "CHECKBOX/RADIO"
+    // citado acima, mais antigo — borda fina + check-on.svg, fundo
+    // transparente). Os dois brigavam pelas mesmas propriedades ao mesmo
+    // tempo, produzindo um resultado inconsistente/glitchado em vez de
+    // "sem estilo nenhum" (o bug original, ANTES de qualquer um dos dois
+    // blocos existir, era mesmo o indicador nativo cru do Fusion). O
+    // bloco duplicado foi removido — o tema original já cobre
+    // QCheckBox/QRadioButton (e também QListView/QTreeView::indicator)
+    // sozinho.
     {
         // 0.4 -> 0.7: o trilho DESLIGADO ficava perto demais de surface2 (o
         // mesmo fundo dos cards ao redor), praticamente some sob o card —
@@ -370,7 +524,22 @@ QString buildModernStylesheet()
             "QCheckBox[kaiRole=\"switch\"] { spacing: %3px; }\n"
             "QCheckBox[kaiRole=\"switch\"]::indicator { width: 36px; height: 20px;"
             " border: none; background: transparent; image: url(%1); }\n"
-            "QCheckBox[kaiRole=\"switch\"]::indicator:checked { image: url(%2); }\n"
+            
+            "QCheckBox[kaiRole=\"switch\"]::indicator:unchecked { "
+            "   image: url(%1); "
+            "   border-radius: 10px; "                 // Curvatura perfeita para 20px de altura
+            "   border: 1px solid rgba(0, 0, 0, 0.15); " // Contraste sutil nas bordas
+            "   background: rgba(0, 0, 0, 0.05); "       // Sombra interna leve
+            "}\n"
+            
+            // É importante zerar a borda e o fundo no estado :checked para 
+            // a sombra não vazar quando a switch estiver ligada.
+            "QCheckBox[kaiRole=\"switch\"]::indicator:checked { "
+            "   image: url(%2); "
+            "   border: none; "
+            "   background: transparent; "
+            "}\n"
+            
             "QCheckBox[kaiRole=\"switch\"]:disabled { color: %4; }\n")
             .arg(svgOff, svgOn).arg(tk::space(2)).arg(muted);
     }
@@ -422,12 +591,27 @@ QString buildModernStylesheet()
         // (pedido do usuário: tirar a bordinha roxa, usar a cor da caixinha).
         // ALTURA EXPLÍCITA (%18): sem isto, cada ::tab usa a altura do seu
         // próprio sizeHint (ícone + texto + padding), quase sempre MENOR que
-        // a QTabBar (fixa em tk::controlHeight(), ver OutputPanel::setupUi) —
-        // o rótulo então ficava colado no topo da aba, com um vão sobrando
+        // a QTabBar (fixa em m_barHeight, ver OutputPanel::setupUi) — o
+        // rótulo então ficava colado no topo da aba, com um vão sobrando
         // embaixo (relatado: "a aba tem os itens desalinhados, embaixo tem
         // um espaço maior que em cima"). Fixando a altura do próprio ::tab
         // igual à da barra (descontada a margem vertical), o Qt centraliza
         // ícone+texto dentro dela de verdade.
+        //
+        // BUG REAL encontrado depois (relatado de novo: "o focus da saída
+        // ainda está desalinhado com o outer da aba"), com número na mão
+        // medido via amostragem de pixel + QTabBar::tabRect(): esta conta
+        // ignorava que "height" no QSS é a altura do CONTEÚDO — o retângulo
+        // final pintado da aba soma margin (2+2=4, ver "margin: 2px 1px"
+        // abaixo) + padding (%12 em cima e embaixo, 2×) + este height. Com
+        // o valor antigo (controlHeight()-4 = 28) a soma dava 4+8+28=40,
+        // mas a QTabBar SÓ tinha 36px de altura (tinha um desconto de
+        // space(1) em OutputPanel::setupUi que não existe mais) — a aba
+        // pintava 4px além do fim da barra, cortada/vazando de forma
+        // desigual (o motivo real do "desalinhado"). Agora a QTabBar
+        // preenche a caixinha INTEIRA (m_barHeight, sem desconto) e esta
+        // conta subtrai margin+padding de m_barHeight pra fechar exato:
+        // altura da barra − margin (2+2) − padding (%12 × 2).
         "QTabBar#outputTabs::tab { padding: %12px %13px; color: %14;"
         " background: transparent; border: none; border-radius: %3px;"
         " margin: 2px 1px; height: %18px; font-size: %5pt; font-weight: 500; }\n"
@@ -450,11 +634,12 @@ QString buildModernStylesheet()
         // %12 = padding vertical das abas (pequeno: a altura da barra é fixa
         // em m_barHeight e o texto centraliza), %13 = padding horizontal.
         .arg(tk::space(1)).arg(tk::space(3))
-        .arg(muted).arg(fg).arg(hover).arg(border)
-        // %18 = altura do ::tab = altura da QTabBar (tk::controlHeight(), ver
-        // OutputPanel::setupUi) menos a margem vertical (2px em cima + 2px
-        // embaixo) — ver comentário acima da regra.
-        .arg(tk::controlHeight() - 4);
+        .arg(tk::tabInactiveFg()).arg(fg).arg(hover).arg(border)
+        // %18 = altura de CONTEÚDO do ::tab: altura real da QTabBar
+        // (m_barHeight = controlHeight() + space(2)) menos a margem
+        // vertical (2px + 2px) e menos o padding vertical (%12, 2×) — ver
+        // comentário acima da regra pro porquê exato.
+        .arg(tk::controlHeight() + tk::space(2) - 4 - 2 * tk::space(1));
 
     // Badge "Pulado" (Execution Condition não atendida — ver
     // OutputStatus::Skipped): regra própria, em vez de espremida na cadeia
@@ -477,6 +662,43 @@ QString buildModernStylesheet()
         .arg(padY).arg(padX).arg(rSm).arg(muted).arg(hover).arg(fg)
         .arg(sel).arg(accent).arg(wTitle);
 
+    // --- Moldura dos painéis principais (caixa de comandos e Saída) = "panelCard":
+    // a MESMA borda de 1px + raio dos tokens nos dois; o miolo mantém a cor de
+    // cada painel. Os widgets precisam de WA_StyledBackground. ---
+    qss += QStringLiteral(
+        "QWidget#panelCard { background: transparent; border: 1px solid %1;"
+        " border-radius: %2px; }\n")
+        .arg(border).arg(rMd);
+
+    // --- Cantos da JANELA: o contêiner raiz segue o raio médio (radiusMd, o mesmo
+    // da máscara em MainWindow::updateWindowShape) em vez dos 8px fixos do
+    // tema; maximizada/tela cheia fica reto. ---
+    qss += QStringLiteral(
+        "QWidget#rootContainer { border-radius: %1px; }\n"
+        "QWidget#rootContainer[kaiMaximized=\"true\"] { border-radius: 0px; }\n"
+        // Janela translúcida: só o contêiner raiz pinta fundo (com os cantos
+        // arredondados e suavizados); o QMainWindow por trás fica transparente.
+        "QMainWindow[kaiTranslucent=\"true\"] { background: transparent; }\n"
+        // A barra do topo encosta nos cantos de cima: sem isto o fundo quadrado
+        // dela vazaria para fora do arco da janela.
+        "QWidget#rootContainer TopUtilityBar { border-top-left-radius: %1px;"
+        " border-top-right-radius: %1px; }\n"
+        "QWidget#rootContainer[kaiMaximized=\"true\"] TopUtilityBar {"
+        " border-top-left-radius: 0px; border-top-right-radius: 0px; }\n")
+        .arg(rMd);
+
+    // --- Cantos dos DIÁLOGOS: todo QDialog ganha a moldura própria do Kai (ver
+    // dialog-frame.h) — fundo com o mesmo raio da janela principal (a borda e a
+    // sombra interna são desenhadas por cima, em DialogEdge); com cantos nativos do
+    // DWM (kaiFlat) fica reto. A barra de título é transparente e arredonda os
+    // cantos de cima junto com o diálogo. ---
+    qss += QStringLiteral(
+        "QDialog[kaiFramed=\"true\"] { border-radius: %1px; }\n"
+        "QDialog[kaiFramed=\"true\"][kaiFlat=\"true\"] { border-radius: 0px; }\n"
+        "QWidget#kaiDialogTitleBar { background: transparent; border-top-left-radius: %1px;"
+        " border-top-right-radius: %1px; }\n")
+        .arg(rMd);
+
     // --- Handle do QSplitter: uma LINHA de 1px na cor de borda do tema,
     // igual ao separador da barra de ações do topo (referência do usuário).
     // Fundo transparente + uma borda fina no meio do handle (não um bloco
@@ -490,6 +712,145 @@ QString buildModernStylesheet()
         "QSplitter::handle:horizontal:hover { border-left: 1px solid %2; }\n"
         "QSplitter::handle:vertical:hover { border-top: 1px solid %2; }\n")
         .arg(border, accent);
+
+    // Divisores entre painéis que já têm moldura própria: "outerSplitter"
+    // (caixa de comandos | Saída) e "actionsSplitter" (colunas de ações |
+    // árvore). A linha do handle virava uma borda dupla colada na moldura.
+    // Continuam arrastáveis (o handle existe, só não desenha nada).
+    for (const QString &name : {QStringLiteral("outerSplitter"), QStringLiteral("actionsSplitter")}) {
+        qss += QStringLiteral(
+            "QSplitter#%1::handle, QSplitter#%1::handle:hover,"
+            " QSplitter#%1::handle:horizontal, QSplitter#%1::handle:vertical,"
+            " QSplitter#%1::handle:horizontal:hover, QSplitter#%1::handle:vertical:hover {"
+            " background: transparent; border: none; }\n").arg(name);
+    }
+
+    // --- Gradientes de tema, em 3 BASES reutilizáveis (pedido do usuário:
+    // "quero gradientes diferentes, para que o tema possa decidir se usa
+    // ou não em tal lugar") — cada área do app usa uma das 3 bases, nunca
+    // uma cor própria isolada, então o tema controla TODAS as áreas de uma
+    // categoria com um único par start/end:
+    //   - "primary":   chrome do app (janela, diálogos, header, árvore de
+    //                   comandos) E as superfícies da Saída (cartões da
+    //                   aba Requisição/Headers, stack de saída) — "app e
+    //                   saídas", pedido do usuário.
+    //   - "secondary":  reservada; campos de entrada não usam gradiente.
+    //   - "tertiary":   entalhes decorativos (logo e dica da tela de
+    //                   boas-vindas); botões não usam gradiente.
+    // Cada base só entra em jogo quando o tema ATIVO declara o par de
+    // cores para ela (ver tk::hasGradient) e o interruptor mestre está
+    // ligado (Configurações -> Aparência -> "Gradientes do tema", ver
+    // tk::setGradientsEnabled); senão a string vem vazia e o fundo sólido
+    // de sempre (theme.qss) continua valendo — nenhum destes blocos força
+    // um fallback próprio, o tema decide base a base.
+    //
+    // "primary" no chrome do app: mesmos seletores que já pintavam o bg
+    // sólido em theme.qss (QWidget#rootContainer/QDialog/TopUtilityBar/
+    // árvore de comandos); aqui só a propriedade background-color é
+    // substituída, border/border-radius continuam os mesmos declarados lá.
+    if (tk::hasGradient(QStringLiteral("primary"))) {
+        const QString primaryBg = tk::gradientQss(QStringLiteral("background-color"), QStringLiteral("primary"));
+        qss += QStringLiteral("QWidget#rootContainer { %1 }\n").arg(primaryBg);
+        // Diálogos (Editar Comando, Configurações, etc.) são janelas
+        // PRÓPRIAS, fora da hierarquia de #rootContainer — sem esta regra,
+        // ficavam com o fundo SÓLIDO genérico de QDialog (theme.qss),
+        // destoando do resto do app (relatado pelo usuário: "a aba de
+        // configuração não usa o mesmo tema das outras abas... fundos de
+        // gradiente").
+        qss += QStringLiteral("QDialog { %1 }\n").arg(primaryBg);
+        // TopUtilityBar (barra superior/título) — seletor por CLASSE
+        // (Q_OBJECT já expõe o className pro motor de QSS), sem precisar
+        // de objectName dedicado.
+        qss += QStringLiteral("TopUtilityBar { %1 }\n").arg(primaryBg);
+        // Árvore de comandos — só as QTreeWidget internas de
+        // CommandTreeWidget (seletor descendente por classe), não
+        // qualquer QTreeWidget do app (diálogos etc). Quando o usuário tem
+        // uma imagem de fundo própria configurada (Configurações ->
+        // Aparência -> "Plano de fundo"), CommandTreeWidget aplica um
+        // setStyleSheet LOCAL na própria árvore que sempre vence este aqui
+        // (ver CommandTreeWidget::applyBackgroundStyle) — sem conflito.
+        qss += QStringLiteral("CommandTreeWidget QTreeWidget { %1 }\n").arg(primaryBg);
+    }
+    // Fundo da árvore de comandos SEMPRE transparente via QSS — em TODOS os
+    // estados, inclusive o normal/parado (pedido do usuário: "as bordas são
+    // entre as células" — a árvore tem 2 colunas, nome/ícone e status; o
+    // Qt pinta hover/seleção por CÉLULA, e a segunda coluna, vazia na maior
+    // parte do tempo, nunca entra no estado :hover — só a que está sob o
+    // cursor. SEM uma regra de fundo para o estado normal, o Qt cai no
+    // fallback nativo (zebra da paleta) SÓ nessa célula, repintando por
+    // cima do preenchimento manual e reabrindo o vão — daí a "bordinha"
+    // reaparecer só passando o mouse, mesmo com :hover/:selected já
+    // transparentes). Com TODO estado zerado aqui, o DraggableTreeWidget é
+    // o ÚNICO responsável pelo fundo (zebra, hover e seleção), cobrindo a
+    // linha inteira de uma vez (ver DraggableTreeWidget::setRowColors) — escopado só a
+    // esta árvore (seletor descendente por classe), sem afetar nenhuma
+    // outra lista/árvore do app.
+    // border/outline explícitos aqui também: o item "atual" (foco de
+    // teclado/clique) ganha do Fusion um contorno/retângulo pontilhado
+    // PRÓPRIO da célula (distinto do preenchimento de fundo, e SEM
+    // depender de hover) — relatado pelo usuário como a bordinha
+    // aparecendo "no focus, nem precisa do mouse em cima". outline:none já
+    // existe no seletor genérico do container (mais acima), mas reforçamos
+    // aqui, escopado e com prioridade máxima, direto no ::item.
+    // border-radius: 0px REPETIDO aqui (a regra base mais acima já zera,
+    // mas pra esta ficar 100% auto-contida e não depender de nenhuma outra
+    // regra pra não reintroduzir cantos arredondados no hover/zebra —
+    // relatado pelo usuário: "na linha zebrada, ao fazer hover ainda
+    // aparece as bordinhas redondas").
+    qss += QStringLiteral(
+        "CommandTreeWidget QTreeWidget::item, CommandTreeWidget QTreeWidget::item:hover,"
+        " CommandTreeWidget QTreeWidget::item:selected,"
+        " CommandTreeWidget QTreeWidget::item:selected:active,"
+        " CommandTreeWidget QTreeWidget::item:selected:!active,"
+        " CommandTreeWidget QTreeWidget::item:focus {"
+        " background-color: transparent; border: none; outline: none; border-radius: 0px; }\n");
+    // Botões de confirmação dos diálogos (QDialogButtonBox) numa regra só,
+    // para todos os diálogos do app: neutro (Cancelar etc.) e primário
+    // (Salvar/OK, marcado com kaiRole="primary" ou :default), cada um com
+    // hover, pressed, foco e desabilitado coerentes. Cores sólidas, sem
+    // gradiente. Seletores mais específicos que os genéricos de QPushButton
+    // para vencer qualquer regra anterior.
+    {
+        const QString primary = tk::buttonColor();
+        const QColor primaryColor(primary);
+        const QString hoverNeutral = tk::selBg();
+        const QString pressedNeutral = QColor(tk::selBg()).darker(112).name();
+        // Ordem importa (mesma especificidade): foco < hover < pressed, para
+        // o hover continuar visível no botão que está com foco.
+        qss += QStringLiteral(
+            "QDialogButtonBox QPushButton { min-width: 88px; padding: 7px 18px;"
+            " border-radius: %1px; border: 1px solid %2; background-color: %3; color: %4;"
+            " font-weight: 500; icon-size: 0px; }\n"
+            "QDialogButtonBox QPushButton:focus { border: 1px solid %6; }\n"
+            "QDialogButtonBox QPushButton:hover { background-color: %5; border: 1px solid %6; }\n"
+            "QDialogButtonBox QPushButton:pressed { background-color: %7; border: 1px solid %6; }\n"
+            "QDialogButtonBox QPushButton:disabled { background-color: %3; border: 1px solid %2; color: %8; }\n")
+            .arg(tk::radiusMd())
+            .arg(tk::borderColor(), tk::surface2(), tk::fg(), hoverNeutral, tk::accent(),
+                 pressedNeutral, tk::mutedFg());
+        const auto sel = [](const char *state) {
+            const QString st = QString::fromLatin1(state);
+            return QStringLiteral("QDialogButtonBox QPushButton[kaiRole=\"primary\"]%1,"
+                                  " QDialogButtonBox QPushButton:default%1").arg(st);
+        };
+        qss += QStringLiteral(
+            "%1 { background-color: %2; color: %3; border: 1px solid %2; font-weight: 600; }\n"
+            "%4 { border: 1px solid %5; }\n"
+            "%6 { background-color: %7; border: 1px solid %7; }\n"
+            "%8 { background-color: %9; border: 1px solid %9; }\n"
+            "%10 { background-color: %2; border: 1px solid %2; }\n")
+            .arg(sel(""), primary, tk::buttonFg())
+            .arg(sel(":focus"), tk::fg())
+            .arg(sel(":hover"), primaryColor.lighter(112).name())
+            .arg(sel(":pressed"), primaryColor.darker(112).name())
+            .arg(sel(":disabled"));
+    }
+    // Anel de foco nos botões primários fora de QDialogButtonBox.
+    qss += QStringLiteral("QPushButton[kaiRole=\"primary\"]:focus { border: 1px solid %1; }\n")
+        .arg(tk::fg());
+    // Campos de entrada (QLineEdit/QComboBox/QSpinBox/QPlainTextEdit...)
+    // ficam SEMPRE com fundo sólido: o gradiente do tema vale só para fundos
+    // (janela, diálogos, cards) e botões de ação, nunca para os campos.
 
     return qss;
 }
@@ -523,7 +884,10 @@ void applyWindowBackdrop(QWidget *window)
     }
     const auto &fx = tk::effects();
     if (!fx.translucency && !fx.blur) {
-        window->setAttribute(Qt::WA_TranslucentBackground, false);
+        // A janela principal fica translúcida de propósito (cantos suaves, ver
+        // MainWindow): não desliga o atributo nela.
+        window->setAttribute(Qt::WA_TranslucentBackground,
+                             window->property("kaiRoundedWindow").toBool());
         return;
     }
 

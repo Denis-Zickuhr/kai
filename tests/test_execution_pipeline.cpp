@@ -1,8 +1,12 @@
 #include <QTest>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QCoreApplication>
+#include <QFile>
 
+#include "core/kip-settings.h"
 #include "engine/execution-pipeline.h"
 #include "utils/translation-manager.h"
 
@@ -11,22 +15,65 @@ using namespace kai::core;
 
 // Pipeline de Pre-Hooks com aborto em falha e execução do
 // comando principal apenas quando todos os pre-hooks têm sucesso.
+namespace {
+struct KipSettingsGuard {
+    kai::core::KipSettings saved = kai::core::kipSettings();
+    ~KipSettingsGuard() { kai::core::setKipSettings(saved); }
+};
+} // namespace
+
 class TestExecutionPipeline : public QObject {
     Q_OBJECT
 
 private slots:
+    // Dois comandos rodando JUNTOS no mesmo pipeline: cada término é atribuído ao comando certo. Antes o pipeline
+    // guardava só o último comando principal, e o fim do primeiro saía como se fosse do segundo.
+    void eachParallelRunIsReportedForItsOwnCommand()
+    {
+        Command slow;
+        slow.id = "slow";
+        slow.type = CommandType::Command;
+        slow.command = "sleep 1";
+        Command quick;
+        quick.id = "quick";
+        quick.type = CommandType::Command;
+        quick.command = "sleep 0.3; exit 3"; // falha: o aborto também é do comando certo
+
+        QMap<QString, Command> allCommands;
+        allCommands[slow.id] = slow;
+        allCommands[quick.id] = quick;
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(slow, allCommands, env);
+        pipeline.run(quick, allCommands, env); // começa enquanto o primeiro ainda roda
+
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 2, 8000);
+        QMap<QString, bool> successById;
+        for (const QList<QVariant> &call : finishedSpy) {
+            const PipelineResult result = qvariant_cast<PipelineResult>(call.at(0));
+            successById.insert(result.mainCommandId, result.success);
+        }
+        QCOMPARE(successById.size(), 2);
+        QVERIFY(successById.contains(QStringLiteral("slow")));
+        QVERIFY(successById.contains(QStringLiteral("quick")));
+        QVERIFY(successById.value(QStringLiteral("slow")));   // o primeiro terminou bem
+        QVERIFY(!successById.value(QStringLiteral("quick"))); // o segundo saiu com 3
+    }
+
     // Pre-hook shell com exitCode != 0 deve abortar o pipeline e jamais
     // disparar o comando principal.
     void failingPreHookAbortsPipelineAndSkipsMainCommand()
     {
         Command preHook;
         preHook.id = "pre_fail";
-        preHook.type = CommandType::Shell;
+        preHook.type = CommandType::Command;
         preHook.command = "exit 1";
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo NAO_DEVERIA_RODAR";
         main.hooks.pre << preHook.id;
 
@@ -60,18 +107,485 @@ private slots:
         QVERIFY(!mainCommandRan);
     }
 
+    // Parada PEDIDA (Parar/kill/reset) não é uma falha do comando: o resultado
+    // do pipeline marca stoppedByRequest para a UI não notificar erro. Uma
+    // falha de verdade (exit != 0) continua sem a marca.
+    void stopRequestedIsFlaggedButRealFailureIsNot()
+    {
+        QMap<QString, Command> allCommands;
+        EnvironmentManager env;
+
+        Command slow;
+        slow.id = "slow_cmd";
+        slow.type = CommandType::Command;
+        slow.command = "sleep 30";
+        {
+            ExecutionPipeline pipeline;
+            QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+            pipeline.run(slow, allCommands, env);
+            QTRY_VERIFY_WITH_TIMEOUT(pipeline.runnerFor(slow.id) != nullptr
+                                         && pipeline.runnerFor(slow.id)->isRunning(), 3000);
+            pipeline.runnerFor(slow.id)->stop();
+            QVERIFY(finishedSpy.wait(10000));
+            const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+            QVERIFY(!result.success);
+            QVERIFY2(result.stoppedByRequest, "parada pedida deveria ser marcada");
+        }
+
+        Command failing;
+        failing.id = "failing_cmd";
+        failing.type = CommandType::Command;
+        failing.command = "exit 3";
+        {
+            ExecutionPipeline pipeline;
+            QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+            pipeline.run(failing, allCommands, env);
+            QVERIFY(finishedSpy.wait(5000));
+            const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+            QVERIFY(!result.success);
+            QVERIFY2(!result.stoppedByRequest, "falha de verdade não é parada pedida");
+        }
+    }
+
+    // ---- KIP (spec 11) ----------------------------------------------------
+
+    static QString kipFixture(const QString &name)
+    {
+        QDir dir(QCoreApplication::applicationDirPath());
+        for (int i = 0; i < 6; ++i) {
+            if (QFile::exists(dir.filePath(QStringLiteral("sample/kip/fixtures/") + name))) {
+                return dir.filePath(QStringLiteral("sample/kip/fixtures/") + name);
+            }
+            if (!dir.cdUp()) break;
+        }
+        return QString();
+    }
+
+    static Command kipCommand(const QString &id, const QString &fixtureName)
+    {
+        Command c;
+        c.id = id;
+        c.name = id;
+        c.type = CommandType::Command;
+        c.kip = true;
+        c.command = QStringLiteral("bash '%1'").arg(kipFixture(fixtureName));
+        return c;
+    }
+
+    // O alvo de terminal é um `wsl -d <distro> -- ...`: a sessão guarda a distro,
+    // que a view usa para abrir no Windows um path que só existe dentro do WSL.
+    void kipSessionKnowsTheWslDistroOfItsTerminalTarget()
+    {
+        QTemporaryDir bin;
+        QVERIFY(bin.isValid());
+        QFile fake(bin.filePath(QStringLiteral("wsl")));
+        QVERIFY(fake.open(QIODevice::WriteOnly));
+        // Um `wsl` de mentira: descarta as opções até `--` e executa o resto.
+        fake.write("#!/bin/sh\nwhile [ \"$1\" != \"--\" ] && [ $# -gt 0 ]; do shift; done\nshift\nexec \"$@\"\n");
+        fake.close();
+        fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner);
+
+        Command cmd = kipCommand("kip_wsl", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        TerminalProfile target;
+        target.name = "WSL";
+        target.usePty = false;
+        target.shell = ShellFlavor::Posix;
+        target.commandTemplate = bin.filePath(QStringLiteral("wsl")) + QStringLiteral(" -d Ubuntu-22.04 -- bash -c {{command}}");
+        cmd.terminalTarget = QStringLiteral("WSL");
+        all[cmd.id] = cmd;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setTerminalProfiles({target});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        KipSession *session = pipeline.kipSessionFor(cmd.id);
+        QVERIFY(session);
+        QCOMPARE(session->wslDistro(), QStringLiteral("Ubuntu-22.04"));
+    }
+
+    // ---- Configurações → KIP ----
+    void kipHandshakeTimeoutComesFromTheSettings()
+    {
+        KipSettingsGuard guard;
+        kai::core::KipSettings prefs;
+        prefs.handshakeTimeoutSec = 2; // o padrão (10 s) não acabaria dentro do teste
+        kai::core::setKipSettings(prefs);
+        const Command cmd = kipCommand("kip_timeout", "silent.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        QElapsedTimer timer;
+        timer.start();
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(6000));
+        QCOMPARE(pipeline.kipSessionFor(cmd.id)->state(), KipSessionState::Unsupported);
+        QVERIFY2(timer.elapsed() >= 1500 && timer.elapsed() < 6000, qPrintable(QString::number(timer.elapsed())));
+    }
+
+    void rememberedAnswersCanBeTurnedOffGlobally()
+    {
+        KipSettingsGuard guard;
+        Command cmd = kipCommand("kip_remember", "happy.sh");
+        cmd.kipLastValues.insert(QStringLiteral("env/env"), QStringLiteral("prod"));
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        auto runOnce = [&](bool remember, QString *prefilled, int *rememberedSignals) {
+            kai::core::KipSettings prefs;
+            prefs.rememberAnswers = remember;
+            kai::core::setKipSettings(prefs);
+            EnvironmentManager env;
+            ExecutionPipeline pipeline;
+            QSignalSpy remembered(&pipeline, &ExecutionPipeline::kipAnswersRemembered);
+            QSignalSpy started(&pipeline, &ExecutionPipeline::kipSessionStarted);
+            QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+            pipeline.run(cmd, all, env);
+            QTRY_VERIFY_WITH_TIMEOUT(pipeline.kipSessionFor(cmd.id)
+                                         && pipeline.kipSessionFor(cmd.id)->screen().awaitingInput(), 5000);
+            KipSession *session = pipeline.kipSessionFor(cmd.id);
+            *prefilled = session->screen().currentValues().value("env").toString();
+            session->submit();
+            QTRY_VERIFY_WITH_TIMEOUT(session->screen().awaitingInput(), 5000); // o confirm
+            session->confirm(true);
+            QVERIFY(finishedSpy.wait(8000));
+            *rememberedSignals = remembered.count();
+        };
+        QString prefilled;
+        int signalsOn = 0;
+        runOnce(true, &prefilled, &signalsOn);
+        QCOMPARE(prefilled, QStringLiteral("prod"));
+        QVERIFY(signalsOn > 0);
+
+        int signalsOff = 0;
+        runOnce(false, &prefilled, &signalsOff);
+        QCOMPARE(prefilled, QStringLiteral("dev")); // o default do programa, não o lembrado
+        QCOMPARE(signalsOff, 0);                    // e nada novo é guardado
+    }
+
+    void kipSessionOutsideWslHasNoDistro()
+    {
+        const Command cmd = kipCommand("kip_nowsl", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(pipeline.kipSessionFor(cmd.id)->wslDistro().isEmpty());
+    }
+
+    void kipCommandRunsAsASessionWithItsOwnEnvironment()
+    {
+        const Command cmd = kipCommand("kip_env", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy started(&pipeline, &ExecutionPipeline::kipSessionStarted);
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+
+        QCOMPARE(started.count(), 1);
+        QCOMPARE(started.first().at(0).toString(), cmd.id);
+        KipSession *session = pipeline.kipSessionFor(cmd.id);
+        QVERIFY(session);
+        QCOMPARE(session, started.first().at(1).value<KipSession *>());
+        QCOMPARE(session->state(), KipSessionState::Finished);
+
+        QCOMPARE(session->screen().blocks().size(), 1);
+        const QString text = std::get<KipMessageBlock>(session->screen().blocks().first()).text;
+        QVERIFY2(text.contains(QStringLiteral("KIP_VERSION=1")), qPrintable(text));
+        const QString locale = kai::utils::TranslationManager::instance().currentLanguage();
+        QVERIFY2(text.contains(QStringLiteral("KIP_LOCALE=") + locale), qPrintable(text));
+
+        // O protocolo cru nunca vai para o log de saída do comando.
+        for (const QList<QVariant> &call : logSpy) {
+            QVERIFY2(!call.at(1).toString().contains(QStringLiteral("\"kip\"")), "JSON do protocolo vazou para o log");
+        }
+    }
+
+    void userEnvironmentOverridesTheKipDefaults()
+    {
+        const Command cmd = kipCommand("kip_env2", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        env.setDynamicVar(QStringLiteral("KIP_VERSION"), QStringLiteral("9"));
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        const auto &block = pipeline.kipSessionFor(cmd.id)->screen().blocks().first();
+        QVERIFY(std::get<KipMessageBlock>(block).text.contains(QStringLiteral("KIP_VERSION=9")));
+    }
+
+    void nonKipCommandsDoNotGetKipEnvironment()
+    {
+        Command cmd;
+        cmd.id = "plain";
+        cmd.type = CommandType::Command;
+        cmd.command = QStringLiteral("echo \"v=[${KIP_VERSION}]\"");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(5000));
+        QVERIFY(!pipeline.kipSessionFor(cmd.id));
+        QString out;
+        for (const QList<QVariant> &call : logSpy) out += call.at(1).toString();
+        QVERIFY(out.contains(QStringLiteral("v=[]")));
+    }
+
+    void kipUnsupportedCommandFailsThePipeline()
+    {
+        Command cmd = kipCommand("kip_unsup", "unsupported.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QVERIFY(!result.stoppedByRequest);
+        QVERIFY(result.exitCode != 0);
+        QCOMPARE(pipeline.kipSessionFor(cmd.id)->state(), KipSessionState::Unsupported);
+        // O stderr do programa chega ao log (é o que `kai -g` imprime).
+        QString out;
+        for (const QList<QVariant> &call : logSpy) out += call.at(1).toString();
+        QVERIFY(out.contains(QStringLiteral("unknown option --kip")));
+    }
+
+    void kipPipelineResultFollowsTheSessionNotTheExitCode()
+    {
+        // Sai com 0 mas estava esperando uma resposta: é falha.
+        Command cmd = kipCommand("kip_wait", "exit-awaiting.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(!qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+    }
+
+    void kipStopByRequestIsFlaggedAsStoppedNotFailed()
+    {
+        Command cmd = kipCommand("kip_stop", "cancel-deaf.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QTRY_VERIFY_WITH_TIMEOUT(pipeline.kipSessionFor(cmd.id)
+                                     && pipeline.kipSessionFor(cmd.id)->state() == KipSessionState::AwaitingInput, 8000);
+        pipeline.runnerFor(cmd.id)->forceStop();
+        // forceStop() pode entregar o `finished` ainda dentro da chamada.
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 8000);
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QVERIFY(result.stoppedByRequest);
+    }
+
+    void kipSetEnvWritesDeclaredVariablesIntoTheCapturedScope()
+    {
+        Command cmd = kipCommand("kip_setenv", "set-env.sh");
+        cmd.declaredEnvVars << DeclaredEnvVar{QStringLiteral("TOKEN")};
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+        QCOMPARE(env.value(QStringLiteral("TOKEN")), QStringLiteral("abc123"));
+        // Não declarada: nunca entra.
+        const auto vars = env.allDynamicVars();
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it) {
+            QVERIFY(!it.value().contains(QStringLiteral("UNDECLARED")));
+        }
+    }
+
+    void kipSetEnvHonorsDeclaredScopeAndPersist()
+    {
+        Command cmd = kipCommand("kip_setenv2", "set-env.sh");
+        DeclaredEnvVar token{QStringLiteral("TOKEN")};
+        token.scope = QStringLiteral("global");
+        token.persist = true;
+        cmd.declaredEnvVars << token;
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        env.setDynamicVarScope(QStringLiteral("proj_a"));
+        ExecutionPipeline pipeline;
+        QSignalSpy persistSpy(&pipeline, &ExecutionPipeline::dynamicVarPersistRequested);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        env.setDynamicVarScope(QStringLiteral("proj_b")); // o usuário trocou de projeto no meio
+        QVERIFY(finishedSpy.wait(8000));
+        QCOMPARE(persistSpy.count(), 1);
+        QCOMPARE(persistSpy.first().at(0).toString(), QString()); // global, vindo da declaração
+        QCOMPARE(persistSpy.first().at(1).toString(), QStringLiteral("TOKEN"));
+        QCOMPARE(persistSpy.first().at(2).toString(), QStringLiteral("abc123"));
+    }
+
+    void kipSetEnvProjectScopeIsTheOneCapturedAtRunStart()
+    {
+        Command cmd = kipCommand("kip_setenv3", "set-env.sh");
+        cmd.declaredEnvVars << DeclaredEnvVar{QStringLiteral("TOKEN")}; // escopo "project" (padrão)
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        env.setDynamicVarScope(QStringLiteral("proj_a"));
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        env.setDynamicVarScope(QStringLiteral("proj_b"));
+        QVERIFY(finishedSpy.wait(8000));
+        const auto vars = env.allDynamicVars();
+        QVERIFY(vars.value(QStringLiteral("proj_a")).contains(QStringLiteral("TOKEN")));
+        QVERIFY(!vars.value(QStringLiteral("proj_b")).contains(QStringLiteral("TOKEN")));
+    }
+
+    void kipCommandCannotBeUsedAsAPreHook()
+    {
+        const Command hook = kipCommand("kip_hook", "env-echo.sh");
+        Command main;
+        main.id = "main_with_kip_hook";
+        main.type = CommandType::Command;
+        main.command = "echo NAO_DEVERIA_RODAR";
+        main.hooks.pre << hook.id;
+        QMap<QString, Command> all{{hook.id, hook}, {main.id, main}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 5000); // recusa síncrona: o sinal já saiu de run()
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QCOMPARE(result.failedCommandId, hook.id);
+        QVERIFY(!result.errorMessage.isEmpty());
+        QVERIFY(!pipeline.kipSessionFor(hook.id)); // nunca virou sessão
+        for (const QList<QVariant> &call : logSpy) {
+            QVERIFY(!call.at(1).toString().contains(QStringLiteral("NAO_DEVERIA_RODAR")));
+        }
+    }
+
+    void kipCommandCannotBeUsedAsAPostHook()
+    {
+        const Command hook = kipCommand("kip_post", "env-echo.sh");
+        Command main;
+        main.id = "main_with_kip_post";
+        main.type = CommandType::Command;
+        main.command = "true";
+        main.hooks.post << hook.id;
+        QMap<QString, Command> all{{hook.id, hook}, {main.id, main}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QCOMPARE(result.failedStage, PipelineStage::PostHooks);
+    }
+
+    void kipCommandIsRefusedInInheritTerminalMode()
+    {
+        // Modo CLI local: terminal herdado, nenhum lugar para renderizar.
+        const Command cmd = kipCommand("kip_local", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setInheritTerminal(true);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 5000); // recusa síncrona: o sinal já saiu de run()
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QVERIFY(!pipeline.kipSessionFor(cmd.id));
+    }
+
+    void kipIgnoresResponderBackgroundAndCaptureEnv()
+    {
+        // Esses recursos competem pelo stdin/stdout do protocolo: o KIP vence.
+        Command cmd = kipCommand("kip_conflicts", "env-echo.sh");
+        cmd.isBackground = true;
+        cmd.captureEnv = true;
+        cmd.declaredEnvVars << DeclaredEnvVar{QStringLiteral("X")};
+        OutputResponder responder;
+        responder.pattern = QStringLiteral(".*");
+        responder.response = QStringLiteral("y");
+        cmd.responders << responder;
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy bgSpy(&pipeline, &ExecutionPipeline::backgroundProcessStarted);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+        QCOMPARE(bgSpy.count(), 0);
+        QCOMPARE(pipeline.kipSessionFor(cmd.id)->state(), KipSessionState::Finished);
+    }
+
+    void rerunReplacesTheKipSession()
+    {
+        const Command cmd = kipCommand("kip_rerun", "env-echo.sh");
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy started(&pipeline, &ExecutionPipeline::kipSessionStarted);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(cmd, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        KipSession *first = pipeline.kipSessionFor(cmd.id);
+        pipeline.run(cmd, all, env);
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 2, 8000);
+        QCOMPARE(started.count(), 2);
+        QVERIFY(pipeline.kipSessionFor(cmd.id) != first);
+    }
+
+    void kipRememberedAnswersArePassedInAndCommittedAnswersAreReported()
+    {
+        Command cmd = kipCommand("kip_mem", "happy.sh");
+        cmd.kipLastValues.insert(QStringLiteral("env/env"), QStringLiteral("prod"));
+        QMap<QString, Command> all{{cmd.id, cmd}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy remembered(&pipeline, &ExecutionPipeline::kipAnswersRemembered);
+        QSignalSpy started(&pipeline, &ExecutionPipeline::kipSessionStarted);
+        pipeline.run(cmd, all, env);
+        QTRY_VERIFY_WITH_TIMEOUT(pipeline.kipSessionFor(cmd.id)
+                                     && pipeline.kipSessionFor(cmd.id)->screen().awaitingInput(), 8000);
+        KipSession *session = pipeline.kipSessionFor(cmd.id);
+        QCOMPARE(session->screen().currentValues().value("env").toString(), QStringLiteral("prod")); // lembrado > default "dev"
+        session->setFieldValue(QStringLiteral("env"), QStringLiteral("dev"));
+        session->submit();
+        QTRY_VERIFY_WITH_TIMEOUT(remembered.count() >= 1, 8000);
+        QCOMPARE(remembered.first().at(0).toString(), cmd.id);
+        QCOMPARE(remembered.first().at(1).toJsonObject().value("env/env").toString(), QStringLiteral("dev"));
+        pipeline.runnerFor(cmd.id)->forceStop();
+    }
+
     // Cenário completo: pre-hook shell "bem-sucedido" simula extração
     // de token e o comando principal interpola a variável correspondente.
     void successfulPipelineRunsMainCommandWithInterpolatedVars()
     {
         Command preHook;
         preHook.id = "pre_ok";
-        preHook.type = CommandType::Shell;
+        preHook.type = CommandType::Command;
         preHook.command = "exit 0";
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo \"Bearer Token: {{AUTH_TOKEN}}\"";
         main.hooks.pre << preHook.id;
 
@@ -103,7 +617,7 @@ private slots:
     {
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo deveria-nao-rodar";
         main.hooks.pre << QStringLiteral("id_inexistente");
 
@@ -133,7 +647,7 @@ private slots:
     {
         Command bgCommand;
         bgCommand.id = "bg_cmd";
-        bgCommand.type = CommandType::Shell;
+        bgCommand.type = CommandType::Command;
         bgCommand.command = "sleep 10"; // processo de longa duração deliberada
         bgCommand.isBackground = true;
 
@@ -179,14 +693,17 @@ private slots:
     {
         Command preHook;
         preHook.id = "login_hook";
-        preHook.type = CommandType::Shell;
+        preHook.type = CommandType::Command;
         // Exporta uma variável nova, como faria um comando de autenticação.
         preHook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
         preHook.captureEnv = true;
+        // Lista branca obrigatória (ver comentário no header/ingestCapturedEnv):
+        // sem declarar o nome, nada é capturado mais.
+        preHook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         // Interpola a variável que SÓ existe se o env do hook foi capturado.
         main.command = "echo \"TOKEN={{KAI_CAPTURED_TOKEN}}\"";
         main.hooks.pre << preHook.id;
@@ -221,6 +738,216 @@ private slots:
         QVERIFY(!combinedOutput.contains(QStringLiteral("__KAI_ENV_CAPTURE")));
     }
 
+    // Bug real reportado: "testei a lógica de export variáveis... export
+    // TESTE=1 e não jogou a ENV pra saída". Causa: ingestCapturedEnv lia o
+    // escopo de variáveis dinâmicas AMBIENTE (EnvironmentManager::
+    // currentDynamicVarScope()) no callback `finished` do processo — se o
+    // usuário trocasse de comando/pasta selecionada ENQUANTO o processo
+    // ainda rodava, a variável capturada ia parar no escopo NOVO (errado),
+    // não no escopo de quando a execução começou. Este teste simula
+    // exatamente essa corrida: troca o escopo ambiente logo após disparar
+    // run(), antes do processo terminar.
+    void captureEnvUsesScopeFromWhenExecutionStartedNotWhenItFinishes()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Command;
+        hook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
+        hook.captureEnv = true;
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Command;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        env.setDynamicVarScope(QStringLiteral("project-A"));
+
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        // Simula o usuário trocando de comando/pasta ENQUANTO o hook ainda
+        // roda (o processo real leva um instante pra terminar) — isto é
+        // exatamente o que MainWindow::runSelectedCommand faz ao reselecionar
+        // outro item na árvore.
+        env.setDynamicVarScope(QStringLiteral("project-B"));
+
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        // A variável tem que estar no escopo de QUANDO A EXECUÇÃO COMEÇOU
+        // (project-A), não no escopo ambiente de quando o processo terminou
+        // (project-B) nem no Global.
+        env.setDynamicVarScope(QStringLiteral("project-A"));
+        QCOMPARE(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")), QStringLiteral("abc123xyz"));
+
+        env.setDynamicVarScope(QStringLiteral("project-B"));
+        QVERIFY(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")).isEmpty());
+
+        env.setDynamicVarScope(QString());
+        QVERIFY(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")).isEmpty());
+    }
+
+    // REGRESSÃO (bug real reportado: "testei a lógica de export variveis...
+    // export TESTE=1 e não jogou a ENV pra saída" - ainda quebrado DEPOIS do
+    // fix de sintaxe por sabor de shell, pedindo investigação de novo). Causa
+    // raiz #2: mais abaixo em run(), a resolução do alvo de terminal fazia
+    // `rawRunner->setUsePty(targetUsePty)` INCONDICIONALMENTE - mesmo com
+    // captureEnv=true, que umas linhas acima já tinha desligado o PTY DE
+    // PROPÓSITO (comentário: "o PTY ecoa o comando e converte quebras de
+    // linha, quebrando o parse"). Como QUALQUER alvo resolvido (o comando
+    // real do usuário usava "@parent", que sempre cai nalgum alvo/default) e
+    // a maioria dos alvos tem usePty=true, a captura ligava o PTY de volta
+    // silenciosamente toda vez que havia um alvo de terminal - exatamente o
+    // caso relatado. Este teste usa um alvo Posix com usePty=TRUE de
+    // propósito (o cenário que disparava o bug) e prova que a variável ainda
+    // é capturada.
+    void captureEnvStillWorksWhenResolvedTargetUsesPty()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Command;
+        hook.command = "export KAI_CAPTURED_TOKEN=abc123xyz";
+        hook.captureEnv = true;
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("KAI_CAPTURED_TOKEN")};
+        hook.terminalTarget = "PseudoPosixPty";
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Command;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        TerminalProfile target;
+        target.name = "PseudoPosixPty";
+        target.shell = ShellFlavor::Posix;
+        target.usePty = true; // o caso que disparava o bug (a maioria dos alvos reais)
+        target.commandTemplate = "bash -lc {{command}}";
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setTerminalProfiles({target});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        QCOMPARE(env.value(QStringLiteral("KAI_CAPTURED_TOKEN")), QStringLiteral("abc123xyz"));
+    }
+
+    // feat/REGRESSÃO (achado de segurança real, reportado pelo usuário:
+    // "exportar esta exportando automaticamente envs do OS, essas envs
+    // quebram o funcionamento se exportadas... preciso apenas exportar as
+    // envs ADVERSAS e incomuns"). "Export variables" agora é uma LISTA
+    // BRANCA: só nomes DECLARADOS no comando (Command::declaredEnvVars) são
+    // capturados, nunca mais "tudo que for novo no ambiente" (o
+    // comportamento antigo vazava env de sistema/distro/WSL imprevisível).
+    // Prova as duas pontas: (1) uma var declarada mas NÃO exportada pelo
+    // processo ainda vira uma variável dinâmica VAZIA (pedido explícito:
+    // "se não ficam vazias, até pra ajudar em debug" — não fica de fora
+    // silenciosamente); (2) uma var REALMENTE exportada pelo processo mas
+    // NÃO declarada no comando nunca é capturada, mesmo aparecendo no dump
+    // de ambiente.
+    void captureEnvOnlyCapturesDeclaredNamesAndBlanksUndeclaredOnes()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Command;
+        // Exporta as DUAS: uma declarada (DECLARED_VAR) e uma NÃO declarada
+        // (UNDECLARED_VAR, que não deveria nunca aparecer capturada).
+        hook.command = "export DECLARED_VAR=yes; export UNDECLARED_VAR=leaked";
+        hook.captureEnv = true;
+        // NOT_SET_VAR: declarada mas o comando nunca exporta - deve virar
+        // dinâmica vazia, não ficar de fora.
+        hook.declaredEnvVars << DeclaredEnvVar{QStringLiteral("DECLARED_VAR")}
+                              << DeclaredEnvVar{QStringLiteral("NOT_SET_VAR")};
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Command;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(result.success);
+
+        QCOMPARE(env.value(QStringLiteral("DECLARED_VAR")), QStringLiteral("yes"));
+        // allDynamicVars() (scope -> {var: valor}) prova EXISTÊNCIA de
+        // verdade, distinta de value() devolvendo "" tanto pra "existe mas
+        // vazia" quanto pra "nunca existiu" - a distinção que este teste
+        // precisa provar.
+        bool notSetVarExists = false;
+        bool undeclaredVarExists = false;
+        const auto allVars = env.allDynamicVars();
+        for (auto scopeIt = allVars.constBegin(); scopeIt != allVars.constEnd(); ++scopeIt) {
+            if (scopeIt.value().contains(QStringLiteral("NOT_SET_VAR"))) notSetVarExists = true;
+            if (scopeIt.value().contains(QStringLiteral("UNDECLARED_VAR"))) undeclaredVarExists = true;
+        }
+        // Declarada, nunca exportada -> existe, mas vazia (não "não encontrada").
+        QVERIFY(notSetVarExists);
+        QCOMPARE(env.value(QStringLiteral("NOT_SET_VAR")), QString());
+        // Exportada de verdade pelo processo, mas NÃO declarada -> nunca capturada.
+        QVERIFY(!undeclaredVarExists);
+    }
+
+    // Sem NENHUM nome declarado, captureEnv=true não deve capturar nada -
+    // "declarar é obrigatório", não um heurístico de melhor esforço.
+    void captureEnvWithNoDeclaredVarsCapturesNothing()
+    {
+        Command hook;
+        hook.id = "login_hook";
+        hook.type = CommandType::Command;
+        hook.command = "export SOMETHING=value";
+        hook.captureEnv = true;
+        // declaredEnvVars deliberadamente vazio.
+
+        Command main;
+        main.id = "main_cmd";
+        main.type = CommandType::Command;
+        main.command = "echo done";
+        main.hooks.pre << hook.id;
+
+        QMap<QString, Command> allCommands;
+        allCommands[hook.id] = hook;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+
+        pipeline.run(main, allCommands, env);
+        QVERIFY(finishedSpy.wait(5000));
+
+        const auto allVars = env.allDynamicVars();
+        for (auto scopeIt = allVars.constBegin(); scopeIt != allVars.constEnd(); ++scopeIt) {
+            QVERIFY(!scopeIt.value().contains(QStringLiteral("SOMETHING")));
+        }
+    }
+
     // Validação da task pre/post hooks (feedback do usuário: "hooks não
     // estão rodando"): prova que pre-hook, comando principal e post-hook
     // TODOS executam, e na ORDEM correta (pre -> main -> post). Cada etapa
@@ -229,17 +956,17 @@ private slots:
     {
         Command pre;
         pre.id = "pre_hook";
-        pre.type = CommandType::Shell;
+        pre.type = CommandType::Command;
         pre.command = "echo MARK_PRE";
 
         Command post;
         post.id = "post_hook";
-        post.type = CommandType::Shell;
+        post.type = CommandType::Command;
         post.command = "echo MARK_POST";
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo MARK_MAIN";
         main.hooks.pre << pre.id;
         main.hooks.post << post.id;
@@ -288,7 +1015,7 @@ private slots:
     {
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         // Comando com aspas simples — quebraria bash -lc '...' sem escape.
         main.command = "echo 'ola mundo'";
         main.terminalTarget = "LocalBash";
@@ -319,6 +1046,82 @@ private slots:
                  "a saída esperada 'ola mundo' não apareceu");
     }
 
+    // Diretório de trabalho que não existe onde o comando roda (ex.: um container que não tem o caminho): o `cd` falho não
+    // pode derrubar o comando. Avisa e executa no diretório atual, com o mesmo código de saída do comando.
+    void missingWorkingDirectoryDoesNotStopTheCommandThroughATerminalTarget()
+    {
+        Command main;
+        main.id = "cwd_target";
+        main.type = CommandType::Command;
+        main.command = "echo ran-in-default; exit 0";
+        main.terminalTarget = "LocalBash";
+        main.workingDirMode = WorkingDirMode::Custom;
+        main.workingDir = "/caminho/que/nao/existe/neste/container";
+        QMap<QString, Command> all{{main.id, main}};
+        TerminalProfile target;
+        target.name = "LocalBash";
+        target.commandTemplate = "bash -lc '{{command}}'";
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setTerminalProfiles({target});
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QString combined;
+        for (const QList<QVariant> &call : logSpy) combined += call.at(1).toString();
+        QVERIFY2(result.success, qPrintable(QStringLiteral("o comando não rodou: [%1]").arg(combined)));
+        QVERIFY(combined.contains(QStringLiteral("ran-in-default")));
+        QVERIFY2(combined.contains(QStringLiteral("/caminho/que/nao/existe/neste/container")), "o aviso do diretório não apareceu");
+    }
+
+    // O código de saída do comando continua sendo o que vale (o aviso do cd não o mascara).
+    void missingWorkingDirectoryKeepsTheCommandExitCode()
+    {
+        Command main;
+        main.id = "cwd_target_fail";
+        main.type = CommandType::Command;
+        main.command = "exit 3";
+        main.terminalTarget = "LocalBash";
+        main.workingDirMode = WorkingDirMode::Custom;
+        main.workingDir = "/nao/existe";
+        QMap<QString, Command> all{{main.id, main}};
+        TerminalProfile target;
+        target.name = "LocalBash";
+        target.commandTemplate = "bash -lc '{{command}}'";
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setTerminalProfiles({target});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QVERIFY(!qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+    }
+
+    // Sem alvo de terminal (processo local): diretório inexistente também não impede de rodar.
+    void missingWorkingDirectoryDoesNotStopALocalCommand()
+    {
+        Command main;
+        main.id = "cwd_local";
+        main.type = CommandType::Command;
+        main.command = "echo ran-local";
+        main.workingDirMode = WorkingDirMode::Custom;
+        main.workingDir = "/nao/existe/mesmo";
+        QMap<QString, Command> all{{main.id, main}};
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        QVERIFY(finishedSpy.wait(8000));
+        QString combined;
+        for (const QList<QVariant> &call : logSpy) combined += call.at(1).toString();
+        QVERIFY2(qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success, qPrintable(combined));
+        QVERIFY(combined.contains(QStringLiteral("ran-local")));
+        QVERIFY(combined.contains(QStringLiteral("/nao/existe/mesmo")));
+    }
+
     // Bug real reportado: comando MULTI-PALAVRA (ex: "maga env prod X",
     // "read -p ...") via alvo cujo template deixa {{command}} SEM aspas
     // (ex: "bash -lc {{command}}") chegava truncado — o bash tratava só a
@@ -329,7 +1132,7 @@ private slots:
     {
         Command main;
         main.id = "main_multi";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         // Multi-palavra: sem o wrap, só "echo" rodaria e o resto sumiria.
         main.command = "echo alpha beta gamma";
         main.terminalTarget = "LocalBashNoQuote";
@@ -373,7 +1176,7 @@ private slots:
     {
         Command main;
         main.id = "ps_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo hi";
         main.terminalTarget = "PseudoPS";
 
@@ -415,7 +1218,7 @@ private slots:
     {
         Command main;
         main.id = "cmd_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo hi";
         main.terminalTarget = "PseudoCmd";
 
@@ -452,7 +1255,7 @@ private slots:
     {
         Command main;
         main.id = "posix_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo hi";
         main.terminalTarget = "PseudoPosix";
 
@@ -482,6 +1285,41 @@ private slots:
                  qPrintable(QStringLiteral("payload POSIX sem export -> [%1]").arg(combined)));
     }
 
+    // REGRESSÃO (bug reportado: "testei a lógica de export variveis... export
+    // TESTE=1 e não jogou a ENV pra saída, mesmo jogando o comando pra
+    // shell... para shell normal ainda não vai"). wrapForEnvCapture() sempre
+    // gerou sintaxe POSIX (`echo '...'` + `env`) não importa o sabor real do
+    // shell que ia executar o hook - o mesmo bug já corrigido uma vez em
+    // buildTargetedCommand() (injeção de env), nunca aplicado aqui (extração
+    // de env). `env` não existe nem em cmd.exe nem em PowerShell, e aspas
+    // simples são literais em ambos (não delimitador de string) - a captura
+    // simplesmente nunca funcionava fora de um alvo Posix/WSL. Testado
+    // diretamente (método privado, ver friend em execution-pipeline.h) pois
+    // esta CI só tem bash - não dá pra provar via execução de ponta a ponta
+    // que `Get-ChildItem`/`set` são sintaxe válida de PowerShell/cmd.
+    void wrapForEnvCaptureUsesRightSyntaxPerShellFlavor()
+    {
+        ExecutionPipeline pipeline;
+
+        const QString posix = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::Posix);
+        QVERIFY2(posix.contains(QStringLiteral("\necho '")) && posix.endsWith(QStringLiteral("\nenv")),
+                 qPrintable(QStringLiteral("Posix errado -> [%1]").arg(posix)));
+
+        const QString cmd = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::Cmd);
+        QVERIFY2(cmd.endsWith(QStringLiteral("\nset")),
+                 qPrintable(QStringLiteral("Cmd sem 'set' -> [%1]").arg(cmd)));
+        QVERIFY2(!cmd.endsWith(QStringLiteral("\nenv")),
+                 "Cmd não deveria depender do `env` POSIX (não existe em cmd.exe)");
+        QVERIFY2(!cmd.contains(QLatin1Char('\'')),
+                 qPrintable(QStringLiteral("Cmd com aspas simples (literais em cmd.exe, não delimitador) -> [%1]").arg(cmd)));
+
+        const QString ps = pipeline.wrapForEnvCapture(QStringLiteral("echo hi"), ShellFlavor::PowerShell);
+        QVERIFY2(ps.contains(QStringLiteral("Get-ChildItem Env:")),
+                 qPrintable(QStringLiteral("PowerShell sem Get-ChildItem Env: -> [%1]").arg(ps)));
+        QVERIFY2(!ps.contains(QStringLiteral("\nenv")),
+                 "PowerShell não deveria depender do `env` POSIX (não existe em pwsh)");
+    }
+
 
     // REGRESSÃO (bug reportado: rodar 2 TTYs fazia o 1º perder Stop/entrada e
     // deixava processo fantasma). Causa: UM slot único de runner — o 2º
@@ -502,18 +1340,18 @@ private slots:
 
         Command cleanupOk;
         cleanupOk.id = "cleanup_ok";
-        cleanupOk.type = CommandType::Shell;
+        cleanupOk.type = CommandType::Command;
         cleanupOk.command = QStringLiteral("touch '%1'").arg(okMark);
 
         Command cleanupFail;
         cleanupFail.id = "cleanup_fail";
-        cleanupFail.type = CommandType::Shell;
+        cleanupFail.type = CommandType::Command;
         cleanupFail.command = QStringLiteral("touch '%1'").arg(failMark);
 
         // --- caminho de SUCESSO ---
         Command good;
         good.id = "good_cmd";
-        good.type = CommandType::Shell;
+        good.type = CommandType::Command;
         good.command = "echo ok";
         good.hooks.cleanup = QStringList{"cleanup_ok"};
 
@@ -533,7 +1371,7 @@ private slots:
         // --- caminho de FALHA ---
         Command bad;
         bad.id = "bad_cmd";
-        bad.type = CommandType::Shell;
+        bad.type = CommandType::Command;
         bad.command = "exit 7";
         bad.hooks.cleanup = QStringList{"cleanup_fail"};
         all[bad.id] = bad;
@@ -560,12 +1398,12 @@ private slots:
 
         Command cleanup;
         cleanup.id = "cleanup_counter";
-        cleanup.type = CommandType::Shell;
+        cleanup.type = CommandType::Command;
         cleanup.command = QStringLiteral("echo x >> '%1'").arg(counter);
 
         Command main;
         main.id = "main_once";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "exit 3"; // falha -> passa pelo abort()
         main.hooks.cleanup = QStringList{"cleanup_counter"};
 
@@ -598,7 +1436,7 @@ private slots:
     {
         Command bad;
         bad.id = "bad_nl";
-        bad.type = CommandType::Shell;
+        bad.type = CommandType::Command;
         bad.command = "exit 9";
 
         QMap<QString, Command> all;
@@ -634,7 +1472,7 @@ private slots:
     {
         Command c;
         c.id = "c_missing_cleanup";
-        c.type = CommandType::Shell;
+        c.type = CommandType::Command;
         c.command = "echo ok";
         c.hooks.cleanup = QStringList{"nao_existe"};
 
@@ -654,11 +1492,11 @@ private slots:
     {
         Command a;
         a.id = "cmd_a";
-        a.type = CommandType::Shell;
+        a.type = CommandType::Command;
         a.command = "sleep 5";   // fica vivo
         Command b;
         b.id = "cmd_b";
-        b.type = CommandType::Shell;
+        b.type = CommandType::Command;
         b.command = "sleep 5";
 
         QMap<QString, Command> all;
@@ -697,8 +1535,9 @@ private slots:
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "pwd";
+        main.workingDirMode = WorkingDirMode::Custom;
         main.workingDir = tmp.path();
         main.terminalTarget = "LocalBash";
 
@@ -739,12 +1578,12 @@ private slots:
     {
         Command post;
         post.id = "post_fail";
-        post.type = CommandType::Shell;
+        post.type = CommandType::Command;
         post.command = "exit 3";
 
         Command main;
         main.id = "main_cmd";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo MARK_MAIN";
         main.hooks.post << post.id;
 
@@ -775,7 +1614,7 @@ private slots:
 
         Folder folder; folder.id = "f1"; folder.name = "F"; folder.terminalTarget = "Docker";
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "f1";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "f1";
         cmd.terminalTarget = "WSL";
 
         ExecutionPipeline pipeline;
@@ -790,7 +1629,7 @@ private slots:
         TerminalProfile docker; docker.name = "Docker"; docker.commandTemplate = "docker exec x {{command}}";
         Folder folder; folder.id = "f1"; folder.name = "F"; folder.terminalTarget = "Docker";
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "f1";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "f1";
         cmd.terminalTarget = kInheritTerminalTarget;
 
         ExecutionPipeline pipeline;
@@ -808,7 +1647,7 @@ private slots:
         Folder mid; mid.id = "mid"; mid.name = "Mid"; mid.parentId = "root";
         mid.terminalTarget = kInheritTerminalTarget;
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "mid";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "mid";
         cmd.terminalTarget = kInheritTerminalTarget;
 
         ExecutionPipeline pipeline;
@@ -828,7 +1667,7 @@ private slots:
         Folder root; root.id = "root"; root.name = "Root";
         root.terminalTarget = kInheritTerminalTarget; // raiz também herda -> nada concreto
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "root";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "root";
         cmd.terminalTarget = kInheritTerminalTarget;
 
         ExecutionPipeline pipeline;
@@ -848,7 +1687,7 @@ private slots:
 
         Folder folder; folder.id = "f1"; folder.name = "F"; folder.terminalTarget = QString(); // local
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "f1";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "f1";
         cmd.terminalTarget = kInheritTerminalTarget;
 
         ExecutionPipeline pipeline;
@@ -866,7 +1705,7 @@ private slots:
 
         Folder folder; folder.id = "f1"; folder.name = "F"; folder.terminalTarget = QString();
 
-        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Shell; cmd.folderId = "f1";
+        Command cmd; cmd.id = "c1"; cmd.type = CommandType::Command; cmd.folderId = "f1";
         cmd.terminalTarget = kInheritTerminalTarget;
 
         ExecutionPipeline pipeline;
@@ -891,7 +1730,7 @@ private slots:
     {
         Command main;
         main.id = "guarded_disabled";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo DEVERIA_RODAR";
         ExecutionCondition blocked;
         blocked.left = "{{TOKEN}}";
@@ -925,7 +1764,7 @@ private slots:
     {
         Command main;
         main.id = "guarded_mixed";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo NAO_DEVERIA_RODAR";
         ExecutionCondition disabled;
         disabled.left = "1";
@@ -962,7 +1801,7 @@ private slots:
     {
         Command main;
         main.id = "guarded";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo NAO_DEVERIA_RODAR";
         main.executionConditions = {ExecutionCondition{QString(), "{{TOKEN}}", "exists", QString()}};
 
@@ -1030,7 +1869,7 @@ private slots:
     {
         Command shellCmd;
         shellCmd.id = "guarded_shell";
-        shellCmd.type = CommandType::Shell;
+        shellCmd.type = CommandType::Command;
         shellCmd.command = "echo NAO_DEVERIA_RODAR";
         shellCmd.executionConditions = {ExecutionCondition{QString(), "{{TOKEN}}", "exists", QString()}};
 
@@ -1085,7 +1924,7 @@ private slots:
     {
         Command main;
         main.id = "guarded";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo NAO_DEVERIA_RODAR";
         main.executionConditions = {ExecutionCondition{"Token ausente", "{{TOKEN}}", "exists", QString()}};
 
@@ -1117,7 +1956,7 @@ private slots:
     {
         Command main;
         main.id = "guarded";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo NAO_DEVERIA_RODAR";
         main.executionConditions = {ExecutionCondition{QString(), "{{TOKEN}}", "exists", QString()}};
         main.conditionSkipBehavior = "failure";
@@ -1146,7 +1985,7 @@ private slots:
     {
         Command main;
         main.id = "guarded_or";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "echo DEVERIA_RODAR";
         // 1ª falsa (TOKEN não existe -> not_exists é FALSO pra vazio? não,
         // "exists" numa var vazia é falso) + 2ª verdadeira ("1" == "1").
@@ -1186,7 +2025,7 @@ private slots:
     {
         Command main;
         main.id = "opens_folder";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "exit 1"; // simula um comando que "falha" mas na verdade funcionou
         main.ignoreExitCode = true;
 
@@ -1210,7 +2049,7 @@ private slots:
     {
         Command main;
         main.id = "fails_normally";
-        main.type = CommandType::Shell;
+        main.type = CommandType::Command;
         main.command = "exit 1";
         // ignoreExitCode fica no default (false).
 
@@ -1234,7 +2073,7 @@ private slots:
     {
         Command bg;
         bg.id = "bg_opens_folder";
-        bg.type = CommandType::Shell;
+        bg.type = CommandType::Command;
         bg.command = "exit 1";
         bg.isBackground = true;
         bg.ignoreExitCode = true;
@@ -1266,6 +2105,173 @@ private slots:
         }
         QVERIFY2(!loggedAsError, "exit code != 0 com ignoreExitCode não deveria logar como erro");
     }
+
+    // ---- Diretório de trabalho com herança + PROJECT_PATH embutido ----------
+private:
+    struct RunOutput {
+        bool success = false;
+        QString text;
+    };
+    static RunOutput runInTree(const Command &main, const QVector<Folder> &folders,
+                               const QMap<QString, Command> &extraCommands = {},
+                               const QMap<QString, QString> &globalVars = {})
+    {
+        QMap<QString, Command> all = extraCommands;
+        all[main.id] = main;
+        EnvironmentManager env;
+        env.setGlobalVars(globalVars);
+        ExecutionPipeline pipeline;
+        pipeline.setFolders(folders);
+        QSignalSpy logSpy(&pipeline, &ExecutionPipeline::logMessage);
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, all, env);
+        RunOutput out;
+        if (!finishedSpy.wait(5000)) {
+            return out;
+        }
+        out.success = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success;
+        for (const QList<QVariant> &call : logSpy) {
+            out.text += call.at(1).toString();
+        }
+        return out;
+    }
+    static Folder makeFolder(const QString &id, const QString &parent = QString())
+    {
+        Folder f;
+        f.id = id;
+        f.name = id;
+        if (!parent.isEmpty()) {
+            f.parentId = parent;
+        }
+        return f;
+    }
+    static Command pwdCommand(const QString &folderId)
+    {
+        Command c;
+        c.id = "pwd_cmd";
+        c.type = CommandType::Command;
+        c.command = "pwd";
+        c.folderId = folderId;
+        return c;
+    }
+
+private slots:
+    void commandRunsInTheWorkingDirInheritedFromItsFolderChain()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString root = QDir(dir.path()).canonicalPath();
+        QVERIFY(QDir(root).mkpath("services/api"));
+
+        Folder project = makeFolder("proj");
+        project.isProject = true;
+        project.workingDirMode = WorkingDirMode::Custom;
+        project.workingDir = root;
+        Folder sub = makeFolder("sub", "proj");
+        sub.workingDirMode = WorkingDirMode::Custom;
+        sub.workingDir = "services/api"; // relativo: cola na raiz herdada
+        const QVector<Folder> folders{project, sub, makeFolder("deep", "sub")};
+
+        const RunOutput inherited = runInTree(pwdCommand("deep"), folders);
+        QVERIFY(inherited.success);
+        QVERIFY2(inherited.text.contains(root + "/services/api"), qPrintable(inherited.text));
+
+        Command own = pwdCommand("deep");
+        own.workingDirMode = WorkingDirMode::Custom;
+        own.workingDir = "..";
+        const RunOutput custom = runInTree(own, folders);
+        QVERIFY2(custom.text.contains(root + "/services\n") || custom.text.trimmed().endsWith(root + "/services"),
+                 qPrintable(custom.text));
+    }
+
+    // "O pai tem wd, mas o filho não quer ter": None corta a herança.
+    void noneWorkingDirDoesNotInheritTheParents()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString root = QDir(dir.path()).canonicalPath();
+        Folder project = makeFolder("proj");
+        project.workingDirMode = WorkingDirMode::Custom;
+        project.workingDir = root;
+        Folder child = makeFolder("child", "proj");
+        child.workingDirMode = WorkingDirMode::None;
+
+        const RunOutput out = runInTree(pwdCommand("child"), {project, child});
+        QVERIFY(out.success);
+        QVERIFY2(!out.text.contains(root), qPrintable(out.text));
+
+        Command none = pwdCommand("proj");
+        none.workingDirMode = WorkingDirMode::None;
+        QVERIFY(!runInTree(none, {project}).text.contains(root));
+    }
+
+    void projectPathIsComputedFromTheNearestProjectFolder()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString root = QDir(dir.path()).canonicalPath();
+        Folder project = makeFolder("proj");
+        project.isProject = true;
+        project.workingDirMode = WorkingDirMode::Custom;
+        project.workingDir = root;
+        const QVector<Folder> folders{project, makeFolder("sub", "proj")};
+
+        Command c = pwdCommand("sub");
+        c.command = "echo \"root=[{{PROJECT_PATH}}] env=[$PROJECT_PATH]\"";
+        const RunOutput out = runInTree(c, folders);
+        QVERIFY(out.success);
+        QVERIFY2(out.text.contains(QStringLiteral("root=[%1] env=[%1]").arg(root)), qPrintable(out.text));
+
+        // Fora de um projeto a variável não existe.
+        Folder plain = makeFolder("plain");
+        plain.workingDirMode = WorkingDirMode::Custom;
+        plain.workingDir = root;
+        Command outside = c;
+        outside.folderId = "plain";
+        QVERIFY2(runInTree(outside, {plain}).text.contains(QStringLiteral("root=[] env=[]")),
+                 "sem projeto, PROJECT_PATH não deve ser definida");
+    }
+
+    // A variável embutida tem a MENOR precedência: o usuário sempre vence.
+    void userDefinedProjectPathBeatsTheBuiltinOne()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Folder project = makeFolder("proj");
+        project.isProject = true;
+        project.workingDirMode = WorkingDirMode::Custom;
+        project.workingDir = QDir(dir.path()).canonicalPath();
+        Command c = pwdCommand("proj");
+        c.command = "echo \"pp=[{{PROJECT_PATH}}]\"";
+        const RunOutput out = runInTree(c, {project}, {}, {{"PROJECT_PATH", "/do/usuario"}});
+        QVERIFY2(out.text.contains(QStringLiteral("pp=[/do/usuario]")), qPrintable(out.text));
+    }
+
+    // Cleanup hooks rodam destacados, por outro caminho: também herdam.
+    void cleanupHookInheritsTheWorkingDirOfItsFolder()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString root = QDir(dir.path()).canonicalPath();
+        Folder project = makeFolder("proj");
+        project.workingDirMode = WorkingDirMode::Custom;
+        project.workingDir = root;
+
+        Command cleanup;
+        cleanup.id = "cleanup_cmd";
+        cleanup.type = CommandType::Command;
+        cleanup.command = "pwd > cleanup-ran.txt";
+        cleanup.folderId = "proj";
+        Command main = pwdCommand("proj");
+        main.command = "true";
+        main.hooks.cleanup << cleanup.id;
+
+        const RunOutput out = runInTree(main, {project}, {{cleanup.id, cleanup}});
+        QVERIFY(out.success);
+        QFile marker(root + "/cleanup-ran.txt"); // só existe se o cleanup rodou DENTRO do diretório herdado
+        QTRY_VERIFY_WITH_TIMEOUT(marker.exists(), 5000);
+    }
+
 };
 
 QTEST_MAIN(TestExecutionPipeline)

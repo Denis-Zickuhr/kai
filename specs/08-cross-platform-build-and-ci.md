@@ -40,6 +40,14 @@ docker compose run --rm build-linux                          # AppImage
 KAI_BUILD_INSTALLER=1 docker compose run --rm build-windows   # portable folder + installer
 ```
 
+- **`kai.com` (Windows only)** — `src/console-shim.cpp`, target `kai-console` (`OUTPUT_NAME kai`, `SUFFIX .com`, linked
+  static, WinAPI only): a console-subsystem program that runs the `kai.exe` next to it with the same command line, waits
+  and returns its exit code. `kai.exe` is GUI-subsystem and gets no output in some pseudo-console terminals (PhpStorm);
+  `.com` resolves before `.exe` in `PATHEXT`. Redirected std handles are passed through; console handles are NOT (the child
+  gets NULL and attaches to the shim's console); `kai` with no arguments and no console stdout is a launcher start: it
+  returns without waiting. Ctrl+C is swallowed by the shim (handler, not `SetConsoleCtrlHandler(NULL)`, which the child would
+  inherit). Both packaging scripts copy `kai.com` next to `kai.exe` and the NSIS installer kills it like `kai.exe`.
+  Cross-checked with MinGW+wine against a fake `kai.exe` (arguments with quotes, exit code, redirects, missing child).
 - **`build-linux`** (`packaging/docker/Dockerfile.linux`): builds natively
   on Ubuntu, then packages a self-contained `Kai-x86_64.AppImage` via
   `linuxdeploy`.

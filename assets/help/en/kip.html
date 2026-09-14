@@ -1,0 +1,103 @@
+<h2>KIP — app-like command interfaces</h2>
+<p><b>KIP</b> (Kai Interface Protocol) lets a command turn the output panel into a small <b>app</b>: instead of text, Kai shows forms, confirmations, lists, tables, progress bars, checklists and a result card with buttons. The program only prints JSON lines; Kai draws the interface.</p>
+<p>It fits wizards (deploy, restore, scaffolding, onboarding), logins that export a token, file conversion and lookups with a result table.</p>
+
+<h3>1. Turning it on</h3>
+<p>Open the command editor, <b>KIP</b> tab (command-type commands only, not HTTP), and tick <b>KIP interface</b> (or set <code>kip: true</code> in the file). <b>Open in its own window</b> (<code>kip_window: true</code>) shows the view in a separate window. <b>Close the window when it finishes</b> (<code>kip_auto_close: true</code>, with an optional delay in seconds) closes that window by itself after a <i>successful</i> run — made for quick scripts started with <code>kai -gw</code>; a failure or a cancel keeps it open so you can read the error.</p>
+<ul>
+<li>Kai <b>never changes your command</b>. If the tool needs a flag (<code>mytool deploy --kip</code>), write it in the command.</li>
+<li>The parameters form still runs first, and <code>{{VAR}}</code> works in the command.</li>
+<li>Kai sets <code>KIP_VERSION=1</code> and <code>KIP_LOCALE</code> (<code>en</code>/<code>pt</code>) in the program's environment.</li>
+<li>Background, interactive terminal, formatted output, Markdown, auto-run, schedule, auto-replies and export-from-environment are disabled for KIP commands, and a KIP command can't be used as a hook.</li>
+</ul>
+
+<h3>2. How the program talks to Kai</h3>
+<table>
+<tr><td><b>stdout</b></td><td>messages to Kai, one JSON object per line: <code>{"kip":1,"type":"..."}</code></td></tr>
+<tr><td><b>stdin</b></td><td>Kai's answers: <code>response</code>, <code>change</code>, <code>back</code>, <code>cancel</code></td></tr>
+<tr><td><b>stderr</b></td><td>free log, shown in <b>Details → Log</b></td></tr>
+</table>
+<p>The first message must be <code>hello</code>. If the process exits (or 10 seconds pass) before it, Kai shows <b>"This command doesn't support KIP"</b>. Stdout lines that aren't protocol go to the log.</p>
+<table>
+<tr><td><code>hello</code></td><td>handshake; names the app</td></tr>
+<tr><td><code>prompt</code></td><td>form with fields; wait for the answer</td></tr>
+<tr><td><code>confirm</code></td><td>yes/no (<code>danger</code> for destructive actions)</td></tr>
+<tr><td><code>patch</code> / <code>invalid</code></td><td>update fields while open / reject an answer with messages per field</td></tr>
+<tr><td><code>message</code>, <code>markdown</code></td><td>status card, formatted text</td></tr>
+<tr><td><code>progress</code>, <code>steps</code> + <code>step</code></td><td>bar (or indeterminate), live checklist</td></tr>
+<tr><td><code>table</code></td><td>read-only table (select a cell and press Ctrl+C)</td></tr>
+<tr><td><code>notify</code></td><td>system notification</td></tr>
+<tr><td><code>set_env</code></td><td>exports a declared variable</td></tr>
+<tr><td><code>chip_result</code></td><td>progress and outcome of a <b>chip</b> (see below)</td></tr>
+<tr><td><code>done</code></td><td>result screen with buttons: open URL (http/https), reveal in the file manager, copy</td></tr>
+</table>
+
+<h3>3. Field types</h3>
+<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code> and <code>flags</code>. Fields can be <code>required</code>, have a <code>default</code>, belong to a <code>group</code> and be <code>watch</code>ed: when the user changes a watched field Kai sends <code>change</code> and the program answers with a <code>patch</code> (this is how a second list depends on the first). Kai remembers the last answers of each prompt (never <code>secret</code>); turn it off with <code>remember: false</code>.</p>
+
+<h3>4. Chips and long lists</h3>
+<p><b>Chips</b> are small buttons under the fields of a prompt for <i>ephemeral</i> actions — "show the context of this branch", "sync", "delete". Clicking one does not answer the form: Kai sends <code>chip</code> to the program, which replies with <code>chip_result</code> messages (<code>running</code>, then <code>success</code> or <code>error</code>, with a Markdown <code>text</code>) shown in a box under the chips. The step stays open and an error never ends the session.</p>
+<ul>
+<li>A chip can ask for confirmation first (<code>confirm</code>, inside the box) and look destructive (<code>danger</code>).</li>
+<li><code>requires</code> keeps the chip disabled until the listed fields are filled.</li>
+<li>One chip runs at a time; close the box with the × button.</li>
+</ul>
+<p>For <code>list</code> and <code>table</code> fields, <code>searchable</code> forces (or hides) the filter box and <code>page_size</code> splits the items into pages with a "Page 2 of 5" bar. Pages apply to the filtered result and keep what you selected.</p>
+
+<h3>5. The <code>kai kip</code> helper</h3>
+<p>You don't need to write JSON by hand in shell scripts:</p>
+<pre>kai kip hello --title "Deploy"
+kai kip prompt --id env --title "Where to?" \
+  --field select env "Environment" --options dev,staging,prod --required
+read -r resp
+[ "$(kai kip get "$resp" type)" = cancel ] &amp;&amp; exit 130
+env=$(kai kip get "$resp" values.env)
+kai kip progress 50 "Uploading..."
+kai kip done --title "Deployed" --action open_url:"Open":https://example.com</pre>
+<p>It only prints messages and reads values: it needs no running app. <code>kai kip --help</code> lists every verb and option.</p>
+<p><b>Python, Node and PHP, no file:</b> set the command's <b>Language</b> to Python, Node or PHP and turn KIP on — the command text is the program, and Kai injects a <code>kip</code> module (<code>import kip</code> in Python; the global <code>kip</code> in Node, with top-level <code>await</code>; the class <code>Kip</code> in PHP):</p>
+<pre>import kip
+v = kip.prompt([{"name": "env", "type": "select", "options": ["dev", "prod"]}],
+               id="where", title="Where to?")
+kip.progress(50, "Deploying...")
+kip.done(title="Deployed to " + v["env"])</pre>
+<pre>$v = Kip::prompt([['name' => 'env', 'type' => 'select', 'options' => ['dev', 'prod']]],
+                 ['id' => 'where', 'title' => 'Where to?']);
+Kip::progress(50, 'Deploying...');
+Kip::done('Deployed to ' . $v['env']);</pre>
+<p><code>hello</code> is sent for you, output is unbuffered, Cancel exits with code 130 and Back raises <code>kip.Back</code> (<code>KipBack</code> in PHP). <code>{{VAR}}</code> is not replaced in this code; variables come from <code>os.environ</code> / <code>process.env</code> / <code>getenv()</code>. Your own script files (<code>python3 tool.py</code> in a Native command with KIP on) find the module too — see Languages.</p>
+
+<h3>5b. <code>kip</code> in the shell</h3>
+<p>Turn <b>KIP</b> on in a <b>Native</b> command that runs in a POSIX shell (Linux, macOS, WSL, other POSIX profiles): Kai defines a <code>kip</code> function with the same verbs as <code>kai kip</code> — <b>no <code>kai</code> binary needed</b>, so it works in WSL, containers and SSH. <code>hello</code> is sent for you, and <code>{{VAR}}</code> is replaced as in any native command.</p>
+<pre>kip prompt --id where --title "Where to?" --field select env Environment --options dev,staging,prod --required
+kip recv                          # the answer lands in $KIP_MSG (Cancel exits with 130)
+target=$(kip get "$KIP_MSG" values.env)
+kip progress 50 "Deploying..."
+kip done --title "Deployed to $target"</pre>
+<p><b>Limits:</b></p>
+<ul>
+<li>The helper is POSIX <code>sh</code> + <code>awk</code> (mawk, gawk and busybox work); the inline form also needs <code>base64</code> and <code>gzip</code>. No <code>jq</code>.</li>
+<li>Use <code>kip recv</code> in the main script, not inside <code>$( )</code>, or the answer is lost with the subshell; don't reuse the <code>_kip_*</code> names.</li>
+<li><code>kip raw</code> only checks the basic shape of the message; <code>kip get</code> prints exponent numbers as written and drops NUL bytes. Helper messages are in English.</li>
+<li>Windows without a POSIX profile (plain cmd.exe / PowerShell) has no <code>kip</code> function: use a WSL profile, or write the program in Python, Node or PHP. A text too long for the command line is written by Kai to a file of its own and loaded from there (shell, Python, Node and PHP alike).</li>
+</ul>
+
+<h3>6. Exporting variables</h3>
+<p>A program can set a dynamic variable with <code>set_env</code> only for names listed in the command's <b>Exportable variables</b> tab. The value is immediately available to other commands as <code>{{NAME}}</code>.</p>
+
+<h3>7. The view</h3>
+<ul>
+<li>One screen at a time, with a summary of your previous answers above it (secrets appear as ••••).</li>
+<li><b>Back</b> appears when the program allows it; <b>Cancel run</b> asks the program to stop (and stops it after 3 seconds).</li>
+<li>A destructive confirmation focuses the decline button, so Enter never confirms by accident.</li>
+<li><b>Details</b> (collapsed): the <b>Log</b> and the <b>Protocol</b> inspector with every message in both directions.</li>
+<li>The output panel's tab bar is hidden for KIP commands; the icon at the top-right of the view opens it in its own window.</li>
+<li>Failures, cancellation, unsupported and protocol errors show a card with the details open and <b>Run again</b>.</li>
+</ul>
+
+<h3>8. Settings and the creation manifesto</h3>
+<p><b>Settings → KIP</b> has the global preferences: how long to wait for the program's first message, for the answer to a field update and after <i>Cancel</i>; whether to remember the last answers; and whether the Details drawer opens by itself on failures; and the <b>Own-window size</b> — follow the general window setting, normal, maximized or fullscreen (it applies to KIP views only). Whether a command uses KIP is set in its own editor (command-type commands only, not HTTP).</p>
+<p><b>Help → Creation manifesto</b> copies, with one click, the guide to hand to an AI assistant so it writes a KIP program (or a <code>kai.yml</code>) for you.</p>
+
+<h3>9. In the terminal</h3>
+<p><code>kai -g &lt;command&gt;</code> runs a KIP command in the app and brings its view to the front. With <code>-w</code> (or <code>kip_window</code>) the view opens in its own window and the <b>main window is not shown</b>. In local mode (<code>kai</code> inside a folder with a <code>kai.yml</code>) KIP commands are refused: there is no interface to draw them.</p>

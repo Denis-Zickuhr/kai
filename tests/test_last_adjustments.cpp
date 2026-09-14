@@ -6,9 +6,9 @@
 #include <QLineEdit>
 #include <functional>
 
-#include "ui/command-tree-widget.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -98,7 +98,11 @@ private slots:
 
         CommandEditorDialog dialog(QStringLiteral("f_a"), {}, {folderA, folderB}, nullptr);
 
-        auto *folderCombo = dialog.findChildren<QComboBox *>().first();
+        // Não usa mais o primeiro QComboBox do tree: o card de identidade
+        // (onde este combo vive) foi movido para a posição 3 (pedido do
+        // usuário: Modo/Perfil -> topo, Command/body -> 2, Nome/ícones -> 3),
+        // então outro combo (ex.: PERFIL) pode aparecer antes dele agora.
+        auto *folderCombo = dialog.findChild<QComboBox *>(QStringLiteral("commandEditorFolderCombo"));
         QVERIFY(folderCombo != nullptr);
         // 3 itens agora: "(Raiz)" (folderId vazio) + as 2 pastas. A opção
         // Raiz foi adicionada (feedback do usuário: comando também vai à

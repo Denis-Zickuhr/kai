@@ -1,6 +1,7 @@
 #include "utils/path-format.h"
 
 #include <QRegularExpression>
+#include <QSettings>
 
 namespace kai::utils {
 
@@ -41,7 +42,7 @@ QString toPosixPath(const QString &path)
     return p;
 }
 
-QString toWindowsPath(const QString &path)
+QString toWindowsPath(const QString &path, const QString &wslDistro)
 {
     QString p = path.trimmed();
     if (p.isEmpty()) {
@@ -55,22 +56,62 @@ QString toWindowsPath(const QString &path)
         rest.replace(QLatin1Char('/'), QLatin1Char('\\'));
         return QStringLiteral("%1:\\%2").arg(m.captured(1).toUpper(), rest);
     }
-    // Sem prefixo /mnt/<letra>/ reconhecido (ex: /home/user/...): não há
-    // unidade Windows correspondente — só normaliza as barras, o melhor
-    // que dá pra fazer sem informação extra (ex: qual distro/mapeamento).
+    // Sem prefixo /mnt/<letra>/ (ex: /home/user/...): o path vive dentro do WSL.
+    // Sabendo a distro, o Windows o enxerga como UNC; sem ela, só normaliza as
+    // barras (não há unidade correspondente).
+    if (!wslDistro.isEmpty() && p.startsWith(QLatin1Char('/'))) {
+        p.replace(QLatin1Char('/'), QLatin1Char('\\'));
+        return QStringLiteral("\\\\wsl.localhost\\") + wslDistro + p;
+    }
     p.replace(QLatin1Char('/'), QLatin1Char('\\'));
     return p;
 }
 
-QString convertFilePathFormat(const QString &path, const QString &format)
+QString convertFilePathFormat(const QString &path, const QString &format, const QString &wslDistro)
 {
     if (format == QStringLiteral("posix")) {
         return toPosixPath(path);
     }
     if (format == QStringLiteral("windows")) {
-        return toWindowsPath(path);
+        return toWindowsPath(path, wslDistro);
     }
     return path; // "native" (ou qualquer valor desconhecido): sem conversão
+}
+
+QString wslDistroFromTemplate(const QString &commandTemplate, const QString &defaultDistro)
+{
+    static const QRegularExpression callsWsl(QStringLiteral(R"re((?:^|[\s"'\\/])wsl(?:\.exe)?(?=\s|$))re"),
+                                             QRegularExpression::CaseInsensitiveOption);
+    if (!callsWsl.match(commandTemplate).hasMatch()) {
+        return QString();
+    }
+    static const QRegularExpression distroFlag(
+        QStringLiteral(R"re((?:^|\s)(?:-d|--distribution)(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+)))re"));
+    const QRegularExpressionMatch m = distroFlag.match(commandTemplate);
+    if (m.hasMatch()) {
+        for (int i = 1; i <= 3; ++i) {
+            if (!m.captured(i).isEmpty()) {
+                return m.captured(i);
+            }
+        }
+    }
+    return defaultDistro;
+}
+
+QString defaultWslDistro()
+{
+#if defined(Q_OS_WIN)
+    QSettings lxss(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss"),
+                   QSettings::NativeFormat);
+    const QString guid = lxss.value(QStringLiteral("DefaultDistribution")).toString();
+    if (guid.isEmpty()) {
+        return QString();
+    }
+    lxss.beginGroup(guid);
+    return lxss.value(QStringLiteral("DistributionName")).toString();
+#else
+    return QString();
+#endif
 }
 
 } // namespace kai::utils

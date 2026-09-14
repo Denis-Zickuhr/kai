@@ -1,0 +1,62 @@
+<h2>Folders, tree &amp; search</h2>
+<h3>Folders and commands</h3>
+<p>Commands live inside <b>folders</b>. Each top-level folder becomes a <b>tab</b>; subfolders nest inside it. Create things from the <b>Item</b> menu, the side bar or the right-click menu: <b>New Folder</b>, <b>New Command</b>, <b>New Collection</b> (see <a href='help://collections'>Collections</a>).</p>
+<p>A folder can carry its own settings: name, icon, parent folder, the <a href='help://terminal_targets'>execution profile</a> its commands inherit, its own <a href='help://variables'>variables</a> and a <a href='help://cli'>CLI path</a>. A folder also has a <b>working directory</b>, inherited by its subfolders and commands: each one can inherit it, set its own (a relative path is resolved over the inherited one) or choose <i>None</i> to cut the inheritance. A project imported from a <a href='help://kai_json'>kai.yml</a> becomes a project folder whose working directory is the project root; <code>{{PROJECT_PATH}}</code> is always the root of the nearest project folder.</p>
+<h3>Syncing a project folder with its file</h3>
+<p>A project folder can be kept in step with a <code>kai.yml</code> in its working directory, <b>by hand</b>: right-click the folder and choose <b>Sync Kai → File</b> or <b>Sync File → Kai</b>. Nothing runs on its own.</p>
+<ul>
+<li><b>Kai → File</b> writes the folder's subfolders and commands to the file. The file is always <code>kai.yml</code> (a <code>kai.json</code> is neither read nor touched). It is written by <b>path and name, without ids</b>: loading it keeps the id, remembered values and links of whatever stays in place with the same name (renaming makes a new item). Variables marked <b>Secret</b> are written by name only — their value stays in your Kai.</li>
+<li><b>File → Kai</b> replaces everything <i>inside</i> the folder with the file's content (the folder itself stays).</li>
+<li>After each sync Kai remembers what both sides looked like. If the side that would be <b>overwritten</b> changed since then — or was never synced — you're asked to confirm first, with the counts of what would be replaced.</li>
+<li><b>File → Kai</b> reads both a hand-written project file (the <a href='help://kai_json'>kai.yml</a> format: <code>folder</code> paths, hooks by name, no ids) and the format <b>Kai → File</b> writes. It never modifies the file. <b>Kai → File</b> also writes the folder's variables and folder actions (with expansion and groups) — global actions stay in Settings. <b>Collections are never written</b>: a select parameter keeps only the collection's <b>name</b> as a reference, matched by name with your collections when the file is loaded (not found = reported, the parameter is left without a source). An action pointing to a command outside the project is written by its name. Remembered parameter values never go. Collections defined inside a file are not imported by the sync and are reported as skipped.</li>
+<li><b>Kai → File</b> always writes Kai's own export format, so over a hand-written file it asks first and replaces it.</li>
+<li><b>Out-of-sync mark:</b> a project folder that has been synced before gets an <b>amber dot</b> on its icon (with a tooltip saying what changed) when Kai changed and the file doesn't have it yet, when the file changed (or disappeared) and Kai doesn't have it, or both. Kai checks when it opens, when the window regains focus, after you save changes and after a sync — it doesn't watch the file. Running a command (remembered parameter values) doesn't count as a change. A folder that was never synced isn't marked.</li>
+</ul>
+<h3>Folder actions</h3>
+<p>An <b>action</b> is an existing command mapped to appear as an icon on a folder's row — handy for <code>git fetch</code>, <code>pull</code> or <code>status</code>, which you want to run <i>on this folder</i>.</p>
+<ul>
+<li><b>Per folder:</b> edit the folder → <b>Actions</b> tab, which works like the dynamic parameters: <b>Add action</b> and the count outside the table, a table with just the names (drag to reorder, pencil to edit, trash to remove) and a small form to pick the command. They show <b>left to right, in registration order</b>, at the <b>end of the row, after the time marker</b>.</li>
+<li><b>For every folder:</b> <b>Settings → Actions</b>, each one optionally limited to <b>project folders</b>. Global ones come first, then the folder's own.</li>
+<li>Actions appear on <b>subfolders</b>; a top-level folder is a tab and has no row.</li>
+<li><b>Expansion actions:</b> in the action's form, turn on <b>Expansion action</b> for the useful-but-not-so-much ones. Instead of an icon, they stay hidden behind a single <b>expand symbol</b> (chevron) at the end of the row; clicking it opens a menu with them. They behave exactly like the others (click runs, loads or shows the output; right-click for the same menu) — they just live somewhere else.</li>
+<li><b>Groups:</b> type a <b>Group</b> in the action's form (a theme, like “Git” or “Docker”) and, optionally, pick a <b>group icon</b> (without one, a default is used). Actions of the same group share <b>one icon</b> on the row that opens a menu with them. A group is one thing across global and folder actions (same name, any capitalization), and its icon applies to all its actions. An action in a group doesn't need the expansion flag — the group is its place. Order on the row: plain icons, then one icon per group, then the expand symbol.</li>
+<li><b>Click an icon:</b> if the action never ran, it runs; if it already ran and isn't loaded, the click <b>loads</b> its saved output; with the output <b>loaded</b>, hovering shows a play glyph and the click <b>runs it again</b>. Whenever the click will only <i>show</i> an output (running, or it ran and isn't loaded yet), hovering shows an <b>eye</b> instead, so it is clear nothing will execute. While running, a click just shows the output. It runs with that folder as context: the working directory becomes the folder's, and the folder's variables and terminal profile apply. A command with parameters asks for them as usual; KIP commands work as actions too and show their KIP interface in the output panel.</li>
+<li>The icon is <b>green while it runs</b> on that folder, accent when idle. The same action can run on several folders <b>at the same time</b>, each with its own output.</li>
+<li>The output opens in the output panel and the icon is <b>focused</b>; it's kept in memory per action and folder. Click elsewhere on the same row to unfocus — the saved output stays.</li>
+<li>Folder exports carry actions <b>by command name</b>; <b>Global actions</b> is its own item in the global export/import, matched by unique command name on import. If the actions use commands that live <b>outside</b> the exported folder, <b>Folder actions</b> (on by default) carries those commands too: on import, the ones you don't have yet go into an <b>Imported actions</b> folder and the actions get linked to them; a command you already have with the same name is reused, not copied.</li>
+</ul>
+<h3>Folder documentation</h3>
+<p>Select a folder and the <b>Output</b> area shows its documentation: the <b>README.md</b> in the folder's working directory opens by itself, with nothing to configure. Without a README, the first document found there opens instead; in a folder with no documents at all, a button in the middle creates the <b>README.md</b>. The tree of files and notes starts collapsed — open it with the first button on the top bar.</p>
+<ul>
+<li><b>Links:</b> a relative link to another .md opens it right there; the bar on top has <b>back / forward</b>, the clickable <b>path</b> and a button for the <b>tree of the folder's documents</b>. The <b>zoom</b> stays on that bar.</li>
+<li><b>Kai links</b> redirect to Kai itself: <code>[Start](kai:run/Dev server)</code> runs a command (after asking you), <code>kai:open/Name</code> selects a command or folder and <code>kai:env/Name</code> switches the environment (also after asking). A name with spaces works as is.</li>
+<li><b>Diagrams:</b> a <code>```mermaid</code> block with a <code>graph TD</code> / <code>flowchart LR</code> is drawn as a diagram; other diagram types stay as code.</li>
+</ul>
+<h3>Files, editing and notes in the documentation</h3>
+<ul>
+<li><b>File explorer:</b> the side panel opens by itself when the folder has other files. Search by name, the funnel chooses the file types shown (default: <code>.md</code>, <code>.txt</code> and files without extension; the menu lists the extensions found), and the file-plus button creates a new file in the selected folder.</li>
+<li><b>Editing:</b> the <b>pencil</b> next to the magnifier turns the viewer into an editor with syntax colors, line numbers, auto-indent and live validation for JSON, YAML and XML. <b>Save</b> (Ctrl+S) and <b>Discard</b> sit next to it; leaving the file with unsaved changes asks first.</li>
+<li><b>Editor shortcuts (VS Code style):</b> <b>Alt+↑/↓</b> move lines, <b>Shift+Alt+↑/↓</b> copy them, <b>Ctrl+Shift+K</b> delete, <b>Ctrl+Enter</b> new line below, <b>Ctrl+L</b> select line, <b>Ctrl+/</b> comment, <b>Ctrl+D</b> add the next occurrence to the selection (multi-cursor), <b>Ctrl+Shift+L</b> select all occurrences, <b>Ctrl+Alt+↑/↓</b> or <b>Alt+click</b> add a cursor, <b>Shift+Alt+drag</b> column selection, <b>Esc</b> back to one cursor, <b>Ctrl+Shift+\\</b> matching bracket, <b>Ctrl+G</b> go to line, <b>Shift+Alt+F</b> format, <b>Ctrl+H</b> replace. Brackets and quotes close themselves.</li>
+<li><b>Tools</b> (wand): format, minify, sort keys, escape, validate, convert JSON ⇄ YAML/XML, Base64/URL, sort lines, remove duplicates, case. They act on the selection, or on the whole text.</li>
+<li><b>Notes:</b> <b>New Note</b> (right-click menu) creates quick text kept inside Kai — a Markdown, text, JSON, YAML or XML note — shown in the tree with a notebook icon and in a <b>Notes</b> section below the files of the folder. A note is <b>local</b> by default (only this Kai); turn that off in <b>Note Properties</b> and it travels with exports and the project file (<code>notes:</code> in <code>kai.yml</code>).</li>
+<li>A <b>hidden</b> command run by schedule, auto-run or <code>kai run</code> runs quietly: it does not open the output nor create a tab. Click it (with hidden items shown) and you see its output as usual.</li>
+</ul>
+<h3>The right-click menu</h3>
+<p>On a command: <b>Edit</b>, <b>Duplicate</b>, <b>Export…</b>, <b>Delete</b> (<b>Export…</b> opens the export dialog already pointing at that item). On a folder: the same, plus <b>Hide / Show Folder</b> (and, on a project folder, the sync actions above). The same menu opens from the keyboard (<b>Ins</b> by default). <b>Run</b>, <b>Stop</b> (terminate), <b>Force stop</b> and <b>Reset and restart</b> are in the action side bar.</p>
+<h3>Search</h3>
+<p><b>Ctrl+F</b> shows the search bar; it filters commands by name with a fuzzy match (typos and gaps are fine). Press it again to hide. Searching opens the folders that hold a match; when you stop searching, every folder goes back to <b>how it was</b> before (no tree left wide open).</p>
+<h3>Order, hiding and filtering</h3>
+<ul>
+<li><b>Order:</b> the command editor has an <b>Order</b> field. Lower numbers come first; <i>automatic</i> sorts by name.</li>
+<li><b>Hide:</b> hidden items leave the tree until <b>Show hidden items</b> is on. Hide a command from its editor or a folder from the menu.</li>
+<li><b>Show only running commands:</b> a quick filter for what is running right now. Root folders (tabs) with nothing running <b>disappear</b> while it is on, and folders go back as they were when you turn it off.</li>
+<li><b>Expand / collapse</b> the selected folder or everything.</li>
+</ul>
+<h3>Editing</h3>
+<ul>
+<li>Every editor has a <b>Simple</b> and an <b>Advanced (JSON)</b> mode; <b>Ctrl+E</b> switches an open editor.</li>
+<li><b>Edit body (quick)</b> in the side bar opens just the body of an HTTP command.</li>
+<li>Icons come from the built-in set or any image file you pick.</li>
+<li><b>Duplicate</b> copies a command, a folder or a collection.</li>
+</ul>
+<div class='tip'>Every action here has a keyboard shortcut you can change — see <a href='help://shortcuts'>Keyboard shortcuts</a>. <b>Settings → Storage</b> lists, duplicates and deletes many items at once.</div>

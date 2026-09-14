@@ -31,9 +31,26 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
         {QStringLiteral("action.context_menu"), QStringLiteral("settings.shortcut.context_menu"),
          QStringLiteral("settings.shortcut.context_menu.desc"), {QStringLiteral("Ins")}, ShortcutScope::TreeWidget},
         {QStringLiteral("action.focus_output"), QStringLiteral("settings.shortcut.focus_output"),
-         QStringLiteral("settings.shortcut.focus_output.desc"), {QStringLiteral("Ctrl+`")}, ShortcutScope::Window},
+         QStringLiteral("settings.shortcut.focus_output.desc"), {QStringLiteral("Ctrl+'")}, ShortcutScope::Window},
+        // Alternar entre as guias da barra de saídas (ver OutputTabsBar). Window: vale com o foco em qualquer lugar da
+        // janela; o QShortcut vence o Ctrl+Tab embutido dos QTabWidget da árvore.
+        {QStringLiteral("action.next_output"), QStringLiteral("settings.shortcut.next_output"),
+         QStringLiteral("settings.shortcut.next_output.desc"), {QStringLiteral("Ctrl+Tab")}, ShortcutScope::Window},
+        {QStringLiteral("action.previous_output"), QStringLiteral("settings.shortcut.previous_output"),
+         QStringLiteral("settings.shortcut.previous_output.desc"), {QStringLiteral("Ctrl+Shift+Tab")}, ShortcutScope::Window},
         {QStringLiteral("action.toggle_edit_mode"), QStringLiteral("settings.shortcut.toggle_edit_mode"),
          QStringLiteral("settings.shortcut.toggle_edit_mode.desc"), {QStringLiteral("Ctrl+E")}, ShortcutScope::Window},
+        // Pedido do usuário: "quero um novo atalho, funcionara na janela
+        // normal apenas [não global], se definido, ao apertar ocultar, por
+        // padrão vai ser esc" — DIFERENTE do atalho GLOBAL (globalHotkey,
+        // Ctrl+Shift+B por padrão), que funciona mesmo com o Kai sem foco;
+        // este é um QShortcut comum, só dispara com a janela ATIVA. Handler
+        // (ver MainWindow::setupActionShortcuts) deliberadamente não faz
+        // nada se o foco estiver dentro de um terminal INTERATIVO — Esc é
+        // uma tecla de uso comum lá dentro (ex: sair do modo de inserção do
+        // vim) e não pode ser sequestrada.
+        {QStringLiteral("action.hide_window"), QStringLiteral("settings.shortcut.hide_window"),
+         QStringLiteral("settings.shortcut.hide_window.desc"), {QStringLiteral("Esc")}, ShortcutScope::Window},
 
         // --- Já eram data-driven (grupos Item/Exibição/Execução) ---
         {QStringLiteral("action.new_collection"), QStringLiteral("settings.shortcut.new_collection"),
@@ -62,6 +79,8 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
          QStringLiteral("settings.shortcut.hide_selected.desc"), {}, ShortcutScope::Window},
         {QStringLiteral("action.show_hidden"), QStringLiteral("settings.shortcut.show_hidden"),
          QStringLiteral("settings.shortcut.show_hidden.desc"), {}, ShortcutScope::Window},
+        {QStringLiteral("action.show_running_only"), QStringLiteral("settings.shortcut.show_running_only"),
+         QStringLiteral("settings.shortcut.show_running_only.desc"), {}, ShortcutScope::Window},
     };
     return specs;
 }

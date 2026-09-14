@@ -7,7 +7,7 @@ multi-step tasks — one global shortcut away. It injects variables based on
 the active project, streams output live, and never leaves orphaned
 processes behind.
 
-**Status: beta.** It works and is used daily, but the UI and config file
+**Status: beta!.** It works and is used daily, but the UI and config file
 format may still change between versions.
 
 ---
@@ -18,7 +18,7 @@ format may still change between versions.
 
 | Type | What it does |
 |---|---|
-| **Shell** | Runs commands and scripts, with incremental output and ANSI colors. Supports long-running background processes and a real interactive terminal (TUI) for full-screen apps like vim, htop, or a nested Claude Code. |
+| **Command** | Runs a shell line or script — or **Python, Node or PHP code** written directly in the command, with no `python3 -c "..."` quoting — with incremental output and ANSI colors. Supports long-running background processes and a real interactive terminal (TUI) for full-screen apps like vim, htop, or a nested Claude Code. |
 | **HTTP** | REST requests with method, headers, body and query. Response with a navigable JSON tree, headers, timing and size, plus a "Request" tab showing exactly what was sent. |
 
 - **Tracked processes:** lists what's running with its PID, lets you attach
@@ -58,7 +58,7 @@ format may still change between versions.
 - **Collections:** your own tabular data sources (customers, environments,
   whatever you need), usable as the source of a select parameter.
 - **Import:** a pasted `curl` command, an OpenAPI/Swagger spec in JSON, or a
-  `kai.json` at the root of a project — including automatic detection of
+  `kai.yml` at the root of a project — including automatic detection of
   npm, Docker Compose, Python and Composer/Makefile projects that don't
   have one yet.
 
@@ -136,7 +136,7 @@ use `QT_QPA_PLATFORM=offscreen`.
 
 ---
 
-## The `kai.json` file
+## The `kai.yml` file
 
 Placed at the root of a project, it's imported automatically along with its
 commands and variables:
@@ -152,21 +152,24 @@ commands and variables:
   "commands": [
     {
       "name": "Dev Server",
-      "type": "shell",
+      "type": "command",
       "command": "npm run dev",
       "is_background": true
     },
     {
       "name": "Migrations",
-      "type": "shell",
+      "type": "command",
       "command": "npm run db:migrate"
     }
   ]
 }
 ```
 
-A full guide for generating one (by hand or with an AI model) lives in
-[`docs/manifesto/kai-json-manifesto.md`](docs/manifesto/kai-json-manifesto.md).
+A full guide for writing one in YAML (by hand or with an AI model) lives in
+[`assets/manifesto/kai-manifesto.md`](assets/manifesto/kai-manifesto.md)
+(and, for programs that talk KIP,
+[`assets/manifesto/kip-manifesto.md`](assets/manifesto/kip-manifesto.md)). Both can be
+read and copied with one click from **Help → Creation manifesto**.
 There's also a ready-made sample project in [`sample/`](sample/README.md).
 
 ---
@@ -178,17 +181,17 @@ The same content is in the built-in help, under the **Help** menu, with
 search.
 
 Getting started: [overview](docs/overview.md) ·
-[shell commands](docs/commands-shell.md) · [HTTP commands](docs/commands-http.md) ·
+[commands](docs/commands.md) · [HTTP commands](docs/commands-http.md) ·
 [variables](docs/variables.md) · [environments](docs/environments.md) ·
-[hooks](docs/hooks.md) · [CLI](docs/cli.md)
+[Languages](docs/languages.md) · [hooks](docs/hooks.md) · [CLI](docs/cli.md)
 
 Import: [cURL](docs/import-curl.md) · [OpenAPI](docs/import-openapi.md) ·
-[kai.json](docs/kai-json.md)
+[kai.yml](docs/kai-yml.md)
 
 Advanced: [terminal targets & WSL](docs/terminal-targets-wsl.md) ·
-[collections & parameters](docs/collections-and-params.md) ·
+[parameters](docs/parameters.md) · [collections](docs/collections.md) ·
 [dynamic variables](docs/dynamic-vars.md) · [themes](docs/themes.md) ·
-[shortcuts](docs/shortcuts.md)
+[shortcuts](docs/shortcuts.md) · [KIP (app-like command interfaces)](docs/kip.md)
 
 Not yet implemented: [feature backlog](docs/roadmap-ideas.md).
 

@@ -5,6 +5,7 @@
 #include <QRegularExpression>
 
 #include "core/models.h"
+#include "core/environment-manager.h"
 
 namespace kai::engine {
 
@@ -34,7 +35,13 @@ public:
         int ruleIndex = -1; // índice da regra que casou (para log)
     };
 
-    explicit OutputResponderMatcher(const QVector<core::OutputResponder> &responders);
+    // `envManager` (opcional — nulo = sem interpolação, ex: testes que não
+    // têm um EnvironmentManager à mão) permite {{VAR}} na resposta, além
+    // dos grupos \1..\9 já suportados (feedback do usuário: auto-
+    // responsores não suportavam interpolação de envs — ex: responder um
+    // prompt de senha com {{DB_PASSWORD}} em vez de hardcoded no pattern).
+    explicit OutputResponderMatcher(const QVector<core::OutputResponder> &responders,
+                                    core::EnvironmentManager *envManager = nullptr);
 
     // Ingere um chunk de saída e retorna as respostas a enviar (na ordem).
     // Pode retornar 0, 1 ou várias (se o chunk trouxe vários prompts).
@@ -52,6 +59,7 @@ private:
                                 const QRegularExpressionMatch &match);
 
     QVector<Rule> m_rules;
+    core::EnvironmentManager *m_envManager = nullptr;
     QString m_buffer;
     int m_scanFrom = 0; // cursor: não recasa antes disto
 };

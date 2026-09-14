@@ -5,10 +5,10 @@
 #include <QToolButton>
 #include <QPushButton>
 
-#include "ui/command-tree-widget.h"
-#include "ui/action-sidebar.h"
-#include "ui/item-actions-bar.h"
-#include "ui/fuzzy-search.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/action-sidebar.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/shared/fuzzy-search.h"
 #include "core/models.h"
 #include "utils/translation-manager.h"
 
@@ -74,11 +74,12 @@ private slots:
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_1"));
         QVERIFY(tree != nullptr);
-        // Duas colunas agora: [0] ícone+nome (com estrutura de árvore) e
-        // [1] indicador de status "rodando" grande e separado (feedback do
-        // usuário). Os controles inline permanecem removidos (viraram row
-        // actions na ActionSidebar).
+        // Colunas: [0] ícone+nome (com estrutura de árvore) e [1] indicador de status
+        // "rodando" grande e separado (feedback do usuário), que também leva os ícones das
+        // AÇÕES nas linhas de pasta. Os controles inline permanecem removidos (viraram
+        // row actions na ActionSidebar): nada de widget dentro das células.
         QCOMPARE(tree->columnCount(), 2);
+        QVERIFY(!tree->isColumnHidden(1));
         QVERIFY(tree->itemWidget(tree->topLevelItem(0), 0) == nullptr);
         QVERIFY(tree->itemWidget(tree->topLevelItem(0), 1) == nullptr);
     }

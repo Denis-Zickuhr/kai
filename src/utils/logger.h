@@ -61,6 +61,18 @@ public:
     // Caminho do arquivo de log ativo (vazio se a persistência não foi
     // habilitada ou falhou).
     static QString logFilePath();
+
+    // Desliga qDebug/qInfo/qWarning/qCritical (terminal) sem afetar o
+    // arquivo de log — usado pelo runner de CLI Path local (`kai <path>`),
+    // que roda como um comando de linha de comando enxuto: a saída do
+    // PRÓPRIO comando do usuário deve ser a única coisa impressa, sem os
+    // logs internos "[Kai][...]" do app aparecerem junto (pedido do
+    // usuário, com exemplo real: "kai ping" mostrando ProjectSelector/
+    // ExecutionPipeline/ProcessRunner antes do "pong" — ninguém que roda um
+    // atalho de terminal espera ruído de diagnóstico interno). Continua
+    // true por padrão (GUI/instância normal quer ver os logs no terminal
+    // de onde foi lançada, como sempre).
+    static void setConsoleOutputEnabled(bool enabled);
 };
 
 } // namespace kai::utils

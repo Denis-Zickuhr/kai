@@ -1,0 +1,28 @@
+<h2>Parâmetros</h2>
+<p><b>Parâmetros</b> pedem valores num formulário <i>antes</i> de um comando rodar. Adicione na aba <b>Parâmetros</b> do editor do comando; cada um vira <code>{{nome}}</code> no comando (ou na URL, nos headers e no body de um comando HTTP; em código Python/Node ele chega como variável de ambiente).</p>
+<h3>Tipos</h3>
+<table>
+<tr><td><b>text</b></td><td>uma linha de texto</td></tr>
+<tr><td><b>textarea</b></td><td>texto com várias linhas que cresce conforme você digita</td></tr>
+<tr><td><b>number</b></td><td>um campo numérico</td></tr>
+<tr><td><b>bool</b></td><td>um interruptor (inserido como true/false)</td></tr>
+<tr><td><b>select</b></td><td>uma opção de uma lista fixa (opcionalmente <b>multi-seleção</b>, unida por vírgulas) <i>ou</i> uma entrada de uma <a href='help://collections'>coleção</a></td></tr>
+<tr><td><b>file</b></td><td>um seletor de arquivo ou pasta (veja abaixo)</td></tr>
+<tr><td><b>json</b></td><td>um editor de trecho com realce de sintaxe, útil para bodies</td></tr>
+<tr><td><b>date</b></td><td>um seletor de data para data, hora ou as duas, opcionalmente um intervalo</td></tr>
+</table>
+<h3>Opções comuns</h3>
+<ul>
+<li><b>Rótulo</b> e <b>valor padrão</b>. O Kai lembra os últimos valores usados e preenche de novo; as opções de um select são ordenadas pelo uso mais recente.</li>
+<li><b>Obrigatório</b> coloca um asterisco e bloqueia o OK até ser preenchido.</li>
+<li><b>Opcional</b> esconde o campo atrás de uma caixa (<i>Informar &lt;rótulo&gt;?</i>) para um formulário longo continuar curto; só vale quando marcada.</li>
+<li><b>Grupo</b> — dê o mesmo nome de grupo a vários parâmetros para dobrá-los numa seção.</li>
+<li><b>Descrição</b> aparece no <code>--help</code> da CLI (veja <a href='help://cli'>CLI</a>).</li>
+</ul>
+<h3>Arquivo e pasta</h3>
+<p>O <b>Modo de seleção</b> escolhe arquivo, pasta ou <i>ambos</i> (perguntado ao executar). O seletor abre na última pasta que você usou em qualquer lugar do Kai. O <b>Formato do caminho</b> converte o que o sistema devolve: <code>native</code>, <code>posix</code> (<code>/mnt/c/...</code>) ou <code>windows</code> (<code>C:\...</code>) — útil quando um Kai do Windows roda comandos no WSL.</p>
+<h3>Data</h3>
+<p><b>O campo de data mostra</b> data, hora ou data e hora. Com <b>Intervalo</b>, <code>{{nome}}</code> é o início e <code>{{nome.end}}</code> o fim. O <b>Formato de colagem</b> escolhe como o valor é escrito: ISO, BR (15/01/2024), US, hora 24h, Unix em segundos ou milissegundos, ou um modelo próprio (<code>yyyy-MM-dd HH:mm</code>).</p>
+<h3>Select ligado a uma coleção</h3>
+<p>Escolher uma entrada injeta o campo exibido como <code>{{nome}}</code> <i>e</i> cada campo da entrada como <code>{{nome.campo}}</code> — veja <a href='help://collections'>Coleções</a>.</p>
+<div class='tip'>Na linha de comando os parâmetros obrigatórios são posicionais e os opcionais são <code>--nome=valor</code> — veja <a href='help://cli'>CLI</a>.</div>

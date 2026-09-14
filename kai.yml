@@ -1,0 +1,206 @@
+project_name: "Kai (dev)"
+icon: terminal
+env_vars:
+  KAI_DEV_CONTAINER: kai-dev
+  KAI_BUILD_DIR: dist/dev
+
+folders:
+  - path: Dev
+    icon: container
+    cli_path: dev
+    cli_description: Dev container and the Kai running inside it
+  - path: Tests
+    icon: flask-conical
+    cli_path: test
+    cli_description: Qt Test suite
+  - path: Release
+    icon: rocket
+    cli_path: release
+    cli_description: Packaging and publishing
+
+commands:
+  # --- Dev ------------------------------------------------------------------
+  - name: Start dev container
+    folder: Dev
+    cli_path: up
+    description: Starts the kai-dev container (docker compose up). Its main process is docker/watch.sh, which rebuilds and relaunches the app on every change.
+    type: command
+    icon: power
+    command: docker compose -f docker/docker-compose.yml up
+
+  - name: Stop dev container
+    folder: Dev
+    cli_path: down
+    description: Stops and removes the kai-dev container.
+    type: command
+    icon: power-off
+    command: docker compose -f docker/docker-compose.yml down
+
+  - name: Run Kai with auto-reload
+    folder: Dev
+    cli_path: watch
+    description: Runs docker/watch.sh in the container, rebuilding and relaunching Kai on every change under src/.
+    type: command
+    icon: eye
+    command: docker exec {{KAI_DEV_CONTAINER}} bash docker/watch.sh
+    is_background: true
+
+  - name: Run Kai once
+    folder: Dev
+    cli_path: once
+    description: Starts the already built Kai in the container, without watching for changes. Log in /tmp/kai.log inside the container.
+    type: command
+    icon: play
+    command: docker exec -d {{KAI_DEV_CONTAINER}} bash -c "cd /workspace/{{KAI_BUILD_DIR}} && ./bin/kai > /tmp/kai.log 2>&1"
+
+  - name: List Kai processes in the container
+    folder: Dev
+    cli_path: procs
+    description: Shows the Kai processes running inside the container, with their PIDs (use with `kai dev stop`).
+    type: command
+    icon: search
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "ps aux | grep '/workspace/{{KAI_BUILD_DIR}}/bin/kai' | grep -v grep"
+
+  - name: Stop a Kai process in the container
+    folder: Dev
+    cli_path: stop
+    description: Kills one Kai process inside the container by PID.
+    type: command
+    icon: circle-stop
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "kill {{pid}}"
+    params:
+      - name: pid
+        label: Process PID
+        description: PID of the Kai process to kill (see `kai dev procs`).
+        type: text
+
+  # --- Tests ----------------------------------------------------------------
+  - name: Run the full test suite
+    folder: Tests
+    cli_path: all
+    description: Runs every Qt Test through ctest in the container, printing the output of failed tests.
+    type: command
+    icon: list-checks
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ctest --test-dir {{KAI_BUILD_DIR}} --output-on-failure"
+
+  - name: Run a single test
+    folder: Tests
+    cli_path: one
+    description: Runs a single test binary from the repository root, so tests that look up assets/ find them.
+    type: command
+    icon: flask-conical
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ./{{KAI_BUILD_DIR}}/bin/{{test}}"
+    params:
+      - name: test
+        label: Test binary
+        description: Name of the test binary in dist/dev/bin, e.g. test_cli_completion.
+        type: text
+        optional: true
+        default: test_i18n_sync
+
+  - name: Check translations
+    folder: Tests
+    cli_path: i18n
+    description: Runs test_i18n_sync, which fails on keys missing from a language pack or not used by any code.
+    type: command
+    icon: languages
+    command: docker exec {{KAI_DEV_CONTAINER}} bash -c "cd /workspace && ./{{KAI_BUILD_DIR}}/bin/test_i18n_sync"
+
+  # --- Release --------------------------------------------------------------
+  - name: Build Linux AppImage
+    folder: Release
+    cli_path: linux
+    description: Builds the Linux AppImage in a container; the output goes to dist/.
+    type: command
+    icon: package
+    command: docker compose run --rm build-linux
+
+  - name: Build Windows package
+    folder: Release
+    cli_path: windows
+    description: Cross-compiles the portable Windows build plus the installer; the output goes to dist/.
+    type: command
+    icon: package
+    command: KAI_BUILD_INSTALLER=1 docker compose run --rm build-windows
+
+  - name: Show current release
+    folder: Release
+    cli_path: current
+    description: Shows the latest tag's GitHub release and its published assets.
+    type: command
+    icon: eye
+    command: gh release view "$(git describe --tags --abbrev=0)" --json tagName,assets
+
+  - name: Publish a release (KIP)
+    folder: Release
+    cli_path: publish-kip
+    description: The same packaging/release.sh, but with the Kai interface (KIP) instead of terminal questions - a form, the plan as a confirmation (red when it pushes or publishes) and a live checklist.
+    type: command
+    icon: rocket
+    command: ./packaging/release.sh --kip
+    kip: true
+
+  - name: Publish a release
+    folder: Release
+    cli_path: publish
+    description: Runs packaging/release.sh — version bump, build, commit, tag, push and GitHub release. Asks everything up front, shows the plan, then runs without further questions. Every parameter below is optional; an empty one is asked.
+    type: command
+    icon: rocket
+    command: './packaging/release.sh{% if bump %} --bump={{bump}}{% endif %}{% if build %} --build={{build}}{% endif %}{% if commit %} --commit={{commit}}{% endif %}{% if tag %} --tag={{tag}}{% endif %}{% if push %} --push={{push}}{% endif %}{% if release %} --release={{release}}{% endif %}{% if yes %} --yes{% endif %}'
+    params:
+      - name: bump
+        label: Version bump
+        description: New version (X.Y.Z), "patch" for the next patch version, or "none" to keep the current one.
+        type: text
+        optional: true
+        default: ""
+      - name: build
+        label: Build artifacts
+        description: Which artifacts to build before publishing.
+        type: select
+        options:
+          - "Ask:"
+          - linux
+          - windows
+          - both
+          - none
+        optional: true
+        default: ""
+      - name: commit
+        label: Commit the bump
+        description: Commit the version bump on the current branch.
+        type: select
+        options:
+          - "Ask:"
+          - "yes"
+          - "no"
+        optional: true
+        default: ""
+      - name: tag
+        label: Git tag
+        description: Tag name, "auto" for vX.Y.Z, or "none" for no tag.
+        type: text
+        optional: true
+        default: ""
+      - name: push
+        label: Push to origin
+        description: Push the branch (and the tag, if any) to origin.
+        type: select
+        options:
+          - "Ask:"
+          - "yes"
+          - "no"
+        optional: true
+        default: ""
+      - name: release
+        label: GitHub release
+        description: Tag to publish the GitHub release for, "auto" (the new tag or vX.Y.Z), or "none".
+        type: text
+        optional: true
+        default: ""
+      - name: "yes"
+        label: Skip confirmation
+        description: Run the plan without the final confirmation.
+        type: bool
+        optional: true
+        default: "false"

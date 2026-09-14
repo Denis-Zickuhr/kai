@@ -23,7 +23,7 @@ if [ "$1" = "install" ]; then
     ASSETS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kai/assets"
     echo "==> Instalando assets em $ASSETS_DIR..."
     mkdir -p "$ASSETS_DIR"
-    for grupo in themes i18n help logo; do
+    for grupo in themes i18n help logo manifesto; do
         if [ -d "assets/$grupo" ]; then
             rm -rf "$ASSETS_DIR/$grupo"
             cp -r "assets/$grupo" "$ASSETS_DIR/$grupo"

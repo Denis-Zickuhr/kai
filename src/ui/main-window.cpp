@@ -1,15 +1,32 @@
+#include "core/folder-actions.h"
+#include "core/working-dir.h"
+#include "ui/features/docs/note-dialog.h"
 #include "ui/main-window.h"
-#include "ui/notification-gate.h"
-#include "ui/expand-collapse-bar.h"
+#include "utils/path-format.h"
+#include "utils/duration-format.h"
+#include "ui/external-run-session.h"
+#include "ui/shared/notification-gate.h"
+#include "ui/shared/native-window-corners.h"
+#include "ui/shared/expand-collapse-bar.h"
+#include "ui/shared/panel-metrics.h"
 #include "ui/app-stylesheet.h"
-#include "ui/dialog-utils.h"
+#include "ui/shared/dialog-utils.h"
 #include "utils/action-shortcuts.h"
-#include "ui/export-selection-dialog.h"
+#include "ui/features/collections/export-dialog.h"
+#include "ui/features/collections/import-dialog.h"
+#include "ui/features/collections/import-selection-dialog.h"
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <dwmapi.h>
+#endif
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QClipboard>
+#include <QScopeGuard>
 #include <QShortcut>
 #include <QWidget>
 #include <QCloseEvent>
@@ -19,6 +36,11 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QMenu>
+#include <QPointer>
+#include <QThread>
+#include <algorithm>
+#include "ui/features/docs/doc-links.h"
+#include "ui/shared/lucide-icons.h"
 #include <QAction>
 #include <QMessageBox>
 #include <QFileDialog>
@@ -43,24 +65,34 @@
 #include <QCoreApplication>
 #include <QWindow>
 #include <QMouseEvent>
+#include <QPainterPath>
+#include <QRegion>
+#include <QStyle>
 #include "qhotkey.h"
 
-#include "ui/parameter-form-dialog.h"
-#include "ui/folder-editor-dialog.h"
-#include "ui/folder-delete-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/collection-editor-dialog.h"
-#include "ui/name-uniqueness.h"
-#include "ui/json-viewer-widget.h"
-#include "ui/loading-overlay.h"
-#include "ui/command-json-editor-dialog.h"
-#include "ui/settings-dialog.h"
-#include "ui/environment-manager-dialog.h"
-#include "ui/run-history-dialog.h"
-#include "ui/help-dialog.h"
+#include "ui/features/command-editor/parameter-form-dialog.h"
+#include "ui/features/collections/folder-editor-dialog.h"
+#include "ui/features/collections/folder-delete-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/features/collections/collection-editor-dialog.h"
+#include "ui/shared/name-uniqueness.h"
+#include "ui/shared/json-viewer-widget.h"
+#include "ui/shared/loading-overlay.h"
+#include "ui/features/command-editor/command-json-editor-dialog.h"
+#include "ui/features/settings/settings-dialog.h"
+#include "ui/features/environments/environment-manager-dialog.h"
+#include "ui/features/history/run-history-dialog.h"
+#include "ui/features/history/notification-history-dialog.h"
+#include "engine/module-files.h"
+#include "ui/features/output/output-tabs-bar.h"
+#include "ui/features/output/quick-run-popup.h"
+#include "engine/script-spill.h"
+#include "ui/shared/help-dialog.h"
+#include "ui/shared/manifesto-dialog.h"
 #include "core/openapi-parser.h"
-#include "ui/quick-body-editor-dialog.h"
-#include "ui/welcome-screen.h"
+#include "core/yaml-bridge.h"
+#include "ui/shared/quick-body-editor-dialog.h"
+#include "ui/shared/welcome-screen.h"
 #include "utils/asset-paths.h"
 #include "utils/logger.h"
 #include "utils/design-tokens.h"
@@ -71,11 +103,100 @@
 #include <QUrl>
 #include <QRegularExpression>
 #include <functional>
+#include "ui/shared/window-translucency.h"
+#include "ui/shared/file-dialogs.h"
 
 namespace kai::ui {
 
 namespace {
 constexpr const char *kLogTag = "MainWindow";
+
+// Intercepta o arraste do mouse num QSplitterHandle e o repassa como
+// (press/move + posição global X) — o handle em si não move nada. Usado para a
+// borda da lista de comandos redimensionar o divisor EXTERNO.
+class HandleDragForwarder : public QObject {
+public:
+    HandleDragForwarder(QWidget *handle, std::function<void(bool, int)> onEvent)
+        : QObject(handle), m_onEvent(std::move(onEvent))
+    {
+        handle->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        Q_UNUSED(watched);
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_dragging = true;
+                m_onEvent(true, me->globalPosition().toPoint().x());
+                return true;
+            }
+            break;
+        }
+        case QEvent::MouseMove:
+            if (m_dragging) {
+                m_onEvent(false, static_cast<QMouseEvent *>(event)->globalPosition().toPoint().x());
+                return true;
+            }
+            break;
+        case QEvent::MouseButtonRelease:
+            if (m_dragging) {
+                m_dragging = false;
+                return true;
+            }
+            break;
+        default:
+            break;
+        }
+        return false;
+    }
+
+private:
+    std::function<void(bool, int)> m_onEvent;
+    bool m_dragging = false;
+};
+
+#if defined(Q_OS_WIN)
+// Restaurar/focar a janela a partir de um HOTKEY GLOBAL (processo em
+// segundo plano) é um caso clássico onde SetForegroundWindow do Win32
+// FALHA SILENCIOSAMENTE — o Windows só deixa o processo que já tem o
+// foreground roubar o foco de outro; um processo em background (que é
+// exatamente o caso de um hotkey global dele mesmo) não tem essa
+// permissão por padrão. show()/showNormal()/raise()/activateWindow() do
+// Qt fazem a chamada Win32 "certa" por baixo dos panos, mas ela é
+// silenciosamente ignorada pelo SO — a janela DESMINIMIZA (o estado
+// muda) mas não vem pra frente/não recebe foco de teclado (bug
+// reportado: "não funciona, tem certeza?" — sim, existe mesmo, é uma
+// limitação conhecida do Win32, não um bug de lógica no toggleVisibility
+// em si). O truque padrão (usado por launchers tipo PowerToys Run/
+// Wox): anexar temporariamente a thread de INPUT à do processo que
+// atualmente tem o foreground (AttachThreadInput) — enquanto anexado, o
+// Windows trata as duas threads como uma só pra fins de permissão de
+// foreground, então SetForegroundWindow funciona de verdade.
+void forceForegroundOnWindows(QWidget *window)
+{
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (!hwnd) {
+        return;
+    }
+    if (::IsIconic(hwnd)) {
+        ::ShowWindow(hwnd, SW_RESTORE);
+    }
+    const HWND foregroundHwnd = ::GetForegroundWindow();
+    const DWORD foregroundThreadId = foregroundHwnd
+        ? ::GetWindowThreadProcessId(foregroundHwnd, nullptr) : 0;
+    const DWORD currentThreadId = ::GetCurrentThreadId();
+    const bool attached = foregroundThreadId != 0 && foregroundThreadId != currentThreadId
+        && ::AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
+    ::SetForegroundWindow(hwnd);
+    ::BringWindowToTop(hwnd);
+    if (attached) {
+        ::AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
+    }
+}
+#endif
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -89,7 +210,20 @@ MainWindow::MainWindow(QWidget *parent)
     // primeira renderização. Fallback en -> própria chave é garantido
     // pelo TranslationManager, então um settings.json sem idioma ou com
     // idioma inválido não quebra nada.
-    utils::TranslationManager::instance().loadLanguage(m_configManager.loadSettings().language);
+    // Janela translúcida ANTES de a janela nativa existir (cantos suaves, ver
+    // shouldUseTranslucentWindow e QMainWindow[kaiTranslucent] no QSS).
+    m_translucentWindow = shouldUseTranslucentWindow();
+    if (m_translucentWindow) {
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setProperty("kaiRoundedWindow", true); // lido por applyWindowBackdrop
+        setProperty("kaiTranslucent", true);   // seletor do QSS
+    }
+
+    const core::SettingsData initialSettings = m_configManager.loadSettings();
+    core::setKipSettings(initialSettings.kip);
+    utils::TranslationManager::instance().loadLanguage(initialSettings.language);
+    m_outputMaxLogSizeChars = qMax(1, initialSettings.outputMaxLogSizeKb) * 1024;
+    m_globalActions = initialSettings.globalActions;
 
     setupUi();
     applyOutputPosition();
@@ -120,6 +254,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_pipeline, &engine::ExecutionPipeline::logMessage, this, &MainWindow::handlePipelineLog);
     connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, this, &MainWindow::handlePipelineFinished);
     connect(m_pipeline, &engine::ExecutionPipeline::backgroundProcessStarted, this, &MainWindow::handleBackgroundProcessStarted);
+    connect(m_pipeline, &engine::ExecutionPipeline::kipSessionStarted, this, &MainWindow::handleKipSessionStarted);
+    connect(m_pipeline, &engine::ExecutionPipeline::kipNotifyRequested, this, &MainWindow::handleKipNotify);
+    connect(m_pipeline, &engine::ExecutionPipeline::kipAnswersRemembered, this, &MainWindow::handleKipAnswersRemembered);
+    // "Run again" do cartão de resultado KIP: re-executa pelo fluxo normal
+    // (formulário de parâmetros do Kai incluído).
+    connect(m_terminalDrawer, &TerminalDrawer::kipRunAgainRequested, this, &MainWindow::handleCommandActivated);
     // Atualiza o indicador de "rodando" quando um estágio começa (bug
     // reportado no Windows: o ícone de execução não aparecia — o status
     // era calculado só ANTES do processo existir; ao reagir ao início do
@@ -131,6 +271,17 @@ MainWindow::MainWindow(QWidget *parent)
     // Config corrompida restaurada de backup: sinal já existia, mas não
     // tinha NENHUM listener (achado silencioso) — vira notificação opcional.
     connect(&m_configManager, &core::ConfigManager::configRecovered, this, &MainWindow::handleConfigRecovered);
+
+    // CRON Scheduler (Etapa 4): dispara comandos agendados no horário correto.
+    // Usa o mesmo handler que autorun e cliques manuais (handleCommandActivated).
+    connect(&m_cronScheduler, &engine::CronScheduler::commandDue, this, [this](const QString &commandId) {
+        if (!m_commandsById.contains(commandId)) {
+            return; // comando removido
+        }
+        utils::Logger::info(kLogTag,
+            QStringLiteral("CRON: disparando '%1'.").arg(commandId));
+        runInBackground(commandId);
+    });
 
     // Garante encerramento seguro de processos em background ao fechar o
     // app ("processos zumbis").
@@ -154,7 +305,63 @@ MainWindow::MainWindow(QWidget *parent)
     // toggleVisibility (quando a janela já foi mostrada uma vez).
 }
 
+// Uma execução de ação de pasta em andamento: tudo que o pipeline e o ambiente
+// referenciam por ponteiro precisa viver tanto quanto ela.
+struct MainWindow::ActionRun {
+    engine::ExecutionPipeline *pipeline = nullptr; // filho do MainWindow
+    std::unique_ptr<core::EnvironmentManager> env;
+    QMap<QString, core::Command> allCommands;      // pra resolver hooks
+    core::Command command;                         // o comando virtual (id = ação+pasta)
+    QDateTime startedAt;
+};
+
 MainWindow::~MainWindow() = default;
+
+void MainWindow::connectPipelineAuxSignals(engine::ExecutionPipeline *pipeline)
+{
+    connect(pipeline, &engine::ExecutionPipeline::httpResultReady, this,
+            [this](const QString &commandId, const engine::HttpResult &result) {
+        // Guarda o resultado estruturado para reaplicar ao reselecionar o
+        // comando (Headers/JSON não somem ao trocar de aba/comando).
+        m_lastHttpResult.insert(commandId, result);
+        // Um resultado de verdade chegou: a marca de "pulado" de uma
+        // rodada anterior não vale mais (ver m_skippedReason).
+        m_skippedReason.remove(commandId);
+        if (m_connectedTerminalCommandId == commandId) {
+            m_terminalDrawer->setSkipped(false);
+            m_terminalDrawer->setHttpResult(result);
+        }
+        if (m_terminalDrawer->hasDetachedWindow()
+            && m_terminalDrawer->detachedCommandId() == commandId) {
+            m_terminalDrawer->setDetachedHttpResult(result);
+        }
+    });
+    // Comando HTTP pulado por Execution Condition (ver
+    // ExecutionPipeline::commandSkippedByCondition) — badge âmbar "Pulado"
+    // + painel "Requisição não executada" em vez do resultado em cache de
+    // uma execução anterior (bug relatado: parecia sucesso de verdade).
+    connect(pipeline, &engine::ExecutionPipeline::commandSkippedByCondition, this,
+            [this](const QString &commandId, const QString &reasonLabel) {
+        m_skippedReason.insert(commandId, reasonLabel);
+        if (m_connectedTerminalCommandId == commandId) {
+            m_terminalDrawer->setSkipped(true, reasonLabel);
+            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Skipped);
+        }
+    });
+    // EnvExtractor::persist == true (feedback do usuário: refresh token/API
+    // key não deveria exigir reautenticar a cada boot) — grava write-through
+    // em dynamic-vars.json. Arquivo pequeno e evento raro (só extractors
+    // marcados persist), então regravar tudo a cada chamada é seguro/simples.
+    connect(pipeline, &engine::ExecutionPipeline::dynamicVarPersistRequested, this,
+            [this](const QString &scopeKey, const QString &name, const QString &value) {
+        QMap<QString, QMap<QString, QString>> all = m_configManager.loadPersistedDynamicVars();
+        all[scopeKey][name] = value;
+        if (!m_configManager.savePersistedDynamicVars(all)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Falha ao persistir variável dinâmica '%1'.").arg(name));
+        }
+    });
+}
+
 
 void MainWindow::setupUi()
 {
@@ -165,7 +372,14 @@ void MainWindow::setupUi()
     // arredondamento é feito por um container central com border-radius
     // aplicado via QSS do tema (objectName "rootContainer"). O drag e o
     // maximizar/restaurar são tratados manualmente (handlers de janela).
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    // Os hints de minimizar/menu de sistema/maximizar/fechar são EXPLÍCITOS de
+    // propósito: FramelessWindowHint faz o Qt tratar os flags como
+    // "customizados" e não aplicar os padrões, então no Windows a janela nascia
+    // sem WS_MINIMIZEBOX/WS_SYSMENU e o clique no ícone da barra de tarefas
+    // (SC_MINIMIZE) era ignorado.
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint
+                   | Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint
+                   | Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint);
     // TAMANHO DA JANELA CONFIGURÁVEL (pedido do usuário): antes era 1280x760
     // cravado. O modo vem das configurações — tamanho fixo, maximizada, tela
     // cheia ou lembrar o último tamanho usado.
@@ -176,6 +390,13 @@ void MainWindow::setupUi()
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("rootContainer"));
+    // Necessário pro fundo em GRADIENTE (base "primary" do tema, ver
+    // app-stylesheet.cpp) realmente pintar aqui: um QWidget "puro" (não
+    // QFrame) só honra um qlineargradient() do QSS com este atributo — cor
+    // SÓLIDA já funcionava sem ele (o Fusion tem um atalho pra isso), mas
+    // gradiente exige o pipeline de pintura completo do estilo (relatado
+    // pelo usuário: "a main window está sem nenhum gradiente").
+    central->setAttribute(Qt::WA_StyledBackground, true);
     // Mouse tracking para o resize por borda funcionar (o cursor muda ao
     // se aproximar das bordas mesmo sem botão pressionado). O container
     // deixa uma pequena margem nas bordas (kResizeMargin) onde os eventos
@@ -197,23 +418,22 @@ void MainWindow::setupUi()
     layout->setSpacing(0);
 
     m_topBar = new TopUtilityBar(central);
-    connect(m_topBar, &TopUtilityBar::importProjectRequested, this, &MainWindow::handleImportProjectRequested);
-    connect(m_topBar, &TopUtilityBar::importOpenApiRequested, this, &MainWindow::handleImportOpenApiRequested);
-    connect(m_topBar, &TopUtilityBar::importConfigRequested, this, &MainWindow::handleImportConfigRequested);
-    connect(m_topBar, &TopUtilityBar::exportGlobalRequested, this, &MainWindow::handleExportGlobalRequested);
-    connect(m_topBar, &TopUtilityBar::exportFolderRequested, this, &MainWindow::handleExportFolderRequested);
-    connect(m_topBar, &TopUtilityBar::exportCommandRequested, this, &MainWindow::handleExportCommandRequested);
+    connect(m_topBar, &TopUtilityBar::importRequested, this, &MainWindow::handleImportRequested);
+    connect(m_topBar, &TopUtilityBar::exportRequested, this, &MainWindow::handleExportRequested);
     connect(m_topBar, &TopUtilityBar::logsRequested, this, &MainWindow::handleLogsRequested);
     connect(m_topBar, &TopUtilityBar::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_topBar, &TopUtilityBar::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
     connect(m_topBar, &TopUtilityBar::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
+    connect(m_topBar, &TopUtilityBar::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_topBar, &TopUtilityBar::settingsRequested, this, &MainWindow::handleSettingsRequested);
     connect(m_topBar, &TopUtilityBar::environmentSelected, this, &MainWindow::handleEnvironmentSelected);
     connect(m_topBar, &TopUtilityBar::manageEnvironmentsRequested, this, &MainWindow::handleManageEnvironmentsRequested);
-    connect(m_topBar, &TopUtilityBar::showProcessListRequested, this, &MainWindow::handleShowProcessListRequested);
     connect(m_topBar, &TopUtilityBar::runHistoryRequested, this, &MainWindow::handleRunHistoryRequested);
     connect(m_topBar, &TopUtilityBar::helpRequested, this, &MainWindow::handleHelpRequested);
-    connect(m_topBar, &TopUtilityBar::showWelcomeRequested, this, &MainWindow::handleShowWelcomeRequested);
+    connect(m_topBar, &TopUtilityBar::manifestoRequested, this, [this]() {
+        ManifestoDialog dialog(this);
+        dialog.exec();
+    });    connect(m_topBar, &TopUtilityBar::showWelcomeRequested, this, &MainWindow::handleShowWelcomeRequested);
     connect(m_topBar, &TopUtilityBar::hideRequested, this, &MainWindow::toggleVisibility);
     connect(m_topBar, &TopUtilityBar::quitAppRequested, this, &MainWindow::quitApplication);
     connect(m_topBar, &TopUtilityBar::minimizeRequested, this, &QWidget::showMinimized);
@@ -237,6 +457,56 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::commandActivated, this, &MainWindow::handleCommandActivated);
     connect(m_commandTree, &CommandTreeWidget::editRequested, this, &MainWindow::handleEditRequested);
     connect(m_commandTree, &CommandTreeWidget::deleteRequested, this, &MainWindow::handleDeleteRequested);
+    // Scripts longos demais para a linha de comando vão para <temp>/kai-run: aqui só se limpam os antigos.
+    engine::ScriptSpill::cleanupOldAsync();
+    engine::ModuleFiles::ensureAsync();
+    m_projectSync = new engine::ProjectSyncManager(QString(), this);
+    connect(m_projectSync, &engine::ProjectSyncManager::planReady, this, &MainWindow::handleProjectSyncPlan);
+    connect(m_projectSync, &engine::ProjectSyncManager::kaiToFileFinished, this,
+        [this](const QString &folderId, bool ok, const QString &errorDetail) {
+            const QString title = utils::tr(QStringLiteral("project_sync.title"));
+            if (ok) {
+                QMessageBox::information(this, title, utils::tr(QStringLiteral("project_sync.done.kai_to_file"))
+                    .arg(folderDisplayName(folderId)));
+            } else {
+                QMessageBox::warning(this, title, utils::tr(QStringLiteral("project_sync.write_failed")).arg(errorDetail));
+            }
+            finishProjectSync(folderId);
+        });
+    connect(m_commandTree, &CommandTreeWidget::projectSyncRequested, this, &MainWindow::startProjectSync);
+    connect(m_projectSync, &engine::ProjectSyncManager::driftChecked, m_commandTree, &CommandTreeWidget::setSyncDrift);
+    m_syncDriftTimer = new QTimer(this);
+    m_syncDriftTimer->setSingleShot(true);
+    m_syncDriftTimer->setInterval(400);
+    connect(m_syncDriftTimer, &QTimer::timeout, this, [this]() {
+        m_commandsData.notes = m_notes;
+        m_projectSync->requestDriftCheck(m_commandsData, m_collections);
+    });
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+        if (state == Qt::ApplicationActive) {
+            scheduleSyncDriftCheck();
+        }
+    });
+    scheduleSyncDriftCheck();
+    connect(m_commandTree, &CommandTreeWidget::exportRequested, this, [this](const QString &id, bool isFolder) {
+        showExportDialog(id, isFolder);
+    });
+
+    // "Ocultar/Mostrar pasta" no menu de contexto da ABA (pasta raiz) —
+    // pedido do usuário: "adicione a possibilidade de ocultar pastas de
+    // raiz". Direto pelo id (não passa por currentSelectionId(), que só
+    // enxerga o item selecionado DENTRO da árvore, nunca a aba em si).
+    connect(m_commandTree, &CommandTreeWidget::toggleFolderHiddenRequested, this,
+        [this](const QString &folderId) {
+            for (core::Folder &f : m_commandsData.folders) {
+                if (f.id == folderId) {
+                    f.hidden = !f.hidden;
+                    break;
+                }
+            }
+            m_configManager.saveCommands(m_commandsData);
+            reloadCommandTree();
+        });
     connect(m_commandTree, &CommandTreeWidget::duplicateRequested, this, &MainWindow::handleDuplicateRequested);
     connect(m_commandTree, &CommandTreeWidget::quickEditBodyRequested, this, &MainWindow::handleQuickEditBodyRequested);
     connect(m_commandTree, &CommandTreeWidget::collectionEditRequested, this, &MainWindow::handleCollectionEditRequested);
@@ -245,9 +515,16 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_commandTree, &CommandTreeWidget::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
     connect(m_commandTree, &CommandTreeWidget::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
+    connect(m_commandTree, &CommandTreeWidget::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
+    connect(m_commandTree, &CommandTreeWidget::noteActivated, this, &MainWindow::handleNoteActivated);
+    connect(m_commandTree, &CommandTreeWidget::noteEditRequested, this, &MainWindow::handleNoteEditRequested);
+    connect(m_commandTree, &CommandTreeWidget::noteDuplicateRequested, this, &MainWindow::handleNoteDuplicateRequested);
+    connect(m_commandTree, &CommandTreeWidget::noteDeleteRequested, this, &MainWindow::handleNoteDeleteRequested);
     connect(m_commandTree, &CommandTreeWidget::playRequested, this, &MainWindow::handleCommandActivated);
-    connect(m_commandTree, &CommandTreeWidget::killRequested, this, &MainWindow::handleKillCommandRequested);
-    connect(m_commandTree, &CommandTreeWidget::forceStopRequested, this, &MainWindow::handleKillCommandRequested);
+    connect(m_commandTree, &CommandTreeWidget::killRequested, this,
+            [this](const QString &commandId) { handleKillCommandRequested(commandId, false); });
+    connect(m_commandTree, &CommandTreeWidget::forceStopRequested, this,
+            [this](const QString &commandId) { handleKillCommandRequested(commandId, true); });
     connect(m_commandTree, &CommandTreeWidget::resetRequested, this, &MainWindow::handleResetCommandRequested);
     connect(m_commandTree, &CommandTreeWidget::structureChanged, this, &MainWindow::handleTreeStructureChanged);
 
@@ -260,6 +537,7 @@ void MainWindow::setupUi()
     connect(m_itemActionsBar, &ItemActionsBar::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_itemActionsBar, &ItemActionsBar::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
     connect(m_itemActionsBar, &ItemActionsBar::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
+    connect(m_itemActionsBar, &ItemActionsBar::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_itemActionsBar, &ItemActionsBar::editSelectedRequested, this, &MainWindow::triggerEditSelected);
     connect(m_itemActionsBar, &ItemActionsBar::deleteSelectedRequested, this, &MainWindow::triggerDeleteSelected);
 
@@ -270,6 +548,8 @@ void MainWindow::setupUi()
     connect(m_expandCollapseBar, &ExpandCollapseBar::collapseAllRequested, this, &MainWindow::triggerCollapseAll);
     connect(m_expandCollapseBar, &ExpandCollapseBar::toggleHiddenSelectedRequested, this, &MainWindow::triggerToggleHiddenSelected);
     connect(m_expandCollapseBar, &ExpandCollapseBar::toggleShowHiddenRequested, this, &MainWindow::triggerToggleShowHidden);
+    connect(m_expandCollapseBar, &ExpandCollapseBar::toggleRunningOnlyRequested, this, &MainWindow::triggerToggleRunningOnly);
+    connect(m_expandCollapseBar, &ExpandCollapseBar::eyeEasterEggTriggered, this, &MainWindow::showEyeEasterEgg);
 
     connect(m_commandTree, &CommandTreeWidget::tabsReordered, this, [this](const QVector<TreeNodePlacement> &placements) {
         // Persiste a nova ordem das abas SEM reconstruir a árvore (evita
@@ -292,8 +572,21 @@ void MainWindow::setupUi()
         static_cast<void (CommandTreeWidget::*)()>(&CommandTreeWidget::focusFirstVisibleItem));
     connect(m_commandTree, &CommandTreeWidget::selectionChanged, this,
         [this](const QString &itemId, bool isFolder) {
+            if (isNoteId(itemId)) {
+                handleNoteSelected(itemId);
+                return;
+            }
             handleCommandSelectionChanged(itemId, isFolder);
         });
+    // Clicar de novo no item que JÁ está selecionado não emite selectionChanged: se a saída mostra outro comando
+    // (um KIP iniciado sem passar pela árvore), o primeiro clique tem que trazer a saída deste.
+    connect(m_commandTree, &CommandTreeWidget::commandClicked, this, [this](const QString &commandId) {
+        if (commandId != m_connectedTerminalCommandId) {
+            handleCommandSelectionChanged(commandId, false);
+        }
+    });
+    connect(m_commandTree, &CommandTreeWidget::folderActionActivated, this, &MainWindow::handleFolderActionActivated);
+    connect(m_commandTree, &CommandTreeWidget::folderActionContextRequested, this, &MainWindow::showFolderActionMenu);
 
     m_actionSidebar = new ActionSidebar(central);
     connect(m_actionSidebar, &ActionSidebar::playSelectedRequested, this, &MainWindow::triggerPlaySelected);
@@ -304,10 +597,40 @@ void MainWindow::setupUi()
 
     m_terminalDrawer = new TerminalDrawer(central);
     connect(m_terminalDrawer, &TerminalDrawer::commandEntered, this, &MainWindow::handleTerminalInputEntered);
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentKaiLinkActivated, this, &MainWindow::handleDocKaiLink);
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentNewNoteRequested, this, &MainWindow::handleNewNoteRequested);
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentNoteDeleteRequested, this, &MainWindow::handleNoteDeleteRequested);
+    // Notas editadas no leitor: quem grava é o app (notes.json).
+    m_terminalDrawer->embeddedPanel()->setNoteSaver([this](const QString &noteId, const QString &content) {
+        for (core::Note &note : m_notes) {
+            if (note.id == noteId) {
+                note.content = content;
+                return m_configManager.saveNotes(m_notes);
+            }
+        }
+        return false;
+    });
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabActivated, this, &MainWindow::activateOutputTab);
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::commandsToggleRequested, this,
+            [this]() { setCommandsCollapsed(!m_commandsCollapsed); });
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::quickRunRequested, this, &MainWindow::showQuickRun);
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::docsRequested, this, &MainWindow::showDocsMenu);
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabCloseRequested, this, &MainWindow::closeOutputTab);
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabMoved, this, [this](const QString &id, int newIndex) {
+        // O usuário arrastou a guia: a ordem da barra passa a valer para a sessão.
+        const int from = m_outputTabOrder.indexOf(id);
+        if (from < 0) {
+            return;
+        }
+        m_outputTabOrder.move(from, std::clamp(newIndex, 0, int(m_outputTabOrder.size()) - 1));
+        refreshOutputTabs();
+    });
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabContextRequested, this, &MainWindow::showOutputTabMenu);
     connect(m_terminalDrawer, &TerminalDrawer::interruptRequested, this, &MainWindow::handleTerminalInterrupt);
     connect(m_terminalDrawer, &TerminalDrawer::eofRequested, this, &MainWindow::handleTerminalEof);
     connect(m_terminalDrawer, &TerminalDrawer::rawTerminalInput, this, &MainWindow::handleTerminalRawInput);
     connect(m_terminalDrawer, &TerminalDrawer::terminalSizeChanged, this, &MainWindow::handleTerminalSizeChanged);
+    connect(m_terminalDrawer, &TerminalDrawer::firstErrorInFormattedOutput, this, &MainWindow::handleFirstErrorInFormattedOutput);
     // Opções de exibição da Saída: persistência GLOBAL em settings.json
     // (feedback do usuário: as opções do menu da Saída devem valer entre
     // sessões, para todos os comandos — não mais por comando). Ao alternar
@@ -338,53 +661,18 @@ void MainWindow::setupUi()
     }
     // SAÍDA V2: resultado HTTP estruturado alimenta as abas Headers/JSON/Raw.
     // A janela destacada recebe o mesmo quando é do comando de origem.
-    connect(m_pipeline, &engine::ExecutionPipeline::httpResultReady, this,
-            [this](const QString &commandId, const engine::HttpResult &result) {
-        // Guarda o resultado estruturado para reaplicar ao reselecionar o
-        // comando (Headers/JSON não somem ao trocar de aba/comando).
-        m_lastHttpResult.insert(commandId, result);
-        // Um resultado de verdade chegou: a marca de "pulado" de uma
-        // rodada anterior não vale mais (ver m_skippedReason).
-        m_skippedReason.remove(commandId);
-        if (m_connectedTerminalCommandId == commandId) {
-            m_terminalDrawer->setSkipped(false);
-            m_terminalDrawer->setHttpResult(result);
-        }
-        if (m_terminalDrawer->hasDetachedWindow()
-            && m_terminalDrawer->detachedCommandId() == commandId) {
-            m_terminalDrawer->setDetachedHttpResult(result);
-        }
-    });
-    // Comando HTTP pulado por Execution Condition (ver
-    // ExecutionPipeline::commandSkippedByCondition) — badge âmbar "Pulado"
-    // + painel "Requisição não executada" em vez do resultado em cache de
-    // uma execução anterior (bug relatado: parecia sucesso de verdade).
-    connect(m_pipeline, &engine::ExecutionPipeline::commandSkippedByCondition, this,
-            [this](const QString &commandId, const QString &reasonLabel) {
-        m_skippedReason.insert(commandId, reasonLabel);
-        if (m_connectedTerminalCommandId == commandId) {
-            m_terminalDrawer->setSkipped(true, reasonLabel);
-            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Skipped);
-        }
-    });
-    // EnvExtractor::persist == true (feedback do usuário: refresh token/API
-    // key não deveria exigir reautenticar a cada boot) — grava write-through
-    // em dynamic-vars.json. Arquivo pequeno e evento raro (só extractors
-    // marcados persist), então regravar tudo a cada chamada é seguro/simples.
-    connect(m_pipeline, &engine::ExecutionPipeline::dynamicVarPersistRequested, this,
-            [this](const QString &scopeKey, const QString &name, const QString &value) {
-        QMap<QString, QMap<QString, QString>> all = m_configManager.loadPersistedDynamicVars();
-        all[scopeKey][name] = value;
-        if (!m_configManager.savePersistedDynamicVars(all)) {
-            utils::Logger::warning(kLogTag, QStringLiteral("Falha ao persistir variável dinâmica '%1'.").arg(name));
-        }
-    });
+    connectPipelineAuxSignals(m_pipeline);
     connect(m_terminalDrawer, &TerminalDrawer::closeRequested, this, &MainWindow::handleTerminalCloseRequested);
     // Persiste o estado colapsado do terminal entre sessões
     // (feedback do usuário: lembrar se o terminal estava colapsado). Ao
     // alternar, grava terminal_collapsed em settings.json.
     connect(m_terminalDrawer, &TerminalDrawer::expandedChanged, this,
         [this](bool expanded) {
+            if (expanded) {
+                applyOutputRatio();
+            } else if (m_commandsCollapsed) {
+                setCommandsCollapsed(false); // a tela nunca fica com os dois recolhidos
+            }
             core::SettingsData settings = m_configManager.loadSettings();
             settings.terminalCollapsed = !expanded;
             m_configManager.saveSettings(settings);
@@ -425,13 +713,22 @@ void MainWindow::setupUi()
     // settings.json já persistidos, ver applyActionGroupPlacement()).
     m_upperActionsContainer = new ActionGroupContainer(Qt::Horizontal, central);
     m_bottomActionsContainer = new ActionGroupContainer(Qt::Horizontal, central);
+    m_upperActionsContainer->setEdgeSeparator(Qt::BottomEdge);
+    m_bottomActionsContainer->setEdgeSeparator(Qt::TopEdge);
     m_leftActionsContainer = new ActionGroupContainer(Qt::Vertical, central);
     m_sideActionsContainer = new ActionGroupContainer(Qt::Vertical, central);
 
+    // Caixa de comandos dentro da MESMA moldura (borda + raio) da Saída — a
+    // regra de "panelCard" fica em app-stylesheet.cpp. A margem de 2px é a
+    // borda (1px) mais 1px de respiro, igual ao TerminalDrawer.
     auto *treeContainer = new QWidget(central);
+    treeContainer->setObjectName(QStringLiteral("panelCard"));
+    treeContainer->setAttribute(Qt::WA_StyledBackground, true);
     auto *treeContainerLayout = new QVBoxLayout(treeContainer);
-    treeContainerLayout->setContentsMargins(0, 0, 0, 0);
-    treeContainerLayout->setSpacing(4);
+    m_treeContainerLayout = treeContainerLayout;
+    const int frameInset = panelFrameInset();
+    treeContainerLayout->setContentsMargins(frameInset, frameInset, frameInset, frameInset);
+    treeContainerLayout->setSpacing(0);
     treeContainerLayout->addWidget(m_upperActionsContainer);
     treeContainerLayout->addWidget(m_commandTree, 1);
     treeContainerLayout->addWidget(m_bottomActionsContainer);
@@ -442,14 +739,18 @@ void MainWindow::setupUi()
     // updateWelcomeScreenVisibility() detecta 0 comandos E 0 pastas (ver
     // reloadCommandTree()). Troca de visibilidade, sem recriar nada, no
     // mesmo espírito de applyOutputPosition() para widgets já construídos.
-    m_welcomeScreen = new WelcomeScreen(treeContainer);
+    // A tela de boas-vindas é IRMÃ do divisor externo (entra no layout do
+    // conteúdo, ver contentLayout abaixo) e o SUBSTITUI: nenhuma barra de ação,
+    // lista ou saída é tocada — o divisor inteiro só fica oculto.
+    m_welcomeScreen = new WelcomeScreen(central);
     m_welcomeScreen->setVisible(false);
     connect(m_welcomeScreen, &WelcomeScreen::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_welcomeScreen, &WelcomeScreen::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
     connect(m_welcomeScreen, &WelcomeScreen::closeRequested, this, &MainWindow::handleWelcomeScreenClosed);
-    treeContainerLayout->addWidget(m_welcomeScreen, 1);
 
     m_horizontalSplitter = new QSplitter(Qt::Horizontal, central);
+    // Nome usado pelo QSS para tirar a linha dos handles (ver app-stylesheet.cpp).
+    m_horizontalSplitter->setObjectName(QStringLiteral("actionsSplitter"));
     m_horizontalSplitter->setChildrenCollapsible(false);
     m_horizontalSplitter->addWidget(m_leftActionsContainer);
     m_horizontalSplitter->addWidget(treeContainer);
@@ -457,6 +758,22 @@ void MainWindow::setupUi()
     m_horizontalSplitter->setStretchFactor(0, 0);
     m_horizontalSplitter->setStretchFactor(1, 1);
     m_horizontalSplitter->setStretchFactor(2, 0);
+    // Arrastar a divisória da BARRA DE AÇÕES (esquerda/direita) é inútil —
+    // ela só hospeda botões de ícone, não há conteúdo que se beneficie de
+    // mais/menos espaço (pedido do usuário: desabilitar esse resize).
+    // Desabilita só os DOIS handles adjacentes a ela (índices 1 e 2, entre
+    // leftActionsContainer|treeContainer e treeContainer|sideActionsContainer)
+    // — o handle(0) nem existe (primeiro widget do splitter). Com o handle
+    // travado e o stretch factor 0 (acima, já não crescia com a janela), o
+    // Qt passa a dimensionar a barra sempre pelo próprio sizeHint (os
+    // botões), garantindo por padrão espaço suficiente pra renderizar os
+    // itens sem depender de arraste algum.
+    if (QSplitterHandle *leftHandle = m_horizontalSplitter->handle(1)) {
+        leftHandle->setEnabled(false);
+    }
+    if (QSplitterHandle *sideHandle = m_horizontalSplitter->handle(2)) {
+        sideHandle->setEnabled(false);
+    }
 
     // Wrapper que agrupa a busca + a área de navegação (árvore/actions),
     // construído UMA vez aqui — applyOutputPosition() decide depois em
@@ -477,12 +794,24 @@ void MainWindow::setupUi()
     auto *contentLayout = new QVBoxLayout(m_content);
     contentLayout->setContentsMargins(16, 8, 16, 16);
     contentLayout->setSpacing(12);
+    contentLayout->addWidget(m_welcomeScreen, 1); // começa oculta (ver setWelcomeMode)
     // O splitter externo (m_outerSplitter: Vertical para "bottom" ou
     // Horizontal para "left"/"right") é criado/montado em
     // applyOutputPosition(), chamado logo após setupUi() — aqui só
     // reservamos o layout que vai recebê-lo.
 
     layout->addWidget(m_content, 1);
+
+    // Linha de status no rodapé: comandos em execução + último resultado.
+    m_statusLine = new StatusLine(central);
+    connect(m_statusLine, &StatusLine::runningClicked, this, &MainWindow::handleShowProcessListRequested);
+    // Notificações: o atalho saiu do menu Processos e vive aqui, com destaque
+    // quando há não lidas (a contagem chega por sinal a cada mudança).
+    connect(m_statusLine, &StatusLine::notificationsRequested, this, &MainWindow::handleNotificationHistoryRequested);
+    connect(&m_notificationHistory, &core::NotificationHistory::unreadCountChanged,
+            m_statusLine, &StatusLine::setUnreadNotifications);
+    m_statusLine->setUnreadNotifications(m_notificationHistory.unreadCount());
+    layout->addWidget(m_statusLine);
 
     setCentralWidget(central);
 
@@ -522,7 +851,7 @@ void MainWindow::setupTrayIcon()
     connect(toggleAction, &QAction::triggered, this, &MainWindow::toggleVisibility);
 
     auto *importAction = menu->addAction(utils::tr(QStringLiteral("tray.import")));
-    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportProjectRequested);
+    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportRequested);
 
     menu->addSeparator();
 
@@ -536,7 +865,8 @@ void MainWindow::setupTrayIcon()
 }
 
 void MainWindow::maybeShowNotification(NotificationEvent event, const QString &title, const QString &body,
-                                        QSystemTrayIcon::MessageIcon icon)
+                                        QSystemTrayIcon::MessageIcon icon, const QString &commandId,
+                                        const QString &eventKeyOverride)
 {
     // Carrega as Configurações na hora (mesmo padrão já usado em dezenas
     // de outros pontos deste arquivo — não existe um SettingsData
@@ -544,17 +874,66 @@ void MainWindow::maybeShowNotification(NotificationEvent event, const QString &t
     // não em loop quente).
     const core::SettingsData settings = m_configManager.loadSettings();
     bool eventToggleOn = false;
+    QString eventKey;
     switch (event) {
-    case NotificationEvent::CommandFailure: eventToggleOn = settings.notifyOnCommandFailure; break;
-    case NotificationEvent::BackgroundProcessCrash: eventToggleOn = settings.notifyOnBackgroundProcessCrash; break;
-    case NotificationEvent::BackgroundProcessSuccess: eventToggleOn = settings.notifyOnBackgroundProcessSuccess; break;
-    case NotificationEvent::ConfigRecovered: eventToggleOn = settings.notifyOnConfigRecovered; break;
+    case NotificationEvent::CommandFailure:
+        eventToggleOn = settings.notifyOnCommandFailure;
+        eventKey = QStringLiteral("command_failure");
+        break;
+    case NotificationEvent::BackgroundProcessCrash:
+        eventToggleOn = settings.notifyOnBackgroundProcessCrash;
+        eventKey = QStringLiteral("background_crash");
+        break;
+    case NotificationEvent::BackgroundProcessSuccess:
+        eventToggleOn = settings.notifyOnBackgroundProcessSuccess;
+        eventKey = QStringLiteral("background_success");
+        break;
+    case NotificationEvent::ConfigRecovered:
+        eventToggleOn = settings.notifyOnConfigRecovered;
+        eventKey = QStringLiteral("config_recovered");
+        break;
+    case NotificationEvent::FirstErrorInFormattedOutput:
+        eventToggleOn = settings.notifyOnFirstErrorInFormattedOutput;
+        eventKey = QStringLiteral("first_error_in_formatted_output");
+        break;
+    case NotificationEvent::KipNotify:
+        // Pedido explícito do programa KIP: só o interruptor geral decide.
+        eventToggleOn = true;
+        eventKey = eventKeyOverride.isEmpty() ? QStringLiteral("kip_notify") : eventKeyOverride;
+        break;
     }
+
+    // Registra no histórico persistido SEMPRE que o evento ocorre — mesmo
+    // que o toast não vá aparecer (notificações desligadas ou janela em
+    // foco) — pedido do usuário: "queria melhorar o processamento de
+    // notificações, talvez salvar elas". O toggle de notificações só
+    // decide o TOAST, não o log.
+    core::NotificationRecord record;
+    record.eventKey = eventKey;
+    record.title = title;
+    record.body = body;
+    record.commandId = commandId;
+    m_notificationHistory.append(record);
+
+    // `notify` de um app KIP: "a janela está em foco" significa "o usuário está
+    // olhando para ESSA view" — se ele está noutro comando, o toast aparece.
+    const bool viewInFront = event == NotificationEvent::KipNotify ? isKipViewVisible(commandId) : isActiveWindow();
     if (!shouldShowNotification(trayAvailable(), settings.notificationsEnabled,
-            eventToggleOn, settings.notifyEvenWhenFocused, isActiveWindow())) {
+            eventToggleOn, settings.notifyEvenWhenFocused, viewInFront)) {
         return;
     }
     m_trayIcon->showMessage(title, body, icon, 6000);
+}
+
+bool MainWindow::isKipViewVisible(const QString &commandId) const
+{
+    if (m_terminalDrawer->hasDetachedWindow() && m_terminalDrawer->detachedCommandId() == commandId
+        && m_terminalDrawer->detachedWindowActive()) {
+        return true;
+    }
+    return isVisible() && !isMinimized() && isActiveWindow() && m_connectedTerminalCommandId == commandId
+        && m_terminalDrawer->isExpanded() && m_terminalDrawer->kipMode()
+        && !(m_terminalDrawer->hasDetachedWindow() && m_terminalDrawer->detachedCommandId() == commandId);
 }
 
 void MainWindow::handleConfigRecovered(const QString &filePath, const QString &backupPath)
@@ -574,6 +953,15 @@ void MainWindow::setupToolbar()
     // Removida por completo; Importar Projeto e Processos foram
     // incorporados ao menu único da TopUtilityBar.
     m_processListDialog = new ProcessListDialog(m_processManager, this);
+    // Parar/forçar pelo diálogo vale para QUALQUER processo (primeiro ou segundo
+    // plano): passa pelo mesmo caminho do botão Parar da árvore.
+    connect(m_processListDialog, &ProcessListDialog::stopRequested, this,
+            [this](const QString &commandId, bool force) { handleKillCommandRequested(commandId, force); });
+    connect(m_processListDialog, &ProcessListDialog::commandRequested, this,
+            [this](const QString &commandId) {
+                showAndRaise();
+                m_commandTree->selectCommand(commandId);
+            });
     // Alimenta a lista com os processos de FOREGROUND (registry do pipeline),
     // além dos de background do ProcessManager. Sem isso, quem roda comandos
     // normais via um diálogo sempre vazio.
@@ -584,9 +972,9 @@ void MainWindow::setupToolbar()
     }
     m_processListDialog->setForegroundProvider([this]() {
         QList<QPair<QString, qint64>> running;
-        for (const QString &id : m_pipeline->runningCommandIds()) {
+        for (const QString &id : allPipelineRunningCommandIds()) {
             qint64 pid = 0;
-            if (auto *r = m_pipeline->runnerFor(id)) {
+            if (auto *r = runnerFor(id)) {
                 pid = r->processId();
             }
             running.append({id, pid});
@@ -815,9 +1203,23 @@ void MainWindow::setupActionShortcuts()
         // Fechar Aplicativo: encerra o app de fato (diferente do "X" da
         // janela, que apenas oculta — spec 09/closeEvent).
         {QStringLiteral("action.quit_app"), [this]() { quitApplication(); }},
-        {QStringLiteral("action.toggle_search"), [this]() { toggleSearchBar(); }},
+        // Pedido do usuário: se a Saída (Resposta/JSON ou texto simples) já
+        // está em foco, o mesmo atalho ativa/foca a busca DELA em vez de
+        // abrir a busca da árvore de comandos — só cai no comportamento
+        // antigo se a Saída não é a coisa em foco ou não tem busca própria
+        // pertinente ali (terminal interativo, painel "não executado"...).
+        {QStringLiteral("action.toggle_search"), [this]() {
+            if (m_terminalDrawer && m_terminalDrawer->isVisible()
+                && m_terminalDrawer->isAncestorOf(QApplication::focusWidget())
+                && m_terminalDrawer->focusSearch()) {
+                return;
+            }
+            toggleSearchBar();
+        }},
         {QStringLiteral("action.context_menu"), [this]() { m_commandTree->openContextMenuForCurrent(); }},
         {QStringLiteral("action.focus_output"), [this]() { toggleOutputFocus(); }},
+        {QStringLiteral("action.next_output"), [this]() { cycleOutputTab(1); }},
+        {QStringLiteral("action.previous_output"), [this]() { cycleOutputTab(-1); }},
         // NOTA: "action.toggle_edit_mode" propositalmente NÃO tem handler
         // aqui — os próprios diálogos que usam esse atalho
         // (dialog-utils.h/json-editor-dialog.cpp) constroem seu QShortcut
@@ -840,6 +1242,20 @@ void MainWindow::setupActionShortcuts()
         {QStringLiteral("action.collapse_all"), [this]() { triggerCollapseAll(); }},
         {QStringLiteral("action.hide_selected"), [this]() { triggerToggleHiddenSelected(); }},
         {QStringLiteral("action.show_hidden"), [this]() { triggerToggleShowHidden(); }},
+        {QStringLiteral("action.show_running_only"), [this]() { triggerToggleRunningOnly(); }},
+        // Esc (padrão) esconde a janela — mas NUNCA quando o foco está
+        // dentro de um terminal INTERATIVO (ex: vim rodando via um comando
+        // com interactive_terminal): Esc é tecla de uso comum lá dentro e
+        // sequestrá-la quebraria o programa rodando. Fora disso, mesmo
+        // comportamento de toggleVisibility() quando a janela já está
+        // visível — hide() simples.
+        {QStringLiteral("action.hide_window"), [this]() {
+            if (m_terminalDrawer && m_terminalDrawer->interactiveMode()
+                && m_terminalDrawer->isAncestorOf(QApplication::focusWidget())) {
+                return;
+            }
+            hide();
+        }},
     };
 
     for (const auto &spec : utils::actionShortcutSpecs()) {
@@ -876,6 +1292,14 @@ void MainWindow::setupActionShortcuts()
 void MainWindow::toggleSearchBar()
 {
     const bool willShow = !m_searchBar->isVisible();
+    if (m_commandsCollapsed) {
+        // A busca é da lista: traz a lista de volta (e, com a busca já aberta, só devolve o foco a ela).
+        setCommandsCollapsed(false);
+        if (!willShow) {
+            m_searchBar->setFocus();
+            return;
+        }
+    }
     m_searchBar->setVisible(willShow);
     if (willShow) {
         // Ao exibir, autofoca para o usuário já digitar.
@@ -910,7 +1334,7 @@ void MainWindow::toggleOutputFocus()
     // nele, já que teclas vão direto pro PTY (ver PtyTerminalWidget).
     const auto it = m_commandsById.constFind(m_connectedTerminalCommandId);
     const bool connectedIsInteractive = it != m_commandsById.constEnd()
-        && it->type == core::CommandType::Shell && it->interactiveTerminal;
+        && it->type == core::CommandType::Command && it->interactiveTerminal;
     if (connectedIsInteractive) {
         m_terminalDrawer->focusInteractiveTerminal();
     } else {
@@ -1003,6 +1427,201 @@ void MainWindow::applyActionGroupPlacement()
     if (m_sideActionsContainer) {
         m_sideActionsContainer->setGroups(sideGroups);
     }
+
+    // Largura da coluna de ícones (pedido do usuário: o handle de resize
+    // dela foi desabilitado — ver setupUi/m_horizontalSplitter — então
+    // NADA MAIS ajusta essa largura depois da distribuição inicial do
+    // QSplitter, que roda ainda com os containers vazios/escondidos e por
+    // isso reserva pouco ou nenhum espaço). Aplicamos aqui, toda vez que os
+    // grupos mudam, o tamanho "natural" de cada coluna (ActionGroupContainer
+    // ::contentWidth(), 0 se estiver oculta) e o resto pra árvore — sem
+    // isso os ícones ficavam espremidos/cortados por padrão (bug relatado
+    // com print).
+    if (m_horizontalSplitter && m_leftActionsContainer && m_sideActionsContainer) {
+        const int leftW = m_leftActionsContainer->isHidden() ? 0 : m_leftActionsContainer->contentWidth();
+        const int sideW = m_sideActionsContainer->isHidden() ? 0 : m_sideActionsContainer->contentWidth();
+        m_horizontalSplitter->setSizes({leftW, 10000, sideW});
+    }
+
+    updateTreeBorderResizeHandles();
+    syncPanelBarHeights();
+}
+
+void MainWindow::applyFrameInsets()
+{
+    // O recuo interno das molduras depende do raio dos cantos: sem ele o canto
+    // quadrado dos filhos cobre o arco da borda (ver panelFrameInset).
+    const int inset = panelFrameInset();
+    if (m_treeContainerLayout) {
+        m_treeContainerLayout->setContentsMargins(inset, inset, inset, inset);
+    }
+    if (m_terminalDrawer) {
+        m_terminalDrawer->refreshFrameInset();
+    }
+}
+
+void MainWindow::syncPanelBarHeights()
+{
+    if (!m_terminalDrawer) {
+        return;
+    }
+    // Base do design system; as barras de ação podem ser mais altas que ela (o
+    // tamanho dos botões não acompanha a densidade), então vale a maior altura
+    // REAL entre as barras horizontais e o piso da base.
+    const int baseHeight = utils::tokens::controlHeight() + utils::tokens::space(2);
+    int height = baseHeight;
+    for (const ActionGroupContainer *bar : {m_upperActionsContainer, m_bottomActionsContainer}) {
+        if (bar && !bar->isHidden()) {
+            height = qMax(height, bar->naturalBarHeight());
+        }
+    }
+    // Teto: a barra nunca passa muito da base. Um sizeHint TRANSITÓRIO (grupos
+    // que acabaram de trocar de orientação, layout ainda não recalculado)
+    // inflaria TODAS as barras de uma vez — cabeçalho da Saída, abas e as duas
+    // barras de ação — e empurraria a lista para fora da tela.
+    height = qMin(height, baseHeight + utils::tokens::space(3));
+    for (ActionGroupContainer *bar : {m_upperActionsContainer, m_bottomActionsContainer}) {
+        if (bar) {
+            bar->setBarHeight(height);
+        }
+    }
+    m_terminalDrawer->setBarHeight(height);
+    // As abas das pastas raiz têm a mesma altura das barras (e reaplicam o
+    // estilo único de abas com os tokens atuais de tema/densidade).
+    if (m_commandTree) {
+        m_commandTree->setTabBarHeight(height);
+    }
+}
+
+void MainWindow::updateTreeBorderResizeHandles()
+{
+    if (!m_horizontalSplitter || !m_outerSplitter || !m_terminalDrawer
+        || !m_leftActionsContainer || !m_sideActionsContainer) {
+        return;
+    }
+    // Só há coluna ENTRE a lista e a Saída quando o divisor externo é
+    // horizontal: Saída à direita -> coluna "side" (handle 2); Saída à
+    // esquerda -> coluna "left" (handle 1). Embaixo não há nada a repassar.
+    const bool outerHorizontal = m_outerSplitter->orientation() == Qt::Horizontal;
+    const int drawerIndex = m_outerSplitter->indexOf(m_terminalDrawer);
+    struct Border { int handleIndex; bool active; };
+    const Border borders[] = {
+        {1, outerHorizontal && drawerIndex == 0 && !m_leftActionsContainer->isHidden()},
+        {2, outerHorizontal && drawerIndex == 1 && !m_sideActionsContainer->isHidden()},
+    };
+    for (const Border &border : borders) {
+        QSplitterHandle *handle = m_horizontalSplitter->handle(border.handleIndex);
+        if (!handle) {
+            continue;
+        }
+        // Instala o repassador uma única vez por handle (ele vive como filho do
+        // handle e lê o estado atual do MainWindow a cada evento).
+        if (!handle->property("kaiTreeBorderForwarder").toBool()) {
+            handle->setProperty("kaiTreeBorderForwarder", true);
+            new HandleDragForwarder(handle, [this](bool press, int globalX) {
+                dragTreeBorder(press, globalX);
+            });
+        }
+        handle->setEnabled(border.active);
+        handle->setCursor(border.active ? Qt::SplitHCursor : Qt::ArrowCursor);
+    }
+}
+
+void MainWindow::dragTreeBorder(bool press, int globalX)
+{
+    if (!m_outerSplitter || !m_terminalDrawer || !m_mainAreaWrapper || m_commandsCollapsed
+        || m_outerSplitter->orientation() != Qt::Horizontal) {
+        return;
+    }
+    if (press) {
+        m_treeDragStartX = globalX;
+        m_treeDragStartSizes = m_outerSplitter->sizes();
+        return;
+    }
+    const int drawerIndex = m_outerSplitter->indexOf(m_terminalDrawer);
+    if (m_treeDragStartSizes.size() != 2 || drawerIndex < 0) {
+        return;
+    }
+    // Arrastar a borda para a direita alarga o lado ESQUERDO do divisor
+    // externo (Saída à esquerda -> a Saída; à direita -> a área da lista).
+    const int total = m_treeDragStartSizes.at(0) + m_treeDragStartSizes.at(1);
+    const int wantLeft = m_treeDragStartSizes.at(0) + (globalX - m_treeDragStartX);
+    const int wantDrawer = drawerIndex == 0 ? wantLeft : total - wantLeft;
+
+    // A Saída respeita seus limites (mínimo, e máximo quando colapsada); a área
+    // da lista mantém um mínimo utilizável.
+    const int mainMin = qMax(m_mainAreaWrapper->minimumSizeHint().width(), 200);
+    const int drawerMin = m_terminalDrawer->minimumWidth();
+    const int drawerMax = qMin(m_terminalDrawer->maximumWidth(), total - mainMin);
+    const int drawerWidth = qBound(drawerMin, wantDrawer, qMax(drawerMin, drawerMax));
+    const int left = drawerIndex == 0 ? drawerWidth : total - drawerWidth;
+
+    m_outerSplitter->setSizes({left, total - left});
+    captureOutputRatio();
+    if (m_outputSplitterSaveTimer) {
+        m_outputSplitterSaveTimer->start();
+    }
+}
+
+namespace {
+constexpr double kMinOutputRatio = 0.1;
+constexpr double kMaxOutputRatio = 0.9;
+
+double defaultOutputRatio(const QString &position)
+{
+    return position == QStringLiteral("bottom") ? 0.5 : 1.0 / 3.0;
+}
+} // namespace
+
+void MainWindow::captureOutputRatio()
+{
+    if (!m_outerSplitter || !m_terminalDrawer || !m_terminalDrawer->isExpanded() || m_commandsCollapsed) {
+        return;
+    }
+    const int idx = m_outerSplitter->indexOf(m_terminalDrawer);
+    const QList<int> sizes = m_outerSplitter->sizes();
+    if (idx < 0 || sizes.size() != 2 || sizes.at(0) + sizes.at(1) <= 0) {
+        return;
+    }
+    m_outputRatio = qBound(kMinOutputRatio,
+                           double(sizes.at(idx)) / double(sizes.at(0) + sizes.at(1)),
+                           kMaxOutputRatio);
+}
+
+void MainWindow::applyOutputRatio()
+{
+    if (m_applyingOutputRatio || !m_outerSplitter || !m_terminalDrawer || !m_mainAreaWrapper
+        || m_outputRatio <= 0.0 || !m_terminalDrawer->isExpanded() || m_commandsCollapsed) {
+        return;
+    }
+    const int idx = m_outerSplitter->indexOf(m_terminalDrawer);
+    if (idx < 0 || m_outerSplitter->count() != 2) {
+        return;
+    }
+    const bool horizontal = m_outerSplitter->orientation() == Qt::Horizontal;
+    // O geometry do splitter já é o novo (o filtro roda no Resize), mas o
+    // sizes() ainda é o antigo: o total vem da geometria.
+    const int total = (horizontal ? m_outerSplitter->width() : m_outerSplitter->height())
+                      - m_outerSplitter->handleWidth();
+    if (total <= 0) {
+        return;
+    }
+    const auto axis = [horizontal](const QSize &size) { return horizontal ? size.width() : size.height(); };
+    const int drawerMin = qMax(axis(m_terminalDrawer->minimumSize()),
+                               axis(m_terminalDrawer->minimumSizeHint()));
+    const int mainMin = qMax(axis(m_mainAreaWrapper->minimumSizeHint()), horizontal ? 200 : 120);
+    const int drawerMax = qMax(drawerMin, total - mainMin);
+    const int drawerSize = qBound(drawerMin, qRound(m_outputRatio * total), drawerMax);
+
+    QList<int> sizes{0, 0};
+    sizes[idx] = drawerSize;
+    sizes[1 - idx] = total - drawerSize;
+    if (sizes == m_outerSplitter->sizes()) {
+        return;
+    }
+    m_applyingOutputRatio = true;
+    m_outerSplitter->setSizes(sizes);
+    m_applyingOutputRatio = false;
 }
 
 void MainWindow::applyOutputPosition()
@@ -1038,21 +1657,30 @@ void MainWindow::applyOutputPosition()
         (pos == QStringLiteral("left") || pos == QStringLiteral("right")) ? Qt::Horizontal : Qt::Vertical;
 
     auto *newSplitter = new QSplitter(orientation, m_content);
+    // Nome usado pelo QSS para tirar a linha do divisor entre as duas molduras.
+    newSplitter->setObjectName(QStringLiteral("outerSplitter"));
     newSplitter->setChildrenCollapsible(false);
 
     if (pos == QStringLiteral("left")) {
         // Saída à esquerda, área principal (busca+árvore/actions) à direita.
+        // STRETCH INVERTIDO (pedido do usuário): ao redimensionar a JANELA
+        // (não o arraste manual do divisor — stretchFactor só afeta esse
+        // caso), quem deve absorver a diferença é a SAÍDA (factor 1), não
+        // a área principal — antes era o contrário, e a Saída parecia
+        // "grudada" no mesmo tamanho enquanto só a janela/área principal
+        // mudava.
         newSplitter->addWidget(m_terminalDrawer);
         newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->setStretchFactor(0, 0);
-        newSplitter->setStretchFactor(1, 1);
-        newSplitter->setSizes({4000, 8000});
-    } else if (pos == QStringLiteral("right")) {
-        // Área principal à esquerda, Saída à direita.
-        newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->addWidget(m_terminalDrawer);
         newSplitter->setStretchFactor(0, 1);
         newSplitter->setStretchFactor(1, 0);
+        newSplitter->setSizes({4000, 8000});
+    } else if (pos == QStringLiteral("right")) {
+        // Área principal à esquerda, Saída à direita. Mesmo racional acima:
+        // a Saída (agora índice 1) é quem absorve o resize da janela.
+        newSplitter->addWidget(m_mainAreaWrapper);
+        newSplitter->addWidget(m_terminalDrawer);
+        newSplitter->setStretchFactor(0, 0);
+        newSplitter->setStretchFactor(1, 1);
         newSplitter->setSizes({8000, 4000});
     } else {
         // "bottom" (padrão/histórico) — estrutura e proporção
@@ -1089,9 +1717,21 @@ void MainWindow::applyOutputPosition()
     // default de qualquer forma na próxima chamada de applyOutputPosition,
     // o que é aceitável: o usuário raramente troca de posição e re-resize
     // é rápido).
-    if (settings.outputSplitterSizes.size() == 2) {
-        newSplitter->setSizes(settings.outputSplitterSizes);
+    // Só a PROPORÇÃO importa (o salvo são dois números relativos, não pixels:
+    // a janela pode abrir maximizada ou menor que da última vez). Trocar a
+    // posição da Saída volta ao padrão da nova orientação.
+    const bool positionChanged = !m_appliedOutputPosition.isEmpty() && m_appliedOutputPosition != pos;
+    m_appliedOutputPosition = pos;
+    m_outputRatio = defaultOutputRatio(pos);
+    if (!positionChanged && settings.outputSplitterSizes.size() == 2) {
+        const int idx = newSplitter->indexOf(m_terminalDrawer);
+        const double sum = double(settings.outputSplitterSizes.at(0)) + settings.outputSplitterSizes.at(1);
+        const double saved = sum > 0 ? settings.outputSplitterSizes.at(idx) / sum : 0.0;
+        if (saved >= kMinOutputRatio && saved <= kMaxOutputRatio) {
+            m_outputRatio = saved;
+        }
     }
+    newSplitter->installEventFilter(this);
 
     if (auto *contentLayout = qobject_cast<QVBoxLayout *>(m_content->layout())) {
         contentLayout->addWidget(newSplitter, 1);
@@ -1099,8 +1739,10 @@ void MainWindow::applyOutputPosition()
     m_outerSplitter = newSplitter;
 
     // Painel de Saída SEMPRE visível (bug histórico documentado em
-    // setupUi(): reparentar via QSplitter nunca deve escondê-lo).
+    // setupUi(): reparentar via QSplitter nunca deve escondê-lo). Na tela de
+    // boas-vindas quem some é o divisor inteiro (ver setWelcomeMode).
     m_terminalDrawer->setVisible(true);
+    newSplitter->setVisible(!m_welcomeMode);
 
     // Persiste o tamanho toda vez que o usuário arrasta o divisor (não em
     // resizes programáticos — splitterMoved só dispara em drag manual do
@@ -1116,19 +1758,274 @@ void MainWindow::applyOutputPosition()
                 return;
             }
             core::SettingsData s = m_configManager.loadSettings();
-            s.outputSplitterSizes = m_outerSplitter->sizes();
+            if (m_outputRatio > 0.0) {
+                const int drawerPart = qRound(m_outputRatio * 10000);
+                s.outputSplitterSizes = m_outerSplitter->indexOf(m_terminalDrawer) == 0
+                    ? QList<int>{drawerPart, 10000 - drawerPart}
+                    : QList<int>{10000 - drawerPart, drawerPart};
+            }
             m_configManager.saveSettings(s);
         });
     }
-    connect(newSplitter, &QSplitter::splitterMoved, m_outputSplitterSaveTimer,
-            qOverload<>(&QTimer::start));
+    connect(newSplitter, &QSplitter::splitterMoved, this, [this]() {
+        captureOutputRatio();
+        m_outputSplitterSaveTimer->start();
+    });
+    if (positionChanged) {
+        m_outputSplitterSaveTimer->start();
+    }
+    if (m_commandsCollapsed) {
+        m_mainAreaWrapper->setVisible(false); // o reparent para o splitter novo não pode reabri-la
+    }
+    applyOutputRatio();
+
+    updateTreeBorderResizeHandles();
+    updateCommandsToggle();
+}
+
+void MainWindow::setCommandsCollapsed(bool collapsed)
+{
+    if (!m_mainAreaWrapper || !m_terminalDrawer) {
+        return;
+    }
+    if (collapsed != m_commandsCollapsed) {
+        if (collapsed) {
+            captureOutputRatio(); // lembra a divisão para devolver igual
+            m_commandsCollapsed = true;
+            if (!m_terminalDrawer->isExpanded()) {
+                m_terminalDrawer->setExpanded(true);
+            }
+            m_mainAreaWrapper->setVisible(false);
+        } else {
+            m_commandsCollapsed = false;
+            m_mainAreaWrapper->setVisible(true);
+            applyOutputRatio();
+            updateTreeBorderResizeHandles();
+        }
+    }
+    updateCommandsToggle();
+    if (!m_restoringUiState) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        if (settings.commandsCollapsed != m_commandsCollapsed) {
+            settings.commandsCollapsed = m_commandsCollapsed;
+            m_configManager.saveSettings(settings);
+        }
+    }
+}
+
+void MainWindow::showQuickRun()
+{
+    if (!m_quickRun) {
+        m_quickRun = new QuickRunPopup(this);
+        connect(m_quickRun, &QuickRunPopup::commandChosen, this, [this](const QString &commandId) {
+            // Escolher já executa: pede os parâmetros, se houver, e mostra a saída (a lista pode estar recolhida).
+            handleCommandActivated(commandId);
+        });
+    }
+    // As pastas que levam a cada comando, da raiz até a que o contém.
+    auto pathOf = [this](const QString &folderId) {
+        QStringList names;
+        QSet<QString> seen;
+        QString current = folderId;
+        while (!current.isEmpty() && !seen.contains(current)) {
+            seen.insert(current);
+            QString parent;
+            for (const core::Folder &f : m_commandsData.folders) {
+                if (f.id == current) {
+                    names.prepend(f.name);
+                    parent = f.parentId.value_or(QString());
+                    break;
+                }
+            }
+            current = parent;
+        }
+        return names.join(QStringLiteral(" / "));
+    };
+    QVector<QuickRunPopup::Entry> entries;
+    for (const core::Command &command : m_commandsData.commands) {
+        if (!command.hidden) {
+            entries.append({command.id, command.name, pathOf(command.folderId)});
+        }
+    }
+    m_quickRun->refreshStyle();
+    m_quickRun->setEntries(entries);
+    OutputTabsBar *bar = m_terminalDrawer->outputTabs();
+    const QRect anchor = bar->quickRunRect().isValid() ? bar->quickRunRect() : bar->rect();
+    m_quickRun->openBelow(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
+}
+
+// Conta uma abertura da documentação da pasta e grava o contador (doc-usage.json) numa thread, sem pressa: o menu de
+// documentos ordena por isto.
+void MainWindow::recordDocUse(const QString &folderId)
+{
+    ++m_docUsage[folderId];
+    if (!m_docUsageSaveTimer) {
+        m_docUsageSaveTimer = new QTimer(this);
+        m_docUsageSaveTimer->setSingleShot(true);
+        m_docUsageSaveTimer->setInterval(1500);
+        connect(m_docUsageSaveTimer, &QTimer::timeout, this, [this]() {
+            if (m_docUsageSaving) {
+                m_docUsageSaveTimer->start();
+                return;
+            }
+            m_docUsageSaving = true;
+            const QMap<QString, int> snapshot = m_docUsage;
+            QPointer<MainWindow> guard(this);
+            QThread *thread = QThread::create([guard, snapshot]() {
+                core::ConfigManager config;
+                config.saveDocUsage(snapshot);
+                QMetaObject::invokeMethod(guard.data(), [guard]() {
+                    if (guard) {
+                        guard->m_docUsageSaving = false;
+                    }
+                }, Qt::QueuedConnection);
+            });
+            connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+            thread->start();
+        });
+    }
+    m_docUsageSaveTimer->start();
+}
+
+// O ícone de documentos: lista as pastas que têm documentação, mais usadas primeiro. Cada FONTE aparece uma vez: uma
+// subpasta que só herda o diretório da pasta pai (ou repete o de outra) não entra; entra a que tem notas próprias ou
+// um diretório próprio com documentos. Procurar documentos toca o disco, então roda numa thread e o menu abre quando
+// ela termina.
+void MainWindow::showDocsMenu()
+{
+    struct Candidate {
+        QString id;
+        QString label;
+        QString directory; // só quando a pasta tem diretório PRÓPRIO a verificar
+        bool hasNotes = false;
+    };
+    auto labelOf = [this](const QString &folderId) {
+        QStringList names;
+        QSet<QString> seen;
+        QString current = folderId;
+        while (!current.isEmpty() && !seen.contains(current)) {
+            seen.insert(current);
+            QString parent;
+            for (const core::Folder &f : m_commandsData.folders) {
+                if (f.id == current) {
+                    names.prepend(f.name);
+                    parent = f.parentId.value_or(QString());
+                    break;
+                }
+            }
+            current = parent;
+        }
+        return names.join(QStringLiteral(" › "));
+    };
+    QVector<Candidate> candidates;
+    QSet<QString> seenDirectories;
+    for (const core::Folder &folder : m_commandsData.folders) {
+        if (folder.hidden) {
+            continue;
+        }
+        const QString directory = QDir::cleanPath(folderDocumentDirectory(folder.id));
+        const QString parentDirectory = folder.parentId ? QDir::cleanPath(folderDocumentDirectory(*folder.parentId)) : QString();
+        const bool hasNotes = !docNotesFor(folder.id).isEmpty();
+        const bool ownDirectory = directory != QLatin1String(".") && !directory.isEmpty() && directory != parentDirectory
+            && !seenDirectories.contains(directory);
+        if (ownDirectory) {
+            seenDirectories.insert(directory);
+        }
+        if (hasNotes || ownDirectory) {
+            candidates.append({folder.id, labelOf(folder.id), ownDirectory ? directory : QString(), hasNotes});
+        }
+    }
+    QStringList directories;
+    for (const Candidate &candidate : std::as_const(candidates)) {
+        if (!candidate.directory.isEmpty()) {
+            directories << candidate.directory;
+        }
+    }
+    QPointer<MainWindow> guard(this);
+    QThread *thread = QThread::create([guard, candidates, directories]() {
+        QSet<QString> withDocuments;
+        for (const QString &directory : directories) {
+            if (ui::directoryHasDocuments(directory)) {
+                withDocuments.insert(directory);
+            }
+        }
+        QMetaObject::invokeMethod(guard.data(), [guard, candidates, withDocuments]() {
+            if (!guard) {
+                return;
+            }
+            QVector<Candidate> listed;
+            for (const Candidate &candidate : candidates) {
+                if (candidate.hasNotes || withDocuments.contains(candidate.directory)) {
+                    listed.append(candidate);
+                }
+            }
+            // Mais usadas primeiro; empate: ordem alfabética do caminho (a pasta pai fica junto das suas subpastas).
+            std::stable_sort(listed.begin(), listed.end(), [guard](const Candidate &a, const Candidate &b) {
+                const int usageA = guard->m_docUsage.value(a.id);
+                const int usageB = guard->m_docUsage.value(b.id);
+                return usageA != usageB ? usageA > usageB : a.label.compare(b.label, Qt::CaseInsensitive) < 0;
+            });
+            auto *menu = new QMenu(guard);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            if (listed.isEmpty()) {
+                menu->addAction(utils::tr(QStringLiteral("output_tabs.docs.empty")))->setEnabled(false);
+            }
+            for (const Candidate &candidate : std::as_const(listed)) {
+                QAction *action = menu->addAction(LucideIcons::icon(QStringLiteral("file-text"), QColor(utils::tokens::mutedFg()), 16),
+                                                  candidate.label);
+                const QString folderId = candidate.id;
+                connect(action, &QAction::triggered, guard.data(), [guard, folderId]() { guard->openFolderDocs(folderId); });
+            }
+            OutputTabsBar *bar = guard->m_terminalDrawer->outputTabs();
+            const QRect anchor = bar->docsRect().isValid() ? bar->docsRect() : bar->rect();
+            menu->popup(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
+        }, Qt::QueuedConnection);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+// Volta à visualização de documentos de uma pasta: seleciona a pasta na árvore (a seleção é quem abre a documentação);
+// sem como selecionar (a aba raiz), abre a documentação direto.
+void MainWindow::openFolderDocs(const QString &folderId)
+{
+    if (!m_terminalDrawer) {
+        return;
+    }
+    if (!m_terminalDrawer->isExpanded()) {
+        m_terminalDrawer->setExpanded(true);
+    }
+    const bool alreadySelected = m_commandTree->currentSelectionId() == folderId;
+    if (alreadySelected || !m_commandTree->selectCommand(folderId)) {
+        resetDrawerForNonCommand(true);
+        showFolderDocumentation(folderId);
+    }
+}
+
+void MainWindow::updateCommandsToggle()
+{
+    if (!m_terminalDrawer) {
+        return;
+    }
+    // A lista fica em cima quando a Saída está embaixo; ao lado oposto quando a Saída está à esquerda/direita.
+    Qt::Edge edge = Qt::TopEdge;
+    if (m_appliedOutputPosition == QStringLiteral("left")) {
+        edge = Qt::RightEdge;
+    } else if (m_appliedOutputPosition == QStringLiteral("right")) {
+        edge = Qt::LeftEdge;
+    }
+    OutputTabsBar *bar = m_terminalDrawer->outputTabs();
+    bar->setCommandsToggleVisible(true);
+    bar->setCommandsToggleState(m_commandsCollapsed, edge);
 }
 
 void MainWindow::applyEditShortcutOnSelection()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty()) {
-        if (m_commandTree->currentSelectionIsCollection()) {
+        if (m_commandTree->currentSelectionIsNote()) {
+            handleNoteEditRequested(id);
+        } else if (m_commandTree->currentSelectionIsCollection()) {
             handleCollectionEditRequested(id);
         } else {
             handleEditRequested(id, m_commandTree->currentSelectionIsFolder());
@@ -1140,7 +2037,11 @@ void MainWindow::applyDeleteShortcutOnSelection()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty()) {
-        handleDeleteRequested(id, m_commandTree->currentSelectionIsFolder());
+        if (m_commandTree->currentSelectionIsNote()) {
+            handleNoteDeleteRequested(id);
+        } else {
+            handleDeleteRequested(id, m_commandTree->currentSelectionIsFolder());
+        }
     }
 }
 
@@ -1154,6 +2055,10 @@ void MainWindow::applyDeleteShortcutOnSelection()
 void MainWindow::triggerPlaySelected()
 {
     const QString id = m_commandTree->currentSelectionId();
+    if (!id.isEmpty() && m_commandTree->currentSelectionIsNote()) {
+        handleNoteActivated(id); // "executar" uma nota é abri-la para editar
+        return;
+    }
     if (!id.isEmpty() && !m_commandTree->currentSelectionIsFolder()) {
         handleCommandActivated(id);
     }
@@ -1171,7 +2076,7 @@ void MainWindow::triggerForceStopSelected()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty() && !m_commandTree->currentSelectionIsFolder()) {
-        handleKillCommandRequested(id); // ProcessManager::stop já faz terminate->timeout->kill
+        handleKillCommandRequested(id, /*force=*/true);
     }
 }
 
@@ -1187,7 +2092,9 @@ void MainWindow::triggerEditSelected()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty()) {
-        if (m_commandTree->currentSelectionIsCollection()) {
+        if (m_commandTree->currentSelectionIsNote()) {
+            handleNoteEditRequested(id);
+        } else if (m_commandTree->currentSelectionIsCollection()) {
             handleCollectionEditRequested(id);
         } else {
             handleEditRequested(id, m_commandTree->currentSelectionIsFolder());
@@ -1207,7 +2114,9 @@ void MainWindow::triggerDeleteSelected()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty()) {
-        if (m_commandTree->currentSelectionIsCollection()) {
+        if (m_commandTree->currentSelectionIsNote()) {
+            handleNoteDeleteRequested(id);
+        } else if (m_commandTree->currentSelectionIsCollection()) {
             handleCollectionDeleteRequested(id);
         } else {
             handleDeleteRequested(id, m_commandTree->currentSelectionIsFolder());
@@ -1262,7 +2171,15 @@ void MainWindow::triggerToggleHiddenSelected()
     if (id.isEmpty()) {
         return;
     }
-    if (m_commandTree->currentSelectionIsCollection()) {
+    if (m_commandTree->currentSelectionIsNote()) {
+        for (core::Note &note : m_notes) {
+            if (note.id == id) {
+                note.hidden = !note.hidden;
+                break;
+            }
+        }
+        persistNotes();
+    } else if (m_commandTree->currentSelectionIsCollection()) {
         for (core::Collection &col : m_collections) {
             if (col.id == id) {
                 col.hidden = !col.hidden;
@@ -1309,6 +2226,33 @@ void MainWindow::triggerToggleShowHidden()
     m_configManager.saveSettings(settings);
 }
 
+void MainWindow::showEyeEasterEgg()
+{
+    const QString title = utils::tr(QStringLiteral("easter_egg.eye.title"));
+    // Sempre entra no histórico (e acende o contador de não lidas da barra
+    // inferior — a única pista visível sem bandeja, como no WSLg).
+    core::NotificationRecord record;
+    record.eventKey = QStringLiteral("easter_egg_eye");
+    record.title = title;
+    m_notificationHistory.append(record);
+    // O toast do sistema segue o interruptor geral de notificações; ignora a
+    // regra "janela em foco" de propósito: o clique é feito dentro da janela.
+    if (trayAvailable() && m_configManager.loadSettings().notificationsEnabled) {
+        m_trayIcon->showMessage(title, QStringLiteral("Kai"), QSystemTrayIcon::Information, 3000);
+    }
+}
+
+void MainWindow::triggerToggleRunningOnly()
+{
+    m_showRunningOnly = !m_showRunningOnly;
+    if (m_commandTree) {
+        m_commandTree->setShowRunningOnly(m_showRunningOnly);
+    }
+    if (m_expandCollapseBar) {
+        m_expandCollapseBar->setShowingRunningOnly(m_showRunningOnly);
+    }
+}
+
 void MainWindow::quitApplication()
 {
     // Fechamento real do app (nova ação "Fechar Aplicativo",
@@ -1338,25 +2282,42 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     if (m_processListDialog) {
         m_processListDialog->applyThemeVariables(theme.variables);
     }
-    // Recolori os ícones neutros dos 3 grupos de ações com a cor de
-    // destaque do tema (feedback do usuário: ícones seguem a cor do tema,
-    // não um roxo fixo).
-    const QString accentHex = theme.variables.value(QStringLiteral("accent_color"),
-                                                     theme.variables.value(QStringLiteral("accent")));
-    if (m_actionSidebar && !accentHex.isEmpty()) {
-        m_actionSidebar->applyAccentColor(QColor(accentHex));
+    // Ícones neutros dos 3 grupos de ações: cinza do tema (o mesmo dos ícones
+    // do cabeçalho da Saída). O accent fica para seleção e ação primária —
+    // com tudo em roxo nada se destacava. Play/Parar/Forçar seguem com suas
+    // cores semânticas (verde/amarelo/vermelho).
+    if (m_statusLine) {
+        m_statusLine->applyTheme();
     }
-    if (m_expandCollapseBar && !accentHex.isEmpty()) {
-        m_expandCollapseBar->applyAccentColor(QColor(accentHex));
+    // Barra do topo: ícones de menu e botões de janela em cinza cravado.
+    if (m_topBar) {
+        m_topBar->refreshStyle();
     }
-    if (m_itemActionsBar && !accentHex.isEmpty()) {
-        m_itemActionsBar->applyAccentColor(QColor(accentHex));
+    // Tela de boas-vindas: monta todo o estilo na construção (accent de fallback
+    // antes do tema existir) — refaz com os tokens do tema carregado.
+    if (m_welcomeScreen) {
+        m_welcomeScreen->applyTheme();
+    }
+    // Abas das pastas raiz e barras de ação: o sublinhado da aba selecionada
+    // (accent) e o texto das inativas ficavam congelados na cor do tema
+    // anterior — o QSS delas só era montado na construção.
+    syncPanelBarHeights();
+    const QColor neutralIconColor(utils::tokens::mutedFg());
+    if (m_actionSidebar) {
+        m_actionSidebar->applyAccentColor(neutralIconColor);
+    }
+    if (m_expandCollapseBar) {
+        m_expandCollapseBar->applyAccentColor(neutralIconColor);
+    }
+    if (m_itemActionsBar) {
+        m_itemActionsBar->applyAccentColor(neutralIconColor);
     }
     // Reconstrói a árvore/abas para os ícones (abas de root, itens) que são
     // recoloridos com o accent do tema (IconPickerWidget::iconForName) pegarem
     // a nova cor no live-reload — senão só atualizariam ao reabrir o app.
     if (m_commandTree) {
-        m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections);
+        m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+        m_commandTree->refreshTreeConnectorColor(QColor(utils::tokens::accent()));
     }
 }
 
@@ -1364,6 +2325,11 @@ void MainWindow::loadConfig()
 {
     m_commandsData = m_configManager.loadCommands();
     m_collections = m_configManager.loadCollections();
+    m_notes = m_configManager.loadNotes();
+    m_docUsage = m_configManager.loadDocUsage();
+    core::bindPendingCollectionReferences(m_commandsData.commands, m_collections);
+    // Reschedule CRON timers após carregar comandos
+    m_cronScheduler.reschedule(m_commandsData.commands);
 
     const core::SettingsData settings = m_configManager.loadSettings();
     // As variáveis globais agora vêm do environment (pacote) ATIVO — o
@@ -1378,6 +2344,12 @@ void MainWindow::loadConfig()
     // usamos o mesmo valor já salvo — idempotente, não regrava nada
     // diferente.
     m_terminalDrawer->setExpanded(!settings.terminalCollapsed);
+    // A lista de comandos recolhida também volta como estava (nunca junto com a Saída recolhida).
+    if (settings.commandsCollapsed && !settings.terminalCollapsed) {
+        m_restoringUiState = true;
+        setCommandsCollapsed(true);
+        m_restoringUiState = false;
+    }
 
     reloadCommandTree();
 }
@@ -1386,13 +2358,19 @@ void MainWindow::appendToCommandLog(const QString &commandId, const QString &tex
 {
     QString &log = m_commandLogs[commandId];
     log += text;
+    // Saída nova numa guia que não está em foco ganha a marca de novidade.
+    if (m_terminalDrawer) {
+        m_terminalDrawer->outputTabs()->markActivity(commandId);
+    }
 
     // Limita o buffer por comando para evitar crescimento ilimitado de
     // memória em processos de longa duração (mesmo espírito do
-    // setMaximumBlockCount do TerminalDrawer) — mantém os últimos ~200KB.
-    constexpr int kMaxLogSizeChars = 200000;
-    if (log.size() > kMaxLogSizeChars) {
-        log = log.right(kMaxLogSizeChars);
+    // setMaximumBlockCount do TerminalDrawer) — configurável em
+    // Configurações → Saída (bug reportado: um valor fixo de 200KB
+    // descartava o INÍCIO do log de scripts verbosos, "rodei um script
+    // grandinho e perdi logs"; default agora 1MB, ajustável).
+    if (log.size() > m_outputMaxLogSizeChars) {
+        log = log.right(m_outputMaxLogSizeChars);
     }
 }
 
@@ -1408,11 +2386,9 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // e, por fim, para o CWD, quando o comando não define um.
     {
         QString dir;
-        for (const core::Command &c : m_commandsData.commands) {
-            if (c.id == commandId) {
-                dir = m_envManager.interpolate(c.workingDir);
-                break;
-            }
+        const auto wdIt = m_commandsById.constFind(commandId); // inclui o comando virtual de uma ação
+        if (wdIt != m_commandsById.constEnd()) {
+            dir = m_pipeline->effectiveWorkingDir(*wdIt, m_envManager);
         }
         if (dir.trimmed().isEmpty()) {
             dir = m_envManager.interpolate(QStringLiteral("{{PROJECT_DIR}}"));
@@ -1435,13 +2411,18 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // tela a partir do log bruto já acumulado — um único vterm é
     // reaproveitado entre comandos (ver OutputPanel::setInteractiveMode),
     // então trocar de seleção e voltar é seguro/determinístico.
+    const bool isKip = (it != m_commandsById.constEnd()) && it->kip && it->type == core::CommandType::Command;
     const bool isInteractive = (it != m_commandsById.constEnd())
-        && it->type == core::CommandType::Shell && it->interactiveTerminal;
+        && it->type == core::CommandType::Command && it->interactiveTerminal && !isKip;
     m_terminalDrawer->setInteractiveMode(isInteractive);
     // "Saída" não faz sentido pra HTTP (feedback do usuário) — some pra
     // qualquer comando HTTP, aparece de novo pra shell/desconhecido.
     m_terminalDrawer->setStdoutTabVisible(
         it == m_commandsById.constEnd() || it->type != core::CommandType::Http);
+    // Saída formatada (Command::formattedOutput) — POR COMANDO (pedido do
+    // usuário), não uma preferência de exibição global.
+    m_terminalDrawer->setFormattedOutputEnabled(
+        it != m_commandsById.constEnd() && it->formattedOutput && !isKip);
 
     m_terminalDrawer->setCommandName(displayName);
     // (removido) linha "[Saída conectada ao comando X]": boilerplate — o nome do
@@ -1452,14 +2433,31 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // já estava na tela, dobrando a saída. A ordem é sempre limpar (topo) ->
     // reinjetar o histórico -> receber os chunks novos ao vivo.
     m_terminalDrawer->appendRawText(m_commandLogs.value(commandId), false);
+    // FLUSH SÍNCRONO: appendRawText só ENFILEIRA (coalescing de 16ms
+    // pensado para chunks de streaming ao vivo, não para o replay do
+    // histórico ao reconectar). Bug relatado: comandos em modo Markdown
+    // às vezes carregavam vazios (no boot ou ao trocar de aba) — a
+    // reconexão seguinte (ex.: showEvent() reselecionando o primeiro item
+    // visível, 0ms) podia rodar clear() ANTES do timer de 16ms disparar,
+    // apagando o histórico enfileirado sem nada disparar de novo
+    // (reselecionar o MESMO item não reemite currentItemChanged). Forçar o
+    // flush aqui garante que o conteúdo já esteja no widget de saída antes
+    // de qualquer reconexão subsequente ter chance de limpar de novo.
+    m_terminalDrawer->flushPendingOutput();
     if (isInteractive) {
         m_terminalDrawer->resetInteractiveAndReplay(m_commandLogs.value(commandId));
     }
 
-    // Botão "Ver JSON" reflete o log DESTE comando (feedback do usuário:
-    // qualquer log com JSON — não só HTTP — deve oferecer a árvore, e ao
-    // reselecionar um comando já executado o botão precisa reaparecer).
-    m_terminalDrawer->setJsonAvailable(m_commandLogs.value(commandId));
+    // Botão "Ver JSON" reflete o log DESTE comando — SÓ para HTTP (pedido do
+    // usuário, revertendo uma versão anterior que detectava JSON em
+    // QUALQUER log de shell: "quero apenas para cmds http" — a Saída
+    // Formatada já cobre o caso de logs de shell estruturados, então a
+    // detecção automática por conteúdo virou ruído/falso positivo ali).
+    if (it != m_commandsById.constEnd() && it->type == core::CommandType::Http) {
+        m_terminalDrawer->setJsonAvailable(m_commandLogs.value(commandId));
+    } else {
+        m_terminalDrawer->setJsonAvailable(QString());
+    }
 
     // Reaplica o resultado HTTP estruturado (se houver) para RESTAURAR as
     // abas Headers/JSON ao reselecionar um comando HTTP já executado — antes
@@ -1492,7 +2490,7 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
     // usava m_activePipelineCommandId, que ficava desatualizado ao rodar um
     // 2º TTY, fazendo o 1º parecer "sem input" ao reconectar).
     // Runner DESTE comando (registry por commandId) — não mais o "ativo".
-    const bool runningInPipeline = m_pipeline->runnerFor(commandId) != nullptr;
+    const bool runningInPipeline = runnerFor(commandId) != nullptr;
     const bool stillRunning = runningInManager || runningInPipeline;
     m_terminalDrawer->setInputEnabled(stillRunning);
     if (isInteractive) {
@@ -1511,8 +2509,38 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
         // Última execução deste comando foi pulada por Execution Condition
         // — badge âmbar, não o verde de sucesso (ver commandSkippedByCondition).
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Skipped);
+    } else if (m_failedCommandIds.contains(commandId)) {
+        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Failed);
     } else {
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Success);
+    }
+
+    // KIP: religa a view à sessão deste comando (que sobrevive ao fim do
+    // processo — o estado final continua visível até rodar de novo). O badge
+    // reflete o desfecho da sessão.
+    if (isKip) {
+        engine::KipSession *session = kipSessionFor(commandId);
+        m_terminalDrawer->bindKipSession(commandId, session);
+        m_terminalDrawer->setInputEnabled(false);
+        if (session && !runningInPipeline) {
+            switch (session->state()) {
+            case core::KipSessionState::Finished: m_terminalDrawer->setExecutionStatus(ExecutionStatus::Success); break;
+            case core::KipSessionState::Cancelled: m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle); break;
+            case core::KipSessionState::Unsupported:
+            case core::KipSessionState::ProtocolError:
+            case core::KipSessionState::Failed: m_terminalDrawer->setExecutionStatus(ExecutionStatus::Failed); break;
+            default: break;
+            }
+        }
+    } else {
+        m_terminalDrawer->clearKip();
+    }
+
+    // Mostrar a saída de um comando (clique nele, uma execução, "mostrar saída") traz a guia dele de volta.
+    if (hasOutputToShow(commandId)) {
+        ensureOutputTab(commandId);
+    } else {
+        refreshOutputTabs();
     }
 }
 
@@ -1521,11 +2549,24 @@ engine::ProcessRunner *MainWindow::runnerForCommandId(const QString &commandId) 
     if (commandId.isEmpty()) {
         return nullptr;
     }
-    engine::ProcessRunner *r = m_pipeline->runnerFor(commandId);
+    engine::ProcessRunner *r = runnerFor(commandId);
     if (!r) {
         r = m_processManager->runnerFor(commandId);
     }
     return r;
+}
+
+void MainWindow::clearOutputPanel()
+{
+    m_terminalDrawer->clearKip();
+    m_terminalDrawer->clear();
+    m_terminalDrawer->setCommandName(QString());
+    m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
+    m_terminalDrawer->setInputEnabled(false);
+    m_terminalDrawer->setInteractiveMode(false);
+    m_terminalDrawer->setStdoutTabVisible(true);
+    m_terminalDrawer->setInteractiveAcceptingInput(false);
+    m_connectedTerminalCommandId.clear();
 }
 
 void MainWindow::handleTerminalCloseRequested()
@@ -1538,14 +2579,244 @@ void MainWindow::handleTerminalCloseRequested()
     // A caixa da Saída permanece sempre visível no layout; o
     // botão "Fechar" apenas limpa o conteúdo e volta ao estado Idle, sem
     // remover o widget do splitter.
-    m_terminalDrawer->clear();
-    m_terminalDrawer->setCommandName(QString());
-    m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
-    m_terminalDrawer->setInputEnabled(false);
-    m_terminalDrawer->setInteractiveMode(false);
-    m_terminalDrawer->setStdoutTabVisible(true);
-    m_terminalDrawer->setInteractiveAcceptingInput(false);
-    m_connectedTerminalCommandId.clear();
+    const QString closedId = m_connectedTerminalCommandId;
+    clearOutputPanel();
+    if (!closedId.isEmpty()) {
+        m_outputTabOrder.removeAll(closedId);
+    }
+    refreshOutputTabs();
+}
+
+// --- Barra de guias das saídas ---
+
+// Há algo para mostrar na saída deste comando? (log guardado, processo vivo ou sessão KIP.)
+bool MainWindow::hasOutputToShow(const QString &commandId) const
+{
+    return !m_commandLogs.value(commandId).isEmpty() || isCommandRunning(commandId) || kipSessionFor(commandId) != nullptr;
+}
+
+void MainWindow::ensureOutputTab(const QString &commandId)
+{
+    if (commandId.isEmpty() || !m_commandsById.contains(commandId)) {
+        return;
+    }
+    if (!m_outputTabOrder.contains(commandId)) {
+        m_outputTabOrder.append(commandId);
+    }
+    refreshOutputTabs();
+}
+
+void MainWindow::refreshOutputTabs()
+{
+    if (!m_terminalDrawer) {
+        return;
+    }
+    // A saída que está na tela sempre tem guia (um comando em segundo plano que volta a falar depois de a guia ser
+    // fechada, por exemplo), mas um comando selecionado que nunca rodou não ganha uma.
+    const QString shown = m_connectedTerminalCommandId;
+    if (!shown.isEmpty() && !m_outputTabOrder.contains(shown) && m_commandsById.contains(shown) && hasOutputToShow(shown)) {
+        m_outputTabOrder.append(shown);
+    }
+    // Um comando apagado sai da barra (mas nunca uma guia que ainda roda ou tem log: o índice dos comandos virtuais
+    // das ações é refeito por inteiro de tempos em tempos).
+    for (auto it = m_outputTabOrder.begin(); it != m_outputTabOrder.end();) {
+        if (!m_commandsById.contains(*it) && !m_commandLogs.contains(*it) && !isCommandRunning(*it)) {
+            it = m_outputTabOrder.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    QVector<OutputTabInfo> tabs;
+    for (const QString &id : std::as_const(m_outputTabOrder)) {
+        const auto cmdIt = m_commandsById.constFind(id);
+        OutputTabInfo info;
+        info.id = id;
+        info.title = cmdIt != m_commandsById.constEnd() ? cmdIt->name : id;
+        QString where;
+        if (const auto actionIds = core::parseFolderActionCommandId(id)) {
+            where = folderDisplayName(actionIds->folderId);
+            if (!where.isEmpty()) {
+                info.title += QStringLiteral(" · ") + where;
+            }
+        }
+        const bool running = isCommandRunning(id);
+        const engine::KipSession *kip = kipSessionFor(id);
+        if (running) {
+            info.status = kip && kip->screen().awaitingInput() ? OutputTabStatus::Waiting : OutputTabStatus::Running;
+        } else if (m_skippedReason.contains(id)) {
+            info.status = OutputTabStatus::Skipped;
+        } else if (m_failedCommandIds.contains(id)) {
+            info.status = OutputTabStatus::Failed;
+        } else if (hasOutputToShow(id)) {
+            info.status = OutputTabStatus::Success;
+        }
+        info.tooltip = info.title + QLatin1Char('\n') + OutputTabsBar::statusText(info.status);
+        tabs.append(info);
+    }
+    OutputTabsBar *bar = m_terminalDrawer->outputTabs();
+    bar->setTabs(tabs);
+    bar->setCurrent(shown);
+}
+
+void MainWindow::activateOutputTab(const QString &commandId)
+{
+    if (!m_commandsById.contains(commandId)) {
+        return;
+    }
+    if (const auto actionIds = core::parseFolderActionCommandId(commandId)) {
+        // Ação de pasta: leva a árvore até a pasta (a aba raiz certa), que é selecionada — selecionar uma pasta limpa a
+        // saída, por isso a saída da ação é reconectada DEPOIS, e o ícone da ação ganha o foco.
+        m_commandTree->selectCommand(actionIds->folderId);
+        reconnectTerminalToCommand(commandId);
+        m_commandTree->setFocusedAction(commandId);
+        return;
+    }
+    // Seleciona o comando na árvore (trocando a aba raiz, se for de outro projeto). Se ele já era o item atual, ou
+    // não está na árvore (oculto, filtrado), a seleção não reconecta sozinha.
+    const bool selected = m_commandTree->selectCommand(commandId);
+    if (!selected || m_connectedTerminalCommandId != commandId) {
+        reconnectTerminalToCommand(commandId);
+    }
+}
+
+void MainWindow::closeOutputTab(const QString &commandId)
+{
+    const int index = m_outputTabOrder.indexOf(commandId);
+    if (index < 0) {
+        return;
+    }
+    m_outputTabOrder.removeAt(index);
+    if (m_commandTree->focusedAction() == commandId) {
+        m_commandTree->setFocusedAction(QString());
+    }
+    if (commandId != m_connectedTerminalCommandId) {
+        refreshOutputTabs();
+        return;
+    }
+    // Fechou a guia que está na tela: vai para a vizinha (a anterior, se era a última); sem nenhuma, a saída esvazia.
+    if (m_outputTabOrder.isEmpty()) {
+        clearOutputPanel();
+        refreshOutputTabs();
+        return;
+    }
+    activateOutputTab(m_outputTabOrder.at(qMin(index, int(m_outputTabOrder.size()) - 1)));
+}
+
+void MainWindow::cycleOutputTab(int direction)
+{
+    const int count = int(m_outputTabOrder.size());
+    if (count == 0) {
+        return;
+    }
+    const int current = m_outputTabOrder.indexOf(m_connectedTerminalCommandId);
+    const int next = current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count;
+    activateOutputTab(m_outputTabOrder.at(next));
+}
+
+void MainWindow::showOutputTabMenu(const QString &commandId, const QPoint &globalPos)
+{
+    if (!m_commandsById.contains(commandId)) {
+        return;
+    }
+    // O clique direito NÃO traz a guia para a tela: o menu age sobre a guia clicada sem tirar o usuário do que ele está
+    // vendo. Só "Mostrar na árvore" a ativa.
+    const bool running = isCommandRunning(commandId);
+    const bool othersExist = m_outputTabOrder.size() > 1;
+    bool anyFinished = false;
+    for (const QString &id : std::as_const(m_outputTabOrder)) {
+        anyFinished = anyFinished || !isCommandRunning(id);
+    }
+
+    const QColor accent(utils::tokens::accent());
+    QMenu menu(this);
+    QAction *stopAction = menu.addAction(LucideIcons::icon(QStringLiteral("square"), QColor(utils::tokens::warningFg()), 16),
+                                         utils::tr(QStringLiteral("output_tabs.menu.stop")));
+    stopAction->setEnabled(running);
+    QAction *rerunAction = menu.addAction(LucideIcons::icon(QStringLiteral("play"), QColor(utils::tokens::successFg()), 16),
+                                          utils::tr(QStringLiteral("output_tabs.menu.rerun")));
+    rerunAction->setEnabled(!running);
+    QAction *treeAction = menu.addAction(LucideIcons::icon(QStringLiteral("folder-search"), accent, 16),
+                                         utils::tr(QStringLiteral("output_tabs.menu.show_in_tree")));
+    menu.addSeparator();
+    QAction *closeAction = menu.addAction(LucideIcons::icon(QStringLiteral("x"), accent, 16),
+                                          utils::tr(QStringLiteral("output_tabs.menu.close")));
+    QAction *closeOthersAction = menu.addAction(utils::tr(QStringLiteral("output_tabs.menu.close_others")));
+    closeOthersAction->setEnabled(othersExist);
+    QAction *closeFinishedAction = menu.addAction(utils::tr(QStringLiteral("output_tabs.menu.close_finished")));
+    closeFinishedAction->setEnabled(anyFinished);
+    menu.addSeparator();
+    // Limpar / copiar / exportar agem sobre o LOG da guia clicada (não sobre o que o painel mostra agora).
+    const QColor muted(utils::tokens::mutedFg());
+    const bool hasLog = !m_commandLogs.value(commandId).isEmpty();
+    QAction *clearAction = menu.addAction(LucideIcons::icon(QStringLiteral("trash-2"), muted, 15),
+                                          utils::tr(QStringLiteral("output.menu.clear")));
+    QAction *copyAction = menu.addAction(LucideIcons::icon(QStringLiteral("clipboard-copy"), muted, 15),
+                                         utils::tr(QStringLiteral("output.menu.copy_all")));
+    QAction *exportAction = menu.addAction(LucideIcons::icon(QStringLiteral("download"), muted, 15),
+                                           utils::tr(QStringLiteral("output.menu.export_to_file")));
+    clearAction->setEnabled(hasLog);
+    copyAction->setEnabled(hasLog);
+    exportAction->setEnabled(hasLog);
+    menu.addSeparator();
+    m_terminalDrawer->embeddedPanel()->fillOptionsMenu(&menu);
+
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) {
+        return;
+    }
+    // O log guardado é o texto cru do processo (com as sequências ANSI de cor): copiar/exportar leva o texto limpo.
+    auto plainLog = [this, commandId]() {
+        static const QRegularExpression ansi(QStringLiteral("\\x1B\\[[0-9;?]*[ -/]*[@-~]|\\x1B\\][^\\x07]*\\x07"));
+        QString text = m_commandLogs.value(commandId);
+        text.remove(ansi);
+        text.remove(QLatin1Char('\r'));
+        return text;
+    };
+    if (chosen == clearAction) {
+        m_commandLogs[commandId].clear();
+        if (commandId == m_connectedTerminalCommandId) {
+            m_terminalDrawer->embeddedPanel()->clearAll();
+        }
+        refreshOutputTabs();
+    } else if (chosen == copyAction) {
+        QGuiApplication::clipboard()->setText(plainLog());
+    } else if (chosen == exportAction) {
+        const auto cmdIt = m_commandsById.constFind(commandId);
+        const QString baseName = cmdIt != m_commandsById.constEnd() ? cmdIt->name : QStringLiteral("saida");
+        const QString suggested = QStringLiteral("%1_%2.log")
+            .arg(baseName, QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HHmmss")));
+        const QString path = pickSaveFile(this, utils::tr(QStringLiteral("output.export.dialog_title")), suggested,
+                                          utils::tr(QStringLiteral("output.export.filter")));
+        if (!path.isEmpty()) {
+            QSaveFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write(plainLog().toUtf8()) < 0 || !file.commit()) {
+                QMessageBox::warning(this, utils::tr(QStringLiteral("output.export.dialog_title")),
+                    utils::tr(QStringLiteral("output.export.failed")));
+            }
+        }
+    } else if (chosen == stopAction) {
+        handleKillCommandRequested(commandId, false);
+    } else if (chosen == rerunAction) {
+        handleCommandActivated(commandId);
+    } else if (chosen == treeAction) {
+        activateOutputTab(commandId);
+        m_commandTree->setFocus();
+    } else if (chosen == closeAction) {
+        closeOutputTab(commandId);
+    } else if (chosen == closeOthersAction) {
+        for (const QString &id : QStringList(m_outputTabOrder)) {
+            if (id != commandId) {
+                closeOutputTab(id);
+            }
+        }
+    } else if (chosen == closeFinishedAction) {
+        for (const QString &id : QStringList(m_outputTabOrder)) {
+            if (!isCommandRunning(id)) {
+                closeOutputTab(id);
+            }
+        }
+    }
 }
 
 void MainWindow::changeEvent(QEvent *event)
@@ -1554,6 +2825,64 @@ void MainWindow::changeEvent(QEvent *event)
     if (event->type() == QEvent::ActivationChange && !isActiveWindow()) {
         maybeAutoHideOnFocusLoss();
     }
+    if (event->type() == QEvent::WindowStateChange) {
+        updateWindowShape(); // maximizada/tela cheia perdem os cantos arredondados
+    }
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    updateWindowShape();
+}
+
+void MainWindow::updateWindowShape()
+{
+    const bool fillsScreen = isMaximized() || isFullScreen();
+    // Raio MÉDIO do token (não o de "janela" radiusLg, 14-24px): uma máscara é
+    // binária e fica serrilhada, e quanto maior o raio mais o serrilhado aparece;
+    // ~8-9px é o tamanho das janelas padrão do Windows 11 e quase não serrilha.
+    const int radius = utils::tokens::radiusMd();
+
+#if defined(Q_OS_WIN)
+    // Windows 11: o próprio DWM arredonda a janela (suave, igual às janelas
+    // padrão). Só com a janela nativa já criada (visível); reaplicado quando o
+    // estilo de cantos muda (m_nativeCornerStyle é zerado em
+    // applyAppearanceSettings).
+    const int cornerStyle = utils::tokens::effects().cornerStyle;
+    if (isVisible() && m_nativeCornerStyle != cornerStyle) {
+        m_nativeCorners = applyNativeWindowCorners(this, cornerStyle);
+        m_nativeCornerStyle = cornerStyle;
+    }
+#endif
+
+    // O contêiner raiz (QSS "rootContainer") desenha o mesmo raio: maximizada —
+    // ou com cantos nativos do DWM, que já recortam a janela — fica reto
+    // (propriedade usada pela regra em app-stylesheet.cpp).
+    const bool flatRoot = fillsScreen || m_nativeCorners;
+    if (QWidget *root = centralWidget()) {
+        const bool wasFlat = root->property("kaiMaximized").toBool();
+        if (wasFlat != flatRoot) {
+            root->setProperty("kaiMaximized", flatRoot);
+            root->style()->unpolish(root);
+            root->style()->polish(root);
+        }
+    }
+
+    if (flatRoot || radius <= 0) {
+        clearMask();
+        return;
+    }
+    // A máscara é aplicada SEMPRE: com translucidez o QSS já pinta o arco com
+    // antialiasing, mas nem todo ambiente honra a transparência da janela (o
+    // canto ficava reto, relatado) — a máscara garante o recorte onde ela falha.
+    // No modo translúcido o raio da máscara é 2px MENOR que o pintado: a máscara
+    // fica por fora do arco suavizado e não serrilha a borda quando a
+    // transparência funciona; sem translucidez usa o raio cheio.
+    const int maskRadius = m_translucentWindow ? qMax(1, radius - 2) : radius;
+    QPainterPath path;
+    path.addRoundedRect(QRectF(rect()), maskRadius, maskRadius);
+    setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
 void MainWindow::maybeAutoHideOnFocusLoss()
@@ -1663,6 +2992,11 @@ void MainWindow::applyAppearanceSettings()
     fx.animations = st.fxAnimations;
     fx.cornerStyle = st.uiCornerStyle;
     utils::tokens::setEffects(fx);
+    // Master switch de gradientes (pedido do usuário: "uma opção que
+    // desabilita os gradientes") — hasGradient() de QUALQUER slot passa a
+    // retornar false enquanto desligado, mesmo que o tema ativo declare as
+    // variáveis; ver design-tokens.h.
+    utils::tokens::setGradientsEnabled(st.gradientsEnabled);
 
     // Re-aplica a folha (os tokens mudaram) e o backdrop da janela.
     if (m_themeManager && m_themeManager->hasTheme()) {
@@ -1673,11 +3007,28 @@ void MainWindow::applyAppearanceSettings()
     applyWindowBackdrop(this);
     applyElevation(m_terminalDrawer, 1);
 
+    // Cards do output panel e do diálogo de processos só recalculam o QSS
+    // (incluindo gradiente) dentro de applyThemeVariables() — não pegam o
+    // setStyleSheet() genérico acima. Sem isto, desligar "Gradientes" (ou
+    // qualquer outra config de aparência) aqui não tirava o gradiente
+    // desses widgets até o próximo live-reload de tema de verdade (bug
+    // relatado: "o modo gradiente mesmo desabilitando não sai, precisa
+    // reiniciar?").
+    if (m_themeManager && m_themeManager->hasTheme()) {
+        m_terminalDrawer->applyThemeVariables(m_themeManager->currentTheme().variables);
+        if (m_processListDialog) {
+            m_processListDialog->applyThemeVariables(m_themeManager->currentTheme().variables);
+        }
+    }
+
     // Os containers de posicionamento (upper/bottom/left/side) têm seu
     // próprio QSS (fundo/borda discretos), fora do stylesheet global acima
     // — sem isso, mudar "Estilo de cantos" no Settings não refletia neles
     // (bug relatado originalmente na antiga ExpandCollapseBar: "não segue
     // a preferência do usuário").
+    if (m_topBar) {
+        m_topBar->refreshStyle();
+    }
     if (m_upperActionsContainer) {
         m_upperActionsContainer->refreshStyle();
     }
@@ -1690,6 +3041,15 @@ void MainWindow::applyAppearanceSettings()
     if (m_sideActionsContainer) {
         m_sideActionsContainer->refreshStyle();
     }
+
+    if (m_commandTree) {
+        m_commandTree->setTreeConnectorStyle(st.treeConnectorStyle, QColor(utils::tokens::accent()));
+    }
+
+    applyFrameInsets();
+    syncPanelBarHeights();
+    m_nativeCornerStyle = -1; // reaplica os cantos nativos (estilo e cor da borda)
+    updateWindowShape(); // o raio dos cantos pode ter mudado
 }
 
 bool MainWindow::isCommandRunning(const QString &commandId) const
@@ -1704,11 +3064,14 @@ bool MainWindow::isCommandRunning(const QString &commandId) const
     if (m_pipelineRunningIds.contains(commandId)) {
         return true;
     }
-    return m_pipeline->runnerFor(commandId) != nullptr;
+    return runnerFor(commandId) != nullptr;
 }
 
 void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFolder)
 {
+    // A guia em foco acompanha a saída mostrada, qualquer que seja o ramo abaixo.
+    const auto syncTabs = qScopeGuard([this]() { refreshOutputTabs(); });
+
     // Atualiza as row actions da sidebar conforme a linha selecionada
     // (habilitar play/stop/force-stop/reset/edit/delete só quando a
     // linha permite). Estado de execução/falha vem dos conjuntos
@@ -1726,6 +3089,10 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     if (isCommand) {
         for (const core::Command &c : m_commandsData.commands) {
             if (c.id == itemId) { isHttp = (c.type == core::CommandType::Http); isHidden = c.hidden; break; }
+        }
+    } else if (hasSelection && m_commandTree->currentSelectionIsNote()) {
+        for (const core::Note &note : m_notes) {
+            if (note.id == itemId) { isHidden = note.hidden; break; }
         }
     } else if (hasSelection && m_commandTree->currentSelectionIsCollection()) {
         for (const core::Collection &col : m_collections) {
@@ -1748,20 +3115,17 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     // layout (feedback do usuário), mas o conteúdo ainda é
     // contextual. Selecionar um comando com histórico de log ou em
     // execução (background) reconecta e exibe o log automaticamente;
-    // selecionar uma pasta ou nada reconectado apenas limpa o conteúdo e
-    // volta ao estado Idle, sem esconder o widget.
+    // selecionar uma pasta ou nada SEMPRE limpa o conteúdo e volta ao
+    // estado Idle, sem esconder o widget — mesmo que o comando antes
+    // conectado ainda esteja rodando em background (bug reportado: "ao
+    // selecionar uma PASTA, e se um cmd está rodando dentro dela, o
+    // sistema exibe o cmd rodando, não quero isso" — antes só limpava
+    // quando o comando conectado NÃO estava mais rodando, então uma
+    // pasta selecionada continuava mostrando a saída de um comando ativo
+    // por baixo dela).
     if (itemId.isEmpty() || isFolder) {
-        if (m_connectedTerminalCommandId.isEmpty()
-            || !(m_processManager->isTracked(m_connectedTerminalCommandId)
-                 && m_processManager->statusOf(m_connectedTerminalCommandId) == engine::ProcessStatus::Running)) {
-            m_terminalDrawer->clear();
-            m_terminalDrawer->setCommandName(QString());
-            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
-            m_terminalDrawer->setInputEnabled(false);
-            m_terminalDrawer->setInteractiveMode(false);
-            m_terminalDrawer->setStdoutTabVisible(true);
-            m_connectedTerminalCommandId.clear();
-        }
+        resetDrawerForNonCommand(isFolder); // a documentação anterior só sai quando a nova (ou a falta dela) estiver decidida
+        showFolderDocumentation(isFolder ? itemId : QString());
         return;
     }
 
@@ -1772,20 +3136,354 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     // m_activePipelineCommandId (slot único), que o 2º comando sobrescrevia
     // — daí o Stop desaparecer ao voltar ao 1º TTY.
     const bool isPipelineActive = isCommandRunning(itemId);
+    // KIP: a sessão sobrevive ao fim do processo e mostra o desfecho (inclusive
+    // um app que não imprimiu nada em stderr) — também conta como "tem o que mostrar".
+    const bool hasKipSession = kipSessionFor(itemId) != nullptr;
 
-    if (hasLog || isTracked || isPipelineActive) {
+    if (hasLog || isTracked || isPipelineActive || hasKipSession) {
         reconnectTerminalToCommand(itemId);
     } else if (m_connectedTerminalCommandId != itemId) {
         // Comando sem histórico ainda: limpa o conteúdo em vez de forçar
         // exibição de um log vazio, evitando ruído visual para comandos
         // nunca executados. A caixa continua visível, apenas ociosa.
+        //
+        // BUG REAL CORRIGIDO ("saída formatada... traz a saída do comando
+        // pro cara errado"): este ramo limpava a tela mas NUNCA atualizava
+        // m_connectedTerminalCommandId — ficava apontando pro comando
+        // selecionado ANTES. Selecionar um comando B sem histórico ainda,
+        // vindo de um comando A conectado, deixava o backend pensando que
+        // A continuava conectado; um chunk de log NOVO de A (ainda rodando
+        // em background) então aparecia na tela sob o cabeçalho/seleção de
+        // B — e um chunk de B era descartado (o guard "!=
+        // m_connectedTerminalCommandId" no handler de log via commandId
+        // ainda achava que A era o conectado). Alinhar o id conectado (e
+        // o toggle de Saída Formatada, por-comando) aqui, mesmo sem
+        // histórico ainda, fecha a lacuna.
+        m_connectedTerminalCommandId = itemId;
+        m_terminalDrawer->setCurrentCommandId(itemId);
+        m_terminalDrawer->clearKip();
         m_terminalDrawer->clear();
         m_terminalDrawer->setCommandName(QString());
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
         m_terminalDrawer->setInputEnabled(false);
         m_terminalDrawer->setInteractiveMode(false);
         m_terminalDrawer->setStdoutTabVisible(true);
+        {
+            bool formattedOutput = false;
+            for (const core::Command &c : m_commandsData.commands) {
+                if (c.id == itemId) {
+                    formattedOutput = c.formattedOutput;
+                    break;
+                }
+            }
+            m_terminalDrawer->setFormattedOutputEnabled(formattedOutput);
+        }
     }
+}
+
+// A Saída fica ociosa e sem comando conectado (seleção de pasta, nota ou nada).
+void MainWindow::resetDrawerForNonCommand(bool keepDocument)
+{
+    m_terminalDrawer->clearKip();
+    m_terminalDrawer->clear(keepDocument);
+    m_terminalDrawer->setCommandName(QString());
+    m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
+    m_terminalDrawer->setInputEnabled(false);
+    m_terminalDrawer->setInteractiveMode(false);
+    m_terminalDrawer->setStdoutTabVisible(true);
+    m_connectedTerminalCommandId.clear();
+}
+
+bool MainWindow::isNoteId(const QString &id) const
+{
+    if (id.isEmpty()) {
+        return false;
+    }
+    for (const core::Note &note : m_notes) {
+        if (note.id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QVector<DocNote> MainWindow::docNotesFor(const QString &folderId) const
+{
+    QVector<DocNote> out;
+    for (const core::Note &note : m_notes) {
+        if (note.folderId == folderId) {
+            out.append({note.id, note.name, note.icon, note.type, note.content, note.local});
+        }
+    }
+    return out;
+}
+
+// O diretório que o leitor lista para a pasta (o de trabalho efetivo, já interpolado); vazio se não há um absoluto.
+QString MainWindow::folderDocumentDirectory(const QString &folderId) const
+{
+    QString path = const_cast<MainWindow *>(this)->m_envManager.interpolate(
+        core::effectiveFolderWorkingDir(folderId, m_commandsData.folders).trimmed());
+    if (path.contains(QStringLiteral("{{"))) {
+        return QString();
+    }
+    if (path == QLatin1String("~") || path.startsWith(QStringLiteral("~/"))) {
+        path = QDir::homePath() + path.mid(1);
+    }
+    return QDir::isAbsolutePath(path) ? path : QString();
+}
+
+void MainWindow::refreshDocNotes()
+{
+    OutputPanel *panel = m_terminalDrawer ? m_terminalDrawer->embeddedPanel() : nullptr;
+    if (panel && !m_docFolderId.isEmpty()) {
+        panel->updateDocumentNotes(docNotesFor(m_docFolderId), true);
+    }
+}
+
+void MainWindow::showFolderDocumentation(const QString &folderId)
+{
+    m_docFolderId.clear();
+    OutputPanel *panel = m_terminalDrawer->embeddedPanel();
+    if (!panel) {
+        return;
+    }
+    if (folderId.isEmpty()) {
+        panel->clearDocument();
+        return;
+    }
+    const core::Folder *folder = nullptr;
+    for (const core::Folder &f : m_commandsData.folders) {
+        if (f.id == folderId) {
+            folder = &f;
+            break;
+        }
+    }
+    if (!folder) {
+        panel->clearDocument();
+        return;
+    }
+    m_docFolderId = folderId;
+    recordDocUse(folderId);
+
+    auto expand = [this](QString path) {
+        path = m_envManager.interpolate(path.trimmed());
+        if (path.contains(QStringLiteral("{{"))) {
+            return QString();
+        }
+        if (path == QLatin1String("~") || path.startsWith(QStringLiteral("~/"))) {
+            path = QDir::homePath() + path.mid(1);
+        }
+        return path;
+    };
+    const QString workingDir = expand(core::effectiveFolderWorkingDir(folder->id, m_commandsData.folders));
+    const bool hasWorkingDir = !workingDir.isEmpty() && QDir::isAbsolutePath(workingDir);
+
+    // As notas da pasta aparecem no explorador; sem README, a primeira nota abre no lugar.
+    const QVector<DocNote> notes = docNotesFor(folderId);
+    if (hasWorkingDir) {
+        panel->showFolderReadme(workingDir, folder->name, notes, true);
+    } else if (!notes.isEmpty()) {
+        panel->showNote(notes.first().id, notes, QString(), folder->name, false);
+    } else {
+        panel->clearDocument(); // nada a mostrar: o documento da pasta anterior não pode ficar
+    }
+}
+
+// ------------------------------------------------------------------------------------------------------------- notas
+
+void MainWindow::persistNotes()
+{
+    if (!m_configManager.saveNotes(m_notes)) {
+        QMessageBox::warning(this, QStringLiteral("Kai"), utils::tr(QStringLiteral("mainwindow.error.persist_notes")));
+    }
+    reloadCommandTree();
+    refreshDocNotes();
+}
+
+void MainWindow::handleNewNoteRequested()
+{
+    const QString folderId = resolveTargetFolderId();
+    if (folderId.isEmpty()) {
+        QMessageBox::information(this, utils::tr(QStringLiteral("ctx.new.note")),
+            utils::tr(QStringLiteral("note.error.need_folder")));
+        return;
+    }
+    core::Note note;
+    note.id = QStringLiteral("note_") + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    note.folderId = folderId;
+    note.name = utils::tr(QStringLiteral("note.default_name"));
+    note.icon = QStringLiteral("notebook");
+    NotePropertiesDialog dialog(note, m_commandsData.folders, true, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    note = dialog.buildNote();
+    m_notes << note;
+    persistNotes();
+    // Abre a nota nova direto no editor: é para escrever.
+    m_commandTree->selectCommand(note.id);
+    showNoteView(note.id, true);
+}
+
+void MainWindow::handleNoteEditRequested(const QString &noteId)
+{
+    const auto it = std::find_if(m_notes.begin(), m_notes.end(), [&noteId](const core::Note &n) { return n.id == noteId; });
+    if (it == m_notes.end()) {
+        return;
+    }
+    NotePropertiesDialog dialog(*it, m_commandsData.folders, false, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const core::Note edited = dialog.buildNote();
+    it->name = edited.name;
+    it->icon = edited.icon;
+    it->type = edited.type;
+    it->folderId = edited.folderId;
+    it->local = edited.local;
+    persistNotes();
+    if (m_commandTree->currentSelectionId() == noteId) {
+        handleNoteSelected(noteId); // volta a mostrar com o tipo/nome novos
+    }
+}
+
+void MainWindow::handleNoteDuplicateRequested(const QString &noteId)
+{
+    const auto it = std::find_if(m_notes.constBegin(), m_notes.constEnd(), [&noteId](const core::Note &n) { return n.id == noteId; });
+    if (it == m_notes.constEnd()) {
+        return;
+    }
+    core::Note copy = *it;
+    copy.id = QStringLiteral("note_") + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+    copy.name = it->name + utils::tr(QStringLiteral("duplicate.name_suffix"));
+    copy.order = -1;
+    m_notes << copy;
+    persistNotes();
+}
+
+void MainWindow::handleNoteDeleteRequested(const QString &noteId)
+{
+    if (!confirmYesNo(this, utils::tr(QStringLiteral("delete.confirm.title")),
+                      utils::tr(QStringLiteral("delete.confirm.note")))) {
+        return;
+    }
+    m_notes.removeIf([&noteId](const core::Note &n) { return n.id == noteId; });
+    persistNotes();
+}
+
+void MainWindow::handleNoteSelected(const QString &noteId)
+{
+    // Barras e Saída como numa seleção de pasta (nota não executa); depois mostra a nota no leitor.
+    handleCommandSelectionChanged(noteId, true);
+    showNoteView(noteId, false);
+}
+
+void MainWindow::handleNoteActivated(const QString &noteId)
+{
+    if (m_commandTree->currentSelectionId() != noteId) {
+        m_commandTree->selectCommand(noteId); // seleciona (e mostra); abaixo só entra na edição
+    }
+    showNoteView(noteId, true);
+}
+
+void MainWindow::showNoteView(const QString &noteId, bool startEditing)
+{
+    OutputPanel *panel = m_terminalDrawer->embeddedPanel();
+    const auto it = std::find_if(m_notes.constBegin(), m_notes.constEnd(), [&noteId](const core::Note &n) { return n.id == noteId; });
+    if (!panel || it == m_notes.constEnd()) {
+        return;
+    }
+    if (m_connectedTerminalCommandId == noteId) {
+        m_connectedTerminalCommandId.clear();
+    }
+    m_docFolderId = it->folderId;
+    QString label = it->folderId;
+    for (const core::Folder &f : m_commandsData.folders) {
+        if (f.id == it->folderId) {
+            label = f.name;
+        }
+    }
+    panel->showNote(noteId, docNotesFor(it->folderId), folderDocumentDirectory(it->folderId), label, startEditing);
+}
+
+void MainWindow::handleDocKaiLink(const QString &action, const QString &target)
+{
+    const QString wanted = target.trimmed();
+    // O comando de mesmo nome mais perto da pasta que mostra o documento: ela mesma, depois as de dentro, depois o resto.
+    auto folderDepthFrom = [this](const QString &commandFolderId) {
+        int depth = 0;
+        QString current = commandFolderId;
+        QSet<QString> seen;
+        while (!current.isEmpty() && !seen.contains(current)) {
+            if (current == m_docFolderId) {
+                return depth;
+            }
+            seen.insert(current);
+            QString parent;
+            for (const core::Folder &f : m_commandsData.folders) {
+                if (f.id == current) {
+                    parent = f.parentId.value_or(QString());
+                    break;
+                }
+            }
+            current = parent;
+            ++depth;
+        }
+        return 1000;
+    };
+    auto matches = [&wanted](const QString &id, const QString &name) {
+        return id == wanted || name.compare(wanted, Qt::CaseInsensitive) == 0;
+    };
+    const core::Command *command = nullptr;
+    int bestDepth = 100000;
+    for (const core::Command &c : m_commandsData.commands) {
+        if (!matches(c.id, c.name)) {
+            continue;
+        }
+        const int depth = folderDepthFrom(c.folderId);
+        if (depth < bestDepth) {
+            bestDepth = depth;
+            command = &c;
+        }
+    }
+    const QString title = utils::tr(QStringLiteral("doc.kai.title"));
+
+    if (action == QLatin1String("env")) {
+        const core::SettingsData settings = m_configManager.loadSettings();
+        for (const core::Environment &e : settings.environments) {
+            if (matches(e.id, e.name)) {
+                if (QMessageBox::question(this, title, utils::tr(QStringLiteral("doc.kai.confirm_env")).arg(e.name),
+                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+                    handleEnvironmentSelected(e.id);
+                }
+                return;
+            }
+        }
+    } else if (action == QLatin1String("run")) {
+        if (command) {
+            if (QMessageBox::question(this, title, utils::tr(QStringLiteral("doc.kai.confirm_run")).arg(command->name),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+                m_commandTree->selectCommand(command->id);
+                handleCommandActivated(command->id);
+            }
+            return;
+        }
+    } else if (action == QLatin1String("open")) {
+        if (command) {
+            m_commandTree->selectCommand(command->id);
+            return;
+        }
+        for (const core::Folder &f : m_commandsData.folders) {
+            if (matches(f.id, f.name)) {
+                m_commandTree->selectCommand(f.id);
+                return;
+            }
+        }
+    } else {
+        QMessageBox::information(this, title, utils::tr(QStringLiteral("doc.kai.unknown_action")).arg(action));
+        return;
+    }
+    QMessageBox::information(this, title, utils::tr(QStringLiteral("doc.kai.not_found")).arg(wanted));
 }
 
 void MainWindow::updateRunningCommandStatus()
@@ -1811,11 +3509,14 @@ void MainWindow::updateRunningCommandStatus()
     runningIds.unite(m_pipelineRunningIds);
     // Runners de processo VIVOS no pipeline (fonte real): garante que a
     // bolinha reflita a realidade mesmo se o Set divergir.
-    for (const QString &id : m_pipeline->runningCommandIds()) {
+    for (const QString &id : allPipelineRunningCommandIds()) {
         runningIds.insert(id);
     }
     m_commandTree->setRunningCommandIds(runningIds);
     m_commandTree->setFailedCommandIds(m_failedCommandIds);
+    if (m_statusLine) {
+        m_statusLine->setRunningCount(runningIds.size());
+    }
 
     // PID visual na saída (feedback do usuário): mostra o PID do SO do
     // processo do comando atualmente CONECTADO ao terminal, quando há um
@@ -1824,7 +3525,7 @@ void MainWindow::updateRunningCommandStatus()
         qint64 pid = 0;
         const QString cid = m_connectedTerminalCommandId;
         if (!cid.isEmpty()) {
-            if (auto *pr = m_pipeline->runnerFor(cid)) {
+            if (auto *pr = runnerFor(cid)) {
                 pid = pr->processId();
             } else if (auto *r = m_processManager->runnerFor(cid)) {
                 if (m_processManager->statusOf(cid) == engine::ProcessStatus::Running) {
@@ -1864,7 +3565,7 @@ void MainWindow::updateRunningCommandStatus()
             QString st = QStringLiteral("parado");
             if (isCommandRunning(did)) {
                 qint64 pid = 0;
-                if (auto *r = m_pipeline->runnerFor(did)) {
+                if (auto *r = runnerFor(did)) {
                     pid = r->processId();
                 } else if (auto *br = m_processManager->runnerFor(did)) {
                     pid = br->processId();
@@ -1877,6 +3578,7 @@ void MainWindow::updateRunningCommandStatus()
             m_terminalDrawer->setDetachedStatusText(st);
         }
     }
+    refreshOutputTabs();
 }
 
 void MainWindow::reloadCommandTree()
@@ -1885,7 +3587,9 @@ void MainWindow::reloadCommandTree()
     for (const core::Command &command : m_commandsData.commands) {
         m_commandsById[command.id] = command;
     }
-    m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections);
+    rebuildActionCommands();
+    m_commandTree->setGlobalActions(m_globalActions);
+    m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
     updateRunningCommandStatus();
     updateWelcomeScreenVisibility();
 }
@@ -1905,26 +3609,34 @@ void MainWindow::updateWelcomeScreenVisibility()
     // Boas-Vindas) ou implicitamente quando o app deixa de estar vazio
     // (o próximo boot com dados já nem entra nesta condição).
     const bool showWelcome = isFreshInstall && !m_welcomeScreenDismissed;
-    if (m_welcomeScreen) {
-        m_welcomeScreen->setVisible(showWelcome);
-    }
-    if (m_commandTree) {
-        m_commandTree->setVisible(!showWelcome);
-    }
     // Saída começa COLAPSADA na tela de boas-vindas (pedido do usuário) —
-    // não tem nenhum comando pra mostrar ainda, então o painel vazio só
-    // ocupa espaço à toa. Não força expandir de volta ao sair do estado
-    // fresh-install: assim que o usuário rodar o primeiro comando, o
-    // caminho normal (handleCommandActivated -> setExpanded(true)) já
-    // cuida disso sozinho.
+    // não tem nenhum comando pra mostrar ainda. Não força expandir de volta ao
+    // sair do estado fresh-install: assim que o usuário rodar o primeiro
+    // comando, o caminho normal (handleCommandActivated -> setExpanded(true))
+    // já cuida disso sozinho.
     if (showWelcome && m_terminalDrawer) {
         m_terminalDrawer->setExpanded(false);
     }
-    // Os containers de ações (m_upperActionsContainer/m_bottomActionsContainer)
-    // NÃO são tocados aqui de propósito: sua visibilidade já é gerenciada
-    // por ActionGroupContainer::setGroups (some sozinho quando vazio) +
-    // applyActionGroupPlacement, conforme a preferência do usuário — forçar
-    // aqui reapareceria uma barra vazia mesmo com placement "hidden".
+    setWelcomeMode(showWelcome);
+    if (m_statusLine) {
+        m_statusLine->setVisible(!showWelcome);
+    }
+}
+
+void MainWindow::setWelcomeMode(bool welcome)
+{
+    m_welcomeMode = welcome;
+    // Pedido do usuário: na tela de boas-vindas NADA além dela aparece — nem a
+    // Saída, nem a lista, nem as barras de ação. A tela substitui o divisor
+    // externo inteiro (que contém tudo isso); nenhum widget de dentro é
+    // escondido/mostrado individualmente, então ao sair tudo volta exatamente
+    // como estava, sem recompor nada.
+    if (m_welcomeScreen) {
+        m_welcomeScreen->setVisible(welcome);
+    }
+    if (m_outerSplitter) {
+        m_outerSplitter->setVisible(!welcome);
+    }
 }
 
 void MainWindow::handleWelcomeScreenClosed()
@@ -1945,12 +3657,7 @@ void MainWindow::handleShowWelcomeRequested()
     // vazia. Some sozinha de novo ao fechar (volta pro estado normal:
     // árvore se houver dados, ou vazia se ainda não houver).
     m_welcomeScreenDismissed = false;
-    if (m_welcomeScreen) {
-        m_welcomeScreen->setVisible(true);
-    }
-    if (m_commandTree) {
-        m_commandTree->setVisible(false);
-    }
+    setWelcomeMode(true);
 }
 
 void MainWindow::centerOnActiveScreen()
@@ -1991,7 +3698,10 @@ void MainWindow::handleCommandActivated(const QString &commandId)
         return;
     }
 
-    const core::Command &command = it.value();
+    // CÓPIA, nunca referência para dentro de m_commandsById: o formulário de
+    // parâmetros é um loop modal, e ao confirmar o índice é reconstruído (comandos
+    // virtuais das ações apagados e recriados) — uma referência ficaria pendurada.
+    const core::Command command = it.value();
 
     // Terminal por-comando (feedback do usuário): se este
     // comando já está em execução em background, clicar nele de novo
@@ -2014,7 +3724,17 @@ void MainWindow::handleCommandActivated(const QString &commandId)
 
 // Coleta os parâmetros do comando (via ParameterFormDialog, se houver) e
 // dispara a execução.
-void MainWindow::promptParamsAndRun(const core::Command &command)
+// Dispara pelo mesmo caminho do clique, mas marcado como execução de segundo plano: se o comando é OCULTO (e não é KIP,
+// que precisa de alguém olhando a tela), ele roda sem expandir a Saída, sem guia e sem tomar a Saída de quem está na tela.
+// Ação de pasta e comando visível seguem o fluxo normal.
+void MainWindow::runInBackground(const QString &commandId)
+{
+    m_quietRun = true;
+    handleCommandActivated(commandId);
+    m_quietRun = false;
+}
+
+void MainWindow::promptParamsAndRun(core::Command command)
 {
     // DIAGNÓSTICO (bug reportado: comando com parâmetro não abre o diálogo):
     // registra quantos parâmetros o comando REALMENTE tem em runtime, para
@@ -2023,11 +3743,29 @@ void MainWindow::promptParamsAndRun(const core::Command &command)
         "promptParamsAndRun: comando '%1' (id=%2) tem %3 parâmetro(s).")
         .arg(command.name, command.id).arg(command.params.size()));
     if (!command.params.isEmpty()) {
+        // Só carrega/relê o arquivo de filtros se este comando tem PELO
+        // MENOS UM parâmetro ligado a coleção — evita I/O de disco à toa
+        // (load + save no mesmo objeto, sem mudança nenhuma) em todo
+        // comando parametrizado, mesmo os que nunca usam coleção.
+        const bool hasCollectionParam = std::any_of(command.params.constBegin(), command.params.constEnd(),
+            [](const core::Parameter &p) { return !p.collectionId.isEmpty(); });
+
         // Comando parametrizado: coleta os valores via
         // formulário antes de disparar o pipeline. Pré-preenche com os
         // últimos valores informados (feedback do usuário).
-        ParameterFormDialog dialog(command.params, this, command.lastParamValues, command.paramUsageHistory, m_collections, command.description);
-        if (dialog.exec() != QDialog::Accepted) {
+        ParameterFormDialog dialog(command.params, this, command.lastParamValues, command.paramUsageHistory,
+            m_collections, command.description,
+            hasCollectionParam ? m_configManager.loadCollectionFilters() : QMap<QString, core::CollectionFilterState>{});
+        const int dialogResult = dialog.exec();
+        // Busca/favoritos-only da(s) coleção(ões) usada(s) persistem mesmo
+        // se o usuário CANCELAR o formulário inteiro — é estado de
+        // navegação da tela de seleção, independente de ter confirmado a
+        // execução (pedido do usuário: "os filtros de coleções devem ser
+        // salvos").
+        if (hasCollectionParam) {
+            m_configManager.saveCollectionFilters(dialog.updatedCollectionFilters());
+        }
+        if (dialogResult != QDialog::Accepted) {
             utils::Logger::info(kLogTag, QStringLiteral("Execução de '%1' cancelada pelo usuário.").arg(command.name));
             return;
         }
@@ -2044,13 +3782,17 @@ void MainWindow::promptParamsAndRun(const core::Command &command)
         // Salva os últimos parâmetros informados E o histórico de uso
         // (feedback do usuário: ordenar opções pelo histórico) no comando
         // e persiste, para pré-preencher/reordenar na próxima execução.
+        // Uma ação de pasta guarda os parâmetros no comando de verdade.
+        const auto actionIds = core::parseFolderActionCommandId(command.id);
+        const QString persistedId = actionIds ? actionIds->commandId : command.id;
         for (core::Command &c : m_commandsData.commands) {
-            if (c.id == command.id) {
+            if (c.id == persistedId) {
                 if (c.lastParamValues != values || c.paramUsageHistory != updatedHistory) {
                     c.lastParamValues = values;
                     c.paramUsageHistory = updatedHistory;
                     m_configManager.saveCommands(m_commandsData);
                     m_commandsById[c.id] = c;
+                    rebuildActionCommands();
                 }
                 break;
             }
@@ -2069,6 +3811,12 @@ void MainWindow::scheduleAutoRunCommands()
         if (!command.autoRun) {
             continue;
         }
+        if (command.kip) {
+            // Sessão KIP precisa de alguém olhando a tela (spec 11 §15).
+            utils::Logger::info(kLogTag,
+                QStringLiteral("Auto-run ignorado: '%1' é um comando KIP.").arg(command.id));
+            continue;
+        }
         const int delayMs = qMax(0, command.autoRunDelaySec) * 1000;
         const QString commandId = command.id;
         // AUTO-RUN = AUTOCLICK (feedback do usuário: "é como se fosse apenas um
@@ -2082,26 +3830,18 @@ void MainWindow::scheduleAutoRunCommands()
             }
             utils::Logger::info(kLogTag,
                 QStringLiteral("Auto-run (autoclick): '%1'.").arg(commandId));
-            handleCommandActivated(commandId);
+            runInBackground(commandId);
         });
     }
 }
 
-void MainWindow::runCommandWithParams(const core::Command &command, const QMap<QString, QString> &paramValues)
+// Monta o ambiente de uma execução: variáveis da cadeia de pastas (o filho
+// sobrescreve o pai), escopo das dinâmicas e os parâmetros (com a expansão das
+// coleções). Usada pela execução normal (m_envManager) e pelas ações de pasta
+// (cada uma com a sua cópia).
+void MainWindow::configureEnvForRun(core::EnvironmentManager &env, const core::Command &command,
+                                    const QMap<QString, QString> &paramValues)
 {
-    // OCULTAR AO EXECUTAR (preferência POR COMANDO): esconde a janela do Kai ao
-    // disparar. Só esconde se houver bandeja — sem ela o usuário não teria como
-    // trazer a janela de volta e o app pareceria ter desaparecido.
-    if (command.hideOnRun) {
-        if (trayAvailable()) {
-            hide();
-        } else {
-            utils::Logger::warning(kLogTag,
-                QStringLiteral("Comando '%1' pede para ocultar o Kai, mas não há bandeja "
-                               "neste ambiente; mantendo a janela visível.").arg(command.id));
-        }
-    }
-
     // Escopo de pasta COM HERANÇA pela hierarquia (bug reportado: comando
     // em SUBPASTA não pegava o env_vars da pasta PAI/projeto — ex:
     // {{API_BASE}} ficava literal e o HTTP dava "Protocol '' is unknown").
@@ -2129,7 +3869,7 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
                 mergedVars[it.key()] = it.value(); // filho sobrescreve pai
             }
         }
-        m_envManager.setFolderVars(mergedVars);
+        env.setFolderVars(mergedVars);
 
         // Escopo das variáveis DINÂMICAS (ver EnvironmentManager::
         // setDynamicVarScope): a pasta-projeto (Folder::isProject) MAIS
@@ -2142,7 +3882,7 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
                 break;
             }
         }
-        m_envManager.setDynamicVarScope(dynamicScope);
+        env.setDynamicVarScope(dynamicScope);
     }
 
     // Parâmetros do formulário têm a precedência mais alta.
@@ -2171,74 +3911,98 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
         // de valores de TODAS as entradas escolhidas em {{param.campo__all}}
         // (separados por vírgula), útil para multi-seleção.
         const QStringList chosenIds = chosenRaw.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        QVector<const core::CollectionEntry *> chosenEntries;
+        // CÓPIAS por valor, não ponteiros pra dentro de colIt->entries
+        // (endurecimento defensivo: um ponteiro cru sobrevivendo além deste
+        // laço é uma UB à espreita se m_collections for tocado por
+        // qualquer motivo entre a busca e o uso — ex.: um favorito marcado
+        // há pouco tempo disparando algum caminho de persistência/replace
+        // no meio do caminho. Elimina a classe de bug inteira ao custo de
+        // uma cópia pequena por entrada escolhida).
+        QVector<core::CollectionEntry> chosenEntries;
         for (const QString &id : chosenIds) {
             const auto entryIt = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
                 [&id](const core::CollectionEntry &e) { return e.id == id; });
             if (entryIt != colIt->entries.constEnd()) {
-                chosenEntries << &(*entryIt);
+                chosenEntries << *entryIt;
             }
         }
         if (chosenEntries.isEmpty()) {
             continue;
         }
         // Primeira entrada -> {{param.campo}}.
-        const core::CollectionEntry *first = chosenEntries.first();
-        for (auto vit = first->values.constBegin(); vit != first->values.constEnd(); ++vit) {
+        const core::CollectionEntry &first = chosenEntries.first();
+        for (auto vit = first.values.constBegin(); vit != first.values.constEnd(); ++vit) {
             expandedParams.insert(QStringLiteral("%1.%2").arg(param.name, vit.key()), vit.value());
         }
-        // Todas -> {{param.campo__all}} (CSV) quando houver mais de uma.
-        if (chosenEntries.size() > 1) {
-            for (const core::CollectionField &f : colIt->schema) {
-                QStringList allVals;
-                for (const core::CollectionEntry *e : chosenEntries) {
-                    allVals << e->values.value(f.name);
-                }
-                expandedParams.insert(QStringLiteral("%1.%2__all").arg(param.name, f.name),
-                                      allVals.join(QLatin1Char(',')));
+        // Todas -> {{param.campo__all}} (CSV) — SEMPRE, mesmo com só 1
+        // entrada escolhida (bug real reportado: só era gerado com >1,
+        // então um comando usando "{{param.campo__all}}" ficava com o
+        // placeholder literal, sem substituir NADA, sempre que o usuário
+        // marcava uma única entrada — inconsistente com o multi-select de
+        // opções fixas, cujo "__labels" já era sempre gerado independente
+        // da contagem).
+        // Rótulo da entrada (pedido do usuário: "vou precisar ainda que
+        // injete o nome os rótulos tbm.. ambientes.value__label e
+        // ambientes.value__label__all") — o texto de EXIBIÇÃO da entrada
+        // (collectionDisplayField, com o mesmo fallback pro 1º campo do
+        // schema já usado no picker), à parte do valor cru do campo.
+        // Replicado por campo (não só uma chave "param__label" solta) pra
+        // bater exatamente com o padrão de nomenclatura já usado pelo
+        // usuário no dia a dia ("param.campo__sufixo").
+        // Ver core::resolveCollectionDisplayField (bug corrigido: campo Key
+        // configurado/pré-selecionado por padrão no editor de parâmetros
+        // não é uma exibição útil — mesma lógica usada no chip picker).
+        const QString displayField = core::resolveCollectionDisplayField(*colIt, param.collectionDisplayField);
+        const QString firstLabel = displayField.isEmpty() ? QString() : first.values.value(displayField);
+        QStringList allLabels;
+        if (!displayField.isEmpty()) {
+            for (const core::CollectionEntry &e : chosenEntries) {
+                allLabels << e.values.value(displayField);
             }
         }
+        for (const core::CollectionField &f : colIt->schema) {
+            QStringList allVals;
+            for (const core::CollectionEntry &e : chosenEntries) {
+                allVals << e.values.value(f.name);
+            }
+            expandedParams.insert(QStringLiteral("%1.%2__all").arg(param.name, f.name),
+                                  allVals.join(QLatin1Char(',')));
+            expandedParams.insert(QStringLiteral("%1.%2__label").arg(param.name, f.name), firstLabel);
+            expandedParams.insert(QStringLiteral("%1.%2__label__all").arg(param.name, f.name),
+                                  allLabels.join(QLatin1Char(',')));
+        }
     }
-    m_envManager.setParamVars(expandedParams);
+    env.setParamVars(expandedParams);
+}
 
-    // Execução começa diretamente na pasta/aba do comando; nenhum
-    // histórico separado é mantido na navegação principal.
-    // Terminal por-comando (indicadores visuais de execução):
-    // ao disparar a execução, conecta e exibe o terminal já sinalizando
-    // "Rodando", com o nome do comando no título.
-    m_connectedTerminalCommandId = command.id;
-    m_commandLogs[command.id].clear();
-    // Rastreia o comando de execução única ativo (shell rodando via
-    // pipeline, não background) para marcá-lo como "rodando" na árvore,
-    // permitir matá-lo e reconectar o stdin (bugs reportados). Só shell
-    // tem ProcessRunner; HTTP não.
-    m_activePipelineCommandId = (command.type == core::CommandType::Shell) ? command.id : QString();
-    // Marca a execução como em andamento (indicador estável — sobrevive a
-    // hooks e a outros comandos rodando). Limpo só no pipelineFinished.
-    if (command.type == core::CommandType::Shell) {
-        m_pipelineRunningIds.insert(command.id);
-    }
-    // Marca o início desta execução para registrar a duração no histórico.
-    m_runStartedAt = QDateTime::currentDateTime();
-    // Marca se o comando ativo é HTTP, para abrir o JSON viewer com a
-    // resposta ao finalizar (feature JSON viewer).
-    m_activePipelineIsHttp = (command.type == core::CommandType::Http);
-    // Nova execução limpa qualquer marcação anterior de "falhou"
-    // 05 — botão inline de reset): o estado de erro é só até a próxima
-    // tentativa, nunca permanente.
-    m_failedCommandIds.remove(command.id);
-    updateRunningCommandStatus();
+// Prepara o painel de Saída para uma execução de `command`: limpa, escolhe o
+// modo (KIP/terminal/HTTP/formatada), título e estado "rodando". Não mexe no
+// que é de UMA execução só (m_connectedTerminalCommandId, logs, indicadores).
+void MainWindow::prepareDrawerForRun(const core::Command &command)
+{
+    // Uma execução nova (re)abre a guia da saída e zera o cronômetro dela.
+    ensureOutputTab(command.id);
+    m_terminalDrawer->outputTabs()->noteRunStarted(command.id);
+
     m_terminalDrawer->clear();
+    // KIP: o corpo vira a view do app quando a sessão nascer (kipSessionStarted
+    // — pode demorar se houver pre-hooks); até lá, e para qualquer outro
+    // comando, o painel não está em modo KIP. KIP tem prioridade sobre os
+    // modos de saída que competem com ele (spec 11 §15).
+    const bool isKipCommand = command.kip && command.type == core::CommandType::Command;
+    m_terminalDrawer->clearKip();
     // Terminal interativo (Command::interactiveTerminal): o corpo do painel
     // vira um terminal de verdade em vez das abas Resposta/Saída/Headers/
     // Envs — só faz sentido para shell (HTTP não tem PTY/processo).
     m_terminalDrawer->setInteractiveMode(
-        command.type == core::CommandType::Shell && command.interactiveTerminal);
+        command.type == core::CommandType::Command && command.interactiveTerminal && !isKipCommand);
     // "Saída" não faz sentido pra HTTP (feedback do usuário: "ela não é
     // útil" — HTTP já tem Resposta/Requisição/Headers).
     m_terminalDrawer->setStdoutTabVisible(command.type != core::CommandType::Http);
-    m_terminalDrawer->setInteractiveAcceptingInput(command.type == core::CommandType::Shell);
+    m_terminalDrawer->setFormattedOutputEnabled(command.formattedOutput && !isKipCommand);
+    m_terminalDrawer->setInteractiveAcceptingInput(command.type == core::CommandType::Command && !isKipCommand);
     m_terminalDrawer->setCommandName(command.name);
+    m_terminalDrawer->setCurrentCommandId(command.id);
     m_terminalDrawer->setExecutionStatus(ExecutionStatus::Running);
     m_terminalDrawer->setExpanded(true);
     // Bug real corrigido (feedback do usuário: comandos como
@@ -2252,7 +4016,88 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // UI nunca habilitar o campo a tempo). Habilita já ao disparar a
     // execução (comandos Shell sempre têm um ProcessRunner associado via
     // ExecutionPipeline); handlePipelineFinished desabilita ao terminar.
-    m_terminalDrawer->setInputEnabled(command.type == core::CommandType::Shell);
+    m_terminalDrawer->setInputEnabled(command.type == core::CommandType::Command && !isKipCommand);
+}
+
+void MainWindow::runCommandWithParams(const core::Command &command, const QMap<QString, QString> &paramValues)
+{
+    // OCULTAR AO EXECUTAR (preferência POR COMANDO): esconde a janela do Kai ao
+    // disparar. Só esconde se houver bandeja — sem ela o usuário não teria como
+    // trazer a janela de volta e o app pareceria ter desaparecido.
+    if (command.hideOnRun) {
+        if (trayAvailable()) {
+            hide();
+        } else {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Comando '%1' pede para ocultar o Kai, mas não há bandeja "
+                               "neste ambiente; mantendo a janela visível.").arg(command.id));
+        }
+    }
+
+    // Ação de pasta: execução própria (pipeline e ambiente à parte, em paralelo).
+    if (core::isFolderActionCommandId(command.id)) {
+        startFolderAction(command, paramValues);
+        return;
+    }
+
+    configureEnvForRun(m_envManager, command, paramValues);
+
+    // Segundo plano (comando oculto disparado por cron/auto-run/CLI): nada disto toca na Saída.
+    const bool quiet = m_quietRun && command.hidden && !command.kip;
+    if (quiet) {
+        m_quietRunIds.insert(command.id);
+    } else {
+        m_quietRunIds.remove(command.id);
+    }
+
+    // Execução começa diretamente na pasta/aba do comando; nenhum
+    // histórico separado é mantido na navegação principal.
+    // Terminal por-comando (indicadores visuais de execução):
+    // ao disparar a execução, conecta e exibe o terminal já sinalizando
+    // "Rodando", com o nome do comando no título.
+    if (!quiet) {
+        m_connectedTerminalCommandId = command.id;
+    }
+    m_commandLogs[command.id].clear();
+    // "Abrir último link" para TERMINAL INTERATIVO (ver handlePipelineLog):
+    // reseta a marca de "já abriu nesta execução" a cada novo run.
+    m_openedLastLinkForRun.remove(command.id);
+    // Rastreia o comando de execução única ativo (shell rodando via
+    // pipeline, não background) para marcá-lo como "rodando" na árvore,
+    // permitir matá-lo e reconectar o stdin (bugs reportados). Só shell
+    // tem ProcessRunner; HTTP não.
+    if (!quiet) {
+        m_activePipelineCommandId = (command.type == core::CommandType::Command) ? command.id : QString();
+    }
+    // Marca a execução como em andamento (indicador estável — sobrevive a
+    // hooks e a outros comandos rodando). Limpo só no pipelineFinished.
+    if (command.type == core::CommandType::Command) {
+        m_pipelineRunningIds.insert(command.id);
+        // Bug real reportado: "ao re-rodar um comando via double click ou
+        // enter, esse tempo não reseta" — CommandTreeWidget::
+        // setRunningCommandIds só reinicia o cronômetro visual de um id
+        // quando o poll periódico o vê AUSENTE antes de reaparecer; um
+        // re-disparo rápido o bastante nunca passa por esse "ausente"
+        // intermediário. Reset explícito e síncrono aqui, no instante real
+        // em que a execução começa (mesma condição de tipo que alimenta
+        // m_pipelineRunningIds — é o que popula o cronômetro visual).
+        m_commandTree->resetRunTimer(command.id);
+    }
+    // Marca o início desta execução para registrar a duração no histórico.
+    m_runStartedAt = QDateTime::currentDateTime();
+    // Marca se o comando ativo é HTTP, para abrir o JSON viewer com a
+    // resposta ao finalizar (feature JSON viewer).
+    if (!quiet) {
+        m_activePipelineIsHttp = (command.type == core::CommandType::Http);
+    }
+    // Nova execução limpa qualquer marcação anterior de "falhou"
+    // 05 — botão inline de reset): o estado de erro é só até a próxima
+    // tentativa, nunca permanente.
+    m_failedCommandIds.remove(command.id);
+    updateRunningCommandStatus();
+    if (!quiet) {
+        prepareDrawerForRun(command);
+    }
     // SEM autofoco (feedback do usuário: rodar um comando não deve roubar o
     // foco de onde o usuário estava — árvore, busca, etc.). O campo de
     // resposta fica habilitado/visível com um placeholder convidativo (ver
@@ -2263,11 +4108,16 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // Alvos de terminal configuráveis (feedback do usuário): passa
     // a lista atual das configurações para o pipeline aplicar o template
     // do alvo escolhido pelo comando (ex: WSL bridge).
-    m_pipeline->setTerminalProfiles(m_configManager.loadSettings().terminalProfiles);
+    const core::SettingsData currentSettings = m_configManager.loadSettings();
+    m_pipeline->setTerminalProfiles(currentSettings.terminalProfiles);
+    m_pipeline->setInterpreters(currentSettings.interpreters);
     // Hierarquia de pastas para a RESOLUÇÃO do perfil herdado (@parent):
     // um comando/subpasta que herda sobe pela cadeia até achar um perfil
     // concreto (ver ExecutionPipeline::effectiveTerminalProfileName).
     m_pipeline->setFolders(m_commandsData.folders);
+    // Tempo de espera entre SIGTERM e SIGKILL ao clicar em "Parar" (pedido
+    // do usuário: configurável, como o graceful stop do Docker).
+    m_pipeline->setGracefulStopTimeoutMs(currentSettings.gracefulStopTimeoutSec * 1000);
     m_pipeline->run(command, m_commandsById, m_envManager);
     // Refresca o indicador de "rodando" no próximo ciclo do event loop,
     // quando o ProcessRunner já foi criado/iniciado (corrige o ícone que
@@ -2281,6 +4131,40 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
 {
     appendToCommandLog(commandId, text);
 
+    // KIP: o log do app (stderr, ruído de wrapper, avisos do Kai) já está na
+    // gaveta "Detalhes" da view — não vai também para a saída de texto.
+    {
+        const auto kipIt = m_commandsById.constFind(commandId);
+        if (kipIt != m_commandsById.constEnd() && kipIt->kip && kipIt->type == core::CommandType::Command) {
+            return;
+        }
+    }
+
+    // "Abrir último link" para TERMINAL INTERATIVO (ver comentário do
+    // membro m_openedLastLinkForRun no header) — checa a cada chunk em vez
+    // de esperar o pipeline terminar, já que um servidor de dev interativo
+    // tipicamente nunca "termina com sucesso" (o usuário para manualmente).
+    // Abre a PRIMEIRA URL vista nesta execução, não a última — pro caso de
+    // uso real (URL impressa uma vez no início), "última" não faz sentido
+    // pra um processo que nunca acaba de imprimir coisas.
+    if (!m_openedLastLinkForRun.contains(commandId)) {
+        const auto cmdIt = m_commandsById.constFind(commandId);
+        if (cmdIt != m_commandsById.constEnd() && cmdIt->interactiveTerminal && cmdIt->openLastLink) {
+            // Varre o log ACUMULADO (não só este chunk) - uma URL longa
+            // pode ter sido cortada bem na fronteira entre dois chunks de
+            // saída.
+            static const QRegularExpression interactiveUrlRe(QStringLiteral("https?://[^\\s\"'<>\\])}]+"));
+            const QRegularExpressionMatch m = interactiveUrlRe.match(m_commandLogs.value(commandId));
+            if (m.hasMatch()) {
+                const QString url = m.captured(0);
+                m_openedLastLinkForRun.insert(commandId);
+                utils::Logger::info(kLogTag,
+                    QStringLiteral("Abrindo link impresso por '%1' (terminal interativo): %2").arg(commandId, url));
+                QDesktopServices::openUrl(QUrl(url));
+            }
+        }
+    }
+
     // JANELA DESTACADA: é um monitor FIXO do comando pelo qual foi
     // destacada. Recebe a saída DESSE comando mesmo que outro esteja
     // selecionado (bug reportado: ela espelhava o comando selecionado).
@@ -2291,8 +4175,17 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
 
     // Terminal por-comando: só ecoa no Terminal Drawer visível se este for
     // o comando atualmente conectado (ou se nenhum estiver conectado
-    // ainda, conecta automaticamente ao primeiro log recebido).
-    if (m_connectedTerminalCommandId.isEmpty()) {
+    // ainda E a seleção atual não é uma pasta, conecta automaticamente ao
+    // primeiro log recebido). Sem o segundo checagem, uma PASTA
+    // selecionada (que limpa m_connectedTerminalCommandId ao ser
+    // selecionada) reconectava sozinha assim que qualquer comando em
+    // background produzisse output novo — bug reportado: "ao selecionar
+    // uma PASTA, e se um cmd está rodando dentro dela, o sistema exibe o
+    // cmd rodando, não quero isso".
+    // Uma ação de pasta nunca puxa a Saída sozinha: só o clique no ícone a conecta.
+    // Um comando oculto em segundo plano também não puxa a Saída (nem expande nem cria guia).
+    if (m_connectedTerminalCommandId.isEmpty() && !m_commandTree->currentSelectionIsFolder()
+        && !core::isFolderActionCommandId(commandId) && !m_quietRunIds.contains(commandId)) {
         m_connectedTerminalCommandId = commandId;
     m_terminalDrawer->setCurrentCommandId(commandId);
     // Prompt "user@<caminho>": mostra o diretório de execução do comando
@@ -2300,11 +4193,9 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
     // e, por fim, para o CWD, quando o comando não define um.
     {
         QString dir;
-        for (const core::Command &c : m_commandsData.commands) {
-            if (c.id == commandId) {
-                dir = m_envManager.interpolate(c.workingDir);
-                break;
-            }
+        const auto wdIt = m_commandsById.constFind(commandId); // inclui o comando virtual de uma ação
+        if (wdIt != m_commandsById.constEnd()) {
+            dir = m_pipeline->effectiveWorkingDir(*wdIt, m_envManager);
         }
         if (dir.trimmed().isEmpty()) {
             dir = m_envManager.interpolate(QStringLiteral("{{PROJECT_DIR}}"));
@@ -2332,7 +4223,7 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
     // senão seria trabalho à toa (parse de vterm) num widget escondido.
     const auto connectedIt = m_commandsById.constFind(commandId);
     const bool connectedIsInteractive = connectedIt != m_commandsById.constEnd()
-        && connectedIt->type == core::CommandType::Shell && connectedIt->interactiveTerminal;
+        && connectedIt->type == core::CommandType::Command && connectedIt->interactiveTerminal;
     if (connectedIsInteractive) {
         m_terminalDrawer->feedInteractive(text);
     }
@@ -2359,6 +4250,72 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
 
 void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
 {
+    m_quietRunIds.remove(result.mainCommandId);
+    // Quem terminou é OUTRO comando que não o da Saída, rodando em paralelo (uma ação de pasta na tela, ou outro
+    // comando selecionado enquanto este rodava): este handler presume que o término é do comando CONECTADO, então
+    // aqui trata só o que é do comando que terminou, sem tocar na Saída que está na tela.
+    if (!result.mainCommandId.isEmpty() && result.mainCommandId != m_connectedTerminalCommandId) {
+        // A janela destacada é um monitor FIXO do comando de origem: o badge dela acompanha o fim da execução.
+        if (m_terminalDrawer->hasDetachedWindow() && m_terminalDrawer->detachedCommandId() == result.mainCommandId) {
+            m_terminalDrawer->setDetachedStatus(result.success ? ExecutionStatus::Success
+                : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
+        }
+        const QString finishedId = result.mainCommandId;
+        m_kipOpenWindowFor.remove(finishedId);
+        m_envManager.clearParamVars();
+        m_pipelineRunningIds.remove(finishedId);
+        if (m_activePipelineCommandId == finishedId) {
+            m_activePipelineCommandId.clear();
+        }
+        m_activePipelineIsHttp = false;
+        const auto finishedIt = m_commandsById.constFind(finishedId);
+        const QString finishedName = finishedIt != m_commandsById.constEnd() ? finishedIt->name : finishedId;
+        if (m_statusLine) {
+            m_statusLine->setLastResult(finishedName, result.success, QDateTime::currentDateTime());
+        }
+        if (result.success || result.stoppedByRequest) {
+            m_failedCommandIds.remove(finishedId);
+        } else {
+            m_failedCommandIds.insert(finishedId);
+            const QString failedId = result.failedCommandId.isEmpty() ? finishedId : result.failedCommandId;
+            const auto failedIt = m_commandsById.constFind(failedId);
+            const QString failedName = failedIt != m_commandsById.constEnd() ? failedIt->name : failedId;
+            const QString detail = result.errorMessage.trimmed();
+            maybeShowNotification(NotificationEvent::CommandFailure,
+                utils::tr(QStringLiteral("notification.command_failure.title")),
+                detail.isEmpty()
+                    ? utils::tr(QStringLiteral("notification.command_failure.body_no_detail")).arg(failedName)
+                    : utils::tr(QStringLiteral("notification.command_failure.body")).arg(failedName, detail),
+                QSystemTrayIcon::Warning, failedId);
+        }
+        if (finishedIt != m_commandsById.constEnd()) {
+            core::RunRecord rec;
+            rec.commandId = finishedIt->id;
+            rec.commandName = finishedIt->name;
+            rec.commandType = core::commandTypeToString(finishedIt->type);
+            rec.startedAt = m_runStartedAt.isValid() ? m_runStartedAt : QDateTime::currentDateTime();
+            rec.durationMs = rec.startedAt.msecsTo(QDateTime::currentDateTime());
+            rec.success = result.success;
+            rec.output = m_commandLogs.value(finishedId);
+            m_runHistory.append(rec);
+        }
+        updateRunningCommandStatus();
+        return;
+    }
+    m_kipOpenWindowFor.remove(result.mainCommandId); // pedido de janela que nunca chegou a abrir
+    // A janela destacada é um monitor FIXO do comando de origem: o badge dela
+    // acompanha o fim da execução mesmo com outro comando selecionado.
+    if (m_terminalDrawer->hasDetachedWindow()
+        && m_terminalDrawer->detachedCommandId() == result.mainCommandId) {
+        m_terminalDrawer->setDetachedStatus(result.success ? ExecutionStatus::Success
+            : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
+    }
+    if (m_statusLine) {
+        const auto finishedIt = m_commandsById.constFind(result.mainCommandId);
+        if (finishedIt != m_commandsById.constEnd()) {
+            m_statusLine->setLastResult(finishedIt->name, result.success, QDateTime::currentDateTime());
+        }
+    }
     m_envManager.clearParamVars();
     // NOTA: as variáveis DINÂMICAS (token extraído por env_extractors, env
     // capturado por hook) são mantidas DE PROPÓSITO entre execuções — é a
@@ -2448,18 +4405,21 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
             result.errorMessage.trimmed().isEmpty()
                 ? QString()
                 : QStringLiteral("%1\n").arg(result.errorMessage.trimmed()), true);
-        m_terminalDrawer->setExecutionStatus(ExecutionStatus::Failed);
+        // Parada PEDIDA (Parar/Forçar/kill/reset) não é falha: o comando só
+        // volta a ficar ocioso — sem marca de erro e sem notificação.
+        m_terminalDrawer->setExecutionStatus(result.stoppedByRequest ? ExecutionStatus::Idle
+                                                                     : ExecutionStatus::Failed);
         // Botão inline de reset (novo): mantém o comando
         // marcado como "com erro" até uma nova execução ser disparada,
         // permitindo reiniciar com um clique mesmo depois do processo já
         // ter terminado (não só enquanto ainda está rodando).
-        if (!m_connectedTerminalCommandId.isEmpty()) {
+        if (!result.stoppedByRequest && !m_connectedTerminalCommandId.isEmpty()) {
             m_failedCommandIds.insert(m_connectedTerminalCommandId);
         }
         // Notificação (pedido do usuário): cobre falha manual E de
         // auto-run (mesmo caminho — handleCommandActivated), já que é o
         // cenário mais silencioso (roda sem ninguém olhando).
-        {
+        if (!result.stoppedByRequest) {
             const QString failedId = result.failedCommandId.isEmpty()
                 ? m_connectedTerminalCommandId : result.failedCommandId;
             const auto failedIt = m_commandsById.constFind(failedId);
@@ -2469,20 +4429,22 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
                 utils::tr(QStringLiteral("notification.command_failure.title")),
                 detail.isEmpty()
                     ? utils::tr(QStringLiteral("notification.command_failure.body_no_detail")).arg(failedName)
-                    : utils::tr(QStringLiteral("notification.command_failure.body")).arg(failedName, detail));
+                    : utils::tr(QStringLiteral("notification.command_failure.body")).arg(failedName, detail),
+                QSystemTrayIcon::Warning, failedId);
         }
     }
     updateRunningCommandStatus();
 
     // Botão "Ver JSON" (árvore navegável) SOB DEMANDA no cabeçalho da
-    // saída. Feedback do usuário: NÃO deve se limitar a respostas HTTP —
-    // QUALQUER comando cujo log contenha JSON (ex: um shell "testeeee" que
-    // dá echo num JSON no stdout) deve oferecer a visualização em árvore.
+    // saída — SÓ para HTTP (pedido do usuário, revertendo uma versão
+    // anterior que detectava JSON em QUALQUER log de shell: "quero apenas
+    // para cmds http" — a Saída Formatada cobre logs de shell estruturados
+    // agora, a detecção por conteúdo virou falso positivo/ruído ali).
     // Passamos o log acumulado do comando; setJsonAvailable detecta se há
     // JSON (e o JsonViewerWidget extrai o bloco balanceado do texto misto),
     // escondendo o botão quando não houver JSON algum. Vale para sucesso e
     // erro (ex: 400 com {"message": "..."}).
-    if (!m_connectedTerminalCommandId.isEmpty()) {
+    if (m_activePipelineIsHttp && !m_connectedTerminalCommandId.isEmpty()) {
         m_terminalDrawer->setJsonAvailable(m_commandLogs.value(m_connectedTerminalCommandId));
     } else {
         m_terminalDrawer->setJsonAvailable(QString());
@@ -2498,8 +4460,7 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
             core::RunRecord rec;
             rec.commandId = cmdIt->id;
             rec.commandName = cmdIt->name;
-            rec.commandType = (cmdIt->type == core::CommandType::Http)
-                ? QStringLiteral("http") : QStringLiteral("shell");
+            rec.commandType = core::commandTypeToString(cmdIt->type);
             rec.startedAt = m_runStartedAt.isValid() ? m_runStartedAt : QDateTime::currentDateTime();
             rec.durationMs = rec.startedAt.msecsTo(QDateTime::currentDateTime());
             rec.success = result.success;
@@ -2515,12 +4476,43 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
     // comando substitui a conexão normalmente (runCommandWithParams).
 }
 
+engine::ProcessRunner *MainWindow::runnerFor(const QString &commandId) const
+{
+    const auto action = m_actionRuns.find(commandId);
+    if (action != m_actionRuns.end()) {
+        return action->second->pipeline->runnerFor(commandId);
+    }
+    return m_pipeline->runnerFor(commandId);
+}
+
+engine::KipSession *MainWindow::kipSessionFor(const QString &commandId) const
+{
+    const auto running = m_actionRuns.find(commandId);
+    if (running != m_actionRuns.end()) {
+        return running->second->pipeline->kipSessionFor(commandId);
+    }
+    const auto kept = m_keptKipPipelines.find(commandId);
+    if (kept != m_keptKipPipelines.end() && kept->second) {
+        return kept->second->kipSessionFor(commandId);
+    }
+    return m_pipeline->kipSessionFor(commandId);
+}
+
+QStringList MainWindow::allPipelineRunningCommandIds() const
+{
+    QStringList ids = m_pipeline->runningCommandIds();
+    for (const auto &entry : m_actionRuns) {
+        ids += entry.second->pipeline->runningCommandIds();
+    }
+    return ids;
+}
+
 engine::ProcessRunner *MainWindow::connectedProcessRunner() const
 {
     engine::ProcessRunner *r = nullptr;
     const QString cid = m_connectedTerminalCommandId;
     if (!cid.isEmpty()) {
-        r = m_pipeline->runnerFor(cid);
+        r = runnerFor(cid);
         if (!r) {
             r = m_processManager->runnerFor(cid);
         }
@@ -2590,6 +4582,272 @@ void MainWindow::handleTerminalSizeChanged(int rows, int cols)
     r->resizePty(rows, cols);
 }
 
+void MainWindow::handleFirstErrorInFormattedOutput()
+{
+    // Setting opt-in, default OFF (pedido do usuário: "pode adicionar uma
+    // configuração que caso ocorra um erro do tipo ERROR em view formatada
+    // ele notifica? só a primeira vez, muitas vezes pode dar spam") — a
+    // trava do "só a primeira vez por execução" já foi aplicada em
+    // OutputPanel antes de emitir este sinal; maybeShowNotification só
+    // decide SE o toggle está ligado e se deve realmente mostrar o toast.
+    const auto it = m_commandsById.constFind(m_connectedTerminalCommandId);
+    const QString commandName = it != m_commandsById.constEnd() ? it->name : m_connectedTerminalCommandId;
+    maybeShowNotification(NotificationEvent::FirstErrorInFormattedOutput,
+        utils::tr(QStringLiteral("notification.first_error_in_formatted_output.title")),
+        utils::tr(QStringLiteral("notification.first_error_in_formatted_output.body")).arg(commandName),
+        QSystemTrayIcon::Warning, m_connectedTerminalCommandId);
+}
+
+void MainWindow::rebuildActionCommands()
+{
+    // Os comandos virtuais de uma ação em andamento ficam: o painel e os
+    // indicadores ainda os consultam até ela terminar.
+    for (auto it = m_commandsById.begin(); it != m_commandsById.end();) {
+        if (core::isFolderActionCommandId(it.key()) && m_actionRuns.find(it.key()) == m_actionRuns.end()) {
+            it = m_commandsById.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    QMap<QString, core::Command> real;
+    for (auto it = m_commandsById.cbegin(); it != m_commandsById.cend(); ++it) {
+        if (!core::isFolderActionCommandId(it.key())) {
+            real.insert(it.key(), it.value());
+        }
+    }
+    for (const core::Folder &folder : std::as_const(m_commandsData.folders)) {
+        if (!folder.parentId.has_value()) {
+            continue; // pasta de primeiro nível é aba: sem linha, sem ações
+        }
+        for (const core::FolderAction &action : core::actionsForFolder(folder, m_globalActions, real)) {
+            const core::Command virtualCommand = core::makeFolderActionCommand(real.value(action.commandId), folder);
+            m_commandsById[virtualCommand.id] = virtualCommand;
+        }
+    }
+}
+
+void MainWindow::handleFolderActionActivated(const QString &commandId, const QString &folderId)
+{
+    const QString actionId = core::folderActionCommandId(commandId, folderId);
+    if (!m_commandsById.contains(actionId)) {
+        return;
+    }
+    // O clique faz uma de duas coisas, conforme o estado do ícone:
+    //   - rodando, ou já rodou e NÃO está carregado: carrega a saída guardada (sem executar);
+    //   - nunca rodou, ou já está carregado (focado): executa (de novo).
+    const bool running = isCommandRunning(actionId);
+    const bool loaded = m_commandTree->focusedAction() == actionId;
+    if (running || (!loaded && m_actionsRan.contains(actionId))) {
+        reconnectTerminalToCommand(actionId);
+        m_commandTree->setFocusedAction(actionId);
+        return;
+    }
+    handleCommandActivated(actionId); // pede os parâmetros, se houver, e executa
+}
+
+void MainWindow::showFolderActionMenu(const QString &commandId, const QString &folderId, const QPoint &globalPos)
+{
+    const QString actionId = core::folderActionCommandId(commandId, folderId);
+    if (!m_commandsById.contains(actionId)) {
+        return;
+    }
+    const bool running = isCommandRunning(actionId);
+    const bool hasOutput = running || !m_commandLogs.value(actionId).isEmpty();
+    const QColor accent(utils::tokens::accent());
+    QMenu menu(this);
+    QAction *runAction = menu.addAction(LucideIcons::icon(QStringLiteral("play"), QColor(utils::tokens::successFg()), 16),
+                                        utils::tr(QStringLiteral("tree.run")));
+    runAction->setEnabled(!running);
+    QAction *showAction = menu.addAction(LucideIcons::icon(QStringLiteral("square-terminal"), accent, 16),
+                                         utils::tr(QStringLiteral("tree.action.show_output")));
+    showAction->setEnabled(hasOutput);
+    QAction *stopAction = menu.addAction(LucideIcons::icon(QStringLiteral("square"), QColor(utils::tokens::warningFg()), 16),
+                                         utils::tr(QStringLiteral("tree.stop")));
+    stopAction->setEnabled(running);
+    QAction *forceAction = menu.addAction(LucideIcons::icon(QStringLiteral("octagon-x"), QColor(utils::tokens::errorFg()), 16),
+                                          utils::tr(QStringLiteral("sidebar.force_stop")));
+    forceAction->setEnabled(running);
+    menu.addSeparator();
+    QAction *editAction = menu.addAction(LucideIcons::icon(QStringLiteral("pencil"), accent, 16),
+                                         utils::tr(QStringLiteral("ctx.command.edit")));
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) {
+        return;
+    }
+    if (chosen == runAction) {
+        handleCommandActivated(actionId);
+    } else if (chosen == showAction) {
+        reconnectTerminalToCommand(actionId);
+        m_commandTree->setFocusedAction(actionId);
+    } else if (chosen == stopAction) {
+        handleKillCommandRequested(actionId, false);
+    } else if (chosen == forceAction) {
+        handleKillCommandRequested(actionId, true);
+    } else if (chosen == editAction) {
+        handleEditRequested(commandId, false);
+    }
+}
+
+void MainWindow::startFolderAction(const core::Command &command, const QMap<QString, QString> &paramValues)
+{
+    const QString actionId = command.id;
+    const bool isKip = command.kip && command.type == core::CommandType::Command;
+    if (m_actionRuns.find(actionId) != m_actionRuns.end()) {
+        reconnectTerminalToCommand(actionId);
+        m_commandTree->setFocusedAction(actionId);
+        return;
+    }
+
+    auto run = std::make_shared<ActionRun>();
+    run->command = command;
+    run->allCommands = m_commandsById;
+    run->env = std::make_unique<core::EnvironmentManager>(m_envManager);
+    configureEnvForRun(*run->env, command, paramValues);
+    run->startedAt = QDateTime::currentDateTime();
+
+    // Re-execução de uma ação KIP: a sessão (e o pipeline que a guarda) da vez anterior sai de cena.
+    if (const auto kept = m_keptKipPipelines.find(actionId); kept != m_keptKipPipelines.end()) {
+        if (kept->second) {
+            kept->second->deleteLater();
+        }
+        m_keptKipPipelines.erase(kept);
+    }
+    auto *pipeline = new engine::ExecutionPipeline(this);
+    run->pipeline = pipeline;
+    const core::SettingsData settings = m_configManager.loadSettings();
+    pipeline->setTerminalProfiles(settings.terminalProfiles);
+    pipeline->setInterpreters(settings.interpreters);
+    pipeline->setFolders(m_commandsData.folders);
+    pipeline->setGracefulStopTimeoutMs(settings.gracefulStopTimeoutSec * 1000);
+
+    connect(pipeline, &engine::ExecutionPipeline::logMessage, this, &MainWindow::handlePipelineLog);
+    connect(pipeline, &engine::ExecutionPipeline::pipelineFinished, this,
+            [this, actionId](const engine::PipelineResult &result) { handleActionFinished(actionId, result); });
+    connect(pipeline, &engine::ExecutionPipeline::stageStarted, this,
+            [this](const QString &, engine::PipelineStage) { updateRunningCommandStatus(); });
+    // Comando em segundo plano: o processo passa pro gerenciador (que o mantém vivo).
+    connect(pipeline, &engine::ExecutionPipeline::backgroundProcessStarted, this,
+            [this, pipeline](const QString &commandId, engine::ProcessRunner *) {
+        std::unique_ptr<engine::ProcessRunner> owned = pipeline->releaseRunnerFor(commandId);
+        if (!owned) {
+            return;
+        }
+        const auto it = m_commandsById.constFind(commandId);
+        m_processListDialog->setCommandName(commandId, it != m_commandsById.constEnd() ? it->name : commandId);
+        m_processManager->track(commandId, std::move(owned));
+        m_processListDialog->refreshProcessList();
+        updateRunningCommandStatus();
+        if (m_connectedTerminalCommandId == commandId) {
+            m_terminalDrawer->setExecutionStatus(ExecutionStatus::Background);
+        }
+    });
+    connectPipelineAuxSignals(pipeline);
+    if (isKip) {
+        // A view KIP, as notificações do programa e as respostas lembradas (que vão pro comando de verdade).
+        connect(pipeline, &engine::ExecutionPipeline::kipSessionStarted, this, &MainWindow::handleKipSessionStarted);
+        connect(pipeline, &engine::ExecutionPipeline::kipNotifyRequested, this, &MainWindow::handleKipNotify);
+        connect(pipeline, &engine::ExecutionPipeline::kipAnswersRemembered, this, &MainWindow::handleKipAnswersRemembered);
+    }
+
+    // Estado desta execução e Saída conectada a ela (com o ícone focado).
+    m_actionRuns[actionId] = run;
+    m_actionsRan.insert(actionId);
+    m_commandTree->setActionsWithOutput(m_actionsRan);
+    m_pipelineRunningIds.insert(actionId);
+    m_failedCommandIds.remove(actionId);
+    m_commandLogs[actionId].clear();
+    m_openedLastLinkForRun.remove(actionId);
+    m_connectedTerminalCommandId = actionId;
+    prepareDrawerForRun(command);
+    m_commandTree->setFocusedAction(actionId);
+    updateRunningCommandStatus();
+
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Executando ação '%1' na pasta '%2'.").arg(command.name, command.folderId));
+    pipeline->run(run->command, run->allCommands, *run->env);
+    QTimer::singleShot(0, this, [this]() { updateRunningCommandStatus(); });
+    QTimer::singleShot(150, this, [this]() { updateRunningCommandStatus(); });
+}
+
+void MainWindow::handleActionFinished(const QString &actionId, const engine::PipelineResult &result)
+{
+    const auto runIt = m_actionRuns.find(actionId);
+    std::shared_ptr<ActionRun> run = runIt != m_actionRuns.end() ? runIt->second : nullptr;
+    const auto cmdIt = m_commandsById.constFind(actionId);
+    const core::Command command = run ? run->command : (cmdIt != m_commandsById.constEnd() ? cmdIt.value() : core::Command());
+    const QDateTime started = run ? run->startedAt : QDateTime::currentDateTime();
+
+    if (run) {
+        // O pipeline ainda está empilhado (é ele quem emite este sinal): só
+        // o solta no próximo ciclo, e o ambiente/comandos que ele aponta
+        // vivem até lá (o lambda segura o `run`).
+        if (command.kip && command.type == core::CommandType::Command) {
+            m_keptKipPipelines[actionId] = run->pipeline; // guarda a sessão KIP (e o estado final da view)
+        } else {
+            run->pipeline->deleteLater();
+        }
+        m_actionRuns.erase(runIt);
+        QTimer::singleShot(0, this, [run]() {});
+    }
+    m_pipelineRunningIds.remove(actionId);
+
+    const bool failed = !result.success && !result.stoppedByRequest;
+    if (failed) {
+        m_failedCommandIds.insert(actionId);
+    } else {
+        m_failedCommandIds.remove(actionId);
+    }
+    if (m_statusLine) {
+        m_statusLine->setLastResult(command.name, result.success, QDateTime::currentDateTime());
+    }
+    if (m_terminalDrawer->hasDetachedWindow() && m_terminalDrawer->detachedCommandId() == actionId) {
+        m_terminalDrawer->setDetachedStatus(result.success ? ExecutionStatus::Success
+            : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
+    }
+
+    // A mensagem de erro vai pro log guardado também: rever a saída depois mostra o motivo.
+    const QString error = result.errorMessage.trimmed();
+    if (!result.success && !error.isEmpty()) {
+        appendToCommandLog(actionId, error + QStringLiteral("\n"));
+    }
+    if (m_connectedTerminalCommandId == actionId) {
+        if (!result.success && !error.isEmpty()) {
+            m_terminalDrawer->appendRawText(error + QStringLiteral("\n"), true);
+        }
+        m_terminalDrawer->setExecutionStatus(result.success ? ExecutionStatus::Success
+            : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
+        m_terminalDrawer->setInputEnabled(false);
+        m_terminalDrawer->setInteractiveAcceptingInput(false);
+    }
+
+    const auto ids = core::parseFolderActionCommandId(actionId);
+    core::RunRecord rec;
+    rec.commandId = ids ? ids->commandId : actionId;
+    rec.commandName = command.name;
+    rec.commandType = core::commandTypeToString(command.type);
+    rec.startedAt = started;
+    rec.durationMs = started.msecsTo(QDateTime::currentDateTime());
+    rec.success = result.success;
+    rec.output = m_commandLogs.value(actionId);
+    m_runHistory.append(rec);
+
+    if (failed) {
+        const QString folderName = ids ? [this, &ids]() {
+            for (const core::Folder &f : m_commandsData.folders) {
+                if (f.id == ids->folderId) return f.name;
+            }
+            return ids->folderId;
+        }() : QString();
+        const QString label = folderName.isEmpty() ? command.name : QStringLiteral("%1 — %2").arg(command.name, folderName);
+        maybeShowNotification(NotificationEvent::CommandFailure,
+            utils::tr(QStringLiteral("notification.command_failure.title")),
+            error.isEmpty() ? utils::tr(QStringLiteral("notification.command_failure.body_no_detail")).arg(label)
+                            : utils::tr(QStringLiteral("notification.command_failure.body")).arg(label, error),
+            QSystemTrayIcon::Warning, actionId);
+    }
+    updateRunningCommandStatus();
+}
+
 void MainWindow::handleBackgroundProcessStarted(const QString &commandId, engine::ProcessRunner *runner)
 {
     Q_UNUSED(runner);
@@ -2645,7 +4903,7 @@ void MainWindow::handleBackgroundProcessOutput(const QString &commandId, const Q
         // Terminal interativo: mesmo espírito de handlePipelineLog — só
         // alimenta o vterm se o comando conectado for mesmo interativo.
         const auto it = m_commandsById.constFind(commandId);
-        if (it != m_commandsById.constEnd() && it->type == core::CommandType::Shell
+        if (it != m_commandsById.constEnd() && it->type == core::CommandType::Command
             && it->interactiveTerminal) {
             m_terminalDrawer->feedInteractive(text);
         }
@@ -2671,7 +4929,13 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
 
     // Botão inline de reset (novo): mesmo tratamento de estado
     // de falha aplicado a processos em background.
-    if (status == engine::ProcessStatus::Error) {
+    // Parado por pedido (Parar/Forçar/kill/reset): nem falha nem sucesso — sem
+    // marca de erro e sem notificação.
+    const bool stoppedByRequest = status != engine::ProcessStatus::Running
+        && m_processManager->lastRunStoppedByRequest(commandId);
+    if (stoppedByRequest) {
+        m_failedCommandIds.remove(commandId);
+    } else if (status == engine::ProcessStatus::Error) {
         m_failedCommandIds.insert(commandId);
     } else if (status == engine::ProcessStatus::Success) {
         m_failedCommandIds.remove(commandId);
@@ -2679,7 +4943,8 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
 
     // Notificação (pedido do usuário): processo em background que caiu
     // sozinho (ou, opcionalmente, que terminou bem) sem ninguém olhando.
-    if (status == engine::ProcessStatus::Error || status == engine::ProcessStatus::Success) {
+    if (!stoppedByRequest
+        && (status == engine::ProcessStatus::Error || status == engine::ProcessStatus::Success)) {
         const auto it = m_commandsById.constFind(commandId);
         const QString name = it != m_commandsById.constEnd() ? it->name : commandId;
         if (status == engine::ProcessStatus::Error) {
@@ -2687,12 +4952,13 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
             maybeShowNotification(NotificationEvent::BackgroundProcessCrash,
                 utils::tr(QStringLiteral("notification.background_crash.title")),
                 utils::tr(crashed ? QStringLiteral("notification.background_crash.body_crashed")
-                                   : QStringLiteral("notification.background_crash.body_error")).arg(name));
+                                   : QStringLiteral("notification.background_crash.body_error")).arg(name),
+                QSystemTrayIcon::Warning, commandId);
         } else {
             maybeShowNotification(NotificationEvent::BackgroundProcessSuccess,
                 utils::tr(QStringLiteral("notification.background_success.title")),
                 utils::tr(QStringLiteral("notification.background_success.body")).arg(name),
-                QSystemTrayIcon::Information);
+                QSystemTrayIcon::Information, commandId);
         }
     }
 
@@ -2729,7 +4995,7 @@ void MainWindow::handleShowProcessListRequested()
     m_processListDialog->activateWindow();
 }
 
-void MainWindow::handleKillCommandRequested(const QString &commandId)
+void MainWindow::handleKillCommandRequested(const QString &commandId, bool force)
 {
     // CLEANUP HOOKS: NÃO são disparados aqui de propósito.
     // Antes eram, e havia dois problemas: (a) rodavam ANTES de o processo
@@ -2739,10 +5005,16 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     // Agora existe uma fonte única: o término real do processo (abort/finished),
     // que por definição acontece DEPOIS da morte. Ver runCleanupHooks().
 
-    // Controle visual inline de SIGKILL: encerra imediatamente o
-    // processo em background associado a este comando. ProcessManager::stop
-    // já implementa terminate -> timeout -> kill de forma segura.
-    m_processManager->stop(commandId);
+    // `force` decide o caminho: GRACIOSO (SIGTERM -> espera o tempo
+    // configurado em Configurações -> Geral -> SIGKILL) ou IMEDIATO (SIGKILL
+    // direto, sem esperar nada). Antes "Parar" e "Forçar parada" chamavam
+    // exatamente o mesmo caminho gracioso — "Forçar" não forçava nada (bug
+    // real reportado pelo usuário).
+    if (force) {
+        m_processManager->forceStop(commandId);
+    } else {
+        m_processManager->stop(commandId);
+    }
 
     // Encerra o comando de EXECUÇÃO ÚNICA ativo no pipeline (bug reportado:
     // "encerramento parece não funcionar, fica rodando"). Para o runner
@@ -2752,8 +5024,12 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     // "parar" parecia não ter efeito.
     // Para o runner DESTE comando (registry) — antes parava o "ativo", que
     // podia ser o processo de OUTRO TTY (matava o comando errado).
-    if (engine::ProcessRunner *runner = m_pipeline->runnerFor(commandId)) {
-        runner->stop();
+    if (engine::ProcessRunner *runner = runnerFor(commandId)) {
+        if (force) {
+            runner->forceStop();
+        } else {
+            runner->stop();
+        }
     }
     m_pipelineRunningIds.remove(commandId);
     if (commandId == m_activePipelineCommandId) {
@@ -2763,17 +5039,17 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     m_failedCommandIds.remove(commandId);
     updateRunningCommandStatus();
 
-    // Stop só encerra e limpa a Saída (feedback do usuário: "o
-    // comando de stop deve só parar o comando e resetar a saída") — não
-    // reinicia a execução, diferente do botão de Reset. Só limpa se a
-    // Saída estiver conectada a este comando específico.
+    // Stop encerra o processo e desabilita a entrada, mas PRESERVA a Saída
+    // já produzida (bug reportado: "para o comando todo e caga a saída, some
+    // os logs" — apagar o log de um comando que acabou de ser interrompido
+    // destrói justamente a informação que o usuário quer ver: o que rodou
+    // até a interrupção). Só mexe se a Saída estiver conectada a este
+    // comando específico; o log em si só é limpo no INÍCIO da PRÓXIMA
+    // execução (ver runCommandWithParams), nunca aqui.
     if (m_connectedTerminalCommandId == commandId) {
-        m_terminalDrawer->clear();
-        m_terminalDrawer->setCommandName(QString());
         m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
         m_terminalDrawer->setInputEnabled(false);
         m_terminalDrawer->setInteractiveMode(false);
-        m_connectedTerminalCommandId.clear();
     }
 }
 
@@ -2827,7 +5103,7 @@ void MainWindow::handleResetCommandRequested(const QString &commandId)
     // dando "address already in use" em dev servers — achado de auditoria).
     const bool stillAlive = (m_processManager->isTracked(commandId)
             && m_processManager->statusOf(commandId) == engine::ProcessStatus::Running)
-        || m_pipeline->runnerFor(commandId) != nullptr;
+        || runnerFor(commandId) != nullptr;
     if (stillAlive) {
         auto *waitTimer = new QTimer(this);
         waitTimer->setInterval(150);
@@ -2835,7 +5111,7 @@ void MainWindow::handleResetCommandRequested(const QString &commandId)
         connect(waitTimer, &QTimer::timeout, this, [this, commandId, fresh, waitTimer, tries]() {
             const bool alive = (m_processManager->isTracked(commandId)
                     && m_processManager->statusOf(commandId) == engine::ProcessStatus::Running)
-                || m_pipeline->runnerFor(commandId) != nullptr;
+                || runnerFor(commandId) != nullptr;
             if (!alive || ++(*tries) > 40) { // ~6s de teto
                 waitTimer->stop();
                 waitTimer->deleteLater();
@@ -2858,6 +5134,7 @@ void MainWindow::handleTreeStructureChanged(const QVector<TreeNodePlacement> &pl
     // atualizam parentId. Em ambos, o campo order reflete a posição.
     bool changed = false;
     bool collectionsChanged = false;
+    bool notesChanged = false;
     for (const TreeNodePlacement &p : placements) {
         if (p.isCommand) {
             for (core::Command &command : m_commandsData.commands) {
@@ -2866,6 +5143,17 @@ void MainWindow::handleTreeStructureChanged(const QVector<TreeNodePlacement> &pl
                         command.order = p.order;
                         command.folderId = p.parentId;
                         changed = true;
+                    }
+                    break;
+                }
+            }
+        } else if (p.isNote) {
+            for (core::Note &note : m_notes) {
+                if (note.id == p.id) {
+                    if (note.order != p.order || note.folderId != p.parentId) {
+                        note.order = p.order;
+                        note.folderId = p.parentId;
+                        notesChanged = true;
                     }
                     break;
                 }
@@ -2900,6 +5188,18 @@ void MainWindow::handleTreeStructureChanged(const QVector<TreeNodePlacement> &pl
         }
     }
 
+    if (notesChanged) {
+        if (changed || collectionsChanged) {
+            if (changed && !m_configManager.saveCommands(m_commandsData)) {
+                QMessageBox::warning(this, QStringLiteral("Kai"), utils::tr(QStringLiteral("mainwindow.error.save_commands")));
+            }
+            if (collectionsChanged) {
+                m_configManager.saveCollections(m_collections);
+            }
+        }
+        persistNotes(); // salva as notas e reconstrói a árvore
+        return;
+    }
     if (changed || collectionsChanged) {
         utils::Logger::info(kLogTag,
             QStringLiteral("Drag&drop persistido: %1 item(ns) processados (comandos/pastas: %2, coleções: %3).")
@@ -2927,13 +5227,34 @@ void MainWindow::handleTreeStructureChanged(const QVector<TreeNodePlacement> &pl
     }
 }
 
-void MainWindow::handleImportProjectRequested()
+// ENTRADA ÚNICA de importação (pedido do usuário: "só dois botões... um
+// jeito simplificado e mais fácil, porém completo, de importar, com
+// apenas um form") — substitui os 3 itens de menu antigos
+// (importProjectRequested/importOpenApiRequested/importConfigRequested).
+// ImportDialog só decide a FONTE (pasta de projeto vs arquivo) e, pra
+// arquivo, o TIPO exato por conteúdo; a partir daí delega pro fluxo
+// específico de sempre (mesma lógica, só a entrada mudou).
+void MainWindow::handleImportRequested()
 {
-    const QString directory = m_projectSelector->promptForDirectory(this);
-    if (directory.isEmpty()) {
+    ImportDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) {
         return;
     }
+    switch (dialog.kind()) {
+    case ImportDialog::Kind::Project:
+        importProjectFromDirectory(dialog.path());
+        break;
+    case ImportDialog::Kind::OpenApi:
+        importOpenApiFromFile(dialog.path());
+        break;
+    case ImportDialog::Kind::Config:
+        importConfigFromFile(dialog.path());
+        break;
+    }
+}
 
+void MainWindow::importProjectFromDirectory(const QString &directory)
+{
     // Confere/edita o path e escolhe o formato salvo como PROJECT_PATH
     // (pedido do usuário: sob WSL/WSLg o seletor nativo às vezes devolve um
     // path Windows mesmo para um projeto que roda dentro do WSL — ver
@@ -2947,7 +5268,7 @@ void MainWindow::handleImportProjectRequested()
         return;
     }
 
-    // Feedback visual: mostra o overlay enquanto lê/parseia o kai.json.
+    // Feedback visual: mostra o overlay enquanto lê/parseia o kai.yml.
     LoadingScope loading(m_loadingOverlay, utils::tr(QStringLiteral("mainwindow.import_project.loading")));
     ProjectImportResult importResult =
         m_projectSelector->importFromDirectory(confirmedDirectory, optionsDialog.projectPath(),
@@ -2965,17 +5286,125 @@ void MainWindow::handleImportProjectRequested()
     // como subpasta de uma pasta existente no Kai, em vez de sempre criar
     // na raiz — evita ter que arrastar depois. Vazio (padrão) = raiz,
     // comportamento antigo inalterado.
-    const QString parentFolderId = optionsDialog.parentFolderId();
+    if (!mergeImportedProject(importResult, optionsDialog.parentFolderId())) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("mainwindow.import_project.title")),
+            utils::tr(QStringLiteral("mainwindow.import_project.save_failed")));
+    }
+}
+
+QString MainWindow::folderDisplayName(const QString &folderId) const
+{
+    for (const core::Folder &f : m_commandsData.folders) {
+        if (f.id == folderId) {
+            return f.name;
+        }
+    }
+    return folderId;
+}
+
+void MainWindow::startProjectSync(const QString &folderId, bool kaiToFile)
+{
+    if (m_projectSyncBusy.contains(folderId)) {
+        return;
+    }
+    m_projectSyncBusy.insert(folderId);
+    m_commandsData.notes = m_notes; // as notas sincronizáveis viajam junto das pastas e comandos
+    m_projectSync->requestPlan(kaiToFile ? engine::SyncDirection::KaiToFile : engine::SyncDirection::FileToKai,
+                               folderId, m_commandsData, m_collections);
+}
+
+void MainWindow::finishProjectSync(const QString &folderId)
+{
+    m_projectSyncBusy.remove(folderId);
+    scheduleSyncDriftCheck();
+}
+
+void MainWindow::scheduleSyncDriftCheck()
+{
+    if (m_syncDriftTimer) {
+        m_syncDriftTimer->start(); // reinicia: várias edições seguidas viram uma checagem só
+    }
+}
+
+void MainWindow::handleProjectSyncPlan(const engine::SyncPlan &plan)
+{
+    using Status = engine::SyncPlan::Status;
+    const QString title = utils::tr(QStringLiteral("project_sync.title"));
+    const bool kaiToFile = plan.direction == engine::SyncDirection::KaiToFile;
+
+    if (plan.status == Status::Failed) {
+        const QString reason = plan.errorDetail.isEmpty()
+            ? utils::tr(plan.errorKey) : utils::tr(plan.errorKey).arg(plan.errorDetail);
+        QMessageBox::warning(this, title, reason);
+        finishProjectSync(plan.folderId);
+        return;
+    }
+    if (plan.status == Status::NothingToDo) {
+        QMessageBox::information(this, title, utils::tr(QStringLiteral("project_sync.nothing_to_do")));
+        finishProjectSync(plan.folderId);
+        return;
+    }
+    if (plan.status == Status::NeedsConfirmation) {
+        const QString question = kaiToFile
+            ? utils::tr(QStringLiteral("project_sync.confirm.kai_to_file"))
+                  .arg(plan.filePath).arg(plan.fileCommands).arg(plan.fileFolders)
+                  .arg(plan.kaiCommands).arg(plan.kaiFolders)
+            : utils::tr(QStringLiteral("project_sync.confirm.file_to_kai"))
+                  .arg(folderDisplayName(plan.folderId)).arg(plan.kaiCommands).arg(plan.kaiFolders)
+                  .arg(plan.filePath).arg(plan.fileCommands).arg(plan.fileFolders);
+        if (QMessageBox::question(this, title, question, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                != QMessageBox::Yes) {
+            finishProjectSync(plan.folderId);
+            return;
+        }
+    }
+
+    if (kaiToFile) {
+        m_projectSync->applyKaiToFile(plan); // termina em kaiToFileFinished
+        return;
+    }
+
+    // A pasta pode ter sido apagada enquanto o plano era calculado.
+    const bool folderStillExists = std::any_of(m_commandsData.folders.cbegin(), m_commandsData.folders.cend(),
+        [&plan](const core::Folder &f) { return f.id == plan.folderId; });
+    int unresolvedActions = 0;
+    m_commandsData.notes = m_notes;
+    if (!folderStillExists || !m_projectSync->applyFileToKai(plan, m_commandsData, m_collections, &unresolvedActions)) {
+        QMessageBox::warning(this, title, utils::tr(QStringLiteral("project_sync.error.folder_not_found")));
+        finishProjectSync(plan.folderId);
+        return;
+    }
+    const bool saved = m_configManager.saveCommands(m_commandsData);
+    // As notas sincronizáveis da pasta vieram do arquivo: o notes.json acompanha (as locais ficam como estavam).
+    m_notes = m_commandsData.notes;
+    m_configManager.saveNotes(m_notes);
+    reloadCommandTree();
+    refreshDocNotes();
+    if (saved) {
+        QString done = utils::tr(QStringLiteral("project_sync.done.file_to_kai"))
+            .arg(folderDisplayName(plan.folderId)).arg(plan.fileCommands).arg(plan.fileFolders);
+        if (plan.ignoredCollections > 0) {
+            done += utils::tr(QStringLiteral("project_sync.done.ignored_collections")).arg(plan.ignoredCollections);
+        }
+        if (!plan.unresolvedCollections.isEmpty()) {
+            done += utils::tr(QStringLiteral("project_sync.done.unresolved_collections"))
+                        .arg(plan.unresolvedCollections.join(QStringLiteral(", ")));
+        }
+        if (unresolvedActions > 0) {
+            done += utils::tr(QStringLiteral("project_sync.done.unresolved_actions")).arg(unresolvedActions);
+        }
+        QMessageBox::information(this, title, done);
+    } else {
+        QMessageBox::warning(this, title, utils::tr(QStringLiteral("project_sync.save_failed")));
+    }
+    finishProjectSync(plan.folderId);
+}
+
+bool MainWindow::mergeImportedProject(ProjectImportResult importResult, const QString &parentFolderId)
+{
     if (!parentFolderId.isEmpty()) {
         importResult.folder.parentId = parentFolderId;
     }
-
-    // ID ÚNICO da pasta-raiz importada (bug relatado: 2 pastas com o MESMO
-    // NOME geravam o MESMO id, colidindo em qualquer lookup por id e
-    // fazendo uma "carregar" o conteúdo da outra — ver uniqueFolderId).
-    // Reimportar um projeto cujo nome já existe como pasta é exatamente
-    // esse caso. Subpastas/comandos referenciam o id ANTIGO da raiz
-    // (gerado dentro de ProjectSelector), então o troco é remapeado aqui.
     const QString oldRootId = importResult.folder.id;
     const QString newRootId = uniqueFolderId(oldRootId);
     if (newRootId != oldRootId) {
@@ -2995,7 +5424,7 @@ void MainWindow::handleImportProjectRequested()
     m_commandsData.folders << importResult.folder;
     // Subpastas do projeto (feedback do usuário: organizar em várias pastas
     // — suporte base a pastas em projetos). Cada "folder" declarado no
-    // kai.json vira uma subpasta sob a pasta raiz do projeto.
+    // kai.yml vira uma subpasta sob a pasta raiz do projeto.
     for (const core::Folder &sub : importResult.subFolders) {
         m_commandsData.folders << sub;
     }
@@ -3003,12 +5432,9 @@ void MainWindow::handleImportProjectRequested()
         m_commandsData.commands << command;
     }
 
-    if (!m_configManager.saveCommands(m_commandsData)) {
-        QMessageBox::warning(this, utils::tr(QStringLiteral("mainwindow.import_project.title")),
-            utils::tr(QStringLiteral("mainwindow.import_project.save_failed")));
-    }
+    const bool saved = m_configManager.saveCommands(m_commandsData);
 
-    // Coleções versionadas no kai.json do projeto (fonte de dados por
+    // Coleções versionadas no kai.yml do projeto (fonte de dados por
     // projeto): adiciona ao conjunto e persiste no collections.json.
     if (!importResult.collections.isEmpty()) {
         for (const core::Collection &collection : importResult.collections) {
@@ -3017,59 +5443,341 @@ void MainWindow::handleImportProjectRequested()
         persistCollections();
     }
 
+    // Notas do kai.yml: entram no notes.json (e já vêm como sincronizáveis).
+    if (!importResult.notes.isEmpty()) {
+        m_notes += importResult.notes;
+        persistNotes();
+    }
+
     reloadCommandTree();
+    return saved;
 }
 
-void MainWindow::handleImportConfigRequested()
+ExternalRunSession *MainWindow::startAttachSession(const QString &target, QString &errorMessage)
 {
-    const QString path = QFileDialog::getOpenFileName(this,
-        utils::tr(QStringLiteral("importcfg.dialog_title")), QString(),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
+    QString commandId;
+    QString commandName;
+    if (!resolveProcessTarget(target, commandId, commandName, errorMessage)) {
+        return nullptr;
     }
+    auto *session = new ExternalRunSession(commandId, [this, commandId](const QString &text) {
+        engine::ProcessRunner *runner = runnerFor(commandId);
+        if (!runner) {
+            runner = m_processManager->runnerFor(commandId);
+        }
+        if (runner && runner->isRunning()) {
+            runner->writeRaw(text);
+        }
+    }, this);
 
+    // O que já saiu antes do attach (fim do log, pra não despejar 1MB).
+    constexpr int kReplayChars = 16 * 1024;
+    const QString backlog = m_backgroundProcessLogs.contains(commandId)
+        ? m_backgroundProcessLogs.value(commandId) : m_commandLogs.value(commandId);
+    const QString replay = backlog.right(kReplayChars);
+
+    connect(m_pipeline, &engine::ExecutionPipeline::logMessage, session,
+        [session, commandId](const QString &cid, const QString &text, bool isError) {
+            if (cid == commandId) {
+                session->publishOutput(text, isError);
+            }
+        });
+    connect(m_processManager, &engine::ProcessManager::outputReady, session,
+        [session, commandId](const QString &cid, const QString &text, bool isError) {
+            if (cid == commandId) {
+                session->publishOutput(text, isError);
+            }
+        });
+    connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, session,
+        [session, commandId](const engine::PipelineResult &result) {
+            if (result.mainCommandId == commandId) {
+                session->publishFinished(result.success ? 0 : qMax(1, result.exitCode), result.errorMessage);
+            }
+        });
+    connect(m_processManager, &engine::ProcessManager::statusChanged, session,
+        [session, commandId](const QString &cid, engine::ProcessStatus status) {
+            if (cid == commandId && status != engine::ProcessStatus::Running) {
+                session->publishFinished(status == engine::ProcessStatus::Success ? 0 : 1, QString());
+            }
+        });
+    // Na próxima volta do event loop: quem chamou ainda conecta os sinais.
+    if (!replay.isEmpty()) {
+        QMetaObject::invokeMethod(session, [session, replay]() {
+            session->publishOutput(replay, false);
+        }, Qt::QueuedConnection);
+    }
+    return session;
+}
+
+void MainWindow::notifyExternalRunFinished(const QString &commandId, int exitCode, qint64 elapsedMs)
+{
+    const auto it = m_commandsById.constFind(commandId);
+    const QString name = it != m_commandsById.constEnd() ? it->name : commandId;
+    const QString body = exitCode == 0
+        ? utils::tr(QStringLiteral("cli.notify.done")).arg(name, utils::formatShortDuration(elapsedMs))
+        : utils::tr(QStringLiteral("cli.notify.failed")).arg(name).arg(exitCode).arg(utils::formatShortDuration(elapsedMs));
+    QString ignored;
+    raiseNotificationFromCli(exitCode == 0 ? QStringLiteral("info") : QStringLiteral("error"), QString(), body, ignored);
+}
+
+QJsonArray MainWindow::runningProcessItems()
+{
+    QJsonArray items;
+    auto nameOf = [this](const QString &id) -> QString {
+        for (const core::Command &c : m_commandsData.commands) {
+            if (c.id == id) return c.name;
+        }
+        return id;
+    };
+    QSet<QString> seen;
+    auto add = [&](const QString &id, engine::ProcessRunner *runner, const QString &status) {
+        if (seen.contains(id)) {
+            return;
+        }
+        seen.insert(id);
+        QJsonObject item;
+        item[QStringLiteral("id")] = id;
+        item[QStringLiteral("name")] = nameOf(id);
+        item[QStringLiteral("pid")] = static_cast<double>(runner ? runner->processId() : 0);
+        item[QStringLiteral("status")] = status;
+        items.append(item);
+    };
+    for (const QString &id : m_processManager->trackedCommandIds()) {
+        const engine::ProcessStatus st = m_processManager->statusOf(id);
+        add(id, m_processManager->runnerFor(id),
+            st == engine::ProcessStatus::Running ? QStringLiteral("running")
+            : st == engine::ProcessStatus::Success ? QStringLiteral("success") : QStringLiteral("error"));
+    }
+    for (const QString &id : allPipelineRunningCommandIds()) {
+        add(id, runnerFor(id), QStringLiteral("running"));
+    }
+    return items;
+}
+
+bool MainWindow::importProjectFromCli(const QString &path, const QStringList &only, QString &message)
+{
+    // `kai import [arquivo|pasta]`: um pacote exportado (cabeçalho kai_export: comandos, ações, coleções, perfis...)
+    // entra INTEIRO, sem perguntas, como o diálogo de "Importar configuração" com tudo marcado; `only` (nomes da
+    // CLI, ver cliImportSelection) escolhe as categorias. Qualquer outro kai.yml é um PROJETO: o mesmo import do
+    // diálogo de projeto, pasta-pai = raiz e PROJECT_PATH no formato que o diálogo sugere (utils::toPosixPath).
+    const QFileInfo info(path);
+    if (info.isFile()) {
+        core::ConfigManager::ImportResult package;
+        QString readError;
+        bool isPackage = false;
+        if (readConfigPackage(info.absoluteFilePath(), package, readError, &isPackage)) {
+            ImportSelectionDialog::Selection selection;
+            if (!cliImportSelection(only, selection, message)) {
+                return false;
+            }
+            applyConfigImport(package, selection, message);
+            return true;
+        }
+        if (isPackage) {
+            message = utils::tr(QStringLiteral("importcfg.failed")).arg(readError);
+            return false;
+        }
+    }
+    if (!only.isEmpty()) {
+        message = utils::tr(QStringLiteral("cli.import.only_needs_package"));
+        return false;
+    }
+    const QString directory = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+    if (!info.isDir()) {
+        const QString fileName = info.fileName().toLower();
+        if (fileName != QStringLiteral("kai.yml")) {
+            message = utils::tr(QStringLiteral("cli.import.unsupported_file")).arg(info.fileName());
+            return false;
+        }
+    }
+    const ProjectImportResult importResult =
+        m_projectSelector->importFromDirectory(directory, utils::toPosixPath(directory), false);
+    if (!importResult.success) {
+        message = importResult.errorMessage;
+        return false;
+    }
+    if (!mergeImportedProject(importResult, QString())) {
+        message = utils::tr(QStringLiteral("mainwindow.import_project.save_failed"));
+        return false;
+    }
+    message = utils::tr(QStringLiteral("cli.import.done"))
+        .arg(importResult.folder.name).arg(importResult.commands.size());
+    return true;
+}
+
+// Os nomes de `--only` da CLI -> as categorias do pacote. `actions` = as ações globais e os comandos que as ações
+// usam (as ações de cada pasta vêm junto de `commands`).
+bool MainWindow::cliImportSelection(const QStringList &only, ImportSelectionDialog::Selection &selection, QString &error)
+{
+    selection = ImportSelectionDialog::Selection();
+    if (only.isEmpty()) {
+        return true;
+    }
+    selection = ImportSelectionDialog::Selection{false, false, false, false, false, false, false};
+    for (const QString &raw : only) {
+        const QString name = raw.trimmed().toLower();
+        if (name == QStringLiteral("commands")) selection.commands = true;
+        else if (name == QStringLiteral("collections")) selection.collections = true;
+        else if (name == QStringLiteral("settings")) selection.settings = true;
+        else if (name == QStringLiteral("environments")) selection.environments = true;
+        else if (name == QStringLiteral("terminal-profiles")) selection.terminalProfiles = true;
+        else if (name == QStringLiteral("global-actions")) selection.globalActions = true;
+        else if (name == QStringLiteral("action-commands")) selection.actionCommands = true;
+        else if (name == QStringLiteral("actions")) { selection.globalActions = true; selection.actionCommands = true; }
+        else {
+            error = utils::tr(QStringLiteral("cli.import.unknown_only")).arg(raw);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MainWindow::raiseNotificationFromCli(const QString &level, const QString &title,
+                                          const QString &body, QString &message)
+{
+    // `kai raise`: pedido EXPLÍCITO — não passa pelos interruptores de evento
+    // (maybeShowNotification), só precisa da bandeja pra aparecer. Fica no
+    // histórico de notificações de qualquer jeito.
+    const QSystemTrayIcon::MessageIcon icon = level == QStringLiteral("error") ? QSystemTrayIcon::Critical
+        : level == QStringLiteral("warning") ? QSystemTrayIcon::Warning
+                                              : QSystemTrayIcon::Information;
+    const QString defaultTitle = level == QStringLiteral("error") ? utils::tr(QStringLiteral("cli.raise.title.error"))
+        : level == QStringLiteral("warning") ? utils::tr(QStringLiteral("cli.raise.title.warning"))
+                                              : utils::tr(QStringLiteral("cli.raise.title.info"));
+    const QString shownTitle = title.isEmpty() ? defaultTitle : title;
+
+    core::NotificationRecord record;
+    record.eventKey = QStringLiteral("cli_raise_%1").arg(level);
+    record.title = shownTitle;
+    record.body = body;
+    m_notificationHistory.append(record);
+
+    if (!trayAvailable() || !m_trayIcon) {
+        message = utils::tr(QStringLiteral("cli.raise.no_tray"));
+        return false;
+    }
+    m_trayIcon->showMessage(shownTitle, body, icon, 6000);
+    return true;
+}
+
+// Lê um pacote exportado (sempre YAML; o ConfigManager opera sobre a representação JSON interna). `isPackage` volta
+// false quando o arquivo não tem o cabeçalho `kai_export`: provavelmente é o kai.yml de um projeto.
+bool MainWindow::readConfigPackage(const QString &path, core::ConfigManager::ImportResult &result, QString &error,
+                                   bool *isPackage) const
+{
+    if (isPackage) {
+        *isPackage = true;
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, utils::tr(QStringLiteral("importcfg.title")),
-            utils::tr(QStringLiteral("importcfg.failed")).arg(file.errorString()));
-        return;
+        error = file.errorString();
+        return false;
     }
-    const QString jsonText = QString::fromUtf8(file.readAll());
+    const QString text = QString::fromUtf8(file.readAll());
     file.close();
 
-    const core::ConfigManager::ImportResult result = core::ConfigManager::importFromJson(jsonText);
+    bool yamlOk = false;
+    QString yamlError;
+    const QString jsonText = core::yamlTextToJsonText(text, &yamlOk, &yamlError);
+    if (!yamlOk) {
+        error = yamlError;
+        return false;
+    }
+    if (isPackage && QJsonDocument::fromJson(jsonText.toUtf8()).object().value(QStringLiteral("kai_export")).toObject().isEmpty()) {
+        *isPackage = false;
+    }
+    result = core::ConfigManager::importFromJson(jsonText);
     if (!result.ok) {
+        error = result.errorMessage;
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::importConfigFromFile(const QString &path)
+{
+    core::ConfigManager::ImportResult result;
+    QString readError;
+    if (!readConfigPackage(path, result, readError)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("importcfg.title")),
-            utils::tr(QStringLiteral("importcfg.failed")).arg(result.errorMessage));
+            utils::tr(QStringLiteral("importcfg.failed")).arg(readError));
         return;
     }
 
+    // IMPORTAÇÃO SELETIVA: pergunta o que trazer, mostrando só as categorias
+    // que o arquivo realmente contém. Pedido do usuário: "quero pra
+    // importação o mesmo cenário [do export v2] (vou importar um projeto, e
+    // o kai detecta me pede se quero importar coleções, perfis, comandos,
+    // pastas e etc.)".
+    // Comandos das ações de pasta que o pacote traz e que o usuário ainda não tem (por nome).
+    QVector<core::Command> knownCommands = m_commandsData.commands;
+    knownCommands.append(result.commands);
+    QStringList missingActionCommandNames;
+    for (const core::Command &c : core::ConfigManager::actionCommandsToImport(result, knownCommands)) {
+        missingActionCommandNames << c.name;
+    }
+    ImportSelectionDialog selectionDialog(result, missingActionCommandNames, this);
+    if (selectionDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    QString doneMessage;
+    applyConfigImport(result, selectionDialog.selection(), doneMessage);
+    QMessageBox::information(this, utils::tr(QStringLiteral("importcfg.title")), doneMessage);
+}
+
+// O merge do pacote no que o Kai já tem, sem nenhum diálogo (a interface e a CLI chamam esta mesma função).
+void MainWindow::applyConfigImport(const core::ConfigManager::ImportResult &result,
+                                   const ImportSelectionDialog::Selection &sel, QString &doneMessage)
+{
     // Merge por id: substitui itens existentes de mesmo id, adiciona os
     // novos (evita duplicatas ao reimportar). Import global também mescla
     // settings (env vars e terminal targets), sem sobrescrever tudo cegamente.
-    for (const core::Folder &f : result.folders) {
-        bool replaced = false;
-        for (core::Folder &existing : m_commandsData.folders) {
-            if (existing.id == f.id) { existing = f; replaced = true; break; }
+    int foldersImported = 0;
+    int commandsImported = 0;
+    if (sel.commands) {
+        for (const core::Folder &f : result.folders) {
+            bool replaced = false;
+            for (core::Folder &existing : m_commandsData.folders) {
+                if (existing.id == f.id) { existing = f; replaced = true; break; }
+            }
+            if (!replaced) {
+                m_commandsData.folders.append(f);
+            }
         }
-        if (!replaced) {
-            m_commandsData.folders.append(f);
+        foldersImported = result.folders.size();
+        for (const core::Command &c : result.commands) {
+            bool replaced = false;
+            for (core::Command &existing : m_commandsData.commands) {
+                if (existing.id == c.id) { existing = c; replaced = true; break; }
+            }
+            if (!replaced) {
+                m_commandsData.commands.append(c);
+            }
         }
-    }
-    for (const core::Command &c : result.commands) {
-        bool replaced = false;
-        for (core::Command &existing : m_commandsData.commands) {
-            if (existing.id == c.id) { existing = c; replaced = true; break; }
+        commandsImported = result.commands.size();
+        // Notas do pacote (sincronizáveis): mesmo merge por id.
+        if (!result.notes.isEmpty()) {
+            for (const core::Note &incoming : result.notes) {
+                bool replaced = false;
+                for (core::Note &existing : m_notes) {
+                    if (existing.id == incoming.id) { existing = incoming; replaced = true; break; }
+                }
+                if (!replaced) {
+                    m_notes.append(incoming);
+                }
+            }
+            m_configManager.saveNotes(m_notes);
         }
-        if (!replaced) {
-            m_commandsData.commands.append(c);
+        if (sel.actionCommands) {
+            const QVector<core::Command> actionCommands = core::ConfigManager::actionCommandsToImport(result, m_commandsData.commands);
+            core::ConfigManager::appendImportedActionCommands(actionCommands, m_commandsData);
+            commandsImported += actionCommands.size();
         }
     }
 
     // COLEÇÕES: mesmo merge por id. A importação antiga ignorava coleções, então
     // um pacote exportado "completo" não voltava completo.
-    if (result.hasCollections) {
+    if (result.hasCollections && sel.collections) {
         for (const core::Collection &col : result.collections) {
             bool replaced = false;
             for (core::Collection &existing : m_collections) {
@@ -3095,40 +5803,146 @@ void MainWindow::handleImportConfigRequested()
         persistCollections();
     }
 
-    if (result.hasSettings) {
+    // ALVOS DE TERMINAL: TerminalProfile não tem id, só `name` — então "mesmo
+    // item" é decidido por CONTEÚDO (template/shell/pty/ícone), não pelo
+    // nome. Pedido do usuário: "exportando alvos de terminais, que terão que
+    // vir com nomes autogerados + nome original para permitir conflitos, se
+    // a config for igual a um dos atuais, não precisa trazer outro."
+    //   - conteúdo idêntico a um alvo já existente -> não duplica, apenas
+    //     remapeia referências (terminalTarget) pro nome já existente.
+    //   - nome em conflito mas conteúdo DIFERENTE -> importa com um nome
+    //     novo gerado automaticamente, preservando o alvo local intacto.
+    //   - sem conflito -> importa como veio.
+    // O remapeamento é necessário para comandos/pastas importados NO MESMO
+    // LOTE que apontavam pro nome antigo (terminalTarget é uma string solta,
+    // não uma referência por id).
+    QMap<QString, QString> terminalTargetRename;
+    if (result.hasTerminalProfiles && sel.terminalProfiles) {
         core::SettingsData settings = m_configManager.loadSettings();
-        for (auto it = result.settings.globalEnvVars.constBegin();
-             it != result.settings.globalEnvVars.constEnd(); ++it) {
-            settings.globalEnvVars[it.key()] = it.value();
+        auto sameContent = [](const core::TerminalProfile &a, const core::TerminalProfile &b) {
+            return a.commandTemplate == b.commandTemplate && a.shell == b.shell
+                && a.usePty == b.usePty && a.icon == b.icon;
+        };
+        QSet<QString> usedNames;
+        for (const core::TerminalProfile &existing : settings.terminalProfiles) {
+            usedNames.insert(existing.name);
         }
-        for (const core::TerminalProfile &t : result.settings.terminalProfiles) {
-            bool found = false;
-            for (core::TerminalProfile &existing : settings.terminalProfiles) {
-                if (existing.name == t.name) { existing = t; found = true; break; }
+        for (const core::TerminalProfile &incoming : result.settings.terminalProfiles) {
+            const core::TerminalProfile *identical = nullptr;
+            for (const core::TerminalProfile &existing : settings.terminalProfiles) {
+                if (sameContent(existing, incoming)) { identical = &existing; break; }
             }
-            if (!found) {
-                settings.terminalProfiles.append(t);
+            if (identical) {
+                if (identical->name != incoming.name) {
+                    terminalTargetRename[incoming.name] = identical->name;
+                }
+                continue;
+            }
+            const bool nameConflict = usedNames.contains(incoming.name);
+            core::TerminalProfile toAdd = incoming;
+            if (nameConflict) {
+                QString candidate = utils::tr(QStringLiteral("importcfg.terminal_target.renamed"))
+                    .arg(incoming.name);
+                int suffix = 2;
+                while (usedNames.contains(candidate)) {
+                    candidate = utils::tr(QStringLiteral("importcfg.terminal_target.renamed_n"))
+                        .arg(incoming.name).arg(suffix++);
+                }
+                toAdd.name = candidate;
+                toAdd.isDefault = false; // não rouba o alvo padrão local ao renomear
+                terminalTargetRename[incoming.name] = candidate;
+            }
+            usedNames.insert(toAdd.name);
+            settings.terminalProfiles.append(toAdd);
+        }
+        m_configManager.saveSettings(settings);
+    }
+
+    if (!terminalTargetRename.isEmpty() && sel.commands) {
+        // Reescreve terminalTarget SÓ nos itens que vieram DESTE import (por
+        // id), nunca nos que já existiam localmente — bug de revisão: antes
+        // isto rodava sobre m_commandsData.folders/.commands inteiro (local +
+        // importado), então um comando local que já usava "MyTerm" era
+        // silenciosamente desviado pro perfil importado "MyTerm (importado)"
+        // assim que houvesse um conflito de nome.
+        QSet<QString> importedFolderIds;
+        QSet<QString> importedCommandIds;
+        for (const core::Folder &f : result.folders) importedFolderIds.insert(f.id);
+        for (const core::Command &c : result.commands) importedCommandIds.insert(c.id);
+        for (core::Folder &f : m_commandsData.folders) {
+            if (!importedFolderIds.contains(f.id)) continue;
+            if (terminalTargetRename.contains(f.terminalTarget)) {
+                f.terminalTarget = terminalTargetRename.value(f.terminalTarget);
+            }
+        }
+        for (core::Command &c : m_commandsData.commands) {
+            if (!importedCommandIds.contains(c.id)) continue;
+            if (terminalTargetRename.contains(c.terminalTarget)) {
+                c.terminalTarget = terminalTargetRename.value(c.terminalTarget);
+            }
+        }
+    }
+
+    if ((result.hasSettings && sel.settings) || (result.hasEnvironments && sel.environments)) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        if (sel.settings) {
+            for (auto it = result.settings.globalEnvVars.constBegin();
+                 it != result.settings.globalEnvVars.constEnd(); ++it) {
+                settings.globalEnvVars[it.key()] = it.value();
+            }
+        }
+        // ENVIRONMENTS: bug de revisão — o checkbox existia no diálogo mas
+        // nada consumia `sel.environments`; os pacotes de ambiente do
+        // arquivo nunca eram de fato mesclados. Merge por id, mesma
+        // convenção usada pra pastas/comandos/coleções.
+        if (sel.environments) {
+            for (const core::Environment &e : result.settings.environments) {
+                bool replaced = false;
+                for (core::Environment &existing : settings.environments) {
+                    if (existing.id == e.id) { existing = e; replaced = true; break; }
+                }
+                if (!replaced) {
+                    settings.environments.append(e);
+                }
+            }
+            if (!result.settings.activeEnvironmentId.isEmpty()) {
+                settings.activeEnvironmentId = result.settings.activeEnvironmentId;
             }
         }
         m_configManager.saveSettings(settings);
         m_envManager.setGlobalVars(settings.globalEnvVars);
     }
 
+    // AÇÕES (por pasta e globais): as referências por nome são casadas com os
+    // comandos que existem agora (os recém-importados e os que já tinha).
+    int unresolvedActions = 0;
+    {
+        core::ConfigManager::ImportResult actionsResult = result;
+        if (!sel.globalActions) {
+            actionsResult.hasGlobalActions = false;
+        }
+        if (!sel.commands) {
+            actionsResult.pendingFolderActions.clear(); // as pastas não vieram
+        }
+        core::SettingsData settings = m_configManager.loadSettings();
+        unresolvedActions = core::ConfigManager::applyImportedActions(
+            actionsResult, m_commandsData.folders, m_commandsData.commands, settings.globalActions);
+        if (actionsResult.hasGlobalActions) {
+            m_configManager.saveSettings(settings);
+            m_globalActions = settings.globalActions;
+        }
+    }
+
     persistCommands();
 
-    QMessageBox::information(this, utils::tr(QStringLiteral("importcfg.title")),
-        utils::tr(QStringLiteral("importcfg.done"))
-            .arg(result.folders.size()).arg(result.commands.size()));
+    doneMessage = utils::tr(QStringLiteral("importcfg.done")).arg(foldersImported).arg(commandsImported);
+    if (unresolvedActions > 0) {
+        doneMessage += QStringLiteral("\n\n") + utils::tr(QStringLiteral("importcfg.actions_unresolved")).arg(unresolvedActions);
+    }
 }
 
-void MainWindow::handleImportOpenApiRequested()
+void MainWindow::importOpenApiFromFile(const QString &path)
 {
-    const QString path = QFileDialog::getOpenFileName(this,
-        utils::tr(QStringLiteral("menu.file.import_openapi")),
-        QString(), QStringLiteral("OpenAPI/JSON (*.json);;Todos (*.*)"));
-    if (path.isEmpty()) {
-        return;
-    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("openapi.title")),
@@ -3182,74 +5996,118 @@ void MainWindow::handleImportOpenApiRequested()
         utils::tr(QStringLiteral("openapi.done")).arg(created).arg(parsed.apiTitle));
 }
 
-void MainWindow::handleExportGlobalRequested()
+void MainWindow::handleExportRequested()
 {
-    // EXPORTAÇÃO SELETIVA: primeiro O QUE exportar, depois ONDE salvar — assim o
-    // usuário não escolhe o arquivo para só então descobrir as opções. Antes ia
-    // "tudo", que na prática deixava as coleções de fora: o backup nunca era
-    // realmente completo.
-    ExportSelectionDialog selectionDialog(this);
-    if (selectionDialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const core::ConfigManager::ExportSelection selection = selectionDialog.selection();
-
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-config.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
-    }
-    const QString json = core::ConfigManager::exportSelective(
-        selection, m_configManager.loadSettings(), m_commandsData, m_collections);
-    writeExportFile(path, json);
+    showExportDialog(QString(), false);
 }
 
-void MainWindow::handleExportFolderRequested()
+void MainWindow::showExportDialog(const QString &targetId, bool targetIsFolder)
 {
-    const QString selectedId = m_commandTree->currentSelectionId();
-    const bool isFolder = m_commandTree->currentSelectionIsFolder();
-    const QString folderId = isFolder ? selectedId : m_commandTree->currentRootFolderId();
-    if (folderId.isEmpty()) {
-        QMessageBox::information(this, utils::tr(QStringLiteral("export.title")),
-            utils::tr(QStringLiteral("export.no_selection")));
-        return;
+    // MENU ÚNICO (pedido do usuário: "queria um menu unificado para
+    // exportação, não 3 (ele deixa eu escolher o modo)") — Global sempre
+    // disponível; Pasta/Comando usam um SELETOR GLOBAL sobre TODAS as
+    // pastas/comandos do app (pedido do usuário, com foto: "esse setor de
+    // pastas é meio ruim, deveria ser o seletor global disponível no
+    // sistema com um todo" — antes só oferecia a pasta/comando que já
+    // estivesse selecionado na árvore no momento de abrir a tela).
+    QVector<ExportDialog::TargetChoice> folderChoices;
+    for (const core::Folder &f : foldersInTreeOrder(m_commandsData.folders)) {
+        folderChoices << ExportDialog::TargetChoice{f.id, folderComboLabel(m_commandsData.folders, f.id)};
     }
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-folder.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
-    }
-    writeExportFile(path, core::ConfigManager::exportFolder(folderId, m_commandsData));
-}
 
-void MainWindow::handleExportCommandRequested()
-{
-    const QString selectedId = m_commandTree->currentSelectionId();
-    if (selectedId.isEmpty() || m_commandTree->currentSelectionIsFolder()) {
-        QMessageBox::information(this, utils::tr(QStringLiteral("export.title")),
-            utils::tr(QStringLiteral("export.no_selection")));
+    // Comandos: mesma ideia de folderComboLabel, mas pra Command — nome +
+    // caminho da pasta como hint entre parênteses (vazio pra comando na
+    // raiz, sem ancestral nenhum).
+    QVector<ExportDialog::TargetChoice> commandChoices;
+    for (const core::Command &c : m_commandsData.commands) {
+        const QStringList pathSegments = folderPathSegments(m_commandsData.folders, c.folderId);
+        const QString label = pathSegments.isEmpty()
+            ? c.name
+            : QStringLiteral("%1   (%2)").arg(c.name, pathSegments.join(QStringLiteral(" / ")));
+        commandChoices << ExportDialog::TargetChoice{c.id, label};
+    }
+
+    const QVector<core::TerminalProfile> availableProfiles = m_configManager.loadSettings().terminalProfiles;
+    ExportDialog dlg(folderChoices, commandChoices, availableProfiles,
+        [this](const QString &folderId) { return linkedCollectionsForFolder(folderId); },
+        [this](const QString &commandId) { return linkedCollectionsForCommand(commandId); },
+        this);
+    dlg.setActionCommandsProvider([this](const QString &folderId) {
+        QStringList names;
+        for (const core::Command &c : core::ConfigManager::actionCommandsOutsideFolder(folderId, m_commandsData)) {
+            names << c.name;
+        }
+        return names;
+    });
+    if (!targetId.isEmpty()) {
+        dlg.preselectTarget(targetIsFolder ? ExportDialog::Scope::Folder : ExportDialog::Scope::Command, targetId);
+    }
+    if (dlg.exec() != QDialog::Accepted) {
         return;
     }
-    const QString path = QFileDialog::getSaveFileName(this,
-        utils::tr(QStringLiteral("export.dialog_title")), QStringLiteral("kai-command.json"),
-        utils::tr(QStringLiteral("importcfg.filter")));
-    if (path.isEmpty()) {
-        return;
+
+    const QString format = QStringLiteral("yml"); // o único formato de arquivo
+    const QString filter = utils::tr(QStringLiteral("importcfg.filter.yaml_only"));
+
+    switch (dlg.selectedScope()) {
+    case ExportDialog::Scope::Global: {
+        const QString suggestedName = QStringLiteral("kai-config.%1").arg(format);
+        const QString path = pickSaveFile(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        m_commandsData.notes = m_notes;
+        const QString json = core::ConfigManager::exportSelective(
+            dlg.globalSelection(), m_configManager.loadSettings(), m_commandsData, m_collections,
+            dlg.leanExport());
+        writeExportFile(path, json);
+        break;
     }
-    writeExportFile(path, core::ConfigManager::exportCommand(selectedId, m_commandsData));
+    case ExportDialog::Scope::Folder: {
+        const QString suggestedName = QStringLiteral("kai-folder.%1").arg(format);
+        const QString path = pickSaveFile(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        m_commandsData.notes = m_notes;
+        writeExportFile(path, core::ConfigManager::exportFolder(
+            dlg.selectedTargetId(), m_commandsData, dlg.selectedCollections(), dlg.selectedTerminalProfiles(),
+            dlg.leanExport(), dlg.includeActionCommands()));
+        break;
+    }
+    case ExportDialog::Scope::Command: {
+        const QString suggestedName = QStringLiteral("kai-command.%1").arg(format);
+        const QString path = pickSaveFile(this,
+            utils::tr(QStringLiteral("export.dialog_title")), suggestedName, filter);
+        if (path.isEmpty()) {
+            return;
+        }
+        writeExportFile(path, core::ConfigManager::exportCommand(
+            dlg.selectedTargetId(), m_commandsData, dlg.selectedCollections(), dlg.selectedTerminalProfiles(),
+            dlg.leanExport()));
+        break;
+    }
+    }
 }
 
 void MainWindow::writeExportFile(const QString &path, const QString &content)
 {
+    // O arquivo é sempre YAML: o ConfigManager monta o documento em JSON (representação interna) e é
+    // convertido aqui antes de escrever.
+    QString finalContent = core::jsonTextToYamlText(content);
+    if (finalContent.isEmpty()) {
+        finalContent = content;
+    }
+
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("export.title")),
             utils::tr(QStringLiteral("export.save_failed")));
         return;
     }
-    file.write(content.toUtf8());
+    file.write(finalContent.toUtf8());
     if (!file.commit()) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("export.title")),
             utils::tr(QStringLiteral("export.save_failed")));
@@ -3261,11 +6119,25 @@ void MainWindow::writeExportFile(const QString &path, const QString &content)
 
 void MainWindow::persistCommands()
 {
+    // Ações de pasta que apontam pra um comando que não existe mais (excluído)
+    // não servem pra nada: saem junto.
+    {
+        QSet<QString> commandIds;
+        for (const core::Command &c : m_commandsData.commands) {
+            commandIds.insert(c.id);
+        }
+        for (core::Folder &f : m_commandsData.folders) {
+            f.actions.removeIf([&commandIds](const QString &id) { return !commandIds.contains(id); });
+            f.expansionActions.removeIf([&f](const QString &id) { return !f.actions.contains(id); });
+            f.actionGroups.removeIf([&f](const auto &entry) { return !f.actions.contains(entry.key()); });
+        }
+    }
     if (!m_configManager.saveCommands(m_commandsData)) {
         QMessageBox::warning(this, QStringLiteral("Kai"),
             utils::tr(QStringLiteral("mainwindow.error.persist_commands")));
     }
     reloadCommandTree();
+    scheduleSyncDriftCheck();
 }
 
 QVector<core::Command> MainWindow::commandsInFolder(const QString &folderId) const
@@ -3326,6 +6198,11 @@ QString MainWindow::resolveTargetFolderId() const
         if (m_commandTree->currentSelectionIsFolder()) {
             return selectedId;
         }
+        for (const core::Note &note : m_notes) {
+            if (note.id == selectedId) {
+                return note.folderId; // uma nota selecionada: a pasta dela
+            }
+        }
         const auto it = m_commandsById.constFind(selectedId);
         if (it != m_commandsById.constEnd()) {
             return it.value().folderId;
@@ -3366,6 +6243,62 @@ QString MainWindow::uniqueFolderId(const QString &candidate) const
     return unique;
 }
 
+QVector<QString> MainWindow::folderSubtreeIds(const QString &rootFolderId) const
+{
+    QVector<QString> ids = {rootFolderId};
+    QVector<QString> queue = {rootFolderId};
+    while (!queue.isEmpty()) {
+        const QString currentId = queue.takeFirst();
+        for (const core::Folder &f : m_commandsData.folders) {
+            if (f.parentId.has_value() && f.parentId.value() == currentId && !ids.contains(f.id)) {
+                ids << f.id;
+                queue << f.id;
+            }
+        }
+    }
+    return ids;
+}
+
+QVector<core::Collection> MainWindow::linkedCollectionsForFolder(const QString &folderId) const
+{
+    return core::ConfigManager::linkedCollectionsForFolder(folderId, m_commandsData, m_collections);
+}
+
+QVector<core::Collection> MainWindow::linkedCollectionsForCommand(const QString &commandId) const
+{
+    QSet<QString> collectionIds;
+    QVector<core::Collection> result;
+    auto addIfNew = [&](const core::Collection &col) {
+        if (!collectionIds.contains(col.id)) {
+            collectionIds.insert(col.id);
+            result.append(col);
+        }
+    };
+    const auto cmdIt = m_commandsById.constFind(commandId);
+    if (cmdIt == m_commandsById.constEnd()) {
+        return result;
+    }
+    // (1) Fisicamente guardada na MESMA pasta direta do comando (um
+    // comando não tem "descendentes", então não há subárvore aqui).
+    for (const core::Collection &col : m_collections) {
+        if (col.folderId == cmdIt->folderId) {
+            addIfNew(col);
+        }
+    }
+    // (2) Referenciada por um parâmetro Select do próprio comando.
+    for (const core::Parameter &p : cmdIt->params) {
+        if (p.collectionId.isEmpty()) {
+            continue;
+        }
+        const auto it = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
+            [&p](const core::Collection &col) { return col.id == p.collectionId; });
+        if (it != m_collections.constEnd()) {
+            addIfNew(*it);
+        }
+    }
+    return result;
+}
+
 void MainWindow::handleNewFolderRequested()
 {
     // Pré-preenche a pasta pai sugerida com base na seleção/aba atual
@@ -3373,7 +6306,7 @@ void MainWindow::handleNewFolderRequested()
     // livremente antes de salvar.
     const QString suggestedParentId = resolveTargetFolderId();
     FolderEditorDialog dialog(m_commandsData.folders, this, nullptr, suggestedParentId,
-                              m_configManager.loadSettings().terminalProfiles);
+                              m_configManager.loadSettings().terminalProfiles, m_commandsData.commands);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -3403,7 +6336,7 @@ void MainWindow::handleNewCommandRequested()
         }
 
         FolderEditorDialog folderDialog(m_commandsData.folders, this, nullptr, QString(),
-                                        m_configManager.loadSettings().terminalProfiles);
+                                        m_configManager.loadSettings().terminalProfiles, m_commandsData.commands);
         if (folderDialog.exec() != QDialog::Accepted) {
             return;
         }
@@ -3547,7 +6480,7 @@ void MainWindow::handleEditRequested(const QString &itemId, bool isFolder)
 
         const core::Folder existing = m_commandsData.folders.at(folderIndex);
         FolderEditorDialog dialog(m_commandsData.folders, this, &existing, QString(),
-                                  m_configManager.loadSettings().terminalProfiles);
+                                  m_configManager.loadSettings().terminalProfiles, m_commandsData.commands);
         const int rc = dialog.exec();
 
         // Exclusão pedida via botão "Excluir Pasta" do próprio diálogo
@@ -4024,6 +6957,10 @@ void MainWindow::handleNewCollectionRequested()
 
 void MainWindow::persistCollections()
 {
+    // Uma coleção nova (ou renomeada) pode ser a que algum parâmetro de um arquivo de projeto aguardava.
+    if (core::bindPendingCollectionReferences(m_commandsData.commands, m_collections) > 0) {
+        m_configManager.saveCommands(m_commandsData);
+    }
     if (!m_configManager.saveCollections(m_collections)) {
         QMessageBox::warning(this, QStringLiteral("Kai"),
             utils::tr(QStringLiteral("mainwindow.error.persist_collections")));
@@ -4163,6 +7100,12 @@ void MainWindow::handleSettingsRequested()
             utils::tr(QStringLiteral("mainwindow.settings.save_failed")));
         return;
     }
+    m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
+    core::setKipSettings(newSettings.kip); // vale para as próximas sessões KIP
+    // Ações globais: valem já (ícones e comandos virtuais), sem reconstruir a árvore.
+    m_globalActions = newSettings.globalActions;
+    rebuildActionCommands();
+    m_commandTree->setGlobalActions(m_globalActions);
 
     // As variáveis globais NÃO são mais editadas aqui — vêm do environment
     // (pacote) ativo, gerido pela tela de Environments. Não reaplicamos
@@ -4179,11 +7122,13 @@ void MainWindow::handleSettingsRequested()
     // Aparência (densidade/cantos/efeitos): aplica NA HORA, sem reiniciar.
     if (newSettings.uiDensity != currentSettings.uiDensity
         || newSettings.uiCornerStyle != currentSettings.uiCornerStyle
+        || newSettings.treeConnectorStyle != currentSettings.treeConnectorStyle
         || newSettings.fxShadows != currentSettings.fxShadows
         || newSettings.fxTranslucency != currentSettings.fxTranslucency
         || newSettings.fxBlur != currentSettings.fxBlur
         || newSettings.fxAnimations != currentSettings.fxAnimations
-        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss) {
+        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss
+        || newSettings.gradientsEnabled != currentSettings.gradientsEnabled) {
         applyAppearanceSettings();
     }
 
@@ -4338,7 +7283,178 @@ void MainWindow::handleManageEnvironmentsRequested()
     utils::Logger::info(kLogTag, QStringLiteral("Environments atualizados via tela de gestão."));
 }
 
+// --- KIP ------------------------------------------------------------------
+
+void MainWindow::handleKipSessionStarted(const QString &commandId, engine::KipSession *session)
+{
+    m_terminalDrawer->bindKipSession(commandId, session);
+    const auto it = m_commandsById.constFind(commandId);
+    const bool wantsWindow = (it != m_commandsById.constEnd() && it->kipOpenInWindow)
+        || m_kipOpenWindowFor.contains(commandId);
+    m_kipOpenWindowFor.remove(commandId);
+    // `kip_window` / `-w`: depois de ligar a sessão, abre a view na janela
+    // própria (a mesma da saída destacada). A janela copia o estado do painel
+    // embutido — por isso o bind vem antes.
+    if (wantsWindow && m_connectedTerminalCommandId == commandId && !m_terminalDrawer->hasDetachedWindow()) {
+        m_terminalDrawer->showDetachedOutput();
+    }
+
+    // `kip_auto_close`: terminou COM SUCESSO e a view está na janela própria → fecha-a
+    // depois do atraso (falha/cancelamento deixam aberta: é onde está o erro). A geração
+    // evita fechar a janela de uma re-execução que começou durante a espera.
+    const int generation = ++m_kipAutoCloseGeneration[commandId];
+    if (it != m_commandsById.constEnd() && it->kipAutoCloseWindow && session) {
+        const int delayMs = qBound(0, it->kipAutoCloseDelaySec, 60) * 1000;
+        connect(session, &engine::KipSession::finished, this,
+            [this, commandId, generation, delayMs](const engine::KipOutcome &outcome) {
+                if (!outcome.success) {
+                    return;
+                }
+                QTimer::singleShot(delayMs, this, [this, commandId, generation]() {
+                    if (m_kipAutoCloseGeneration.value(commandId) == generation) {
+                        m_terminalDrawer->closeDetachedWindowFor(commandId);
+                    }
+                });
+            });
+    }
+}
+
+void MainWindow::handleKipNotify(const QString &commandId, const QString &title, const QString &text,
+                                 core::KipLevel level)
+{
+    const auto it = m_commandsById.constFind(commandId);
+    const QString commandName = it != m_commandsById.constEnd() ? it->name : commandId;
+    // Texto vindo do programa, exibido como veio (sem tradução do Kai).
+    const QString shownTitle = title.isEmpty() ? commandName : title;
+    QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Information;
+    if (level == core::KipLevel::Warning) icon = QSystemTrayIcon::Warning;
+    if (level == core::KipLevel::Error) icon = QSystemTrayIcon::Critical;
+    maybeShowNotification(NotificationEvent::KipNotify, shownTitle, text, icon, commandId,
+                          QStringLiteral("kip_notify_%1").arg(core::kipLevelToString(level)));
+}
+
+void MainWindow::handleKipAnswersRemembered(const QString &commandId, const QJsonObject &remembered)
+{
+    // Mesmo modelo de lastParamValues: grava no comando (fonte da verdade em
+    // m_commandsData) e persiste, para pré-preencher a próxima execução. Numa ação
+    // de pasta, o comando de verdade é o da ação.
+    const auto actionIds = core::parseFolderActionCommandId(commandId);
+    const QString persistedId = actionIds ? actionIds->commandId : commandId;
+    for (core::Command &c : m_commandsData.commands) {
+        if (c.id != persistedId) {
+            continue;
+        }
+        bool changed = false;
+        for (auto vit = remembered.constBegin(); vit != remembered.constEnd(); ++vit) {
+            if (c.kipLastValues.value(vit.key()) != vit.value()) {
+                c.kipLastValues[vit.key()] = vit.value();
+                changed = true;
+            }
+        }
+        if (changed) {
+            m_configManager.saveCommands(m_commandsData);
+            m_commandsById[c.id] = c;
+            if (actionIds) {
+                rebuildActionCommands(); // os comandos virtuais levam as respostas lembradas
+            }
+        }
+        return;
+    }
+}
+
 // --- API para o IPC/CLI ---
+
+ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
+                                                 const QMap<QString, QString> &paramValues,
+                                                 QString &errorMessage, bool openOutputWindow,
+                                                 const QString &invocationDir)
+{
+    const auto commandIt = m_commandsById.constFind(commandId);
+    if (commandIt == m_commandsById.constEnd()) {
+        errorMessage = utils::tr(QStringLiteral("cli.error.command_not_found")).arg(commandId);
+        return nullptr;
+    }
+    core::Command command = commandIt.value();
+    if (command.cliWorkingDir == core::CliWorkingDir::Invocation && !invocationDir.isEmpty()) {
+        command.workingDirMode = core::WorkingDirMode::Custom;
+        command.workingDir = invocationDir;
+    }
+    if (isCommandRunning(command.id)) {
+        errorMessage = utils::tr(QStringLiteral("cli.stream.already_running")).arg(command.name);
+        return nullptr;
+    }
+
+    auto *session = new ExternalRunSession(command.id, [this, id = command.id](const QString &text) {
+        engine::ProcessRunner *runner = runnerFor(id);
+        if (!runner) {
+            runner = m_processManager->runnerFor(id);
+        }
+        if (runner && runner->isRunning()) {
+            runner->writeRaw(text);
+        }
+    }, this);
+
+    // KIP via `kai -g`: roda no app como um clique e traz o app à frente com a
+    // view em foco; `-w` abre na janela própria (spec 11 §15). O cliente só
+    // imprime as linhas de log e devolve o código de saída real.
+    if (command.kip && command.type == core::CommandType::Command) {
+        // View na janela própria (`-w` ou `kip_window`): é ELA que o usuário vê — a
+        // janela principal não precisa (nem deve) aparecer por causa disto.
+        if (!openOutputWindow && !command.kipOpenInWindow) {
+            showAndRaise();
+        }
+        if (openOutputWindow) {
+            m_kipOpenWindowFor.insert(command.id);
+        }
+    }
+
+    // Saída do comando E dos hooks dele (cada passo loga com o próprio id).
+    QSet<QString> chainIds{command.id};
+    for (const QString &hookId : command.hooks.pre) {
+        chainIds.insert(hookId);
+    }
+    for (const QString &hookId : command.hooks.post) {
+        chainIds.insert(hookId);
+    }
+    connect(m_pipeline, &engine::ExecutionPipeline::logMessage, session,
+        [session, chainIds](const QString &cid, const QString &text, bool isError) {
+            if (chainIds.contains(cid)) {
+                session->publishOutput(text, isError);
+            }
+        });
+    // Conectado DEPOIS de handleBackgroundProcessStarted (construtor), então
+    // o runner já está no ProcessManager quando isto roda.
+    connect(m_pipeline, &engine::ExecutionPipeline::backgroundProcessStarted, session,
+        [this, session, id = command.id](const QString &cid, engine::ProcessRunner *) {
+            if (cid != id) {
+                return;
+            }
+            engine::ProcessRunner *runner = m_processManager->runnerFor(id);
+            session->publishBackground(runner ? runner->processId() : 0);
+            session->publishFinished(0, QString());
+        });
+    connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, session,
+        [session, id = command.id](const engine::PipelineResult &result) {
+            if (result.mainCommandId == id) {
+                session->publishFinished(result.success ? 0 : qMax(1, result.exitCode), result.errorMessage);
+            }
+        });
+
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Executando '%1' a pedido do CLI (sessão externa).").arg(command.name));
+    // Na PRÓXIMA volta do event loop: quem chamou ainda vai conectar os
+    // sinais da sessão; um pipeline que termina de forma síncrona (ex:
+    // condição de execução não satisfeita) emitiria `finished` no vazio.
+    QMetaObject::invokeMethod(this, [this, command, paramValues, openOutputWindow]() {
+        runCommandWithParams(command, paramValues);
+        // O run acima conecta a Saída embutida ao comando; a janela copia
+        // esse estado (abas HTTP, nome, status...) ao abrir.
+        if (openOutputWindow && m_connectedTerminalCommandId == command.id) {
+            m_terminalDrawer->showDetachedOutput();
+        }
+    }, Qt::QueuedConnection);
+    return session;
+}
 
 bool MainWindow::runCommandByName(const QString &name, QString &message)
 {
@@ -4359,9 +7475,18 @@ bool MainWindow::runCommandByName(const QString &name, QString &message)
     }
     const QString id = matches.first()->id;
     // Reusa o fluxo padrão (trata params via formulário na GUI, hooks etc).
-    // Traz a janela à frente para o usuário acompanhar/preencher params.
-    showAndRaise();
-    handleCommandActivated(id);
+    // Traz a janela à frente para o usuário acompanhar/preencher params — exceto num
+    // comando KIP cuja view abre na janela própria: ali a janela principal só atrapalha.
+    // Um comando OCULTO sem parâmetros roda em segundo plano: nem traz a janela nem mexe na Saída.
+    const bool quiet = matches.first()->hidden && !matches.first()->kip && matches.first()->params.isEmpty();
+    if (!quiet && !(matches.first()->kip && matches.first()->kipOpenInWindow)) {
+        showAndRaise();
+    }
+    if (quiet) {
+        runInBackground(id);
+    } else {
+        handleCommandActivated(id);
+    }
     message = utils::tr(QStringLiteral("cli.command.triggered")).arg(matches.first()->name);
     return true;
 }
@@ -4409,6 +7534,9 @@ void MainWindow::showAndRaise()
     show();
     raise();
     activateWindow();
+#if defined(Q_OS_WIN)
+    forceForegroundOnWindows(this);
+#endif
 }
 
 QStringList MainWindow::runningProcessLines()
@@ -4438,12 +7566,12 @@ QStringList MainWindow::runningProcessLines()
     // listava no máximo um — daí "o windows não lista os processos".
     const QSet<QString> already(m_processManager->trackedCommandIds().cbegin(),
                                 m_processManager->trackedCommandIds().cend());
-    for (const QString &id : m_pipeline->runningCommandIds()) {
+    for (const QString &id : allPipelineRunningCommandIds()) {
         if (already.contains(id)) {
             continue;
         }
         qint64 pid = 0;
-        if (auto *r = m_pipeline->runnerFor(id)) {
+        if (auto *r = runnerFor(id)) {
             pid = r->processId();
         }
         lines << utils::tr(QStringLiteral("cli.ps.line")).arg(nameOf(id)).arg(pid).arg(utils::tr(QStringLiteral("cli.status.running")));
@@ -4507,7 +7635,7 @@ bool MainWindow::resolveProcessTarget(const QString &arg, QString &commandId,
     }
     // Foreground: todos os runners vivos do registry (antes só o "ativo",
     // então attach/kill por nome falhavam com execuções concorrentes).
-    for (const QString &id : m_pipeline->runningCommandIds()) {
+    for (const QString &id : allPipelineRunningCommandIds()) {
         bool dup = false;
         for (const Proc &p : procs) {
             if (p.id == id) { dup = true; break; }
@@ -4516,7 +7644,7 @@ bool MainWindow::resolveProcessTarget(const QString &arg, QString &commandId,
             continue;
         }
         qint64 pid = 0;
-        if (auto *r = m_pipeline->runnerFor(id)) {
+        if (auto *r = runnerFor(id)) {
             pid = r->processId();
         }
         procs.append({id, nameOf(id), pid});
@@ -4566,6 +7694,21 @@ void MainWindow::handleRunHistoryRequested()
     dialog.exec();
 }
 
+void MainWindow::handleNotificationHistoryRequested()
+{
+    NotificationHistoryDialog dialog(&m_notificationHistory, this);
+    // "Ir para o comando" só aparece enquanto o comando ainda existe.
+    dialog.setCommandResolver([this](const QString &commandId) {
+        const auto it = m_commandsById.constFind(commandId);
+        return it != m_commandsById.constEnd() ? it->name : QString();
+    });
+    connect(&dialog, &NotificationHistoryDialog::commandRequested, this, [this](const QString &commandId) {
+        showAndRaise();
+        m_commandTree->selectCommand(commandId);
+    });
+    dialog.exec();
+}
+
 void MainWindow::handleLogsRequested()
 {
     if (!m_logViewerDialog) {
@@ -4605,6 +7748,13 @@ void MainWindow::toggleVisibility()
         }
         raise();
         activateWindow();
+#if defined(Q_OS_WIN)
+        // Ver forceForegroundOnWindows: sem isto, um atalho GLOBAL
+        // (processo em segundo plano) frequentemente desminimiza a janela
+        // (o estado muda) mas o Windows recusa silenciosamente trazê-la
+        // pra frente/dar foco de teclado — bug real reportado.
+        forceForegroundOnWindows(this);
+#endif
     }
 }
 
@@ -4698,6 +7848,22 @@ bool MainWindow::event(QEvent *e)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *e)
 {
+    // Todo diálogo do Kai (inclusive QMessageBox/QInputDialog, que não se centralizam sozinhos) abre no centro da
+    // janela do Kai que o usuário está usando — não na principal, que pode estar em outra tela. Os que já pedem
+    // centerOnParent() cuidam de si.
+    if (e->type() == QEvent::Show) {
+        if (auto *dialog = qobject_cast<QDialog *>(watched);
+            dialog && dialog->isWindow() && !dialog->property("kaiCenterOnShow").toBool()) {
+            centerDialogOnShow(dialog);
+        }
+    }
+    // Qualquer resize do divisor externo (janela redimensionada, maximizar,
+    // restaurar, voltar do minimizado) reaplica a proporção guardada.
+    if (watched == m_outerSplitter && e->type() == QEvent::Resize) {
+        applyOutputRatio();
+        QTimer::singleShot(0, this, [this]() { applyOutputRatio(); });
+        return false;
+    }
     // RESIZE POR BORDA (janela frameless). Filtro GLOBAL: os widgets filhos
     // cobrem as bordas, então observamos todos os eventos e só agimos na
     // FAIXA de kResizeMargin da borda da janela.
@@ -4783,6 +7949,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
+    updateWindowShape(); // a janela nativa existe agora: aplica os cantos nativos (Windows)
     // Prioriza a navegação por seta: ao exibir a janela, foca a árvore de
     // comandos e seleciona o primeiro item visível, para que ↑/↓ naveguem
     // os comandos imediatamente (feedback do usuário). Adiado para o

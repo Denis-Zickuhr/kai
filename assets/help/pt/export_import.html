@@ -1,0 +1,17 @@
+<h2>Exportar e Importar</h2>
+<p>Leve a sua configuração entre máquinas, compartilhe com um time ou guarde no git. Os dois ficam no menu <b>Arquivo</b>.</p>
+<h3>Exportar (Arquivo → Exportar…)</h3>
+<ul>
+<li><b>O que exportar:</b> tudo, <i>uma pasta específica</i> ou <i>um comando específico</i>.</li>
+<li><b>Incluir:</b> pastas e comandos, coleções (nome, pasta, schema), <b>dados das coleções</b> (desligado por padrão — um registro pode guardar dado de verdade, como um token, então só a estrutura é exportada a menos que você ative), environments (pacotes de variáveis), configurações (aparência, atalhos, janela) e perfis de execução. Ao exportar uma pasta ou comando que usa coleções, o Kai pergunta quais coleções ligadas levar junto. Os arquivos nunca levam o que só importa na sua máquina (últimos valores e histórico de parâmetros, últimas respostas KIP, caminho local de origem de uma coleção), e texto de várias linhas no YAML é gravado como bloco <code>|</code>.</li>
+<li><b>Formato do arquivo:</b> YAML (o único formato de arquivo para projetos, exportações e a sincronização de pasta).</li>
+<li><b>Arquivo enxuto</b> (recomendado para versionar à mão): pastas por caminho de nomes, hooks pelo nome do comando, sem ids e sem chaves iguais ao padrão.</li>
+</ul>
+<div class='tip'>Environments podem conter segredos. Revise o arquivo antes de compartilhar, ou deixe os environments de fora.</div>
+<h3>Importar (Arquivo → Importar…)</h3>
+<p>Duas origens, detectadas automaticamente:</p>
+<ul>
+<li><b>Arquivo…</b> — uma exportação do Kai (YAML) ou uma especificação <a href='help://import_openapi'>OpenAPI/Swagger</a>. Numa exportação do Kai você escolhe quais categorias trazer. Pastas e comandos são <i>adicionados</i> ao que você tem; um perfil de execução idêntico a um existente não é duplicado, e um com o mesmo nome mas configuração diferente é renomeado <i>(importado)</i>.</li>
+<li><b>Pasta de projeto…</b> — uma pasta com um <a href='help://kai_json'>kai.yml</a>, ou qualquer projeto reconhecível (<code>package.json</code>, <code>docker-compose.yml</code>, <code>requirements.txt</code>/<code>pyproject.toml</code>, um Makefile…) quando <b>Detectar definições genéricas</b> está ligado. Você escolhe a pasta pai e como o <code>PROJECT_PATH</code> é escrito (útil no WSL, onde o seletor de pastas pode devolver um caminho do Windows).</li>
+</ul>
+<p>Para trazer um comando <code>curl</code> colado use o editor de comando HTTP — veja <a href='help://import_curl'>Importar cURL</a>. Pelo terminal: <code>kai import &lt;caminho&gt;</code> e <code>kai validate &lt;arquivo&gt;</code> (confere um kai.yml em busca de erros de digitação antes de importar) — veja <a href='help://cli'>CLI</a>.</p>

@@ -1,7 +1,7 @@
 # Spec 03: Execution Engine, Processes & Hooks
 
 ## 1. Subprocesses via `QProcess`/PTY
-- Every Shell command runs asynchronously.
+- Every Command runs asynchronously (the command type was called "Shell" before; the JSON type is now `command`, and `shell` is still accepted on read).
 - Before execution, Kai interpolates variables in precedence order:
   `Global < Folder/Project < Dynamic extractions < Form parameters`.
 - Variables are injected into the process environment via
@@ -11,7 +11,7 @@
   grid (libvterm) over a PTY (Unix `forkpty`) / ConPTY (Windows).
 
 ## 2. Terminal targets and execution via WSL
-- A Shell command can pick a **terminal target** that wraps the final
+- A Command can pick a **terminal target** that wraps the final
   command in a template (`command_template`, with a `{{command}}`
   placeholder). Main use case: running commands in **WSL** from Kai running
   natively on Windows.
@@ -26,6 +26,49 @@
   Windows side) never crosses into the WSL side, and a login shell resets
   to `$HOME` anyway. Without a terminal target (native Linux), the CWD is
   applied directly via `QProcess::setWorkingDirectory`.
+
+## 2b. Command languages (Native, Python, Node, PHP)
+- `Command::language` (`native` | `python` | `node` | `php`, JSON key `language`, omitted when
+  native; the old `bash`/`sh`/`pwsh` values load as native) says what the `command` text is. `Command::interpreter` (JSON `interpreter`)
+  optionally overrides the global interpreter for that command; it only applies to
+  python/node/php.
+- **Native** (default): the text is a shell line/script (bash, sh where there is no bash) and `{{VAR}}` is interpolated, as
+  always — also with KIP on (a `kip` function is added in POSIX shells, see spec 11 §25; texts too long for the
+  command line go to a Kai-owned temp file, §26). **Python/Node/PHP**: the text is **code** and is **never interpolated** — it can
+  legitimately contain `{{...}}` (f-strings, dictionaries, JS template strings).
+  Variables and parameters reach the program as **environment variables** through the
+  same resolved env (`Global < Folder < Dynamic < Parameters`), which also travels
+  through terminal targets (exported by the targeted-command prefix).
+- `ExecutionPipeline::commandLineFor` is the single place that turns a command into the
+  shell line (main command, background start, cleanup hooks and `--dry-run` all go
+  through it). For python/node/php, `engine::buildInterpreterCommandLine` builds
+  `<interp> -u -c "<bootstrap>"` / `<interp> -e "<bootstrap>"` / `<interp> -r "eval(gzuncompress(base64_decode('…')));"`. The code is zlib-compressed
+  + base64 and decoded **by the interpreter itself** (not by `base64`/`$(...)`), so the
+  line has no `"`, `$`, backtick, `\` or `!` inside the double quotes — it is the same
+  text for POSIX, PowerShell and Cmd, goes through any terminal target template, keeps
+  stdin free (KIP) and stays far below the Windows command-line limit.
+  - Python runs the code in a fresh globals dict (`__name__ == "__main__"`), `-u` plus
+    `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` (defaults: the user's environment
+    wins).
+  - Node runs it with `vm.runInThisContext` inside an async function (top-level `await`,
+    `return`); an uncaught error exits with code 1.
+- The interpreter is a **shell line resolved where the command runs** (a WSL target uses
+  the WSL's `python3`; a login shell already loads pyenv/nvm). Global values live in
+  `settings.json` → `interpreters` (`python`, `node`, `php`; defaults `python3`/`node`/`php`, and
+  `python` for the default Python on Windows without a terminal target), edited in
+  Settings → Languages. `core::InterpreterSettings::resolve` picks command override,
+  then global, then the language default.
+- **Injected modules** (resources in `src/engine/kip-modules/`): `kai` always (Python/Node), `kip` on KIP
+  commands (the class `Kip` in PHP, which has no `kai`; also written to disk for scripts that run as files, see
+  spec 11 §15c). Python: registered in `sys.modules` (`import kai`); Node: globals plus a patched
+  `Module._load` (`require('kai')`). `kai` is a thin client of the IPC server (one JSON line per
+  request, one per reply; `core::ipcEndpointPath()` is exported as `KAI_IPC_SOCKET`): notify
+  (`raise`), show, run, list (`commands`), env-list/env-use, ps, kill, import. If the socket is
+  unreachable it falls back to the `kai` CLI for notify/show/run/env.use/kill (WSL script under a
+  Windows Kai). Tests: `tests/test_kai_module.cpp` (real `IpcServer`), `tests/test_showcase.cpp`.
+- `capture_env` (Export variables) is ignored for python/node/php (no `export` to read back);
+  KIP's `set_env` covers the use case. Everything else (background, PTY, hooks,
+  conditions, cron, auto-run, KIP) applies unchanged.
 
 ## 3. Execution conditions
 - A command (main or hook) can carry `executionConditions`: a list of

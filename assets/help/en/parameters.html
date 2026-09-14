@@ -1,0 +1,28 @@
+<h2>Parameters</h2>
+<p><b>Parameters</b> ask for values in a form <i>before</i> a command runs. Add them in the command editor's <b>Parameters</b> tab; each one becomes <code>{{name}}</code> in the command (or in the URL, headers and body of an HTTP command; in Python/Node code it arrives as an environment variable).</p>
+<h3>Types</h3>
+<table>
+<tr><td><b>text</b></td><td>a line of text</td></tr>
+<tr><td><b>textarea</b></td><td>multi-line text that grows as you type</td></tr>
+<tr><td><b>number</b></td><td>a numeric field</td></tr>
+<tr><td><b>bool</b></td><td>a switch (inserted as true/false)</td></tr>
+<tr><td><b>select</b></td><td>one of a fixed list of options (optionally <b>multi-select</b>, joined by commas) <i>or</i> an entry of a <a href='help://collections'>collection</a></td></tr>
+<tr><td><b>file</b></td><td>a file or folder picker (see below)</td></tr>
+<tr><td><b>json</b></td><td>a snippet editor with syntax highlighting, handy for bodies</td></tr>
+<tr><td><b>date</b></td><td>a date picker for a date, a time or both, optionally a range</td></tr>
+</table>
+<h3>Common options</h3>
+<ul>
+<li><b>Label</b> and <b>default value</b>. Kai remembers the last values you used and pre-fills them; options of a select are sorted by how recently you used them.</li>
+<li><b>Required</b> puts an asterisk and blocks OK until it is filled.</li>
+<li><b>Optional</b> hides the field behind a checkbox (<i>Provide &lt;label&gt;?</i>) so a long form stays short; it only counts when ticked.</li>
+<li><b>Group</b> — give several parameters the same group name to fold them into a section.</li>
+<li><b>Description</b> is shown in the CLI's <code>--help</code> (see <a href='help://cli'>CLI</a>).</li>
+</ul>
+<h3>File and folder</h3>
+<p><b>Selection mode</b> picks a file, a folder or <i>both</i> (asked at run time). The picker opens in the last folder you used anywhere in Kai. <b>Path format</b> converts what the system returns: <code>native</code>, <code>posix</code> (<code>/mnt/c/...</code>) or <code>windows</code> (<code>C:\...</code>) — useful when a Windows Kai runs commands in WSL.</p>
+<h3>Date</h3>
+<p><b>Date field shows</b> date, time or date &amp; time. With <b>Range</b>, <code>{{name}}</code> is the start and <code>{{name.end}}</code> the end. <b>Paste format</b> chooses how the value is written: ISO, BR (15/01/2024), US, 24h time, Unix seconds or milliseconds, or a custom template (<code>yyyy-MM-dd HH:mm</code>).</p>
+<h3>Select tied to a collection</h3>
+<p>Choosing an entry injects the displayed field as <code>{{name}}</code> <i>and</i> every field of the entry as <code>{{name.field}}</code> — see <a href='help://collections'>Collections</a>.</p>
+<div class='tip'>On the command line the required parameters are positional and the optional ones are <code>--name=value</code> — see <a href='help://cli'>CLI</a>.</div>

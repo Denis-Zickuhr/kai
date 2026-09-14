@@ -162,6 +162,65 @@ private slots:
                  qPrintable(QStringLiteral("o prompt do read não apareceu sob PTY -> [%1]").arg(combined)));
         QVERIFY(combined.contains(QStringLiteral("resp=sim")));
     }
+
+    // Bug real: `kai <cli_path>` via kai.exe chamado do WSL falhava com
+    // "A sintaxe do comando está incorreta." — o cwd vem do Qt com barras
+    // normais ("//wsl.localhost/..."), e o cmd.exe rejeita esse formato no
+    // pushd. O caminho precisa chegar ao pushd com contrabarras.
+    void uncWorkingDirWithForwardSlashesIsPushedWithBackslashes()
+    {
+        const QString wrapped = wrapWindowsCommandForUncWorkingDir(
+            QStringLiteral("docker compose up -d"),
+            QStringLiteral("//wsl.localhost/Ubuntu/home/corin/projects/kai"));
+        QCOMPARE(wrapped,
+                 QStringLiteral("pushd \"\\\\wsl.localhost\\Ubuntu\\home\\corin\\projects\\kai\" "
+                                "&& (docker compose up -d) & popd"));
+    }
+
+    void uncDetectionAcceptsBothSeparators()
+    {
+        QVERIFY(isWindowsUncPath(QStringLiteral("//wsl.localhost/Ubuntu/home")));
+        QVERIFY(isWindowsUncPath(QStringLiteral("\\\\wsl$\\Ubuntu\\home")));
+        QVERIFY(!isWindowsUncPath(QStringLiteral("C:/Users/corin")));
+        QVERIFY(!isWindowsUncPath(QStringLiteral("/home/corin")));
+    }
+
+    // Bug real: `kai -g oi` via WSL com alvo WSL — o lançador dava pushd no
+    // cwd UNC do kai.exe, o wsl.exe nascia em Z:\home\corin e falhava com
+    // "wsl: Failed to translate". Com alvo, o `cd` é do próprio comando.
+    void targetHandlingCwdSkipsPushdAndAvoidsUncBirthDir()
+    {
+        const WindowsLaunchDirs dirs = planWindowsLaunchDirs(
+            QString(), QStringLiteral("//wsl.localhost/Ubuntu/home/corin"), true, QStringLiteral("C:\\Kai"));
+        QCOMPARE(dirs.pushdDir, QString());
+        QCOMPARE(dirs.nativeCwd, QStringLiteral("C:\\Kai"));
+
+        const WindowsLaunchDirs normal = planWindowsLaunchDirs(
+            QString(), QStringLiteral("C:/Users/corin"), true, QStringLiteral("C:\\Kai"));
+        QCOMPARE(normal.pushdDir, QString());
+        QCOMPARE(normal.nativeCwd, QString()); // herda um cwd que já é seguro
+    }
+
+    void localCommandInUncCwdStillUsesPushd()
+    {
+        const WindowsLaunchDirs dirs = planWindowsLaunchDirs(
+            QString(), QStringLiteral("//wsl.localhost/Ubuntu/home/corin"), false, QStringLiteral("C:\\Kai"));
+        QCOMPARE(dirs.pushdDir, QStringLiteral("//wsl.localhost/Ubuntu/home/corin"));
+        QCOMPARE(dirs.nativeCwd, QStringLiteral("C:\\Kai"));
+
+        const WindowsLaunchDirs plain = planWindowsLaunchDirs(
+            QStringLiteral("D:/proj"), QStringLiteral("//wsl.localhost/Ubuntu"), false, QStringLiteral("C:\\Kai"));
+        QCOMPARE(plain.pushdDir, QString());
+        QCOMPARE(plain.nativeCwd, QStringLiteral("D:/proj"));
+    }
+
+    void nonUncWorkingDirLeavesCommandUntouched()
+    {
+        QCOMPARE(wrapWindowsCommandForUncWorkingDir(QStringLiteral("dir"), QStringLiteral("C:/work")),
+                 QStringLiteral("dir"));
+        QCOMPARE(wrapWindowsCommandForUncWorkingDir(QStringLiteral("dir"), QString()),
+                 QStringLiteral("dir"));
+    }
 };
 
 QTEST_MAIN(TestProcessRunner)

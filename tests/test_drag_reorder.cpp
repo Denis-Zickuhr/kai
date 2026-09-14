@@ -2,9 +2,13 @@
 #include <QSignalSpy>
 #include <QTabWidget>
 #include <QTreeWidget>
+#include <QLineEdit>
+#include <QVBoxLayout>
 
-#include "ui/command-tree-widget.h"
-#include "ui/draggable-tree-widget.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/draggable-tree-widget.h"
+#include "ui/shared/draggable-table-widget.h"
+#include "ui/features/command-editor/parameter-editor-widget.h"
 #include "core/models.h"
 #include "utils/translation-manager.h"
 
@@ -34,17 +38,143 @@ private:
     }
 
 private slots:
-    // O DraggableTreeWidget emite itemsDropped ao receber um dropEvent
-    // aceito — o mecanismo que faltava para a ordenação persistir.
-    void draggableTreeEmitsItemsDroppedOnAcceptedDrop()
+    // Reescrito depois da reescrita de DraggableTreeWidget (pedido do
+    // usuário: "bota isso nos cmds agora" — mesma correção da tabela de
+    // Parâmetros, sem QDrag/mimeData nenhum): a versão antiga deste teste
+    // dizia explicitamente "sem simular um drop real de mouse (inviável
+    // em teste headless)" — verdade só enquanto o mecanismo dependia do
+    // D&D NATIVO do Qt (que precisa de um loop de eventos do SO de
+    // verdade). Rastreamento de mouse manual não tem essa limitação:
+    // QTest::mousePress/mouseMove/mouseRelease são eventos comuns, o
+    // gesto de arrastar de verdade agora É testável.
+    void realMouseDragReordersSiblingsAboveAndBelow()
     {
         DraggableTreeWidget tree;
+        auto *a = new QTreeWidgetItem(&tree, {QStringLiteral("A")});
+        auto *b = new QTreeWidgetItem(&tree, {QStringLiteral("B")});
+        auto *c = new QTreeWidgetItem(&tree, {QStringLiteral("C")});
+        Q_UNUSED(b);
+        tree.resize(300, 300);
+        tree.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tree));
+
         QSignalSpy spy(&tree, &DraggableTreeWidget::itemsDropped);
-        QVERIFY(spy.isValid());
-        // Sem simular um drop real de mouse (inviável em teste headless),
-        // garantimos que o sinal existe e é conectável — o comportamento
-        // de emissão é exercitado pelo teste de reordenação abaixo via a
-        // integração com o CommandTreeWidget.
+
+        // Arrasta "C" pro TOPO do retângulo de "A" (zona "Above" — terço
+        // superior) — deve virar irmão, ANTES de "A": [C, A, B].
+        const QRect aRect = tree.visualItemRect(a);
+        const QRect cRect = tree.visualItemRect(c);
+        const QPoint fromPos = cRect.center();
+        const QPoint toPos(aRect.center().x(), aRect.top() + 2); // bem no topo = zona "Above"
+
+        QTest::mousePress(tree.viewport(), Qt::LeftButton, Qt::NoModifier, fromPos);
+        QTest::mouseMove(tree.viewport(), QPoint((fromPos.x() + toPos.x()) / 2, (fromPos.y() + toPos.y()) / 2));
+        QTest::mouseMove(tree.viewport(), toPos);
+        QTest::mouseRelease(tree.viewport(), Qt::LeftButton, Qt::NoModifier, toPos);
+
+        QVERIFY2(spy.count() >= 1, "itemsDropped não disparou");
+        QCOMPARE(tree.topLevelItemCount(), 3);
+        QCOMPARE(tree.topLevelItem(0)->text(0), QStringLiteral("C"));
+        QCOMPARE(tree.topLevelItem(1)->text(0), QStringLiteral("A"));
+        QCOMPARE(tree.topLevelItem(2)->text(0), QStringLiteral("B"));
+    }
+
+    // Mesmo gesto, mas soltando no MEIO do item alvo (zona "On") — deve
+    // REPARENTAR (virar filho), não reordenar como irmão. Sem nenhum
+    // setCanAcceptChildrenPredicate() (comportamento PADRÃO do widget,
+    // sem restrição) — quem quiser restringir (ver CommandTreeWidget)
+    // chama o setter; sem chamar, qualquer item aceita, como sempre foi.
+    void realMouseDragOntoItemReparentsAsChild()
+    {
+        DraggableTreeWidget tree;
+        auto *folder = new QTreeWidgetItem(&tree, {QStringLiteral("Pasta")});
+        auto *leaf = new QTreeWidgetItem(&tree, {QStringLiteral("Comando")});
+        tree.resize(300, 300);
+        tree.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tree));
+
+        QSignalSpy spy(&tree, &DraggableTreeWidget::itemsDropped);
+
+        const QRect leafRect = tree.visualItemRect(leaf);
+        const QRect folderRect = tree.visualItemRect(folder);
+        const QPoint fromPos = leafRect.center();
+        const QPoint toPos = folderRect.center(); // bem no meio = zona "On"
+
+        QTest::mousePress(tree.viewport(), Qt::LeftButton, Qt::NoModifier, fromPos);
+        QTest::mouseMove(tree.viewport(), QPoint((fromPos.x() + toPos.x()) / 2, (fromPos.y() + toPos.y()) / 2));
+        QTest::mouseMove(tree.viewport(), toPos);
+        QTest::mouseRelease(tree.viewport(), Qt::LeftButton, Qt::NoModifier, toPos);
+
+        QVERIFY2(spy.count() >= 1, "itemsDropped não disparou");
+        QCOMPARE(tree.topLevelItemCount(), 1);
+        QCOMPARE(tree.topLevelItem(0)->text(0), QStringLiteral("Pasta"));
+        QCOMPARE(tree.topLevelItem(0)->childCount(), 1);
+        QCOMPARE(tree.topLevelItem(0)->child(0)->text(0), QStringLiteral("Comando"));
+    }
+
+    // Bug real reportado: "eu to conseguindo aninhar cmds dentro de
+    // outros cmds, não era pra dar". CommandTreeWidget restringe a zona
+    // "On" a itens que não são comando/coleção (só pastas aceitam
+    // filhos) — soltar um comando bem no MEIO de outro comando deve cair
+    // pra reordenar como irmão (a metade de cima/baixo decide acima ou
+    // abaixo), nunca reparentar.
+    void draggingCommandOntoAnotherCommandNeverNestsIt()
+    {
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Raiz");
+
+        Command a;
+        a.id = QStringLiteral("c_a");
+        a.folderId = QStringLiteral("f_root");
+        a.name = QStringLiteral("Alpha");
+        a.command = QStringLiteral("echo a");
+        a.order = 0;
+
+        Command b;
+        b.id = QStringLiteral("c_b");
+        b.folderId = QStringLiteral("f_root");
+        b.name = QStringLiteral("Bravo");
+        b.command = QStringLiteral("echo b");
+        b.order = 1;
+
+        CommandTreeWidget widget;
+        widget.setData({root}, {a, b});
+        auto *tree = qobject_cast<DraggableTreeWidget *>(treeForRoot(widget, QStringLiteral("f_root")));
+        QVERIFY(tree);
+        widget.resize(300, 300);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QTreeWidgetItem *alpha = tree->topLevelItem(0);
+        QTreeWidgetItem *bravo = tree->topLevelItem(1);
+        QVERIFY(alpha);
+        QVERIFY(bravo);
+
+        QSignalSpy spy(&widget, &CommandTreeWidget::structureChanged);
+
+        // Solta "Bravo" bem no CENTRO de "Alpha" (zona "On", se aceita) —
+        // como comandos não aceitam filhos, deve virar "Below" (Bravo
+        // continua depois de Alpha — ordem inalterada) em vez de filho.
+        const QPoint fromPos = tree->visualItemRect(bravo).center();
+        const QPoint toPos = tree->visualItemRect(alpha).center();
+        QTest::mousePress(tree->viewport(), Qt::LeftButton, Qt::NoModifier, fromPos);
+        QTest::mouseMove(tree->viewport(), QPoint((fromPos.x() + toPos.x()) / 2, (fromPos.y() + toPos.y()) / 2));
+        QTest::mouseMove(tree->viewport(), toPos);
+        QTest::mouseRelease(tree->viewport(), Qt::LeftButton, Qt::NoModifier, toPos);
+
+        QCOMPARE(alpha->childCount(), 0);
+        QCOMPARE(bravo->childCount(), 0);
+        QCOMPARE(tree->topLevelItemCount(), 2);
+        if (spy.count() > 0) {
+            // Se o drop foi tratado como reorder (Below, sem mudança de
+            // pai), structureChanged pode disparar — o que importa é que
+            // NENHUM comando virou pai do outro.
+            const auto placements = qvariant_cast<QVector<TreeNodePlacement>>(spy.last().at(0));
+            for (const TreeNodePlacement &p : placements) {
+                QCOMPARE(p.parentId, QStringLiteral("f_root"));
+            }
+        }
     }
 
     // Move o 2º comando para o topo da árvore e dispara o recálculo de
@@ -285,6 +415,202 @@ private slots:
         auto *tree = qobject_cast<QTreeWidget *>(tabWidget->widget(0));
         QVERIFY(tree != nullptr);
         QCOMPARE(tree->topLevelItemCount(), 2);
+    }
+
+    // Pedido do usuário: "parâmetros dinâmicos são fortamente
+    // posicionais, preciso de uma estratégia de reorder, podemos usar a
+    // mesma estratégia da saída de terminal [árvore de comandos]". A
+    // MECÂNICA é diferente de propósito (ver comentário em
+    // DraggableTableWidget — cell widgets de ação não sobrevivem a um
+    // InternalMove nativo), mas o resultado observável é o mesmo: soltar
+    // uma linha reordena o modelo de verdade. Sem simular um drag real de
+    // mouse (inviável em teste headless, mesma ressalva do teste da
+    // árvore acima) — dispara o sinal rowMoved diretamente, exercitando o
+    // handler de reorder de ParameterEditorWidget de ponta a ponta.
+    void draggingParameterRowReordersTheRealModel()
+    {
+        Parameter a;
+        a.name = QStringLiteral("alpha");
+        a.type = ParameterType::Text;
+
+        Parameter b;
+        b.name = QStringLiteral("bravo");
+        b.type = ParameterType::Text;
+
+        Parameter c;
+        c.name = QStringLiteral("charlie");
+        c.type = ParameterType::Text;
+
+        ParameterEditorWidget editor;
+        editor.setParameters({a, b, c});
+
+        auto *table = editor.findChild<DraggableTableWidget *>();
+        QVERIFY(table != nullptr);
+
+        QSignalSpy spy(&editor, &ParameterEditorWidget::changed);
+
+        // Arrasta "charlie" (linha 2) pro topo (posição 0).
+        emit table->rowMoved(2, 0);
+
+        QCOMPARE(spy.count(), 1);
+        const QVector<Parameter> reordered = editor.parameters();
+        QCOMPARE(reordered.size(), 3);
+        QCOMPARE(reordered.at(0).name, QStringLiteral("charlie"));
+        QCOMPARE(reordered.at(1).name, QStringLiteral("alpha"));
+        QCOMPARE(reordered.at(2).name, QStringLiteral("bravo"));
+    }
+
+    // Bug real reportado, DUAS vezes ("as vezes some o param" e depois
+    // "ordenação ainda fica errada... é como se o drag colocasse o param
+    // dentro do outro componente"): o D&D NATIVO do Qt (QDrag/
+    // InternalMove, versão anterior de DraggableTableWidget) tinha um
+    // payload de mimeData que outro widget sob o cursor podia engolir no
+    // release — não dava pra reproduzir isso com um teste de sinal direto
+    // (emit rowMoved(...) acima), porque o bug estava exatamente no
+    // MECANISMO de captura do mouse, não no handler de reorder. A versão
+    // atual não usa QDrag nenhum (mouse tracking manual), o que finalmente
+    // permite testar o gesto de VERDADE com QMouseEvent sintético — sem
+    // loop de D&D nativo do SO envolvido, isto roda igual em headless.
+    void realMouseDragReordersTheTableWithoutEscapingToAnotherWidget()
+    {
+        Parameter a; a.name = QStringLiteral("alpha"); a.type = ParameterType::Text;
+        Parameter b; b.name = QStringLiteral("bravo"); b.type = ParameterType::Text;
+        Parameter c; c.name = QStringLiteral("charlie"); c.type = ParameterType::Text;
+
+        // Um QLineEdit VIZINHO, no mesmo formulário — exatamente o
+        // cenário do bug relatado: um campo de texto perto da tabela que
+        // podia "engolir" o texto do parâmetro arrastado.
+        QWidget host;
+        auto *layout = new QVBoxLayout(&host);
+        auto *neighborField = new QLineEdit(&host);
+        layout->addWidget(neighborField);
+        auto *editor = new ParameterEditorWidget(&host);
+        layout->addWidget(editor);
+        editor->setParameters({a, b, c});
+
+        host.resize(400, 400);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+        auto *table = editor->findChild<DraggableTableWidget *>();
+        QVERIFY(table);
+        QCOMPARE(table->rowCount(), 3);
+
+        const QRect fromRect = table->visualRect(table->model()->index(2, 1)); // "charlie"
+        const QRect toRect = table->visualRect(table->model()->index(0, 1));   // linha do "alpha"
+        QVERIFY(fromRect.isValid());
+        QVERIFY(toRect.isValid());
+        const QPoint fromPos = fromRect.center();
+        const QPoint toPos = toRect.center();
+
+        QSignalSpy spy(editor, &ParameterEditorWidget::changed);
+
+        // Gesto real: pressiona em "charlie", move em alguns passos
+        // (supera o limiar de drag do Qt) até a linha do "alpha", solta.
+        QTest::mousePress(table->viewport(), Qt::LeftButton, Qt::NoModifier, fromPos);
+        const QPoint mid((fromPos.x() + toPos.x()) / 2, (fromPos.y() + toPos.y()) / 2);
+        QTest::mouseMove(table->viewport(), mid);
+        QTest::mouseMove(table->viewport(), toPos);
+        QTest::mouseRelease(table->viewport(), Qt::LeftButton, Qt::NoModifier, toPos);
+
+        QVERIFY2(spy.count() >= 1, "O drag deveria ter reordenado o modelo real (changed() não disparou)");
+        const QVector<Parameter> reordered = editor->parameters();
+        QCOMPARE(reordered.size(), 3);
+        QCOMPARE(reordered.at(0).name, QStringLiteral("charlie"));
+        QCOMPARE(reordered.at(1).name, QStringLiteral("alpha"));
+        QCOMPARE(reordered.at(2).name, QStringLiteral("bravo"));
+
+        // O ponto central do bug: o campo vizinho nunca deveria ter
+        // recebido nada — sem QDrag/mimeData, não existe payload pra
+        // "escapar" pra ele.
+        QVERIFY2(neighborField->text().isEmpty(),
+            "O campo vizinho não deveria ter recebido nenhum texto do drag");
+    }
+
+    // Bug real reportado, PERSISTINDO mesmo depois de tirar o D&D nativo:
+    // "arrasto, alguns some, outros vao errados" — no plural, sugerindo
+    // que o problema aparece ao longo de VÁRIOS drags na mesma sessão,
+    // não só no primeiro. Causa real: mouseReleaseEvent() pulava
+    // QTableWidget::mouseReleaseEvent() no caminho de drag concluído —
+    // isso deixava o estado INTERNO de QAbstractItemView (índice
+    // pressionado/seleção) preso apontando pra uma linha que
+    // rebuildTable() já tinha destruído, corrompendo a PRÓXIMA
+    // interação. Este teste arrasta MAIS DE UMA VEZ em sequência (o
+    // cenário que reproduz) e confere a ordem final E a integridade da
+    // tabela (nenhuma linha "fantasma"/sem item) depois de CADA drag.
+    void multipleSequentialDragsNeverCorruptStateOrLoseRows()
+    {
+        QVector<Parameter> params;
+        for (const QString &name : {QStringLiteral("alpha"), QStringLiteral("bravo"),
+                                     QStringLiteral("charlie"), QStringLiteral("delta"),
+                                     QStringLiteral("echo")}) {
+            Parameter p; p.name = name; p.type = ParameterType::Text;
+            params << p;
+        }
+
+        ParameterEditorWidget editor;
+        editor.setParameters(params);
+        editor.resize(400, 400);
+        editor.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&editor));
+
+        auto *table = editor.findChild<DraggableTableWidget *>();
+        QVERIFY(table);
+
+        // toRow pode ser rowCount() (arrastar pro FIM, depois da última
+        // linha) — não existe índice de modelo pra isso, então mira um
+        // ponto alguns pixels ABAIXO da última linha (mesmo cenário que o
+        // clamp de updateIndicatorForPos existe pra cobrir).
+        auto dragRow = [&](int fromRow, int toRow) {
+            const QRect fromRect = table->visualRect(table->model()->index(fromRow, 1));
+            QVERIFY(fromRect.isValid());
+            QPoint toPos;
+            if (toRow < table->rowCount()) {
+                const QRect toRect = table->visualRect(table->model()->index(toRow, 1));
+                QVERIFY(toRect.isValid());
+                toPos = toRect.center();
+            } else {
+                const QRect lastRect = table->visualRect(table->model()->index(table->rowCount() - 1, 1));
+                QVERIFY(lastRect.isValid());
+                toPos = QPoint(lastRect.center().x(), lastRect.bottom() + 5);
+            }
+            const QPoint fromPos = fromRect.center();
+            QTest::mousePress(table->viewport(), Qt::LeftButton, Qt::NoModifier, fromPos);
+            QTest::mouseMove(table->viewport(),
+                QPoint((fromPos.x() + toPos.x()) / 2, (fromPos.y() + toPos.y()) / 2));
+            QTest::mouseMove(table->viewport(), toPos);
+            QTest::mouseRelease(table->viewport(), Qt::LeftButton, Qt::NoModifier, toPos);
+        };
+        auto namesInOrder = [&]() {
+            QStringList names;
+            for (const Parameter &p : editor.parameters()) {
+                names << p.name;
+            }
+            return names;
+        };
+        auto verifyNoPhantomRows = [&]() {
+            QCOMPARE(table->rowCount(), editor.parameters().size());
+            for (int row = 0; row < table->rowCount(); ++row) {
+                QVERIFY2(table->item(row, 1) != nullptr,
+                    qPrintable(QStringLiteral("linha %1 ficou sem item após o drag").arg(row)));
+            }
+        };
+
+        // alpha,bravo,charlie,delta,echo -> arrasta "echo" (4) pro topo.
+        dragRow(4, 0);
+        QCOMPARE(namesInOrder(), (QStringList{"echo", "alpha", "bravo", "charlie", "delta"}));
+        verifyNoPhantomRows();
+
+        // Segundo drag, na tabela JÁ reconstruída pelo primeiro: arrasta
+        // "alpha" (agora linha 1) pro fim.
+        dragRow(1, 5);
+        QCOMPARE(namesInOrder(), (QStringList{"echo", "bravo", "charlie", "delta", "alpha"}));
+        verifyNoPhantomRows();
+
+        // Terceiro drag: arrasta "charlie" (linha 2) pra logo antes de "echo" (linha 0).
+        dragRow(2, 0);
+        QCOMPARE(namesInOrder(), (QStringList{"charlie", "echo", "bravo", "delta", "alpha"}));
+        verifyNoPhantomRows();
     }
 };
 

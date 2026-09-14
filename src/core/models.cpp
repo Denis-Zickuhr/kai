@@ -1,8 +1,49 @@
 #include "core/models.h"
 
 #include <QJsonArray>
+#include <QRegularExpression>
+#include <QUuid>
+
+#include <algorithm>
 
 namespace kai::core {
+
+namespace {
+
+void writeWorkingDir(QJsonObject &obj, WorkingDirMode mode, const QString &path)
+{
+    if (mode == WorkingDirMode::Custom && !path.isEmpty()) {
+        obj["working_dir"] = path;
+    } else if (mode == WorkingDirMode::None) {
+        obj["working_dir"] = QJsonValue(QJsonValue::Null);
+    }
+}
+
+// Ausente/vazio = herdar; null = nenhum; texto = próprio. "{{PROJECT_PATH}}"
+// sozinho era como o import antigo dizia "diretório do projeto" em CADA
+// comando — agora isso é simplesmente herdar da pasta-projeto.
+void readWorkingDir(const QJsonObject &obj, WorkingDirMode &mode, QString &path)
+{
+    mode = WorkingDirMode::Inherit;
+    path.clear();
+    if (!obj.contains("working_dir")) {
+        return;
+    }
+    const QJsonValue v = obj.value("working_dir");
+    if (v.isNull()) {
+        mode = WorkingDirMode::None;
+        return;
+    }
+    const QString text = v.toString().trimmed();
+    static const QRegularExpression projectPathOnly(QStringLiteral(R"(^\{\{\s*PROJECT_PATH\s*\}\}$)"));
+    if (text.isEmpty() || projectPathOnly.match(text).hasMatch()) {
+        return;
+    }
+    mode = WorkingDirMode::Custom;
+    path = text;
+}
+
+} // namespace
 
 QString parameterTypeToString(ParameterType type)
 {
@@ -14,6 +55,7 @@ QString parameterTypeToString(ParameterType type)
     case ParameterType::Number:   return QStringLiteral("number");
     case ParameterType::Textarea: return QStringLiteral("textarea");
     case ParameterType::Json:     return QStringLiteral("json");
+    case ParameterType::Date:     return QStringLiteral("date");
     }
     return QStringLiteral("text");
 }
@@ -26,6 +68,7 @@ ParameterType parameterTypeFromString(const QString &value)
     if (value == QStringLiteral("number"))   return ParameterType::Number;
     if (value == QStringLiteral("textarea")) return ParameterType::Textarea;
     if (value == QStringLiteral("json"))     return ParameterType::Json;
+    if (value == QStringLiteral("date"))     return ParameterType::Date;
     return ParameterType::Text;
 }
 
@@ -33,9 +76,9 @@ QJsonObject Parameter::toJson() const
 {
     QJsonObject obj;
     obj["name"] = name;
-    obj["label"] = label;
+    if (!label.isEmpty()) obj["label"] = label;
     obj["type"] = parameterTypeToString(type);
-    obj["default"] = defaultValue;
+    if (!defaultValue.isEmpty()) obj["default"] = defaultValue;
     if (!options.isEmpty()) {
         obj["options"] = QJsonArray::fromStringList(options);
     }
@@ -44,15 +87,44 @@ QJsonObject Parameter::toJson() const
     }
     if (!collectionId.isEmpty()) {
         obj["collection_id"] = collectionId;
+    } else if (!collectionName.isEmpty()) {
+        obj["collection_name"] = collectionName;
+    }
+    if ((!collectionId.isEmpty() || !collectionName.isEmpty()) && !collectionDisplayField.isEmpty()) {
         obj["collection_display_field"] = collectionDisplayField;
     }
-    obj["initial_dir"] = initialDir;
     if (filePathFormat != QStringLiteral("native")) {
         obj["file_path_format"] = filePathFormat;
     }
-    if (pickFolder) {
+    if (pickMode != QStringLiteral("file")) {
+        obj["pick_mode"] = pickMode;
+    }
+    // Compat: kai.yml antigos (sem pick_mode) leem só pick_folder.
+    if (pickMode == QStringLiteral("folder")) {
         obj["pick_folder"] = true;
     }
+    if (optional) {
+        obj["optional"] = true;
+    }
+    if (required) {
+        obj["required"] = true;
+    }
+    if (dateMode != QStringLiteral("date")) {
+        obj["date_mode"] = dateMode;
+    }
+    if (dateRange) {
+        obj["date_range"] = true;
+    }
+    if (dateFormat != QStringLiteral("iso_date")) {
+        obj["date_format"] = dateFormat;
+    }
+    if (!dateFormatCustom.isEmpty()) {
+        obj["date_format_custom"] = dateFormatCustom;
+    }
+    if (!group.isEmpty()) {
+        obj["group"] = group;
+    }
+    if (!description.isEmpty()) obj["description"] = description;
     return obj;
 }
 
@@ -70,20 +142,41 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     }
     p.multiSelect = obj.value("multi_select").toBool(false);
     p.collectionId = obj.value("collection_id").toString();
+    if (p.collectionId.isEmpty()) {
+        p.collectionName = obj.value("collection_name").toString();
+    }
     p.collectionDisplayField = obj.value("collection_display_field").toString();
-    p.initialDir = obj.value("initial_dir").toString();
     p.filePathFormat = obj.value("file_path_format").toString(QStringLiteral("native"));
     p.pickFolder = obj.value("pick_folder").toBool(false);
+    // pick_mode (novo) tem prioridade; sem ele, deriva de pick_folder
+    // (config antiga) para não quebrar arquivos exportados antes desta
+    // feature.
+    if (obj.contains(QStringLiteral("pick_mode"))) {
+        p.pickMode = obj.value("pick_mode").toString(QStringLiteral("file"));
+    } else {
+        p.pickMode = p.pickFolder ? QStringLiteral("folder") : QStringLiteral("file");
+    }
+    p.optional = obj.value("optional").toBool(false);
+    p.required = obj.value("required").toBool(false);
+    p.dateMode = obj.value("date_mode").toString(QStringLiteral("date"));
+    p.dateRange = obj.value("date_range").toBool(false);
+    p.dateFormat = obj.value("date_format").toString(QStringLiteral("iso_date"));
+    p.dateFormatCustom = obj.value("date_format_custom").toString();
+    p.group = obj.value("group").toString();
+    p.description = obj.value("description").toString();
     return p;
 }
 
 QJsonObject EnvExtractor::toJson() const
 {
     QJsonObject obj;
-    obj["name"] = name;
+    if (!name.isEmpty()) obj["name"] = name;
     obj["json_path"] = jsonPath;
     obj["env_var"] = envVar;
-    obj["persist"] = persist;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
     return obj;
 }
 
@@ -93,20 +186,43 @@ EnvExtractor EnvExtractor::fromJson(const QJsonObject &obj)
     e.name = obj.value("name").toString();
     e.jsonPath = obj.value("json_path").toString();
     e.envVar = obj.value("env_var").toString();
-    // default false — kai.json antigos sem o campo continuam efêmeros.
+    // default false — kai.yml antigos sem o campo continuam efêmeros.
     e.persist = obj.value("persist").toBool(false);
+    // default "project" — kai.yml antigos sem o campo continuam gravando
+    // no escopo ambiente de sempre (comportamento inalterado).
+    e.scope = obj.value("scope").toString(QStringLiteral("project"));
     return e;
+}
+
+QJsonObject DeclaredEnvVar::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
+    return obj;
+}
+
+DeclaredEnvVar DeclaredEnvVar::fromJson(const QJsonObject &obj)
+{
+    DeclaredEnvVar d;
+    d.name = obj.value("name").toString();
+    d.persist = obj.value("persist").toBool(false);
+    d.scope = obj.value("scope").toString(QStringLiteral("project"));
+    return d;
 }
 
 QJsonObject OutputResponder::toJson() const
 {
     QJsonObject obj;
-    obj["enabled"] = enabled;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
     obj["name"] = name;
-    obj["pattern"] = pattern;
-    obj["response"] = response;
-    obj["limit_triggers"] = limitTriggers;
-    obj["max_triggers"] = maxTriggers;
+    if (!pattern.isEmpty()) obj["pattern"] = pattern;
+    if (!response.isEmpty()) obj["response"] = response;
+    if (limitTriggers) obj["limit_triggers"] = true;
+    if (maxTriggers != 1) obj["max_triggers"] = maxTriggers;
     return obj;
 }
 
@@ -152,18 +268,22 @@ QJsonObject HttpConfig::toJson() const
     obj["method"] = httpMethodToString(method);
     obj["url"] = url;
 
-    QJsonObject headersObj;
-    for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
-        headersObj[it.key()] = it.value();
+    if (!headers.isEmpty()) {
+        QJsonObject headersObj;
+        for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
+            headersObj[it.key()] = it.value();
+        }
+        obj["headers"] = headersObj;
     }
-    obj["headers"] = headersObj;
-    obj["body"] = body;
+    if (!body.isEmpty()) obj["body"] = body;
 
-    QJsonArray extractorsArr;
-    for (const EnvExtractor &e : envExtractors) {
-        extractorsArr.append(e.toJson());
+    if (!envExtractors.isEmpty()) {
+        QJsonArray extractorsArr;
+        for (const EnvExtractor &e : envExtractors) {
+            extractorsArr.append(e.toJson());
+        }
+        obj["env_extractors"] = extractorsArr;
     }
-    obj["env_extractors"] = extractorsArr;
     return obj;
 }
 
@@ -189,11 +309,11 @@ HttpConfig HttpConfig::fromJson(const QJsonObject &obj)
 QJsonObject ExecutionCondition::toJson() const
 {
     QJsonObject obj;
-    obj["name"] = name;
-    obj["left"] = left;
-    obj["op"] = op;
-    obj["right"] = right;
-    obj["enabled"] = enabled;
+    if (!name.isEmpty()) obj["name"] = name;
+    if (!left.isEmpty()) obj["left"] = left;
+    if (!op.isEmpty()) obj["op"] = op;
+    if (!right.isEmpty()) obj["right"] = right;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
     return obj;
 }
 
@@ -211,9 +331,9 @@ ExecutionCondition ExecutionCondition::fromJson(const QJsonObject &obj)
 QJsonObject Hooks::toJson() const
 {
     QJsonObject obj;
-    obj["pre"] = QJsonArray::fromStringList(pre);
-    obj["post"] = QJsonArray::fromStringList(post);
-    obj["cleanup"] = QJsonArray::fromStringList(cleanup);
+    if (!pre.isEmpty()) obj["pre"] = QJsonArray::fromStringList(pre);
+    if (!post.isEmpty()) obj["post"] = QJsonArray::fromStringList(post);
+    if (!cleanup.isEmpty()) obj["cleanup"] = QJsonArray::fromStringList(cleanup);
     return obj;
 }
 
@@ -234,74 +354,146 @@ Hooks Hooks::fromJson(const QJsonObject &obj)
 
 QString commandTypeToString(CommandType type)
 {
-    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("shell");
+    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("command");
 }
 
 CommandType commandTypeFromString(const QString &value)
 {
-    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Shell;
+    // "shell" (nome anterior) e qualquer valor desconhecido caem em Command.
+    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Command;
+}
+
+QString commandLanguageToString(CommandLanguage language)
+{
+    switch (language) {
+        case CommandLanguage::Python: return QStringLiteral("python");
+        case CommandLanguage::Node:   return QStringLiteral("node");
+        case CommandLanguage::Php:    return QStringLiteral("php");
+        case CommandLanguage::Native: break;
+    }
+    return QStringLiteral("native");
+}
+
+CommandLanguage commandLanguageFromString(const QString &value)
+{
+    const QString v = value.trimmed().toLower();
+    if (v == QStringLiteral("python")) return CommandLanguage::Python;
+    if (v == QStringLiteral("node"))   return CommandLanguage::Node;
+    if (v == QStringLiteral("php"))    return CommandLanguage::Php;
+    return CommandLanguage::Native;
+}
+
+QString cliWorkingDirToString(CliWorkingDir mode)
+{
+    return mode == CliWorkingDir::Invocation ? QStringLiteral("invocation") : QStringLiteral("default");
+}
+
+CliWorkingDir cliWorkingDirFromString(const QString &value)
+{
+    return value.trimmed().toLower() == QStringLiteral("invocation") ? CliWorkingDir::Invocation
+                                                                     : CliWorkingDir::Default;
 }
 
 QJsonObject Command::toJson() const
 {
+    // OMITE CHAVES NO DEFAULT (pedido do usuário, testando um kai.yml de
+    // mão: "tem muita coisa que é false no def... queria que se for
+    // default, omite por padrão no export") — fromJson() já trata TODA
+    // chave ausente como seu próprio valor default (cada `.toBool(false)`/
+    // `.toString()`/`.toInt(N)` abaixo prova isso), então nunca escrever um
+    // `false`/""/0/lista vazia é 100% equivalente na releitura, só produz
+    // um arquivo bem mais enxuto pra quem edita/versiona um kai.yml (ou
+    // kai.yml) à mão.
     QJsonObject obj;
     obj["id"] = id;
     obj["folder_id"] = folderId;
     obj["name"] = name;
-    obj["description"] = description;
+    if (!description.isEmpty()) obj["description"] = description;
     obj["type"] = commandTypeToString(type);
-    obj["icon"] = icon;
+    if (!icon.isEmpty()) obj["icon"] = icon;
     obj["command"] = command;
-    obj["working_dir"] = workingDir;
-    obj["is_background"] = isBackground;
-    obj["compact_output"] = compactOutput;
-    obj["hide_on_run"] = hideOnRun;
-    obj["ignore_exit_code"] = ignoreExitCode;
-    obj["hidden"] = hidden;
-    obj["capture_env"] = captureEnv;
-    obj["open_last_link"] = openLastLink;
-    obj["interactive_terminal"] = interactiveTerminal;
-    obj["terminal_target"] = terminalTarget;
-    obj["auto_run"] = autoRun;
-    obj["auto_run_delay_sec"] = autoRunDelaySec;
-    obj["order"] = order;
+    if (language != CommandLanguage::Native) obj["language"] = commandLanguageToString(language);
+    if (!interpreter.isEmpty()) obj["interpreter"] = interpreter;
+    writeWorkingDir(obj, workingDirMode, workingDir);
+    if (isBackground) obj["is_background"] = true;
+    if (compactOutput) obj["compact_output"] = true;
+    if (hideOnRun) obj["hide_on_run"] = true;
+    if (ignoreExitCode) obj["ignore_exit_code"] = true;
+    if (hidden) obj["hidden"] = true;
+    if (captureEnv) obj["capture_env"] = true;
+    if (!declaredEnvVars.isEmpty()) {
+        QJsonArray declaredArr;
+        for (const DeclaredEnvVar &d : declaredEnvVars) {
+            declaredArr.append(d.toJson());
+        }
+        obj["declared_env_vars"] = declaredArr;
+    }
+    if (openLastLink) obj["open_last_link"] = true;
+    if (interactiveTerminal) obj["interactive_terminal"] = true;
+    if (formattedOutput) obj["formatted_output"] = true;
+    if (kip) obj["kip"] = true;
+    if (kipOpenInWindow) obj["kip_window"] = true;
+    if (kipAutoCloseWindow) obj["kip_auto_close"] = true;
+    if (kipAutoCloseDelaySec != 2) obj["kip_auto_close_delay_sec"] = kipAutoCloseDelaySec;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (autoRun) obj["auto_run"] = true;
+    if (autoRunDelaySec != 0) obj["auto_run_delay_sec"] = autoRunDelaySec;
+    if (!cronExpression.isEmpty()) obj["cron_expression"] = cronExpression;
+    if (cronNotifyOnRun) obj["cron_notify_on_run"] = true;
+    if (order != -1) obj["order"] = order;
 
     if (httpConfig.has_value()) {
         obj["http_config"] = httpConfig->toJson();
     }
 
-    QJsonArray paramsArr;
-    for (const Parameter &p : params) {
-        paramsArr.append(p.toJson());
+    if (!params.isEmpty()) {
+        QJsonArray paramsArr;
+        for (const Parameter &p : params) {
+            paramsArr.append(p.toJson());
+        }
+        obj["params"] = paramsArr;
     }
-    obj["params"] = paramsArr;
-    obj["hooks"] = hooks.toJson();
+    if (!hooks.pre.isEmpty() || !hooks.post.isEmpty() || !hooks.cleanup.isEmpty()) {
+        obj["hooks"] = hooks.toJson();
+    }
 
-    QJsonArray conditionsArr;
-    for (const ExecutionCondition &c : executionConditions) {
-        conditionsArr.append(c.toJson());
+    if (!executionConditions.isEmpty()) {
+        QJsonArray conditionsArr;
+        for (const ExecutionCondition &c : executionConditions) {
+            conditionsArr.append(c.toJson());
+        }
+        obj["execution_conditions"] = conditionsArr;
     }
-    obj["execution_conditions"] = conditionsArr;
-    obj["condition_combinator"] = conditionCombinator;
-    obj["condition_skip_behavior"] = conditionSkipBehavior;
+    if (conditionCombinator != QStringLiteral("and")) obj["condition_combinator"] = conditionCombinator;
+    if (conditionSkipBehavior != QStringLiteral("success")) obj["condition_skip_behavior"] = conditionSkipBehavior;
 
-    QJsonArray respArr;
-    for (const OutputResponder &r : responders) {
-        respArr.append(r.toJson());
+    if (!responders.isEmpty()) {
+        QJsonArray respArr;
+        for (const OutputResponder &r : responders) {
+            respArr.append(r.toJson());
+        }
+        obj["responders"] = respArr;
     }
-    obj["responders"] = respArr;
 
-    QJsonObject lastParamsObj;
-    for (auto it = lastParamValues.constBegin(); it != lastParamValues.constEnd(); ++it) {
-        lastParamsObj[it.key()] = it.value();
+    if (!lastParamValues.isEmpty()) {
+        QJsonObject lastParamsObj;
+        for (auto it = lastParamValues.constBegin(); it != lastParamValues.constEnd(); ++it) {
+            lastParamsObj[it.key()] = it.value();
+        }
+        obj["last_param_values"] = lastParamsObj;
     }
-    obj["last_param_values"] = lastParamsObj;
 
-    QJsonObject usageObj;
-    for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
-        usageObj[it.key()] = QJsonArray::fromStringList(it.value());
+    if (!kipLastValues.isEmpty()) obj["kip_last_values"] = kipLastValues;
+
+    if (!paramUsageHistory.isEmpty()) {
+        QJsonObject usageObj;
+        for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
+            usageObj[it.key()] = QJsonArray::fromStringList(it.value());
+        }
+        obj["param_usage_history"] = usageObj;
     }
-    obj["param_usage_history"] = usageObj;
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
+    if (cliWorkingDir != CliWorkingDir::Default) obj["cli_working_dir"] = cliWorkingDirToString(cliWorkingDir);
     return obj;
 }
 
@@ -315,18 +507,30 @@ Command Command::fromJson(const QJsonObject &obj)
     c.type = commandTypeFromString(obj.value("type").toString());
     c.icon = obj.value("icon").toString();
     c.command = obj.value("command").toString();
-    c.workingDir = obj.value("working_dir").toString();
+    c.language = commandLanguageFromString(obj.value("language").toString());
+    c.interpreter = obj.value("interpreter").toString();
+    readWorkingDir(obj, c.workingDirMode, c.workingDir);
     c.isBackground = obj.value("is_background").toBool(false);
     c.compactOutput = obj.value("compact_output").toBool(false);
     c.hideOnRun = obj.value("hide_on_run").toBool(false);
     c.ignoreExitCode = obj.value("ignore_exit_code").toBool(false);
     c.hidden = obj.value("hidden").toBool(false);
     c.captureEnv = obj.value("capture_env").toBool(false);
+    for (const QJsonValue &v : obj.value("declared_env_vars").toArray()) {
+        c.declaredEnvVars << DeclaredEnvVar::fromJson(v.toObject());
+    }
     c.openLastLink = obj.value("open_last_link").toBool(false);
     c.interactiveTerminal = obj.value("interactive_terminal").toBool(false);
+    c.formattedOutput = obj.value("formatted_output").toBool(false);
+    c.kip = obj.value("kip").toBool(false);
+    c.kipOpenInWindow = obj.value("kip_window").toBool(false);
+    c.kipAutoCloseWindow = obj.value("kip_auto_close").toBool(false);
+    c.kipAutoCloseDelaySec = qBound(0, obj.value("kip_auto_close_delay_sec").toInt(2), 60);
     c.terminalTarget = obj.value("terminal_target").toString();
     c.autoRun = obj.value("auto_run").toBool(false);
     c.autoRunDelaySec = obj.value("auto_run_delay_sec").toInt(0);
+    c.cronExpression = obj.value("cron_expression").toString();
+    c.cronNotifyOnRun = obj.value("cron_notify_on_run").toBool(false);
     c.order = obj.value("order").toInt(-1);
 
     if (obj.contains("http_config") && obj.value("http_config").isObject()) {
@@ -352,6 +556,7 @@ Command Command::fromJson(const QJsonObject &obj)
     for (auto it = lastParamsObj.constBegin(); it != lastParamsObj.constEnd(); ++it) {
         c.lastParamValues[it.key()] = it.value().toString();
     }
+    c.kipLastValues = obj.value("kip_last_values").toObject();
     const QJsonObject usageObj = obj.value("param_usage_history").toObject();
     for (auto it = usageObj.constBegin(); it != usageObj.constEnd(); ++it) {
         QStringList values;
@@ -360,27 +565,57 @@ Command Command::fromJson(const QJsonObject &obj)
         }
         c.paramUsageHistory[it.key()] = values;
     }
+    c.cliPath = obj.value("cli_path").toString();
+    c.cliWorkingDir = cliWorkingDirFromString(obj.value("cli_working_dir").toString());
     return c;
 }
 
 QJsonObject Folder::toJson() const
 {
+    // Mesmo espírito de Command::toJson (pedido do usuário: omitir chaves
+    // no valor default deixa um kai.yml editado à mão bem mais
+    // enxuto) — fromJson() já trata ausência como o default de cada campo.
     QJsonObject obj;
     obj["id"] = id;
     obj["name"] = name;
-    obj["icon"] = icon;
-    obj["parent_id"] = parentId.has_value() ? QJsonValue(parentId.value()) : QJsonValue(QJsonValue::Null);
-    obj["is_project"] = isProject;
-    obj["project_path"] = projectPath.has_value() ? QJsonValue(projectPath.value()) : QJsonValue(QJsonValue::Null);
-    obj["order"] = order;
-    obj["hidden"] = hidden;
-    obj["terminal_target"] = terminalTarget;
-
-    QJsonObject envObj;
-    for (auto it = envVars.constBegin(); it != envVars.constEnd(); ++it) {
-        envObj[it.key()] = it.value();
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (parentId.has_value()) obj["parent_id"] = parentId.value();
+    if (isProject) obj["is_project"] = true;
+    writeWorkingDir(obj, workingDirMode, workingDir);
+    if (order != -1) obj["order"] = order;
+    if (hidden) obj["hidden"] = true;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
+    if (!cliDescription.isEmpty()) obj["cli_description"] = cliDescription;
+    if (!actions.isEmpty()) obj["actions"] = QJsonArray::fromStringList(actions);
+    if (!expansionActions.isEmpty()) obj["expansion_actions"] = QJsonArray::fromStringList(expansionActions);
+    if (!actionGroups.isEmpty()) {
+        QJsonObject groups;
+        for (auto it = actionGroups.constBegin(); it != actionGroups.constEnd(); ++it) {
+            groups[it.key()] = it.value();
+        }
+        obj["action_groups"] = groups;
     }
-    obj["env_vars"] = envObj;
+    if (!groupIcons.isEmpty()) {
+        QJsonObject icons;
+        for (auto it = groupIcons.constBegin(); it != groupIcons.constEnd(); ++it) {
+            icons[it.key()] = it.value();
+        }
+        obj["group_icons"] = icons;
+    }
+
+    if (!envVars.isEmpty()) {
+        QJsonObject envObj;
+        for (auto it = envVars.constBegin(); it != envVars.constEnd(); ++it) {
+            envObj[it.key()] = it.value();
+        }
+        obj["env_vars"] = envObj;
+    }
+    if (!secretEnvKeys.isEmpty()) {
+        QStringList names(secretEnvKeys.cbegin(), secretEnvKeys.cend());
+        names.sort();
+        obj["secret_env_keys"] = QJsonArray::fromStringList(names);
+    }
     return obj;
 }
 
@@ -398,18 +633,73 @@ Folder Folder::fromJson(const QJsonObject &obj)
 
     f.isProject = obj.value("is_project").toBool(false);
 
-    const QJsonValue pathVal = obj.value("project_path");
-    if (pathVal.isString()) {
-        f.projectPath = pathVal.toString();
-    }
+    readWorkingDir(obj, f.workingDirMode, f.workingDir);
 
     f.order = obj.value("order").toInt(-1);
     f.hidden = obj.value("hidden").toBool(false);
     f.terminalTarget = obj.value("terminal_target").toString();
+    f.cliPath = obj.value("cli_path").toString();
+    f.cliDescription = obj.value("cli_description").toString();
+    // Ordem de cadastro preservada; vazio e repetido não fazem sentido.
+    for (const QJsonValue &v : obj.value("actions").toArray()) {
+        const QString commandId = v.toString().trimmed();
+        if (!commandId.isEmpty() && !f.actions.contains(commandId)) {
+            f.actions.append(commandId);
+        }
+    }
+    const QJsonObject groupsObj = obj.value("action_groups").toObject();
+    for (auto it = groupsObj.constBegin(); it != groupsObj.constEnd(); ++it) {
+        const QString group = it.value().toString().trimmed();
+        if (!it.key().isEmpty() && !group.isEmpty()) {
+            f.actionGroups.insert(it.key(), group);
+        }
+    }
+    const QJsonObject groupIconsObj = obj.value("group_icons").toObject();
+    for (auto it = groupIconsObj.constBegin(); it != groupIconsObj.constEnd(); ++it) {
+        const QString icon = it.value().toString().trimmed();
+        if (!it.key().isEmpty() && !icon.isEmpty()) {
+            f.groupIcons.insert(it.key(), icon);
+        }
+    }
+    for (const QJsonValue &v : obj.value("expansion_actions").toArray()) {
+        const QString commandId = v.toString().trimmed();
+        if (!commandId.isEmpty() && !f.expansionActions.contains(commandId)) {
+            f.expansionActions.append(commandId);
+        }
+    }
 
     const QJsonObject envObj = obj.value("env_vars").toObject();
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
         f.envVars[it.key()] = it.value().toString();
+    }
+    // Um nome secreto sempre existe como variável (num arquivo ele vem sem valor: cada instalação preenche).
+    for (const QJsonValue &v : obj.value("secret_env_keys").toArray()) {
+        const QString name = v.toString().trimmed();
+        if (!name.isEmpty()) {
+            f.secretEnvKeys.insert(name);
+            if (!f.envVars.contains(name)) {
+                f.envVars.insert(name, QString());
+            }
+        }
+    }
+
+    // MIGRAÇÃO (idempotente — depois de salvo, não há mais o que migrar): o
+    // diretório de uma pasta-projeto morava em "project_path" E na variável
+    // PROJECT_PATH (copiada em "{{PROJECT_PATH}}" em cada comando). Agora é o
+    // diretório de trabalho da pasta, herdado pelos filhos, e PROJECT_PATH
+    // virou variável calculada na execução (ver ExecutionPipeline).
+    if (f.workingDirMode == WorkingDirMode::Inherit) {
+        const QString legacyProjectPath = obj.value("project_path").toString().trimmed();
+        const QString legacyEnv = f.isProject ? f.envVars.value(QStringLiteral("PROJECT_PATH")).trimmed() : QString();
+        const QString migrated = !legacyProjectPath.isEmpty() ? legacyProjectPath : legacyEnv;
+        if (!migrated.isEmpty()) {
+            f.workingDirMode = WorkingDirMode::Custom;
+            f.workingDir = migrated;
+        }
+    }
+    if (f.isProject && f.workingDirMode == WorkingDirMode::Custom
+        && f.envVars.value(QStringLiteral("PROJECT_PATH")).trimmed() == f.workingDir) {
+        f.envVars.remove(QStringLiteral("PROJECT_PATH"));
     }
     return f;
 }
@@ -445,9 +735,10 @@ QJsonObject CollectionField::toJson() const
 {
     QJsonObject obj;
     obj["name"] = name;
-    obj["label"] = label;
+    if (!label.isEmpty()) obj["label"] = label;
     obj["type"] = collectionFieldTypeToString(type);
-    obj["visible"] = visible;
+    if (!visible) obj["visible"] = false; // default é true — só grava a exceção
+    if (secret) obj["secret"] = true; // default é false — só grava a exceção
     return obj;
 }
 
@@ -459,6 +750,7 @@ CollectionField CollectionField::fromJson(const QJsonObject &obj)
     f.type = collectionFieldTypeFromString(obj.value("type").toString());
     // Retrocompat: schemas antigos sem a chave assumem visível.
     f.visible = obj.value("visible").toBool(true);
+    f.secret = obj.value("secret").toBool(false);
     return f;
 }
 
@@ -471,7 +763,7 @@ QJsonObject CollectionEntry::toJson() const
         valuesObj[it.key()] = it.value();
     }
     obj["values"] = valuesObj;
-    obj["favorite"] = favorite;
+    if (favorite) obj["favorite"] = true;
     return obj;
 }
 
@@ -499,27 +791,104 @@ QVector<CollectionField> Collection::defaultSchema()
 
 QJsonObject Collection::toJson() const
 {
+    // Mesmo espírito de Command::toJson/Folder::toJson (omitir default).
     QJsonObject obj;
     obj["id"] = id;
     obj["folder_id"] = folderId;
     obj["name"] = name;
-    obj["icon"] = icon;
-    obj["order"] = order;
-    obj["source_path"] = sourcePath;
-    obj["hidden"] = hidden;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (order != -1) obj["order"] = order;
+    if (!sourcePath.isEmpty()) obj["source_path"] = sourcePath;
+    if (hidden) obj["hidden"] = true;
 
-    QJsonArray schemaArr;
-    for (const CollectionField &field : schema) {
-        schemaArr.append(field.toJson());
+    if (!schema.isEmpty()) {
+        QJsonArray schemaArr;
+        for (const CollectionField &field : schema) {
+            schemaArr.append(field.toJson());
+        }
+        obj["schema"] = schemaArr;
     }
-    obj["schema"] = schemaArr;
 
-    QJsonArray entriesArr;
-    for (const CollectionEntry &entry : entries) {
-        entriesArr.append(entry.toJson());
+    if (!entries.isEmpty()) {
+        QJsonArray entriesArr;
+        for (const CollectionEntry &entry : entries) {
+            entriesArr.append(entry.toJson());
+        }
+        obj["entries"] = entriesArr;
     }
-    obj["entries"] = entriesArr;
     return obj;
+}
+
+QStringList Note::types()
+{
+    return {QStringLiteral("markdown"), QStringLiteral("text"), QStringLiteral("json"), QStringLiteral("yaml"),
+            QStringLiteral("xml")};
+}
+
+QString Note::normalizedType(const QString &type)
+{
+    const QString lower = type.trimmed().toLower();
+    if (lower == QLatin1String("md")) {
+        return QStringLiteral("markdown");
+    }
+    if (lower == QLatin1String("txt")) {
+        return QStringLiteral("text");
+    }
+    if (lower == QLatin1String("yml")) {
+        return QStringLiteral("yaml");
+    }
+    return types().contains(lower) ? lower : QStringLiteral("markdown");
+}
+
+QString Note::extensionForType(const QString &type)
+{
+    const QString t = normalizedType(type);
+    if (t == QLatin1String("text")) return QStringLiteral("txt");
+    if (t == QLatin1String("json")) return QStringLiteral("json");
+    if (t == QLatin1String("yaml")) return QStringLiteral("yml");
+    if (t == QLatin1String("xml")) return QStringLiteral("xml");
+    return QStringLiteral("md");
+}
+
+QString Note::typeForExtension(const QString &extension)
+{
+    const QString ext = extension.trimmed().toLower();
+    if (ext == QLatin1String("txt")) return QStringLiteral("text");
+    if (ext == QLatin1String("json")) return QStringLiteral("json");
+    if (ext == QLatin1String("yml") || ext == QLatin1String("yaml")) return QStringLiteral("yaml");
+    if (ext == QLatin1String("xml")) return QStringLiteral("xml");
+    return QStringLiteral("markdown");
+}
+
+QJsonObject Note::toJson() const
+{
+    QJsonObject obj;
+    obj["id"] = id;
+    obj["folder_id"] = folderId;
+    obj["name"] = name;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (order >= 0) obj["order"] = order;
+    obj["type"] = normalizedType(type);
+    obj["content"] = content;
+    // `local` ausente = local (o padrão); só grava quando a nota sincroniza.
+    if (!local) obj["local"] = false;
+    if (hidden) obj["hidden"] = true;
+    return obj;
+}
+
+Note Note::fromJson(const QJsonObject &obj)
+{
+    Note note;
+    note.id = obj.value("id").toString();
+    note.folderId = obj.value("folder_id").toString();
+    note.name = obj.value("name").toString();
+    note.icon = obj.value("icon").toString();
+    note.order = obj.value("order").toInt(-1);
+    note.type = normalizedType(obj.value("type").toString());
+    note.content = obj.value("content").toString();
+    note.local = obj.value("local").toBool(true);
+    note.hidden = obj.value("hidden").toBool(false);
+    return note;
 }
 
 Collection Collection::fromJson(const QJsonObject &obj)
@@ -543,10 +912,78 @@ Collection Collection::fromJson(const QJsonObject &obj)
     }
 
     for (const QJsonValue &v : obj.value("entries").toArray()) {
-        c.entries.append(CollectionEntry::fromJson(v.toObject()));
+        CollectionEntry e = CollectionEntry::fromJson(v.toObject());
+        // Entrada sem id (kai.yml escrito à mão, sem se preocupar
+        // com ids — "o APP deve gerar em runtime") ganha um id novo AQUI:
+        // sem isto, várias entradas sem id colidiriam todas em "" e o
+        // favorito/edição de uma afetaria as outras.
+        if (e.id.isEmpty()) {
+            e.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        c.entries.append(e);
     }
     // tag_colors legado é ignorado (feature de tags removida).
     return c;
+}
+
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured)
+{
+    // ESCOLHA EXPLÍCITA sempre vence, mesmo se for um campo Key — o
+    // usuário questionou exatamente esse caso ("o campo no param como
+    // exibido é key, mas ele tá exibindo o valor... tá certo?" — não
+    // estava: ignorar uma escolha deliberada era o bug errado a corrigir).
+    // O auto-fallback abaixo (que evita Key) só existe pra quando NADA foi
+    // configurado — o problema real era o EDITOR pré-selecionar Key
+    // silenciosamente sem o usuário escolher nada (corrigido em
+    // parameter-editor-widget.cpp: refreshDisplayFields), não este
+    // resolver ignorar uma escolha de verdade.
+    if (!configured.isEmpty()) {
+        const bool exists = std::any_of(collection.schema.constBegin(), collection.schema.constEnd(),
+            [&configured](const CollectionField &f) { return f.name == configured; });
+        if (exists) {
+            return configured;
+        }
+        // `configured` não existe mais no schema (campo removido/renomeado
+        // depois de salvo) — cai pro auto-fallback abaixo, igual a "nada
+        // configurado".
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type == CollectionFieldType::Value) {
+            return f.name;
+        }
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type != CollectionFieldType::Key) {
+            return f.name;
+        }
+    }
+    return collection.schema.isEmpty() ? QString() : collection.schema.first().name;
+}
+
+int bindPendingCollectionReferences(QVector<Command> &commands, const QVector<Collection> &collections)
+{
+    QMap<QString, QString> idByName;
+    QSet<QString> ambiguous;
+    for (const Collection &c : collections) {
+        if (idByName.contains(c.name)) {
+            ambiguous.insert(c.name);
+        }
+        idByName.insert(c.name, c.id);
+    }
+    int bound = 0;
+    for (Command &command : commands) {
+        for (Parameter &param : command.params) {
+            if (!param.collectionId.isEmpty() || param.collectionName.isEmpty()) {
+                continue;
+            }
+            if (idByName.contains(param.collectionName) && !ambiguous.contains(param.collectionName)) {
+                param.collectionId = idByName.value(param.collectionName);
+                param.collectionName.clear();
+                ++bound;
+            }
+        }
+    }
+    return bound;
 }
 
 } // namespace kai::core

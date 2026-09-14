@@ -1,2 +1,26 @@
 <h2>Kai overview</h2>
-<p><b>Kai</b> is a native command runner (C++/Qt6) for developers: it runs Shell scripts and HTTP requests, chains automations (hooks), injects per-environment variables, all with a global shortcut and low resource usage.</p><h3>Typical workflow</h3><ol><li>Create <b>folders</b> and, inside them, <b>commands</b> (Shell or HTTP).</li><li>Define <b>variables</b> in an <b>Environment</b> (a selectable package at the top).</li><li>Run with a double-click; follow the output in the Terminal Drawer.</li><li>Automate with <b>hooks</b> (pre/post) and reuse them via the <b>CLI</b>.</li></ol><div class='tip'>Tip: use search (Ctrl+F) to find commands by name.</div><p>See also: <a href='help://commands_shell'>Shell Commands</a>, <a href='help://commands_http'>HTTP Commands</a>, <a href='help://environments'>Environments</a>.</p>
+<p><b>Kai</b> is a native command runner for developers: it keeps the commands you run every day — shell, Python, Node, PHP, HTTP requests — one global shortcut away, injects variables per environment, streams the output live and never leaves orphaned processes behind.</p>
+<h3>Typical workflow</h3>
+<ol>
+<li>Create <b>folders</b> (they become tabs) and, inside them, <b>commands</b> — see <a href='help://organizing'>Folders, tree &amp; search</a>.</li>
+<li>Write the command: a <a href='help://commands_shell'>shell line</a>, <a href='help://languages'>Python, Node or PHP code</a> or an <a href='help://commands_http'>HTTP request</a>. Ask for values with <a href='help://parameters'>parameters</a>.</li>
+<li>Set <b>variables</b> in an <a href='help://environments'>environment</a> (the selector at the top) and use them as <code>{{VAR}}</code>.</li>
+<li>Run with a double-click or <b>Enter</b>; follow the <a href='help://output'>Output</a> live.</li>
+<li>Automate: <a href='help://hooks'>hooks</a>, <a href='help://scheduling'>schedules</a>, <a href='help://responders'>auto-replies</a>, and the <a href='help://cli'>command line</a>.</li>
+</ol>
+<h3>The main window</h3>
+<ul>
+<li><b>Top bar:</b> menus <b>File</b> (import, export, run history, logs, hide, quit), <b>Item</b> (new folder / command / collection), <b>Settings</b> and <b>Help</b>; the environment selector sits on the right.</li>
+<li><b>Tabs and tree:</b> one tab per folder, with the commands and subfolders in a tree; the side bar next to it runs, stops, edits and creates things.</li>
+<li><b>Output panel:</b> the result of the selected command (bottom by default; it can sit left or right in <a href='help://settings'>Settings → Layout</a>).</li>
+<li><b>Status line:</b> how many commands are running (click for the <a href='help://processes'>process list</a>), whether the last run succeeded and the unread <a href='help://notifications'>notifications</a>.</li>
+</ul>
+<div class='tip'>Press <b>Ctrl+F</b> to search commands by name. The <a href='help://shortcuts'>global shortcut</a> shows or hides Kai from anywhere.</div>
+<h3>Where to read next</h3>
+<table>
+<tr><td><a href='help://commands_shell'>Commands</a></td><td>what a command can do and its options</td></tr>
+<tr><td><a href='help://languages'>Python, Node &amp; PHP</a></td><td>code instead of a shell line, plus the built-in <code>kai</code> and <code>kip</code> modules</td></tr>
+<tr><td><a href='help://kip'>KIP</a></td><td>turn a command into a small app with forms, progress and results</td></tr>
+<tr><td><a href='help://kai_json'>kai.yml</a></td><td>keep a project's commands in a versionable file</td></tr>
+<tr><td><a href='help://settings'>Settings</a></td><td>appearance, layout, notifications, interpreters and more</td></tr>
+</table>

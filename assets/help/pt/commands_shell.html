@@ -1,22 +1,31 @@
-<h2>Comandos Shell</h2>
-<p>Um comando <b>Shell</b> roda uma linha (ou script) no seu shell.</p>
+<h2>Comandos</h2>
+<p>Um <b>Comando</b> roda um programa na sua máquina. O texto é uma linha (ou script) para o seu shell — <b>Nativa</b>, o padrão — ou <b>código</b> em Python, Node ou PHP (veja <a href='help://languages'>Python, Node e PHP</a>). Requisições HTTP têm tipo próprio: <a href='help://commands_http'>Comandos HTTP</a>.</p>
 <h3>Como criar</h3>
-<p>Menu <b>Item → Novo comando</b>, aba <b>Shell</b>. Preencha o comando e, opcionalmente, o <b>diretório de trabalho</b>.</p>
+<p>Menu <b>Item → Novo Comando</b> (ou <b>Ctrl+N</b>), aba <b>Comando</b>. Preencha o comando e, opcionalmente, o <b>diretório de trabalho</b>.</p>
 <pre>npm run dev</pre>
+<h3>Diretório de trabalho</h3>
+<p>Por padrão o comando <b>herda</b> o diretório de trabalho da pasta dele (num projeto importado, a raiz do projeto). Escolha <i>Diretório próprio</i> para definir o seu — um caminho relativo é resolvido em cima do herdado — ou <i>Nenhum</i> para cortar a herança e rodar no diretório padrão do alvo. <code>{{PROJECT_PATH}}</code> é a raiz da pasta-projeto mais próxima: <code>{{PROJECT_PATH}}/api</code>.</p>
 <h3>Variáveis</h3>
 <p>Use <code>{{VAR}}</code> para interpolar variáveis do ambiente ativo:</p>
 <pre>echo "Subindo na porta {{PORT}} ({{NODE_ENV}})"</pre>
+<p>Precedência: <code>Global &lt; Pasta/Projeto &lt; Dinâmica &lt; Parâmetros</code>. Veja <a href='help://variables'>Variáveis</a> e <a href='help://parameters'>Parâmetros</a> para pedir valores antes de rodar. (Em código Python/Node o <code>{{VAR}}</code> <i>não</i> é substituído: as variáveis são variáveis de ambiente.)</p>
 <h3>Background</h3>
-<p>Marque <b>Executar em background</b> para processos longos (ex.: um dev server). O Kai mantém o processo vivo e mostra o status; pare quando quiser.</p>
+<p>Marque <b>Executar em background</b> para processos longos (ex.: um dev server). O Kai mantém o processo vivo e mostra o status; pare quando quiser (SIGTERM e, depois do prazo de graça, SIGKILL, aplicados ao grupo de processos inteiro). Veja <a href='help://processes'>Processos</a>.</p>
 <div class='tip'>Comandos interativos com <code>read</code> aceitam entrada direto no campo de entrada do painel de saída.</div>
 <h3>Terminal interativo (configurações avançadas)</h3>
-<p>Para apps de tela cheia que desenham via cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, um Claude Code aninhado — ative <b>Terminal interativo (TUI)</b>. A saída vira uma grade de terminal de verdade em vez de um log em texto puro, então redesenho, cores e teclado se comportam como um terminal real:</p>
+<p>Para apps de tela cheia que desenham via cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, um Claude Code aninhado — ative <b>Terminal interativo (TUI)</b>. A saída vira uma grade de terminal de verdade em vez de um log em texto puro:</p>
 <pre>htop</pre>
 <h3>Ignorar código de saída (configurações avançadas)</h3>
-<p>Alguns programas retornam um código de saída diferente de zero mesmo funcionando perfeitamente — o caso clássico é o <code>explorer.exe</code> chamado do WSL para abrir uma pasta no Windows. Ative <b>Ignorar código de saída</b> e o Kai sempre trata o comando como sucesso; um crash de processo de verdade (sinal/segfault) continua sendo reportado normalmente:</p>
+<p>Alguns programas retornam um código de saída diferente de zero mesmo funcionando — o caso clássico é o <code>explorer.exe</code> chamado do WSL. Ative <b>Ignorar código de saída</b> e o Kai sempre trata o comando como sucesso; um crash de verdade (sinal/segfault) continua sendo reportado:</p>
 <pre>explorer.exe .</pre>
-<h3>Ocultar o Kai ao executar (configurações avançadas)</h3>
-<p>Para um comando que abre outro app ou janela e o Kai só estorvaria — ex.: um editor de código:</p>
-<pre>code .</pre>
+<h3>Outras opções (configurações avançadas)</h3>
+<ul>
+<li><b>Ocultar o Kai ao executar</b> — para um comando que abre outra janela, ex.: <code>code .</code>.</li>
+<li><b>Abrir o último link impresso ao terminar</b> — abre a última URL <code>http(s)</code> que o comando imprimiu (um dev server, um túnel).</li>
+<li><b>Saída formatada</b> — veja <a href='help://output'>O painel de Saída</a>.</li>
+<li><b>Exportar variáveis</b> — depois que um comando nativo roda, os nomes listados em <b>Variáveis exportáveis</b> são capturados como variáveis dinâmicas (um login que exporta um token, por exemplo). Só os nomes declarados são lidos.</li>
+<li><b>Agendar / rodar ao iniciar o Kai</b> — veja <a href='help://scheduling'>Agendamentos e auto-run</a>.</li>
+<li><b>Auto-respostas</b> — veja <a href='help://responders'>Auto-respostas</a>.</li>
+</ul>
 <h3>Alvos de terminal (WSL, containers, ...)</h3>
-<p>Escolha um alvo em <b>Alvo de Terminal</b> para rodar o comando através de um wrapper — veja <a href='help://terminal_targets'>Alvos de Terminal & WSL</a>.</p>
+<p>Escolha um <b>Perfil</b> para rodar o comando através de um wrapper — veja <a href='help://terminal_targets'>Terminais e WSL</a>.</p>

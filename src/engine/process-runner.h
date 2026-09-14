@@ -13,11 +13,53 @@ class QThread;
 
 namespace kai::engine {
 
+// Mesma lógica de UNC do ProcessRunner (ver comentários na implementação em
+// process-runner.cpp), exposta pra ser reusada pelo cleanup hook em
+// ExecutionPipeline::runCleanupHooks — que roda um QProcess PRÓPRIO,
+// destacado, sem passar por ProcessRunner::start() (achado real: o cleanup
+// hook batia no MESMO travamento de UNC PATH, mas nenhuma dessas proteções
+// valia lá, porque é um caminho de código totalmente separado).
+// As duas primeiras são manipulação pura de string (sem API do Windows) e
+// ficam disponíveis em todas as plataformas pra serem testáveis no Linux.
+bool isWindowsUncPath(const QString &path);
+QString wrapWindowsCommandForUncWorkingDir(const QString &command, const QString &workingDir);
+
+// Onde o cmd.exe NASCE (nativeCwd; vazio = herda o cwd do kai.exe, só
+// quando ele não é UNC) e pra onde ele dá `pushd` antes do comando
+// (pushdDir; vazio = sem pushd). `commandHandlesWorkingDir` = o comando já
+// é um alvo de terminal que faz o próprio `cd` (ex: wsl.exe ... bash -c
+// 'cd /home/...'): aí o pushd no cwd UNC do kai.exe é pior que inútil —
+// o wsl.exe nasce num drive mapeado temporário (Z:\...) e falha com
+// "wsl: Failed to translate 'Z:\home\corin'" (bug real, kai -g via WSL).
+struct WindowsLaunchDirs {
+    QString nativeCwd;
+    QString pushdDir;
+};
+WindowsLaunchDirs planWindowsLaunchDirs(const QString &workingDir, const QString &currentDir,
+                                        bool commandHandlesWorkingDir, const QString &safeDir);
+
+#if defined(Q_OS_WIN)
+QString windowsSafeNonUncStartDir();
+#endif
+
+// Processo DESTACADO (kill remoto, cleanup hook, Kai subido pelo CLI) nunca
+// pode herdar o console NEM os handles de quem chamou: no modo CLI eles são o
+// terminal do usuário (console do pai ou os pipes da interop do WSL). Bug
+// real: o kill remoto disparado no destrutor rodava DEPOIS do kai sair,
+// imprimia "CMD.EXE foi iniciado tendo o caminho acima..." no prompt e
+// chegou a derrubar a aba (0xc000013a). No Windows: CREATE_NO_WINDOW, sem
+// herança de handles e cwd seguro (nunca UNC). No-op fora do Windows.
+void isolateDetachedProcess(QProcess &process);
+
 // Resultado final da execução de um ProcessRunner.
 struct ProcessResult {
     int exitCode = -1;
     bool crashed = false;
     QString errorMessage;
+    // O encerramento foi PEDIDO (stop()/forceStop(): botão Parar, `kai kill`,
+    // reset, re-execução...). Não é uma falha do comando — quem notifica erro
+    // precisa distinguir.
+    bool stoppedByRequest = false;
 };
 
 // Wrapper assíncrono sobre QProcess.
@@ -47,6 +89,16 @@ public:
     // também sejam encerrados — bug real corrigido: "SIGKILL fraco" era
     // na verdade o processo filho sobrevivendo órfão após o bash morrer.
     void stop();
+
+    // Encerramento IMEDIATO (botão "Forçar parada" — pedido do usuário:
+    // "tem o botão de force, que é um sigkill"): manda SIGKILL (ou
+    // TerminateProcess/taskkill /F /T no Windows) direto pro grupo/árvore de
+    // processos, SEM enviar SIGTERM nem esperar `m_killTimeoutMs`. Diferente
+    // de stop(), que sempre dá a chance de encerramento gracioso primeiro —
+    // até a versão anterior deste método, forceStop() e stop() eram a MESMA
+    // chamada (bug real: o botão "Forçar" não forçava nada, só repetia o
+    // stop() gracioso).
+    void forceStop();
 
     // Escreve dados no stdin do processo em execução (interação
     // real com o Terminal Drawer, não apenas leitura de output). Um '\n' é
@@ -108,6 +160,19 @@ public:
     // disparada de forma DESTACADA (não bloqueia a GUI).
     void setRemoteKillCommandLine(const QString &commandLine);
 
+    // O comando recebido por start() já aplica o próprio working dir (alvo
+    // de terminal com `cd` embutido) — ver planWindowsLaunchDirs. Só muda
+    // algo no Windows. Padrão: false.
+    void setCommandHandlesWorkingDir(bool enabled);
+
+    // O processo usa stdin/stdout/stderr do processo Kai (sem PTY/ConPTY,
+    // sem captura: outputReady nunca dispara). Ver ExecutionPipeline::
+    // setInheritTerminal. No Unix não usa setsid: o comando fica no grupo de
+    // processos do terminal e recebe o Ctrl+C dele. No Windows não cria Job
+    // Object: um comando em segundo plano sobrevive à saída do kai, como um
+    // `cmd &`. Padrão: false.
+    void setInheritTerminal(bool enabled);
+
     // Modo de encerramento RÁPIDO (usado no fechamento do app): o destrutor
     // NÃO faz waits bloqueantes — só sinaliza o kill e sai. Sem isto, fechar
     // o Kai com N processos congelava a GUI por N x (1-3s) somados
@@ -129,6 +194,8 @@ private slots:
     void handlePtyReadyRead();
 
 private:
+    void startInheritingTerminal(const QString &command, const QString &workingDir,
+                                 const QMap<QString, QString> &env);
     // Inicia o comando sob um pseudo-terminal (forkpty). Retorna false se
     // não conseguir criar o PTY (chamador cai para o modo QProcess).
     bool startWithPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
@@ -141,6 +208,14 @@ private:
     // ConPTY não puder ser criado (chamador cai para cmd /c via QProcess).
     bool startWithConPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
     void cleanupConPty();
+    // Encerra a árvore de processos INTEIRA do comando via Job Object
+    // (ver m_jobHandle) — TerminateJobObject mata processo+filhos+netos de
+    // uma vez, atômico, sem depender de nenhum processo externo. Se o Job
+    // Object não pôde ser criado/atribuído no start (m_jobHandle nulo —
+    // raro, mas cai aqui como REDE DE SEGURANÇA), usa o `taskkill /T /F`
+    // externo de antes como fallback. `pid` só é usado nesse fallback (log
+    // + linha de comando do taskkill).
+    void terminateProcessTree(qint64 pid);
 
     std::unique_ptr<QProcess> m_process;
     int m_killTimeoutMs = 2000;
@@ -158,6 +233,8 @@ private:
     // --- Modo PTY (comandos shell interativos) ---
     bool m_usePty = true;
     bool m_interactiveShell = false;
+    bool m_commandHandlesWorkingDir = false;
+    bool m_inheritTerminal = false;
     int m_ptyMasterFd = -1;
     qint64 m_ptyChildPid = -1;
     QSocketNotifier *m_ptyNotifier = nullptr;
@@ -169,6 +246,18 @@ private:
     void *m_conOutRead = nullptr;     // HANDLE — lemos a saída daqui
     void *m_conProcess = nullptr;     // HANDLE do processo filho
     void *m_conThread = nullptr;      // HANDLE da thread do processo filho
+    // HANDLE do Job Object que contém o processo filho (e toda a árvore
+    // gerada por ele). Criado no start (ConPTY: antes do ResumeThread, pra
+    // não deixar o processo rodar nem um instante sem estar no job — fecha
+    // a janela de corrida por completo; QProcess: logo após o start).
+    // TerminateJobObject mata a árvore inteira de uma vez, sem precisar
+    // spawnar um `taskkill` externo — era esse padrão (CreateProcessW cru
+    // + taskkill /F escondido) que o Windows Defender lia como assinatura
+    // de dropper/RAT e matava o Kai (bug reportado pelo usuário: "o
+    // windows defender endoidou e matou meu kai"). Nulo se a criação/
+    // atribuição do job falhar, caso em que terminateProcessTree() cai
+    // pro taskkill como rede de segurança.
+    void *m_jobHandle = nullptr;
     QThread *m_conReader = nullptr;   // thread que lê o pipe de saída
     // Flag de ABORT da thread leitora: o dtor sinaliza e a thread sai no
     // próximo ciclo, permitindo um join CONFIÁVEL antes de destruir o objeto

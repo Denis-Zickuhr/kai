@@ -47,6 +47,14 @@ if not exist "%EXE%" (
     exit /b 1
 )
 copy "%EXE%" "%DIST_DIR%\kai.exe" >nul
+REM kai.com: o "kai" de console (o terminal o acha antes do kai.exe; ver src\console-shim.cpp).
+set COM=%BUILD_DIR%\bin\Release\kai.com
+if not exist "%COM%" set COM=%BUILD_DIR%\bin\kai.com
+if not exist "%COM%" (
+    echo [ERRO] kai.com nao encontrado apos o build.
+    exit /b 1
+)
+copy "%COM%" "%DIST_DIR%\kai.com" >nul
 
 REM Copia os assets (temas, language packs, logo) — resolvidos em runtime
 REM relativos ao executavel (mesma estrategia do Linux).

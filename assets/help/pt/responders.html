@@ -1,0 +1,20 @@
+<h2>Auto-respostas</h2>
+<p>Uma <b>auto-resposta</b> (auto-responder) responde um prompt na saída de um comando <b>por você</b>: quando a saída casa com um padrão, o Kai digita a resposta na entrada do comando. Use para ferramentas que perguntam <i>Continuar? [s/N]</i> e não têm uma flag para pular. Adicione na aba <b>Auto-respostas</b> do editor do comando.</p>
+<h3>Campos</h3>
+<table>
+<tr><td><b>Nome</b></td><td>obrigatório — uma resposta sem nome não é salva nem ativada</td></tr>
+<tr><td><b>Habilitada</b></td><td>desligue uma sem apagá-la</td></tr>
+<tr><td><b>Condição (regex)</b></td><td>uma expressão regular testada contra a saída; os grupos capturados ficam disponíveis como <code>\1</code>, <code>\2</code>…</td></tr>
+<tr><td><b>Resposta</b></td><td>o texto enviado, como se você tivesse digitado. Use <code>\1</code> para reaproveitar um grupo capturado e <code>{{VAR}}</code> para interpolar variáveis</td></tr>
+<tr><td><b>Limitar disparos</b> / <b>Máx. de disparos</b></td><td>dispara no máximo N vezes por execução, para um prompt repetido não virar laço infinito</td></tr>
+</table>
+<h3>Exemplo</h3>
+<pre>Condição: Digite o nome do banco \((\w+)\) para confirmar:
+Resposta: \1</pre>
+<p>Toda resposta automática é ecoada na saída para você ver quem digitou.</p>
+<h3>Bom saber</h3>
+<ul>
+<li>Lê a saída ao vivo, então funciona com comandos em background também.</li>
+<li>Não vale em comandos <a href='help://kip'>KIP</a> (o programa já conversa com o Kai pelo protocolo).</li>
+<li>No <a href='help://kai_json'>kai.yml</a> é a lista <code>responders</code>.</li>
+</ul>

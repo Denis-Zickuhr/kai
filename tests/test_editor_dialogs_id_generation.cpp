@@ -1,8 +1,8 @@
 #include <QTest>
 
-#include "ui/folder-editor-dialog.h"
-#include "ui/command-editor-dialog.h"
-#include "ui/name-uniqueness.h"
+#include "ui/features/collections/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-editor-dialog.h"
+#include "ui/shared/name-uniqueness.h"
 
 using namespace kai::ui;
 

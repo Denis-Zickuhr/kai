@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "engine/output-responder-matcher.h"
+#include "core/environment-manager.h"
 
 using namespace kai::engine;
 using namespace kai::core;
@@ -43,6 +44,39 @@ private slots:
         auto out = m.feed(QStringLiteral("Base de dados [producao]? "));
         QCOMPARE(out.size(), 1);
         QCOMPARE(out.at(0).text, QStringLiteral("producao"));
+    }
+
+    // {{VAR}} na resposta (feedback do usuário: auto-responsores não
+    // suportavam interpolação de envs) — junto com \1 no mesmo texto.
+    void interpolatesEnvVarsInResponse()
+    {
+        EnvironmentManager env;
+        env.setGlobalVars({{"DB_PASSWORD", "s3cr3t"}});
+
+        OutputResponder r;
+        r.name = QStringLiteral("t");
+        r.pattern = QStringLiteral("Senha para (\\w+):");
+        r.response = QStringLiteral("{{DB_PASSWORD}} (\\1)");
+        OutputResponderMatcher m({r}, &env);
+
+        auto out = m.feed(QStringLiteral("Senha para producao: "));
+        QCOMPARE(out.size(), 1);
+        QCOMPARE(out.at(0).text, QStringLiteral("s3cr3t (producao)"));
+    }
+
+    // Sem EnvironmentManager (nullptr, default) — {{VAR}} passa como texto
+    // literal, sem crash (retrocompatível com quem instancia sem o param novo).
+    void withoutEnvironmentManagerLeavesPlaceholdersLiteral()
+    {
+        OutputResponder r;
+        r.name = QStringLiteral("t");
+        r.pattern = QStringLiteral("Continuar\\?");
+        r.response = QStringLiteral("{{X}}");
+        OutputResponderMatcher m({r});
+
+        auto out = m.feed(QStringLiteral("Continuar? "));
+        QCOMPARE(out.size(), 1);
+        QCOMPARE(out.at(0).text, QStringLiteral("{{X}}"));
     }
 
     // Vários prompts no mesmo chunk casam na ORDEM de aparição.

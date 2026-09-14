@@ -1,0 +1,35 @@
+<h2>The Output panel</h2>
+<p>The panel shows what the selected command printed, live. It sits at the bottom by default; <b>Settings → Layout</b> can move it left or right.</p>
+<h3>The output bar</h3>
+<p>Above the panel there is a <b>bar with one tab per command that ran in this session</b> — the ones still running and the ones that already finished — so you can jump between outputs without hunting for the command in the tree. A folder action has its own tab per folder (&quot;Command · Folder&quot;). The bar is <b>always there</b> (empty, it shows a hint) and only hides while the panel is collapsed.</p>
+<ul>
+<li><b>Each tab</b> shows a status dot (running, waiting for your answer in a KIP command, finished, failed, skipped), the name, the elapsed time while it runs, and a small dot when new output arrived in a tab you are not looking at. Hover for the details.</li>
+<li><b>Click a tab</b> to bring that output up: the command is selected in the tree too (switching to the right root folder if it lives in another project).</li>
+<li><b>Close a tab</b> with the × (shown on the tab in focus and on hover) or with a middle click. It only closes the <b>tab</b>: the command keeps running and its log is kept. Click the command in the tree (or run it again) and the tab comes back. Closing the tab in focus moves to its neighbour; closing the last one clears the panel.</li>
+<li><b>Right click</b> opens the tab menu — <i>Stop</i>, <i>Run again</i>, <i>Show in the command tree</i>, <i>Close output</i>, <i>Close the other outputs</i>, <i>Close finished outputs</i> — followed by the usual output menu (clear, copy all, export, display options). Right click <b>does not bring the tab to the front</b>: the menu acts on the tab you clicked (clear, copy and export use <i>its</i> log) while you keep looking at your current output; only <i>Show in the command tree</i> switches to it.</li>
+<li><b>Many tabs:</b> the mouse wheel scrolls the bar and a button at its end lists them all.</li>
+<li><b>Keyboard:</b> <b>Ctrl+Tab</b> and <b>Ctrl+Shift+Tab</b> switch to the next / previous output (rebindable in <b>Settings → Shortcuts</b>).</li>
+</ul>
+<p>Tabs are not saved: they start empty on the next launch, like the processes themselves.</p>
+<h3>Tabs</h3>
+<ul>
+<li><b>Output</b> — the command's stdout/stderr, with ANSI colors.</li>
+<li>For HTTP commands also <b>Response</b> (a navigable JSON tree), <b>Headers</b> and <b>Request</b> (exactly what was sent) — see <a href='help://commands_http'>HTTP Commands</a>.</li>
+<li><a href='help://kip'>KIP</a> commands replace the tabs with their own screen.</li>
+</ul>
+<p>The header shows the command and its state: <i>idle</i>, <i>running</i>, <i>done</i> or <i>error</i>.</p>
+<h3>Answering a running command</h3>
+<p>The field at the bottom sends text to the command's input — for <code>read</code> prompts, confirmations, a REPL. Click it or press <b>Ctrl+'</b> to focus it (and again to go back to the tree). <a href='help://responders'>Auto-replies</a> can do it for you.</p>
+<h3>Search and display options</h3>
+<ul>
+<li><b>Search in output</b> (magnifier) finds text in the log.</li>
+<li>The <b>display options</b> menu has: Auto-scroll, Line numbers, Timestamps, Wrap long lines (visual only), <b>Compact output</b> (collapses repeated blank lines and trims trailing spaces), Increase/Decrease font, Copy all, <b>Export to file…</b> and Clear output.</li>
+<li>Large outputs are capped per command: <b>Settings → General → Max log size per command</b>.</li>
+</ul>
+<h3>Other ways to see the output</h3>
+<table>
+<tr><td><b>Interactive terminal</b></td><td>a real terminal grid for <code>vim</code>, <code>htop</code>, <code>less</code>, a nested Claude Code. Turn it on in the command's advanced settings.</td></tr>
+<tr><td><b>Formatted output</b></td><td>each line that is a JSON log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by <i>level</i>, and Kai can <a href='help://notifications'>notify</a> on the first ERROR line.</td></tr>
+</table>
+<h3>Detach into a window</h3>
+<p>The pop-out button opens the panel in its own window with the same tabs and theme, so you can keep a long log beside your editor. From the terminal, <code>kai -gw &lt;path&gt;</code> runs a command and opens its window (see <a href='help://cli'>CLI</a>).</p>

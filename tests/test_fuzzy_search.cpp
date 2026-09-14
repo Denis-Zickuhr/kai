@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/fuzzy-search.h"
+#include "ui/shared/fuzzy-search.h"
 
 using namespace kai::ui;
 
@@ -12,6 +12,15 @@ private slots:
     void exactSubsequenceMatchScoresNonNegative()
     {
         QVERIFY(FuzzyMatcher::score(QStringLiteral("dev"), QStringLiteral("Dev Server")) >= 0);
+    }
+
+    // A penalidade de tamanho só ordena: uma letra num nome longo é match (antes dava negativo e a busca a descartava).
+    void shortQueryInALongTargetStillMatches()
+    {
+        const QString longTarget = QStringLiteral("Subir o ambiente completo de desenvolvimento com banco e cache");
+        QVERIFY(FuzzyMatcher::score(QStringLiteral("z"), longTarget) == -1); // não existe no texto
+        QVERIFY(FuzzyMatcher::score(QStringLiteral("c"), longTarget) >= 0);
+        QCOMPARE(FuzzyMatcher::search(QStringLiteral("c"), {longTarget}).size(), 1);
     }
 
     void nonSubsequenceReturnsNegativeScore()

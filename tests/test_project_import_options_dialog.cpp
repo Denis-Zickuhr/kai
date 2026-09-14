@@ -1,6 +1,6 @@
 #include <QTest>
 
-#include "ui/project-import-options-dialog.h"
+#include "ui/features/collections/project-import-options-dialog.h"
 #include "core/models.h"
 
 using namespace kai::ui;

@@ -1,6 +1,6 @@
 # Run history
 
-Menu **Processes → Run History**. Lists the latest runs (Shell and HTTP)
+Menu **File → Run History**. Lists the latest runs (Shell and HTTP)
 with:
 
 - **Timestamp** and **duration**

@@ -18,6 +18,12 @@ public:
     void setGlobalVars(const QMap<QString, QString> &vars);
     void setFolderVars(const QMap<QString, QString> &vars);
     void setParamVars(const QMap<QString, QString> &vars);
+    // Variáveis EMBUTIDAS, calculadas pelo próprio Kai na execução (ex:
+    // PROJECT_PATH = diretório de trabalho da pasta-projeto mais próxima).
+    // Precedência MAIS BAIXA de todas: uma variável de mesmo nome definida
+    // pelo usuário em qualquer escopo sempre vence.
+    void setBuiltinVar(const QString &name, const QString &value);
+    void clearBuiltinVar(const QString &name);
 
     // ESCOPO das variáveis DINÂMICAS (extraídas via HTTP env_extractor ou
     // captura de env de hook): cada pasta marcada Folder::isProject == true
@@ -127,6 +133,7 @@ private:
     // (via value()) — mesma resolução usada pelo resto do motor.
     QString resolveConditionOperand(const QString &token) const;
 
+    QMap<QString, QString> m_builtinVars;
     QMap<QString, QString> m_globalVars;
     QMap<QString, QString> m_folderVars;
     // scopeKey -> {var: valor}. "" = Global. Ver setDynamicVarScope.

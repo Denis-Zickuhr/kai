@@ -1,4 +1,5 @@
 #include <QTest>
+#include "core/yaml-bridge.h"
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTreeWidget>
@@ -11,10 +12,10 @@
 #include <QMenu>
 #include <QTimer>
 
-#include "ui/command-tree-widget.h"
-#include "ui/project-selector.h"
-#include "ui/item-actions-bar.h"
-#include "ui/folder-editor-dialog.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/collections/folder-editor-dialog.h"
 
 using namespace kai::ui;
 using namespace kai::core;
@@ -117,13 +118,13 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
-        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
         QVERIFY(kaiJson.open(QIODevice::WriteOnly));
-        kaiJson.write(R"json({
+        kaiJson.write(kai::core::jsonTextToYamlText(QString::fromUtf8(R"json({
             "project_name": "Projeto Importado",
             "icon": "database",
             "commands": [{"name": "Build", "type": "shell", "command": "echo ok"}]
-        })json");
+        })json")).toUtf8());
         kaiJson.close();
 
         ProjectSelector selector;
@@ -134,7 +135,7 @@ private slots:
         // que continua uma aba normal (ver EnvironmentManager::
         // setDynamicVarScope e o teste abaixo com isProject=true manual).
         QVERIFY(result.folder.isProject);
-        QCOMPARE(result.folder.projectPath.value(), directory.path());
+        QCOMPARE(result.folder.workingDir, directory.path());
         QCOMPARE(result.commands.size(), 1);
     }
 
@@ -212,6 +213,25 @@ private slots:
         QVERIFY(newCommandEmitted);
     }
 
+    // O grupo "Item" também tem o botão de Nova Nota (ícone de caderno), sempre habilitado.
+    void itemActionsBarHasANewNoteButton()
+    {
+        ItemActionsBar bar;
+        bool emitted = false;
+        QObject::connect(&bar, &ItemActionsBar::newNoteRequested, [&emitted]() { emitted = true; });
+        QPushButton *noteButton = nullptr;
+        for (auto *button : bar.findChildren<QPushButton *>()) {
+            if (button->toolTip() == QStringLiteral("New Note")) {
+                noteButton = button;
+            }
+        }
+        QVERIFY(noteButton != nullptr);
+        QVERIFY(noteButton->isEnabled());
+        QVERIFY(!noteButton->icon().isNull());
+        noteButton->click();
+        QVERIFY(emitted);
+    }
+
     void firstItemIsSelectedNotJustCurrentWhenEnteringTab()
     {
         // Bug reportado: ao entrar numa aba, o primeiro item vinha
@@ -227,14 +247,14 @@ private slots:
         c1.id = QStringLiteral("c_1");
         c1.folderId = root.id;
         c1.name = QStringLiteral("Primeiro");
-        c1.type = CommandType::Shell;
+        c1.type = CommandType::Command;
         c1.command = QStringLiteral("echo 1");
 
         Command c2;
         c2.id = QStringLiteral("c_2");
         c2.folderId = root.id;
         c2.name = QStringLiteral("Segundo");
-        c2.type = CommandType::Shell;
+        c2.type = CommandType::Command;
         c2.command = QStringLiteral("echo 2");
 
         CommandTreeWidget widget;

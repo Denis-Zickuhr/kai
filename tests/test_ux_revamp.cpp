@@ -7,15 +7,15 @@
 #include <QSignalSpy>
 
 #include "core/models.h"
-#include "ui/terminal-profiles-editor-widget.h"
-#include "ui/parameter-editor-widget.h"
-#include "ui/key-value-editor-widget.h"
-#include "ui/collection-editor-dialog.h"
-#include "ui/item-actions-bar.h"
-#include "ui/command-tree-widget.h"
-#include "ui/row-edit-dialog.h"
-#include "ui/table-utils.h"
-#include "ui/dialog-utils.h"
+#include "ui/features/output/terminal-profiles-editor-widget.h"
+#include "ui/features/command-editor/parameter-editor-widget.h"
+#include "ui/shared/key-value-editor-widget.h"
+#include "ui/features/collections/collection-editor-dialog.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/shared/row-edit-dialog.h"
+#include "ui/shared/table-utils.h"
+#include "ui/shared/dialog-utils.h"
 
 using namespace kai::ui;
 using namespace kai::core;
@@ -75,12 +75,13 @@ private slots:
         for (QToolButton *b : editor.findChildren<QToolButton *>()) {
             QVERIFY2(table->isAncestorOf(b), "não deveria haver botões fora da tabela");
         }
-        // Coluna de Ações (índice 1 — logo após Nome, ADJACENTE de
-        // propósito: ver comentário de kColActions em
-        // parameter-editor-widget.cpp sobre o bug do "fantasma" visual
-        // quando havia colunas ocultas entre Nome e Ações) tem um cell
-        // widget com pelo menos 2 ícones (lápis + lixeira).
-        QWidget *actionsCell = table->cellWidget(0, 1);
+        // Coluna de Ações (índice 2 — Arrastar/Nome/Ações, nessa ordem; ver
+        // kColDragHandle/kColName/kColActions em parameter-editor-
+        // widget.cpp) tem um cell widget com pelo menos 2 ícones (lápis +
+        // lixeira). A coluna 0 (indicativo de arrastar, pedido do usuário:
+        // "coloque um indicativo visual que dá pra reordenar") também tem
+        // um cell widget, mas SEM QToolButton — é só um ícone estático.
+        QWidget *actionsCell = table->cellWidget(0, 2);
         QVERIFY(actionsCell != nullptr);
         QCOMPARE(actionsCell->findChildren<QToolButton *>().size(), 2);
         // Round-trip do modelo preserva o parâmetro.

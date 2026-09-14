@@ -2,7 +2,7 @@
 #include <QKeyEvent>
 #include <QTemporaryDir>
 
-#include "ui/shortcut-capture-field.h"
+#include "ui/shared/shortcut-capture-field.h"
 #include "core/config-manager.h"
 
 using namespace kai::ui;

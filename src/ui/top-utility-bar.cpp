@@ -96,23 +96,17 @@ void TopUtilityBar::setupUi()
     };
 
     // --- Arquivo ---
+    // "SÓ DOIS BOTÕES" (pedido do usuário, vendo o menu com 3 itens de
+    // import separados + 1 de export: "achei meio bagunça... quero UM
+    // REVAMP TOTAL, primeiro vamos ter só dois botões") — Importar... e
+    // Exportar..., cada um abrindo UMA tela que resolve o resto (fonte/
+    // tipo/escopo) por dentro, sem multiplicar itens de menu por caso de
+    // uso (ver ImportDialog/ExportDialog).
     QMenu *fileMenu = m_menuBar->addMenu(utils::tr(QStringLiteral("menu.file")));
     connect(addIconAction(fileMenu, QStringLiteral("folder-input"), utils::tr(QStringLiteral("menu.file.import"))), &QAction::triggered,
-            this, &TopUtilityBar::importProjectRequested);
-    connect(addIconAction(fileMenu, QStringLiteral("file-json"), utils::tr(QStringLiteral("menu.file.import_openapi"))), &QAction::triggered,
-            this, &TopUtilityBar::importOpenApiRequested);
-    fileMenu->addSeparator();
-    // Import/Export de configuração (feedback do usuário).
-    connect(addIconAction(fileMenu, QStringLiteral("folder-input"), utils::tr(QStringLiteral("menu.file.import_config"))), &QAction::triggered,
-            this, &TopUtilityBar::importConfigRequested);
-    QMenu *exportMenu = fileMenu->addMenu(utils::tr(QStringLiteral("menu.file.export_config")));
-    exportMenu->setIcon(LucideIcons::icon(QStringLiteral("folder-output"), menuIconColor, kMenuIcon));
-    connect(addIconAction(exportMenu, QStringLiteral("globe"), utils::tr(QStringLiteral("menu.file.export_global"))), &QAction::triggered,
-            this, &TopUtilityBar::exportGlobalRequested);
-    connect(addIconAction(exportMenu, QStringLiteral("folder"), utils::tr(QStringLiteral("menu.file.export_folder"))), &QAction::triggered,
-            this, &TopUtilityBar::exportFolderRequested);
-    connect(addIconAction(exportMenu, QStringLiteral("file"), utils::tr(QStringLiteral("menu.file.export_command"))), &QAction::triggered,
-            this, &TopUtilityBar::exportCommandRequested);
+            this, &TopUtilityBar::importRequested);
+    connect(addIconAction(fileMenu, QStringLiteral("folder-output"), utils::tr(QStringLiteral("menu.file.export_config"))), &QAction::triggered,
+            this, &TopUtilityBar::exportRequested);
     fileMenu->addSeparator();
     connect(addIconAction(fileMenu, QStringLiteral("scroll-text"), utils::tr(QStringLiteral("menu.file.logs"))), &QAction::triggered,
             this, &TopUtilityBar::logsRequested);
@@ -153,6 +147,8 @@ void TopUtilityBar::setupUi()
             this, &TopUtilityBar::showProcessListRequested);
     connect(addIconAction(processesMenu, QStringLiteral("history"), utils::tr(QStringLiteral("menu.processes.history"))), &QAction::triggered,
             this, &TopUtilityBar::runHistoryRequested);
+    connect(addIconAction(processesMenu, QStringLiteral("bell"), utils::tr(QStringLiteral("menu.processes.notifications"))), &QAction::triggered,
+            this, &TopUtilityBar::notificationHistoryRequested);
 
     // --- Ajuda: VOLTOU a ser dropdown (pedido do usuário: "aba de ajuda,
     // volte pra um dropdown") — ganhou um 2º item ("Tela de Boas-Vindas")

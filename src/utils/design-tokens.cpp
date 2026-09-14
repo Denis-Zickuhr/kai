@@ -267,6 +267,31 @@ QString monoFamily()
                                 "'Ubuntu Mono',Consolas,monospace"));
 }
 
+QStringList monoFamilies()
+{
+    QStringList families;
+    for (QString family : monoFamily().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        family = family.trimmed();
+        if (family.startsWith(QLatin1Char('\'')) && family.endsWith(QLatin1Char('\''))) {
+            family = family.mid(1, family.size() - 2);
+        }
+        if (!family.isEmpty()) {
+            families << family;
+        }
+    }
+    return families;
+}
+
+QFont monoFont(int pointSize)
+{
+    QFont f;
+    f.setFamilies(monoFamilies());
+    f.setStyleHint(QFont::Monospace);
+    f.setFixedPitch(true);
+    f.setPointSize(pointSize > 0 ? pointSize : fontSizePt());
+    return f;
+}
+
 int fontSizePt()      { return intToken(QStringLiteral("font_size"), 12) - (g_density == Density::Compact ? 1 : 0); }
 int fontSizeSmallPt() { return qMax(7, fontSizePt() - 2); }
 int fontSizeTitlePt() { return fontSizePt() + 1; }

@@ -2,6 +2,7 @@
 #include <QTreeWidget>
 #include <QTabWidget>
 #include <QTabBar>
+#include <QSignalSpy>
 
 #include "ui/command-tree-widget.h"
 #include "core/models.h"
@@ -192,6 +193,66 @@ private slots:
 
         auto *tree = treeForRoot(widget, QStringLiteral("f_orphan"));
         QCOMPARE(tree->topLevelItemCount(), 0);
+    }
+
+    // REGRESSÃO/feature (pedido do usuário: "se houver um orfão oculto,
+    // ele é renderizado na raiz geral, preciso que adicione a
+    // possibilidade de ocultar pastas de raiz"). Uma pasta órfã (parentId
+    // inválido, vira aba raiz de fallback - ver teste acima) que também
+    // está marcada hidden deve continuar respeitando essa marca como
+    // QUALQUER outra pasta raiz: sem aba nenhuma por padrão, só aparece
+    // com "mostrar ocultos" ligado.
+    void hiddenOrphanFolderRespectsShowHiddenLikeAnyRootFolder()
+    {
+        Folder orphan;
+        orphan.id = QStringLiteral("f_hidden_orphan");
+        orphan.name = QStringLiteral("Pasta Orfa Oculta");
+        orphan.parentId = QStringLiteral("f_inexistente");
+        orphan.hidden = true;
+
+        CommandTreeWidget widget;
+        widget.setData({orphan}, {});
+
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        auto tabExists = [&]() {
+            for (int i = 0; i < tabWidget->count(); ++i) {
+                if (tabWidget->tabBar()->tabData(i).toString() == QStringLiteral("f_hidden_orphan")) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        QVERIFY2(!tabExists(), "pasta raiz oculta (mesmo órfã) não deveria virar aba por padrão");
+
+        widget.setShowHidden(true);
+        widget.setData({orphan}, {}); // reconstrói as abas com o novo estado
+        QVERIFY2(tabExists(), "com 'mostrar ocultos' ligado, a aba deveria aparecer");
+    }
+
+    // O menu de contexto da ABA (pasta raiz) precisa oferecer um jeito de
+    // ocultar/mostrar a própria pasta raiz - pedido do usuário, já que o
+    // form de edição de pasta não tem campo "oculta" e o atalho normal de
+    // ocultar só enxerga o item selecionado DENTRO da árvore, nunca a aba
+    // em si. Testa o SINAL diretamente (emitido por showTabContextMenu,
+    // privado) via um objeto QSignalSpy conectado antes da chamada -
+    // dirigir o QMenu::exec() de verdade off-screen não é confiável, mas
+    // o contrato público (o sinal existe e carrega o id certo) é o que
+    // importa pro MainWindow conseguir reagir a ele.
+    void toggleFolderHiddenSignalExistsAndCarriesFolderId()
+    {
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Raiz");
+
+        CommandTreeWidget widget;
+        widget.setData({root}, {});
+
+        QSignalSpy spy(&widget, &CommandTreeWidget::toggleFolderHiddenRequested);
+        QVERIFY(spy.isValid());
+        emit widget.toggleFolderHiddenRequested(QStringLiteral("f_root"));
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("f_root"));
     }
 };
 

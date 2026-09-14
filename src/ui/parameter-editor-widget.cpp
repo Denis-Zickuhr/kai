@@ -236,15 +236,33 @@ public:
         m_filePathFormatLabel = new QLabel(utils::tr(QStringLiteral("params.path_format.label")), this);
         form->addRow(m_filePathFormatLabel, m_filePathFormat);
 
-        // PASTA em vez de arquivo (feedback do usuário: "às vezes o param é
-        // uma pasta") — troca o seletor de arquivo por getExistingDirectory
-        // no formulário de execução, sem virar um ParameterType novo.
-        m_pickFolder = new QCheckBox(utils::tr(QStringLiteral("params.pick_folder")), this);
-        m_pickFolder->setProperty("kaiRole", QStringLiteral("switch"));
-        m_pickFolder->setToolTip(utils::tr(QStringLiteral("params.pick_folder.tip")));
-        m_pickFolder->setChecked(param.pickFolder);
-        m_pickFolderLabel = new QLabel(QString(), this);
-        form->addRow(m_pickFolderLabel, m_pickFolder);
+        // MODO DE SELEÇÃO (feedback do usuário: "não gostei da cfg pick as
+        // folder, queria tipo um select com modo de seleção... arquivo,
+        // pastas ou ambos") — substitui o antigo checkbox binário
+        // "pick_folder" por um combo de 3 opções; "Ambos" deixa a escolha
+        // arquivo-ou-pasta pro momento em que o usuário clica em procurar
+        // no formulário de execução (ver ParameterFormDialog).
+        m_pickMode = new QComboBox(this);
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.file")), QStringLiteral("file"));
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.folder")), QStringLiteral("folder"));
+        m_pickMode->addItem(utils::tr(QStringLiteral("params.pick_mode.both")), QStringLiteral("both"));
+        m_pickMode->setToolTip(utils::tr(QStringLiteral("params.pick_mode.tip")));
+        {
+            const int idx = m_pickMode->findData(param.pickMode.isEmpty() ? QStringLiteral("file") : param.pickMode);
+            m_pickMode->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        m_pickModeLabel = new QLabel(utils::tr(QStringLiteral("params.pick_mode.label")), this);
+        form->addRow(m_pickModeLabel, m_pickMode);
+
+        // OPCIONAL (pedido do usuário): vale pra QUALQUER tipo de
+        // parâmetro (não só File, por isso fora de applyTypeVisibility) —
+        // no form de execução, o campo nasce escondido atrás de uma
+        // checkbox "Informar <label>?" (ver ParameterFormDialog::setupUi).
+        m_optional = new QCheckBox(utils::tr(QStringLiteral("params.optional")), this);
+        m_optional->setProperty("kaiRole", QStringLiteral("switch"));
+        m_optional->setToolTip(utils::tr(QStringLiteral("params.optional.tip")));
+        m_optional->setChecked(param.optional);
+        form->addRow(new QLabel(QString(), this), m_optional);
 
         auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
         stripDialogButtonIcons(box);
@@ -289,8 +307,8 @@ public:
             m_initialDir->parentWidget()->setVisible(isFile);
             m_filePathFormatLabel->setVisible(isFile);
             m_filePathFormat->setVisible(isFile);
-            m_pickFolderLabel->setVisible(isFile);
-            m_pickFolder->setVisible(isFile);
+            m_pickModeLabel->setVisible(isFile);
+            m_pickMode->setVisible(isFile);
         };
         applyTypeVisibility();
         connect(m_type, &QComboBox::currentTextChanged, this, [applyTypeVisibility](const QString &) {
@@ -320,7 +338,9 @@ public:
                         && m_multiSelect->isChecked();
         p.initialDir = m_initialDir->text().trimmed();
         p.filePathFormat = m_filePathFormat->currentData().toString();
-        p.pickFolder = m_pickFolder->isChecked();
+        p.pickMode = m_pickMode->currentData().toString();
+        p.pickFolder = (p.pickMode == QStringLiteral("folder")); // compat kai.json antigo
+        p.optional = m_optional->isChecked();
         return p;
     }
 
@@ -329,6 +349,14 @@ private:
     QWidget *wrapRow(QLayout *inner)
     {
         auto *w = new QWidget(this);
+        // TRANSPARENTE: sem isto, este QWidget herda a regra GLOBAL
+        // "QWidget { background-color: bg }" e pinta um retângulo QUADRADO
+        // atrás do campo (que já tem seu próprio arredondamento) - achado
+        // real, reportado: "campo de file pick... com borda quadrada ao
+        // invés de preferência". Mesmo padrão já usado em wrapWithLabel/
+        // makeFlagsSection pro mesmo tipo de bug.
+        w->setObjectName(QStringLiteral("paramEditorRowWrap"));
+        w->setStyleSheet(QStringLiteral("QWidget#paramEditorRowWrap { background: transparent; }"));
         inner->setContentsMargins(0, 0, 0, 0);
         w->setLayout(inner);
         return w;
@@ -351,8 +379,9 @@ private:
     QLabel *m_filePathFormatLabel = nullptr;
     QCheckBox *m_multiSelect = nullptr;
     QLabel *m_multiSelectLabel = nullptr;
-    QCheckBox *m_pickFolder = nullptr;
-    QLabel *m_pickFolderLabel = nullptr;
+    QComboBox *m_pickMode = nullptr;
+    QLabel *m_pickModeLabel = nullptr;
+    QCheckBox *m_optional = nullptr;
 };
 
 } // namespace

@@ -255,7 +255,17 @@ QString buildModernStylesheet()
         "QCheckBox, QRadioButton { spacing: %11px; background: transparent; }\n"
         "QCheckBox::indicator, QRadioButton::indicator { width: %7px; height: %7px;"
         " border: 1.5px solid %3; border-radius: %8px; background: transparent; }\n"
-        "QCheckBox::indicator:unchecked { background: transparent; image: none; }\n"
+        // DESMARCADO com fundo PREENCHIDO (%9, a cor de fundo BASE do app —
+        // já usada aqui mesmo pro anel interno do radio marcado, então
+        // nenhum novo parâmetro no .arg() chain) em vez de transparent —
+        // bug real reportado com foto: dentro de um card com fundo
+        // "surface"/"surface2" (survey de opções de export, por exemplo), a
+        // borda fina sobre fundo transparente ficava quase invisível, a
+        // ponto de o checkbox desmarcado sumir de vista por completo. Mesmo
+        // raciocínio já usado pro trilho do switch desligado (ver bloco
+        // TOGGLE SWITCH abaixo: "ficava perto demais de surface2... some
+        // sob o card").
+        "QCheckBox::indicator:unchecked { background: %9; image: none; }\n"
         "QRadioButton::indicator { border-radius: %12px; }\n"
         "QCheckBox::indicator:hover, QRadioButton::indicator:hover {"
         " border: 1.5px solid %10; }\n"
@@ -355,6 +365,28 @@ QString buildModernStylesheet()
     // checkbox padrão — reaproveita o MESMO QCheckBox/bool por trás (só
     // troca a pele via propriedade), sem novo widget/estado. SVG assado por
     // cor (ver themedSwitchSvgPath), igual à estratégia do check normal.
+    //
+    // ESTE BLOCO TEM QUE VIR DEPOIS de QUALQUER outro bloco que estilize
+    // QCheckBox::indicator em geral (ver o bloco "CHECKBOX/RADIO" logo
+    // acima de buildModernStylesheet, no trecho de tooltip/checkbox/
+    // splitter/header) — o QSS engine do Qt não implementa a cascata CSS
+    // por especificidade de forma confiável aqui; regras posteriores no
+    // MESMO qss concatenado ganham de empates, então o switch precisa ser
+    // o ÚLTIMO a declarar `QCheckBox[...]::indicator` pra sua largura/
+    // altura/borda/fundo sempre vencerem, sem depender de especificidade.
+    //
+    // BUG REAL CORRIGIDO (achado com foto, "quadrado errado de fundo" no
+    // diálogo de Exportar): uma sessão anterior adicionou um SEGUNDO
+    // bloco de tema pra QCheckBox::indicator/QRadioButton::indicator bem
+    // aqui, sem perceber que o app JÁ tinha um (o bloco "CHECKBOX/RADIO"
+    // citado acima, mais antigo — borda fina + check-on.svg, fundo
+    // transparente). Os dois brigavam pelas mesmas propriedades ao mesmo
+    // tempo, produzindo um resultado inconsistente/glitchado em vez de
+    // "sem estilo nenhum" (o bug original, ANTES de qualquer um dos dois
+    // blocos existir, era mesmo o indicador nativo cru do Fusion). O
+    // bloco duplicado foi removido — o tema original já cobre
+    // QCheckBox/QRadioButton (e também QListView/QTreeView::indicator)
+    // sozinho.
     {
         // 0.4 -> 0.7: o trilho DESLIGADO ficava perto demais de surface2 (o
         // mesmo fundo dos cards ao redor), praticamente some sob o card —

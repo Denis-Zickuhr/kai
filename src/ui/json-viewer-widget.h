@@ -1,7 +1,9 @@
 #pragma once
 
-#include <QWidget>
+#include <QList>
 #include <QString>
+#include <QTextCursor>
+#include <QWidget>
 
 class QLineEdit;
 class QLabel;
@@ -64,6 +66,11 @@ public:
     // sentido destacar o que já está destacado) — feedback do usuário.
     void setDetachedMode(bool detached);
 
+    // Expande (se preciso) e foca o campo de busca — usado pelo atalho
+    // "Ctrl+F"/ação de pesquisa quando esta aba está em foco (ver
+    // MainWindow::setupActionShortcuts e OutputPanel::focusSearch).
+    void focusSearch() { setSearchExpanded(true); }
+
 private slots:
     void handleCopy();
     void handleDetach();
@@ -71,6 +78,10 @@ private slots:
     // não faz mais sentido numa vista de texto livre): destaca todas as
     // ocorrências de chave/valor que casam com o termo e pula pra primeira.
     void applyFilter(const QString &needle);
+    // Contador/jump estilo Notepad (pedido do usuário): "N/M" + Enter ou os
+    // botões ↑/↓ navegam entre ocorrências sem precisar reeditar o campo.
+    void goToNextMatch();
+    void goToPreviousMatch();
 
 private:
     void setupUi();
@@ -80,6 +91,11 @@ private:
     // Reposiciona o overlay flutuante de controles no canto superior-direito
     // do corpo (chamado em resizeEvent e ao mostrar).
     void repositionOverlay();
+    // Vai pra ocorrência de índice `index` em m_matches (com wrap-around),
+    // reaplica os realces (a atual num tom diferente das demais) e atualiza
+    // o contador "N/M".
+    void goToMatch(int index);
+    void updateMatchCounterLabel();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -93,6 +109,12 @@ private:
     QToolButton *m_searchToggle = nullptr; // chip lupa: abre/fecha a busca
     bool m_searchExpanded = false;
     QWidget *m_overlayBar = nullptr; // controles flutuantes sobre o corpo
+    // Contador/jump estilo Notepad (ver applyFilter/goToMatch).
+    QLabel *m_matchCounterLabel = nullptr;
+    QToolButton *m_prevMatchButton = nullptr;
+    QToolButton *m_nextMatchButton = nullptr;
+    QList<QTextCursor> m_matches;
+    int m_currentMatchIndex = -1;
     QString m_rawText;
     QString m_formatted;
     bool m_isValidJson = false;

@@ -5,6 +5,10 @@
 #include <QCheckBox>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QToolButton>
+#include <QMenu>
+#include <QTimer>
+#include <QApplication>
 
 #include "ui/parameter-form-dialog.h"
 #include "ui/inline-code-field.h"
@@ -408,6 +412,43 @@ private slots:
         ParameterFormDialog dialog(params, nullptr);
         QVERIFY(dialog.findChild<QCheckBox *>() != nullptr);
         QCOMPARE(dialog.findChildren<kai::ui::InlineCodeField *>().size(), 2);
+    }
+
+    // REGRESSÃO/feature (pedido do usuário: "não gostei da cfg pick as
+    // folder, queria tipo um select com modo de seleção... arquivo, pastas
+    // ou ambos"). Parameter::pickMode == "both": clicar no botão de
+    // procurar não abre um QFileDialog direto (nenhum diálogo nativo deixa
+    // escolher arquivo OU pasta ao mesmo tempo) - abre um QMenu perguntando
+    // qual dos dois. Fecha o menu programaticamente (QApplication::
+    // activePopupWidget(), mesmo padrão já usado neste app pra testar
+    // QMessageBox::activeModalWidget()) sem escolher nada, só provando que
+    // o menu realmente aparece com as duas opções e não crasha.
+    void bothPickModeShowsFileOrFolderMenuInsteadOfDialogDirectly()
+    {
+        QVector<Parameter> params;
+        Parameter fileParam;
+        fileParam.name = QStringLiteral("caminho");
+        fileParam.type = ParameterType::File;
+        fileParam.pickMode = QStringLiteral("both");
+        params << fileParam;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        auto *browseButton = dialog.findChild<QToolButton *>();
+        QVERIFY(browseButton != nullptr);
+
+        int menuActionCount = -1;
+        QTimer::singleShot(50, &dialog, [&menuActionCount]() {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (menu) {
+                menuActionCount = menu->actions().size();
+                menu->close();
+            }
+        });
+        QTest::mouseClick(browseButton, Qt::LeftButton);
+
+        QCOMPARE(menuActionCount, 2);
     }
 };
 

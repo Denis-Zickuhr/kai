@@ -1,5 +1,6 @@
 #include "ui/log-viewer-dialog.h"
 
+#include "ui/dialog-utils.h"
 #include "utils/logger.h"
 
 #include <QFile>
@@ -23,6 +24,7 @@ LogViewerDialog::LogViewerDialog(QWidget *parent)
     setSizeGripEnabled(true);
     resize(720, 420);
     setupUi();
+    centerOnParent(this);
 
     // CARREGA O HISTÓRICO DO ARQUIVO antes de escutar o sinal.
     // Causa raiz do "visualizador de logs não funciona no Windows": este

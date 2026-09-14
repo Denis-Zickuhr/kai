@@ -28,7 +28,20 @@ namespace kai::ui {
 // incompatíveis entre os dois, sem uma base comum (QTextEdit não é ancestral
 // de QLineEdit). A lógica de trigger/filtro/popup é compartilhada no .cpp via
 // um controller único parametrizado por um pequeno adaptador de acesso.
-void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()> availableVarsProvider);
-void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> availableVarsProvider);
+//
+// `supportConditionals` (pedido do usuário: "autocomplete/linter de
+// template, tipo ifs... digita um {% e já sugere os comandos possíveis (if,
+// if else) e deixa autocompletar com enter"): quando true, digitar "{%"
+// TAMBÉM abre o popup, sugerindo os blocos condicionais que
+// core::EnvironmentManager::resolveConditionals já entende de verdade
+// ({% if %}/{% else %}/{% endif %} — não é sintaxe nova). Default false:
+// só habilitado explicitamente nos campos onde um bloco condicional faz
+// sentido semântico (corpo de comando/URL/body HTTP) — um operando de
+// Condição de Execução (Left/Right), por exemplo, é um valor simples de
+// comparação, não um template com controle de fluxo, e não ganha esta opção.
+void attachEnvVarAutocomplete(QPlainTextEdit *field, std::function<QStringList()> availableVarsProvider,
+                               bool supportConditionals = false);
+void attachEnvVarAutocomplete(QLineEdit *field, std::function<QStringList()> availableVarsProvider,
+                               bool supportConditionals = false);
 
 } // namespace kai::ui

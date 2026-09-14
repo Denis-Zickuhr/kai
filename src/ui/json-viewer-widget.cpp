@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QApplication>
 #include <QClipboard>
+#include <QFontMetrics>
 #include <QJsonDocument>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -39,9 +40,7 @@ void JsonViewerWidget::setupUi()
     m_view = new FoldableJsonView(this);
     m_view->setReadOnly(true);
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
-    QFont mono(utils::tokens::monoFamily());
-    mono.setPointSize(utils::tokens::fontSizePt());
-    m_view->setFont(mono);
+    m_view->setFont(utils::tokens::monoFont());
     m_view->setStyleSheet(QStringLiteral(
         "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
         "border-radius: %4px; }")
@@ -113,7 +112,43 @@ void JsonViewerWidget::setupUi()
     }
     m_filterField->hide();
     connect(m_filterField, &QLineEdit::textChanged, this, &JsonViewerWidget::applyFilter);
+    // Enter/Shift+Enter navegam pras próximas/anteriores ocorrências, estilo
+    // Notepad — não precisa tirar a mão do teclado pra clicar nos botões.
+    connect(m_filterField, &QLineEdit::returnPressed, this, [this]() {
+        if (QApplication::keyboardModifiers() & Qt::ShiftModifier) {
+            goToPreviousMatch();
+        } else {
+            goToNextMatch();
+        }
+    });
     bar->addWidget(m_filterField);
+
+    // Contador "N/M" + botões ↑/↓ (pedido do usuário: "contador/jump no
+    // campo de pesquisa... estilo notepad"). Só aparecem com o campo
+    // expandido (mesma visibilidade do campo).
+    m_matchCounterLabel = new QLabel(m_overlayBar);
+    m_matchCounterLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_matchCounterLabel->setMinimumWidth(QFontMetrics(m_matchCounterLabel->font())
+        .horizontalAdvance(QStringLiteral("99/99")));
+    m_matchCounterLabel->setAlignment(Qt::AlignCenter);
+    m_matchCounterLabel->hide();
+    bar->addWidget(m_matchCounterLabel);
+
+    m_prevMatchButton = new QToolButton(m_overlayBar);
+    m_prevMatchButton->setIcon(LucideIcons::icon(QStringLiteral("chevron-up"), iconColor, 16));
+    m_prevMatchButton->setToolTip(utils::tr(QStringLiteral("json_viewer.search.previous")));
+    m_prevMatchButton->setAutoRaise(true);
+    m_prevMatchButton->hide();
+    connect(m_prevMatchButton, &QToolButton::clicked, this, &JsonViewerWidget::goToPreviousMatch);
+    bar->addWidget(m_prevMatchButton);
+
+    m_nextMatchButton = new QToolButton(m_overlayBar);
+    m_nextMatchButton->setIcon(LucideIcons::icon(QStringLiteral("chevron-down"), iconColor, 16));
+    m_nextMatchButton->setToolTip(utils::tr(QStringLiteral("json_viewer.search.next")));
+    m_nextMatchButton->setAutoRaise(true);
+    m_nextMatchButton->hide();
+    connect(m_nextMatchButton, &QToolButton::clicked, this, &JsonViewerWidget::goToNextMatch);
+    bar->addWidget(m_nextMatchButton);
 
     auto *expandAllButton = new QToolButton(m_overlayBar);
     expandAllButton->setIcon(LucideIcons::icon(QStringLiteral("expand"), iconColor, 16));
@@ -171,6 +206,13 @@ void JsonViewerWidget::setSearchExpanded(bool expanded)
         } else {
             m_filterField->clear(); // fechar a busca limpa o realce
         }
+    }
+    if (!expanded) {
+        // Contador/setas somem junto (voltam quando houver texto de novo —
+        // ver updateMatchCounterLabel, chamado por applyFilter).
+        if (m_matchCounterLabel) m_matchCounterLabel->hide();
+        if (m_prevMatchButton) m_prevMatchButton->hide();
+        if (m_nextMatchButton) m_nextMatchButton->hide();
     }
     if (m_searchToggle) {
         m_searchToggle->setChecked(expanded);
@@ -367,45 +409,105 @@ void JsonViewerWidget::setJsonText(const QString &rawText)
     }
 
     m_formatted = QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
-    // Limite de auto-colapso (40 linhas): ver comentário em
-    // FoldableJsonView::setFoldableJsonText — por padrão tudo abre, só pares
-    // GIGANTES nascem colapsados (pedido do usuário: "texto livre").
-    m_view->setFoldableJsonText(m_formatted, /*autoCollapseLineThreshold=*/40);
+    // SEM auto-colapso (0 = desliga, ver FoldableJsonView::setFoldableJsonText):
+    // um JSON de resposta grande nascia com o(s) par(es) de nível mais alto
+    // já colapsados (qualquer bloco com mais de 40 linhas de span) — bug
+    // reportado: "estou fazendo um request que me devolve um JSON bem
+    // grande, e o sistema renderiza só um pedacinho desse json, deve
+    // exibir TUDO". A resposta HTTP é exatamente o caso que mais aciona
+    // esse limiar (objeto de nível 1 com centenas de linhas colapsa
+    // inteiro, sobrando só uma linha "{...}" com nenhuma indicação clara
+    // de que há mais conteúdo por trás). Os ícones de colapso na régua
+    // continuam disponíveis pro usuário recolher manualmente o que quiser.
+    m_view->setFoldableJsonText(m_formatted, /*autoCollapseLineThreshold=*/0);
 }
 
 void JsonViewerWidget::applyFilter(const QString &needle)
 {
     const QString trimmed = needle.trimmed();
-    QList<QTextEdit::ExtraSelection> selections;
+    m_matches.clear();
+    m_currentMatchIndex = -1;
     if (!trimmed.isEmpty()) {
-        QTextCharFormat highlightFormat;
-        highlightFormat.setBackground(QColor(utils::tokens::warningFg()).lighter(160));
-        highlightFormat.setForeground(Qt::black);
-
         QTextCursor cursor(m_view->document());
-        QTextCursor firstMatch;
         while (true) {
             cursor = m_view->document()->find(trimmed, cursor);
             if (cursor.isNull()) {
                 break;
             }
-            if (firstMatch.isNull()) {
-                firstMatch = cursor;
-            }
-            QTextEdit::ExtraSelection sel;
-            sel.cursor = cursor;
-            sel.format = highlightFormat;
-            selections.append(sel);
+            m_matches.append(cursor);
         }
-        if (!firstMatch.isNull()) {
-            // Pula pra primeira ocorrência (comportamento de busca do
-            // Insomnia/editor de código) — sem isso, num payload grande o
-            // usuário digitava o termo e nada parecia acontecer na tela.
-            m_view->setTextCursor(firstMatch);
-            m_view->centerCursor();
+        if (!m_matches.isEmpty()) {
+            m_currentMatchIndex = 0;
         }
     }
+    // goToMatch já reaplica os realces (a atual num tom diferente), pula
+    // pra 1ª ocorrência e atualiza o contador "N/M" — sem isto, num payload
+    // grande o usuário digitava o termo e nada parecia acontecer na tela.
+    goToMatch(m_currentMatchIndex);
+}
+
+void JsonViewerWidget::goToMatch(int index)
+{
+    QList<QTextEdit::ExtraSelection> selections;
+    QTextCharFormat highlightFormat;
+    highlightFormat.setBackground(QColor(utils::tokens::warningFg()).lighter(160));
+    highlightFormat.setForeground(Qt::black);
+    // Ocorrência ATUAL num tom diferente das demais — estilo Notepad, pra
+    // ficar claro qual delas o "N/M" está apontando quando há muitas iguais
+    // na tela ao mesmo tempo.
+    QTextCharFormat currentFormat;
+    currentFormat.setBackground(QColor(utils::tokens::accent()));
+    currentFormat.setForeground(Qt::white);
+
+    for (int i = 0; i < m_matches.size(); ++i) {
+        QTextEdit::ExtraSelection sel;
+        sel.cursor = m_matches.at(i);
+        sel.format = (i == index) ? currentFormat : highlightFormat;
+        selections.append(sel);
+    }
     m_view->setExtraSelections(selections);
+
+    if (index >= 0 && index < m_matches.size()) {
+        m_view->setTextCursor(m_matches.at(index));
+        m_view->centerCursor();
+    }
+    updateMatchCounterLabel();
+}
+
+void JsonViewerWidget::updateMatchCounterLabel()
+{
+    if (!m_matchCounterLabel || !m_prevMatchButton || !m_nextMatchButton) {
+        return;
+    }
+    const bool hasTerm = m_filterField && !m_filterField->text().trimmed().isEmpty();
+    m_matchCounterLabel->setVisible(m_searchExpanded && hasTerm);
+    m_prevMatchButton->setVisible(m_searchExpanded && hasTerm);
+    m_nextMatchButton->setVisible(m_searchExpanded && hasTerm);
+    if (!hasTerm) {
+        return;
+    }
+    m_matchCounterLabel->setText(m_matches.isEmpty()
+        ? utils::tr(QStringLiteral("json_viewer.search.no_matches"))
+        : QStringLiteral("%1/%2").arg(m_currentMatchIndex + 1).arg(m_matches.size()));
+    repositionOverlay(); // largura do contador/overlay pode ter mudado
+}
+
+void JsonViewerWidget::goToNextMatch()
+{
+    if (m_matches.isEmpty()) {
+        return;
+    }
+    m_currentMatchIndex = (m_currentMatchIndex + 1) % m_matches.size();
+    goToMatch(m_currentMatchIndex);
+}
+
+void JsonViewerWidget::goToPreviousMatch()
+{
+    if (m_matches.isEmpty()) {
+        return;
+    }
+    m_currentMatchIndex = (m_currentMatchIndex - 1 + m_matches.size()) % m_matches.size();
+    goToMatch(m_currentMatchIndex);
 }
 
 QString JsonViewerWidget::formattedJson() const

@@ -242,7 +242,17 @@ void HttpRunner::handleReplyFinished(QNetworkReply *reply, const core::HttpConfi
     if (!result.contentType.isEmpty()) {
         statusLine += QStringLiteral("  •  %1").arg(result.contentType.section(QLatin1Char(';'), 0, 0));
     }
-    emit logMessage(statusLine, false);
+    // "\n" final é OBRIGATÓRIO aqui — bug real reportado: "a PRIMEIRA linha
+    // de JSON lançada está caindo sempre colada junto a saída normal...
+    // perde se o app soltar uma linha de JSON APENAS". As duas emissões
+    // (linha de status + corpo) chegam no MESMO turno do event loop e o
+    // TerminalDrawer as COALESCE (ver flushPendingOutput: concatena chunks
+    // consecutivos do mesmo canal SEM separador nenhum). Sem \n aqui, o
+    // "{" de abertura do corpo JSON ficava colado no fim da linha de
+    // status ("...45 ms{") — a linha física resultante não começa com
+    // "{", então LogLineModel nunca reconhecia o corpo como JSON: a
+    // resposta inteira virava uma única linha crua sem estrutura nenhuma.
+    emit logMessage(statusLine + QStringLiteral("\n"), false);
     // Corpo formatado (feedback do usuário: um CURL pode retornar mais que
     // um JSON puro; formatamos o JSON quando válido, ou mostramos cru).
     emit logMessage(formatResponseBody(result.body), false);
@@ -323,11 +333,18 @@ void HttpRunner::applyExtractors(const QJsonDocument &doc, const QVector<core::E
             finalValue = QString::fromUtf8(QJsonDocument(value.toArray()).toJson(QJsonDocument::Compact));
         }
 
-        envManager.setDynamicVar(extractor.envVar, finalValue);
+        // ESCOPO (pedido do usuário: "preciso QUE escolha se... salva na
+        // proprio PROJETO ou Global") — "global" força gravar no escopo
+        // Global ("") mesmo com um projeto selecionado; "project" (padrão)
+        // mantém o comportamento de sempre, escopo AMBIENTE atual.
+        const QString targetScope = extractor.scope == QStringLiteral("global")
+            ? QString() : envManager.currentDynamicVarScope();
+        envManager.setDynamicVarInScope(targetScope, extractor.envVar, finalValue);
         utils::Logger::info(kLogTag,
-            QStringLiteral("Extraído '%1' -> variável '%2'.").arg(extractor.jsonPath, extractor.envVar));
+            QStringLiteral("Extraído '%1' -> variável '%2' (escopo: %3).")
+                .arg(extractor.jsonPath, extractor.envVar, targetScope.isEmpty() ? QStringLiteral("Global") : targetScope));
         if (extractor.persist) {
-            emit dynamicVarPersistRequested(envManager.currentDynamicVarScope(), extractor.envVar, finalValue);
+            emit dynamicVarPersistRequested(targetScope, extractor.envVar, finalValue);
         }
     }
 }

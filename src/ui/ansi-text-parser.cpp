@@ -5,11 +5,25 @@
 namespace kai::ui {
 
 namespace {
+// Lead-in da sequência de escape: o byte ESC de verdade (\x1b) OU o glifo
+// "←" (U+2190) — achado real, reportado com print: em alguns caminhos do
+// Windows (cmd.exe/ConPTY sob certas condições ainda não isoladas) o byte
+// ESC chega/é exibido como esse glifo específico em vez do controle
+// invisível de sempre, então a regex baseada só em \x1b nunca casava e a
+// sequência inteira ("←[?25l", "←[K", "←[29;120H"...) vazava como texto
+// literal. Aceitar as duas grafias do lead-in resolve na origem, sem
+// precisar caçar a causa exata do byte trocado.
+const QString &escLeadIn()
+{
+    static const QString pattern = QStringLiteral("(?:\x1b|\u2190)");
+    return pattern;
+}
+
 // Sequência SGR: ESC [ <params> m, onde <params> é uma lista de números
 // separados por ';' (ex: "1;31" para bold + vermelho).
 const QRegularExpression &sgrPattern()
 {
-    static const QRegularExpression pattern(QStringLiteral("\x1b\\[([0-9;]*)m"));
+    static const QRegularExpression pattern(escLeadIn() + QStringLiteral("\\[([0-9;]*)m"));
     return pattern;
 }
 
@@ -27,12 +41,13 @@ const QRegularExpression &sgrPattern()
 // lookahead não ser necessário aqui (tratamos SGR antes, no parse()).
 const QRegularExpression &nonSgrEscapePattern()
 {
-    static const QRegularExpression pattern(QStringLiteral(
-        "\x1b\\[[0-9;?]*[A-Za-ln-z]"      // CSI que NÃO termina em 'm' (m excluído do range)
-        "|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)"  // OSC ... BEL ou ST
-        "|\x1b[()][A-Za-z0-9]"            // designação de charset (ESC(B etc.)
-        "|\x1b[=>]"                        // keypad mode
-        "|[\x00-\x08\x0b\x0c\x0e-\x1f]"));// outros controles (mantém \t=09, \n=0a, \r=0d)
+    const QString esc = escLeadIn();
+    static const QRegularExpression pattern(
+        esc + QStringLiteral("\\[[0-9;?]*[A-Za-ln-z]")      // CSI que NÃO termina em 'm' (m excluído do range)
+        + QStringLiteral("|") + esc + QStringLiteral("\\][^\x07\x1b\u2190]*(?:\x07|") + esc + QStringLiteral("\\\\)")  // OSC ... BEL ou ST
+        + QStringLiteral("|") + esc + QStringLiteral("[()][A-Za-z0-9]")            // designação de charset (ESC(B etc.)
+        + QStringLiteral("|") + esc + QStringLiteral("[=>]")                        // keypad mode
+        + QStringLiteral("|[\x00-\x08\x0b\x0c\x0e-\x1f]"));// outros controles (mantém \t=09, \n=0a, \r=0d)
     return pattern;
 }
 
@@ -137,12 +152,16 @@ QVector<AnsiSegment> AnsiTextParser::parse(const QString &rawInput)
     // Se o fim do input é uma sequência de escape INCOMPLETA, retém para o
     // próximo chunk em vez de deixá-la ser tratada como texto/lixo.
     {
-        const int esc = input.lastIndexOf(QChar(0x1b));
+        // Aceita as duas grafias do lead-in de escape (\x1b OU "←" — ver
+        // escLeadIn() acima) pro mesmo caso já coberto no restante do
+        // arquivo: sem isto, uma sequência "←[..." partida na fronteira do
+        // chunk nunca era reconhecida como pendente e vazava como texto.
+        const int esc = qMax(input.lastIndexOf(QChar(0x1b)), input.lastIndexOf(QChar(0x2190)));
         if (esc >= 0) {
             const QString tail = input.mid(esc);
             // Completa? CSI termina em letra; OSC em BEL/ST; ESC+1 char.
-            static const QRegularExpression completeSeq(QStringLiteral(
-                "^\\x1b(?:\\[[0-9;?]*[A-Za-z]|\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)|[()][A-Za-z0-9]|[=>])"));
+            static const QRegularExpression completeSeq(
+                QStringLiteral("^(?:\\x1b|←)(?:\\[[0-9;?]*[A-Za-z]|\\][^\\x07\\x1b←]*(?:\\x07|(?:\\x1b|←)\\\\)|[()][A-Za-z0-9]|[=>])"));
             if (!completeSeq.match(tail).hasMatch() && tail.length() < 32) {
                 m_pendingTail = tail;
                 input.chop(tail.length());

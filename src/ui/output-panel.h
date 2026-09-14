@@ -4,11 +4,14 @@
 #include "engine/http-runner.h"
 #include "ui/ansi-text-parser.h"
 #include "ui/code-output-view.h"
+#include "ui/log-line-view.h"
 #include "ui/pty-terminal-widget.h"
 
 #include <QByteArray>
+#include <QList>
 #include <QMap>
 #include <QString>
+#include <QTextCursor>
 #include <QVector>
 #include <QWidget>
 
@@ -119,6 +122,14 @@ public:
     // Headers). O chamador (MainWindow) decide conforme o tipo do comando
     // conectado.
     void setStdoutTabVisible(bool visible);
+    // SAÍDA FORMATADA estilo Grafana/Loki (Command::formattedOutput, POR
+    // COMANDO — ver o comentário do campo). Alterna a aba "Saída" entre o
+    // texto cru (CodeOutputView) e o LogLineView (cards colapsáveis de log
+    // JSON). Ambos recebem o mesmo texto o tempo todo (ver appendChunkNow) —
+    // ligar/desligar só troca qual dos dois está visível, sem reprocessar
+    // histórico.
+    void setFormattedOutputEnabled(bool enabled);
+    bool formattedOutputEnabled() const { return m_formattedOutputEnabled; }
     // Modo ESTREITO do cabeçalho: some com métricas HTTP e o botão de PID
     // (não cabem numa coluna fina) — usado pelo drawer ao colapsar a Saída
     // nas posições esquerda/direita, que estreitam a LARGURA em vez da
@@ -168,6 +179,15 @@ public:
     // Texto puro acumulado (usado para semear outra instância no detach).
     QString plainOutput() const;
 
+    // Ativa a busca da aba ATUALMENTE visível (Resposta/JSON ou Saída/texto
+    // simples) — atalho "Ctrl+F"/ação de pesquisa configurável, mas só
+    // quando esta é a aba realmente em foco (ver MainWindow chamando via
+    // TerminalDrawer::focusSearch). Não pertinente em terminal interativo
+    // (PTY) nem no painel de "Requisição não executada" — retorna false
+    // nesses casos para o chamador cair no comportamento padrão (busca na
+    // árvore de comandos).
+    bool focusSearch();
+
 signals:
     void commandEntered(const QString &text);
     // Ctrl+C no campo de input: pedido de interrupção (SIGINT) do processo.
@@ -188,6 +208,9 @@ protected:
 private:
     void setupUi();
     void rebuildOptionsMenu();
+    // Salva o texto cru acumulado num arquivo escolhido pelo usuário (ver
+    // rebuildOptionsMenu — item "Extrair para arquivo").
+    void exportOutputToFile();
     // Gestão das abas próprias (QTabBar + QStackedWidget). Cada aba tem um
     // rótulo na m_tabBar e uma página correspondente em m_pages; o índice de
     // uma é o mesmo da outra (mantidos em paralelo por estes helpers).
@@ -204,6 +227,25 @@ private:
     // setInputShortcutHint) conforme o campo está habilitado ou não.
     void refreshInputPlaceholder();
     void updateTabVisibility();
+    // Overlay de busca da aba "Saída" (texto simples, sem os controles de
+    // JSON que não fazem sentido ali — expandir/colapsar dobras, copiar
+    // formatado, destacar). Mesmo padrão visual do overlay de
+    // JsonViewerWidget (chip lupa + campo, flutuando no canto superior
+    // direito do viewport).
+    void setupOutputSearchOverlay();
+    void setOutputSearchExpanded(bool expanded);
+    void repositionOutputSearchOverlay();
+    void applyOutputSearchFilter(const QString &needle);
+    // Contador/jump estilo Notepad (mesmo padrão de JsonViewerWidget — ver
+    // comentário lá) pra busca no texto CRU da Saída.
+    void goToOutputMatch(int index);
+    void updateOutputMatchCounterLabel();
+    void goToNextOutputMatch();
+    void goToPreviousOutputMatch();
+    void showFieldFilterMenu();
+    // Insere "field:" (cursor pronto pra digitar o valor) ou "field:value"
+    // (já completo, reaplica a busca na hora) no campo de busca.
+    void insertFieldFilterToken(const QString &field, const QString &value = QString());
     // Decide qual página de m_bodyStack mostrar a partir de m_interactiveMode
     // e m_skipped juntos (em vez de cada setter mexer direto no índice) —
     // os dois nunca deveriam ser true ao mesmo tempo na prática (interativo
@@ -231,6 +273,7 @@ private:
     QLabel *m_promptLabel = nullptr;
     QToolButton *m_optionsButton = nullptr;
     QToolButton *m_clearButton = nullptr; // atalho de "limpar saída" no cabeçalho (ver rebuildOptionsMenu)
+    QToolButton *m_exportButton = nullptr; // "Extrair para arquivo", ao lado da lixeira
     QWidget *m_header = nullptr;
     int m_headerHeight = 0;
     int m_barHeight = 0; // altura fixa única da barra (abas + ícones alinhados)
@@ -272,7 +315,31 @@ private:
     bool m_skipped = false;
     bool m_interactiveMode = false;
 
+    // A aba "Saída" é, de fato, m_outputContainer (QStackedLayout alternando
+    // m_outputView/m_formattedView conforme Command::formattedOutput) — ver
+    // setFormattedOutputEnabled. m_outputView continua existindo como o
+    // widget de texto cru de sempre (todo o resto do código que manipula
+    // texto/scroll/documento continua endereçando ele diretamente); só a
+    // identidade usada como PÁGINA da aba (tabOrder/addTabPage/showPage)
+    // trocou de m_outputView para o container.
+    QWidget *m_outputContainer = nullptr;
+    QStackedWidget *m_outputStack = nullptr;
     CodeOutputView *m_outputView = nullptr;
+    LogLineView *m_formattedView = nullptr;
+    bool m_formattedOutputEnabled = false;
+    QWidget *m_outputSearchOverlay = nullptr;
+    QToolButton *m_outputSearchToggle = nullptr;
+    QLineEdit *m_outputSearchField = nullptr;
+    bool m_outputSearchExpanded = false;
+    QLabel *m_outputMatchCounterLabel = nullptr;
+    QToolButton *m_outputPrevMatchButton = nullptr;
+    QToolButton *m_outputNextMatchButton = nullptr;
+    // Menu de filtro rápido por campo (só na Saída Formatada — ver
+    // showFieldFilterMenu): "level:error", "service:foo" etc., estilo
+    // Grafana/Loki, com os campos/valores JÁ VISTOS no log corrente.
+    QToolButton *m_outputFieldFilterButton = nullptr;
+    QList<QTextCursor> m_outputMatches;
+    int m_outputCurrentMatchIndex = -1;
     JsonViewerWidget *m_jsonView = nullptr;
     QTableWidget *m_headersView = nullptr;
     // Aba "Requisição" (feedback do usuário: "a aba de saída é meio inútil

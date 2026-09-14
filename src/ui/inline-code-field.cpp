@@ -181,6 +181,7 @@ void InlineCodeField::expand()
                               ? utils::tr(QStringLiteral("inline_code_field.default_title"))
                               : m_editorTitle);
     dialog.resize(860, 600);
+    centerOnParent(&dialog);
 
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(3));

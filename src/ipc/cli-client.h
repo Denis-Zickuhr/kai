@@ -21,6 +21,7 @@ struct CliOutcome {
 //   kai list
 //   kai env list
 //   kai env use <nome-do-environment>
+//   kai validate <arquivo.json|arquivo.yml>
 //   kai show
 //   kai help
 CliOutcome runCliIfRequested(const QStringList &args);

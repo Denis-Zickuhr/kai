@@ -1,15 +1,20 @@
 #include <QTest>
 #include <QJsonObject>
 #include "core/models.h"
+#include "core/config-manager.h"
 #include "ui/output-panel.h"
+#include "ui/command-tree-widget.h"
 #include <QSignalSpy>
 #include <QLineEdit>
+#include <QTemporaryDir>
 
 #include "ui/main-window.h"
 #include "ui/terminal-drawer.h"
+#include "ui/log-line-view.h"
 #include "engine/process-runner.h"
 
 using namespace kai::ui;
+using namespace kai::core;
 using namespace kai::engine;
 
 // Cobre os ajustes de usabilidade da Saída pedidos pelo usuário: (1) a
@@ -314,6 +319,200 @@ private slots:
         // o clearAll de fato zera, então a reconexão é segura.
         panel.clearAll();
         QVERIFY(panel.plainOutput().isEmpty());
+    }
+
+    // Bug reportado: "ao selecionar uma PASTA, e se um cmd está rodando
+    // dentro dela, o sistema exibe o cmd rodando, não quero isso, se está
+    // na pasta não exibe saída alguma". Havia DOIS caminhos que
+    // vazavam a saída de um comando em background pra uma pasta
+    // selecionada: (1) handleCommandSelectionChanged só limpava o
+    // Terminal Drawer ao selecionar pasta/nada se o comando conectado
+    // NÃO estivesse mais rodando; (2) mesmo depois de limpar,
+    // handlePipelineLog reconectava sozinho ao primeiro log novo que
+    // chegasse enquanto nada estivesse conectado — o que uma pasta
+    // selecionada sempre deixa "nada conectado".
+    void selectingFolderClearsOutputEvenWithBackgroundCommandRunning()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+
+        // "Pasta" precisa ser uma SUBPASTA de verdade (com parentId), não
+        // uma raiz/aba — uma raiz é selecionada trocando de aba, não via
+        // item de árvore, então não exercitaria o mesmo caminho de
+        // currentSelectionIsFolder() que uma subpasta normal usa (o caso
+        // real reportado: uma subpasta dentro de um projeto).
+        Folder root;
+        root.id = QStringLiteral("root");
+        root.name = QStringLiteral("Projeto");
+
+        Folder folder;
+        folder.id = QStringLiteral("f1");
+        folder.name = QStringLiteral("Pasta");
+        folder.parentId = root.id;
+
+        Command command;
+        command.id = QStringLiteral("c1");
+        command.name = QStringLiteral("Dev Server");
+        command.folderId = folder.id;
+        command.type = CommandType::Shell;
+        command.command = QStringLiteral("echo hi");
+        command.isBackground = true;
+
+        CommandsData data;
+        data.folders << root << folder;
+        data.commands << command;
+        ConfigManager manager;
+        QVERIFY(manager.saveCommands(data));
+
+        MainWindow window;
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        auto *panel = drawer ? drawer->findChild<OutputPanel *>() : nullptr;
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        QVERIFY(drawer != nullptr && panel != nullptr && tree != nullptr);
+
+        auto selectItemByText = [&](const QString &text) -> QTreeWidgetItem * {
+            for (QTreeWidget *w : tree->findChildren<QTreeWidget *>()) {
+                const QList<QTreeWidgetItem *> found = w->findItems(text, Qt::MatchExactly | Qt::MatchRecursive);
+                if (!found.isEmpty()) {
+                    found.first()->treeWidget()->setCurrentItem(found.first());
+                    return found.first();
+                }
+            }
+            return nullptr;
+        };
+
+        // Seleciona o COMANDO primeiro (estado inicial determinístico —
+        // não depende de qual item a árvore auto-seleciona ao abrir).
+        QVERIFY(selectItemByText(command.name) != nullptr);
+        QVERIFY(!tree->currentSelectionIsFolder());
+
+        // Chega um chunk de log com nada conectado ainda — reconecta
+        // automaticamente ao comando selecionado, igual a um comando em
+        // background de verdade produzindo output.
+        QMetaObject::invokeMethod(&window, "handlePipelineLog", Qt::DirectConnection,
+            Q_ARG(QString, command.id), Q_ARG(QString, QStringLiteral("Server rodando\n")), Q_ARG(bool, false));
+        drawer->flushPendingOutput();
+        QVERIFY(panel->plainOutput().contains(QStringLiteral("Server rodando")));
+
+        // Seleciona a PASTA que contém o comando em "execução" — a saída
+        // deve sumir completamente, mesmo o comando ainda "rodando".
+        QVERIFY(selectItemByText(folder.name) != nullptr);
+        QVERIFY(tree->currentSelectionIsFolder());
+        QVERIFY(!panel->plainOutput().contains(QStringLiteral("Server rodando")));
+
+        // Novo chunk chega enquanto a pasta AINDA está selecionada — não
+        // pode reconectar sozinho e trazer a saída de volta.
+        QMetaObject::invokeMethod(&window, "handlePipelineLog", Qt::DirectConnection,
+            Q_ARG(QString, command.id), Q_ARG(QString, QStringLiteral("Mais uma linha\n")), Q_ARG(bool, false));
+        drawer->flushPendingOutput();
+        QVERIFY(!panel->plainOutput().contains(QStringLiteral("Mais uma linha")));
+    }
+
+    // Bug reportado: "tenho uma saída CMD que roda terminal formatado, o
+    // build, se vou em outra saída com term formatado, ele buga e traz a
+    // saída do comando pro cara errado" — trocar de um comando com Saída
+    // Formatada pra OUTRO comando também com Saída Formatada não pode
+    // deixar nenhuma linha do comando anterior visível na view formatada
+    // (LogLineView), nem mesmo transitoriamente.
+    void switchingBetweenTwoFormattedOutputCommandsNeverMixesContent()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+
+        Command a;
+        a.id = QStringLiteral("c_a");
+        a.name = QStringLiteral("Build");
+        a.type = CommandType::Shell;
+        a.command = QStringLiteral("echo build");
+        a.formattedOutput = true;
+
+        Command b;
+        b.id = QStringLiteral("c_b");
+        b.name = QStringLiteral("Testes");
+        b.type = CommandType::Shell;
+        b.command = QStringLiteral("echo testes");
+        b.formattedOutput = true;
+
+        CommandsData data;
+        data.commands << a << b;
+        ConfigManager manager;
+        QVERIFY(manager.saveCommands(data));
+
+        MainWindow window;
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        auto *formattedView = drawer ? drawer->findChild<LogLineView *>() : nullptr;
+        QVERIFY(drawer != nullptr && tree != nullptr && formattedView != nullptr);
+
+        auto selectItemByText = [&](const QString &text) -> QTreeWidgetItem * {
+            for (QTreeWidget *w : tree->findChildren<QTreeWidget *>()) {
+                const QList<QTreeWidgetItem *> found = w->findItems(text, Qt::MatchExactly | Qt::MatchRecursive);
+                if (!found.isEmpty()) {
+                    found.first()->treeWidget()->setCurrentItem(found.first());
+                    return found.first();
+                }
+            }
+            return nullptr;
+        };
+        auto formattedContains = [&](const QString &needle) -> bool {
+            for (int i = 0; i < formattedView->logModel()->rowCount(); ++i) {
+                if (formattedView->logModel()->entryAt(i).raw.contains(needle)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        QVERIFY(selectItemByText(a.name) != nullptr);
+        QMetaObject::invokeMethod(&window, "handlePipelineLog", Qt::DirectConnection,
+            Q_ARG(QString, a.id), Q_ARG(QString, QStringLiteral("linha do BUILD\n")), Q_ARG(bool, false));
+        drawer->flushPendingOutput();
+        QVERIFY(formattedContains(QStringLiteral("linha do BUILD")));
+
+        QVERIFY(selectItemByText(b.name) != nullptr);
+        QMetaObject::invokeMethod(&window, "handlePipelineLog", Qt::DirectConnection,
+            Q_ARG(QString, b.id), Q_ARG(QString, QStringLiteral("linha dos TESTES\n")), Q_ARG(bool, false));
+        drawer->flushPendingOutput();
+        QVERIFY(formattedContains(QStringLiteral("linha dos TESTES")));
+        QVERIFY2(!formattedContains(QStringLiteral("linha do BUILD")),
+            "saida formatada do comando anterior vazou pro comando novo");
+    }
+
+    // Bug reportado: "saida formatada, a PRIMEIRA linha de JSON lançada,
+    // esta caindo sempre colada junto a saida normal, isso gera perde se
+    // o APP SOLTAR um linha de JSON APENAS". Raiz real: HttpRunner emitia
+    // a linha de status HTTP e o corpo JSON em duas chamadas logMessage
+    // SEPARADAS, mas a linha de status não terminava em "\n" — como as
+    // duas chegam no mesmo turno do event loop, o TerminalDrawer as
+    // COALESCE (mesmo canal = mesmo erro) por concatenação direta, sem
+    // separador. O "{" de abertura do corpo ficava colado no fim da linha
+    // de status; a linha física resultante não começava com "{", então
+    // LogLineModel nunca reconhecia o corpo como JSON — a resposta
+    // inteira virava uma única linha crua, sem estrutura. Reproduz aqui
+    // via TerminalDrawer (mesmo caminho real) com as DUAS chamadas que o
+    // HttpRunner corrigido agora faz (status já com "\n" final).
+    void httpStatusLineAndJsonBodyNeverGlueIntoOneRawLine()
+    {
+        TerminalDrawer drawer;
+        drawer.setFormattedOutputEnabled(true);
+        const QString statusLine = QStringLiteral("HTTP GET https://x/api -> 200 OK  •  1.2 KB  •  45 ms");
+        const QString body = QStringLiteral("{\n  \"status\": \"ok\"\n}\n");
+        // "\n" final na linha de status É o fix (ver HttpRunner::sendRequest) —
+        // sem ele, este teste falha exatamente como o bug reportado.
+        drawer.appendRawText(statusLine + QStringLiteral("\n"), false);
+        drawer.appendRawText(body, false);
+        drawer.flushPendingOutput();
+
+        auto *formattedView = drawer.findChild<LogLineView *>();
+        QVERIFY(formattedView != nullptr);
+        auto *model = formattedView->logModel();
+        QCOMPARE(model->rowCount(), 2);
+        QVERIFY2(!model->entryAt(0).structured, "linha de status nao e JSON");
+        QVERIFY2(model->entryAt(1).structured,
+            "corpo JSON tem que virar entrada estruturada PROPRIA, nao grudada na linha de status");
+        QVERIFY(model->entryAt(1).raw.contains(QStringLiteral("\"status\": \"ok\"")));
     }
 
     // seedOutput (usado ao destacar a janela) também não deve acumular: a nova

@@ -32,6 +32,7 @@ CommandJsonEditorDialog::CommandJsonEditorDialog(const core::Command *existingCo
     setSizeGripEnabled(true);
     resize(760, 600);
     setupUi(existingCommand, targetFolderId);
+    centerOnParent(this);
 }
 
 QString CommandJsonEditorDialog::templateJsonFor(const QString &targetFolderId)
@@ -109,9 +110,7 @@ void CommandJsonEditorDialog::setupUi(const core::Command *existingCommand, cons
     // com dobras — mesmo componente usado no visualizador de resposta HTTP
     // e agora nos 3 editores de JSON avançado.
     m_jsonField = new FoldableJsonView(this);
-    QFont mono(utils::tokens::monoFamily());
-    mono.setPointSize(utils::tokens::fontSizePt());
-    m_jsonField->setFont(mono);
+    m_jsonField->setFont(utils::tokens::monoFont());
     m_jsonField->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_jsonField->setStyleSheet(QStringLiteral(
         "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3;"

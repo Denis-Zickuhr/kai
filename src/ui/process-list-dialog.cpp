@@ -1,5 +1,6 @@
 #include "ui/process-list-dialog.h"
 
+#include "ui/dialog-utils.h"
 #include <QSet>
 #include "utils/design-tokens.h"
 
@@ -62,6 +63,7 @@ ProcessListDialog::ProcessListDialog(engine::ProcessManager *processManager, QWi
     resize(600, 400);
     setupUi();
     refreshProcessList();
+    centerOnParent(this);
 }
 
 void ProcessListDialog::setupUi()

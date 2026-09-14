@@ -13,6 +13,7 @@
 #include "ui/hooks-editor-widget.h"
 #include "ui/execution-conditions-editor-widget.h"
 #include "ui/env-extractors-editor-widget.h"
+#include "ui/declared-env-vars-editor-widget.h"
 #include "ui/collapsible-section-card.h"
 #include "ui/icon-picker-widget.h"
 #include "ui/lucide-icons.h"
@@ -411,6 +412,26 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     m_extractorsCard->setCount(0);
     mainLayout->addWidget(m_extractorsCard);
 
+    // "Variáveis exportáveis" — a LISTA BRANCA de "Export variables"
+    // (achado de segurança real: exportar TUDO que o ambiente mudasse
+    // vazava env de sistema/distro/WSL e quebrava comandos downstream —
+    // ver DeclaredEnvVar no core). Só faz sentido pro tipo Shell (é o
+    // resultado de rodar um PROCESSO), espelha exatamente o padrão do
+    // card de Extractors (HTTP) logo acima.
+    m_declaredEnvVarsCard = new CollapsibleSectionCard(
+        utils::tr(QStringLiteral("command.group.declared_env_vars")), content);
+    m_declaredEnvVarsCard->setEmptyStateText(utils::tr(QStringLiteral("command_editor.declared_env_vars.empty_state")));
+    m_declaredEnvVarsCard->setActionButtonText(utils::tr(QStringLiteral("keyvalue.add")));
+    m_declaredEnvVarsEditor = new DeclaredEnvVarsEditorWidget(m_declaredEnvVarsCard);
+    m_declaredEnvVarsCard->setBody(m_declaredEnvVarsEditor);
+    connect(m_declaredEnvVarsCard, &CollapsibleSectionCard::actionTriggered,
+            m_declaredEnvVarsEditor, &DeclaredEnvVarsEditorWidget::handleAddRowClicked);
+    connect(m_declaredEnvVarsEditor, &DeclaredEnvVarsEditorWidget::changed, this, [this]() {
+        m_declaredEnvVarsCard->setCount(m_declaredEnvVarsEditor->totalCount());
+    });
+    m_declaredEnvVarsCard->setCount(0);
+    mainLayout->addWidget(m_declaredEnvVarsCard);
+
     // Estado inicial: Shell é o modo padrão (m_shellModeButton nasce
     // marcado — ver acima), então os dois começam escondidos.
     // setExecutionMode(true) os revela quando o comando existente for
@@ -527,9 +548,13 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
         names.removeDuplicates();
         return names;
     };
-    attachEnvVarAutocomplete(m_commandField->editor(), availableVars);
-    attachEnvVarAutocomplete(m_bodyField->editor(), availableVars);
-    attachEnvVarAutocomplete(m_urlField, availableVars);
+    // supportConditionals=true nestes 3: são os campos de TEMPLATE de
+    // verdade (comando shell, body/URL HTTP) — os únicos onde um bloco
+    // {% if %}/{% else %}/{% endif %} faz sentido semântico (pedido do
+    // usuário: "autocomplete/linter de template, tipo ifs").
+    attachEnvVarAutocomplete(m_commandField->editor(), availableVars, /*supportConditionals=*/true);
+    attachEnvVarAutocomplete(m_bodyField->editor(), availableVars, /*supportConditionals=*/true);
+    attachEnvVarAutocomplete(m_urlField, availableVars, /*supportConditionals=*/true);
     // Mesmo provider nos campos esquerda/direita do formulário de Condição
     // de Execução (ver ExecutionConditionsEditorWidget) — "usável com a
     // interpolação" pedido pelo usuário.
@@ -556,10 +581,13 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
             m_workingDirField->setText(existingCommand->workingDir);
             m_backgroundField->setChecked(existingCommand->isBackground);
             m_captureEnvField->setChecked(existingCommand->captureEnv);
+            m_declaredEnvVarsEditor->setDeclaredVars(existingCommand->declaredEnvVars);
+            m_declaredEnvVarsCard->setCount(m_declaredEnvVarsEditor->totalCount());
             m_openLastLinkField->setChecked(existingCommand->openLastLink);
             m_hideOnRunField->setChecked(existingCommand->hideOnRun);
             m_ignoreExitCodeField->setChecked(existingCommand->ignoreExitCode);
             m_interactiveTerminalField->setChecked(existingCommand->interactiveTerminal);
+            m_formattedOutputField->setChecked(existingCommand->formattedOutput);
             const int targetIndex = m_terminalTargetField->findData(existingCommand->terminalTarget);
             m_terminalTargetField->setCurrentIndex(targetIndex >= 0 ? targetIndex : 0);
         }
@@ -621,7 +649,7 @@ void CommandEditorDialog::populateFolderCombo(const QVector<core::Folder> &allFo
     // que impedia criar comando fora de qualquer pasta.
     m_folderField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
 
-    for (const core::Folder &folder : allFolders) {
+    for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
         m_folderField->addItem(folderComboLabel(allFolders, folder.id), folder.id);
     }
 
@@ -729,6 +757,9 @@ void CommandEditorDialog::setExecutionMode(bool isHttp)
     // headers nem body JSON pra extrair de env).
     m_headersCard->setVisible(isHttp);
     m_extractorsCard->setVisible(isHttp);
+    // Variáveis exportáveis é o oposto: só faz sentido pro tipo Shell (é o
+    // resultado de rodar um PROCESSO, não uma resposta HTTP).
+    m_declaredEnvVarsCard->setVisible(!isHttp);
     // Perfil AGORA aparece nos DOIS modos (feedback do usuário: readicionar
     // o seletor de perfil ao HTTP; o uso prático virá depois). Antes era
     // escondido em HTTP.
@@ -910,6 +941,17 @@ void CommandEditorDialog::buildAdvancedSettingsFields()
     m_interactiveTerminalField->setProperty("kaiRole", QStringLiteral("switch"));
     m_interactiveTerminalField->setToolTip(utils::tr(QStringLiteral("command_editor.interactive_terminal.tip")));
 
+    // SAÍDA FORMATADA estilo Grafana/Loki (pedido do usuário): por comando,
+    // não uma preferência global de exibição, já que só se aplica a
+    // serviços que REALMENTE logam JSON estruturado — ver
+    // Command::formattedOutput. Só faz efeito pra Shell NÃO interativo (o
+    // interativo já é emulação de terminal cru, HTTP tem sua própria aba
+    // Resposta), mas o campo fica sempre visível como os outros flags desta
+    // seção (mesmo padrão já usado aqui).
+    m_formattedOutputField = new QCheckBox(utils::tr(QStringLiteral("command_editor.formatted_output")), this);
+    m_formattedOutputField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_formattedOutputField->setToolTip(utils::tr(QStringLiteral("command_editor.formatted_output.tip")));
+
     m_autoRunField = new QCheckBox(utils::tr(QStringLiteral("command.field.autorun")), this);
     m_autoRunField->setProperty("kaiRole", QStringLiteral("switch"));
     m_autoRunField->setToolTip(utils::tr(QStringLiteral("command.field.autorun.tip")));
@@ -932,6 +974,7 @@ void CommandEditorDialog::buildAdvancedSettingsFields()
                            static_cast<QWidget *>(m_captureEnvField), static_cast<QWidget *>(m_openLastLinkField),
                            static_cast<QWidget *>(m_hideOnRunField), static_cast<QWidget *>(m_ignoreExitCodeField),
                            static_cast<QWidget *>(m_interactiveTerminalField),
+                           static_cast<QWidget *>(m_formattedOutputField),
                            static_cast<QWidget *>(m_autoRunField),
                            static_cast<QWidget *>(m_autoRunDelayField)}) {
         field->hide();
@@ -963,6 +1006,11 @@ void CommandEditorDialog::handleAdvancedSettingsClicked()
     // só herdar).
     QDialog dialog(this);
     dialog.setWindowTitle(utils::tr(QStringLiteral("command_editor.advanced_settings.title")));
+    // Sem largura mínima o diálogo nascia do tamanho do menor conteúdo
+    // (achado real, com print: 336px — o campo "Working Dir" cortado, o
+    // textarea "Detalhamento" quebrando linha no meio de palavras). 520px
+    // acomoda os dois campos primários e o grid 2x2 de flags com folga.
+    dialog.setMinimumWidth(520);
     auto *outer = new QVBoxLayout(&dialog);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
@@ -1010,44 +1058,73 @@ void CommandEditorDialog::handleAdvancedSettingsClicked()
         utils::tr(QStringLiteral("command_editor.description.label")), m_descriptionField));
     layout->addWidget(primaryCard);
 
-    // Card SECUNDÁRIO: makeSurfaceCard traz fundo surface2 + raio, SEM
-    // borda (a borda pertence aos campos internos). Não acrescentamos uma
-    // borda "crua" (sem seletor #objectName) por cima: uma regra sem
-    // seletor no setStyleSheet de um ancestral CASCATEIA aos filhos e
-    // desenhava borda nos QLineEdit/QComboBox internos (o "fundo/borda que
-    // era pra estar no campo aparecendo na caixa" relatado).
-    auto *behaviorCard = makeSurfaceCard(&dialog);
-    auto *behaviorLayout = new QVBoxLayout(behaviorCard);
-    behaviorLayout->setContentsMargins(utils::tokens::space(3), utils::tokens::space(3),
-                                        utils::tokens::space(3), utils::tokens::space(3));
-    behaviorLayout->setSpacing(utils::tokens::space(3));
+    // GRUPOS POR FUNÇÃO, cada um num CollapsibleSectionCard (mesmo
+    // componente das seções "Parâmetros Dinâmicos"/"Auto-responsores"),
+    // começando COLAPSADOS (pedido do usuário: "separados por função e em
+    // vários com grupos, iniciando em tabs colapsadas, melhorando o espaço
+    // inicial disponível" — 7 checkboxes + autorun empilhados sempre
+    // abertos tomavam bastante altura antes mesmo do usuário olhar pra
+    // qualquer um deles). setAlwaysShowBody(true) porque estas seções não
+    // têm noção de "contagem de itens" (são campos de formulário fixos,
+    // não uma lista) — sem isso o card mostraria o estado vazio em vez do
+    // conteúdo real.
+    auto makeFlagsSection = [&](const QString &titleKey, QWidget *body) {
+        // TRANSPARENTE: um QWidget puro sem objectName/stylesheet próprio
+        // herda a regra GLOBAL "QWidget { background-color: bg }" do tema
+        // e pinta um retângulo de fundo QUADRADO por cima da área já
+        // arredondada/transparente que o próprio CollapsibleSectionCard
+        // monta por baixo (m_bodyWrapper/m_contentStack já são
+        // transparentes — ver surfaceCssFor lá) — achado real, com print:
+        // "fundos zoados... que são quadrados" dentro de Execução/Ambiente
+        // e Links/Janela e Auto-run. Mesmo padrão que wrapWithLabel já usa
+        // (WA_StyledBackground é herdado do pai; sem objectName aqui a
+        // regra global bate direto no widget).
+        body->setObjectName(QStringLiteral("flagsSectionBody"));
+        body->setStyleSheet(QStringLiteral("QWidget#flagsSectionBody { background: transparent; }"));
+        auto *section = new CollapsibleSectionCard(utils::tr(titleKey), &dialog);
+        section->setAlwaysShowBody(true);
+        // Sem badge de contagem: estas seções agrupam campos de formulário
+        // fixos, sem noção de "quantos itens" — o badge só mostrava "0"
+        // sempre, sem significar nada (achado real: "um contador que não
+        // conta nada").
+        section->setShowCountBadge(false);
+        section->setBody(body);
+        section->setExpanded(false);
+        layout->addWidget(section);
+        return section;
+    };
 
-    auto *behaviorTitle = new QLabel(
-        utils::tr(QStringLiteral("command_editor.advanced_settings.behavior_section")), behaviorCard);
-    QFont behaviorTitleFont = behaviorTitle->font();
-    behaviorTitleFont.setWeight(QFont::DemiBold);
-    behaviorTitle->setFont(behaviorTitleFont);
-    behaviorLayout->addWidget(behaviorTitle);
+    auto *executionBody = new QWidget(&dialog);
+    auto *executionGrid = new QGridLayout(executionBody);
+    executionGrid->setContentsMargins(0, 0, 0, 0);
+    executionGrid->setSpacing(utils::tokens::space(2));
+    executionGrid->addWidget(m_backgroundField, 0, 0);
+    executionGrid->addWidget(m_interactiveTerminalField, 0, 1);
+    executionGrid->addWidget(m_formattedOutputField, 1, 0);
+    executionGrid->addWidget(m_ignoreExitCodeField, 1, 1);
+    makeFlagsSection(QStringLiteral("command_editor.advanced_settings.section.execution"), executionBody);
 
-    auto *flagsGrid = new QGridLayout();
-    flagsGrid->setSpacing(utils::tokens::space(2));
-    flagsGrid->addWidget(m_backgroundField, 0, 0);
-    flagsGrid->addWidget(m_captureEnvField, 0, 1);
-    flagsGrid->addWidget(m_openLastLinkField, 1, 0);
-    flagsGrid->addWidget(m_hideOnRunField, 1, 1);
-    flagsGrid->addWidget(m_interactiveTerminalField, 2, 0);
-    flagsGrid->addWidget(m_ignoreExitCodeField, 2, 1);
-    behaviorLayout->addLayout(flagsGrid);
+    auto *integrationBody = new QWidget(&dialog);
+    auto *integrationGrid = new QGridLayout(integrationBody);
+    integrationGrid->setContentsMargins(0, 0, 0, 0);
+    integrationGrid->setSpacing(utils::tokens::space(2));
+    integrationGrid->addWidget(m_captureEnvField, 0, 0);
+    integrationGrid->addWidget(m_openLastLinkField, 0, 1);
+    makeFlagsSection(QStringLiteral("command_editor.advanced_settings.section.integration"), integrationBody);
 
+    auto *windowBody = new QWidget(&dialog);
+    auto *windowLayout = new QVBoxLayout(windowBody);
+    windowLayout->setContentsMargins(0, 0, 0, 0);
+    windowLayout->setSpacing(utils::tokens::space(2));
+    windowLayout->addWidget(m_hideOnRunField);
     auto *autoRunRow = new QHBoxLayout();
     autoRunRow->setSpacing(utils::tokens::space(2));
     autoRunRow->addWidget(m_autoRunField);
-    autoRunRow->addWidget(new QLabel(utils::tr(QStringLiteral("command.field.autorun_delay")), behaviorCard));
+    autoRunRow->addWidget(new QLabel(utils::tr(QStringLiteral("command.field.autorun_delay")), windowBody));
     autoRunRow->addWidget(m_autoRunDelayField);
     autoRunRow->addStretch();
-    behaviorLayout->addLayout(autoRunRow);
-
-    layout->addWidget(behaviorCard);
+    windowLayout->addLayout(autoRunRow);
+    makeFlagsSection(QStringLiteral("command_editor.advanced_settings.section.window"), windowBody);
 
     // Os campos entram nos layouts acima ainda ESCONDIDOS (ver
     // buildAdvancedSettingsFields) — adicionar a um layout sozinho NÃO
@@ -1056,10 +1133,31 @@ void CommandEditorDialog::handleAdvancedSettingsClicked()
     // mesmo dentro do diálogo).
     const QList<QWidget *> fields = {m_workingDirField, m_backgroundField, m_captureEnvField,
                                       m_openLastLinkField, m_hideOnRunField, m_ignoreExitCodeField,
-                                      m_interactiveTerminalField,
+                                      m_interactiveTerminalField, m_formattedOutputField,
                                       m_autoRunField, m_autoRunDelayField, m_descriptionField};
     for (QWidget *field : fields) {
         field->show();
+        // Reparentar um widget para um QDialog TOP-LEVEL diferente (aqui:
+        // de `this` para o diálogo local) deixa o cache de estilo do Qt
+        // (Fusion) desatualizado para bordas arredondadas especificamente -
+        // achado real, com print: o campo Working Dir e o textarea
+        // Detalhamento apareciam com cantos QUADRADOS aqui dentro, embora
+        // o restante do app (mesmo campo, fora deste popup) já respeite a
+        // preferência de canto do tema. unpolish+polish força o estilo a
+        // recalcular a partir do zero, do jeito que já teria acontecido se
+        // o widget tivesse nascido direto neste diálogo.
+        // Alguns destes campos (ex: m_descriptionField, um InlineCodeField)
+        // são widgets COMPOSTOS com filhos internos (o QPlainTextEdit de
+        // verdade) que têm seu próprio cache de estilo, não repolido só
+        // por chamar isto no widget de fora - repolir também os
+        // descendentes.
+        field->style()->unpolish(field);
+        field->style()->polish(field);
+        const auto descendants = field->findChildren<QWidget *>();
+        for (QWidget *child : descendants) {
+            child->style()->unpolish(child);
+            child->style()->polish(child);
+        }
     }
 
     layout->addStretch(0);
@@ -1086,6 +1184,7 @@ void CommandEditorDialog::handleAdvancedSettingsClicked()
     connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
     footerLayout->addWidget(buttonBox);
     outer->addWidget(footerContainer);
+    dialog.adjustSize();
     centerOnParent(&dialog);
 
     dialog.exec();
@@ -1283,10 +1382,12 @@ core::Command CommandEditorDialog::buildCommand() const
         command.workingDir = m_workingDirField->text();
         command.isBackground = m_backgroundField->isChecked();
         command.captureEnv = m_captureEnvField->isChecked();
+        command.declaredEnvVars = m_declaredEnvVarsEditor->declaredVars();
         command.openLastLink = m_openLastLinkField->isChecked();
         command.hideOnRun = m_hideOnRunField->isChecked();
         command.ignoreExitCode = m_ignoreExitCodeField->isChecked();
         command.interactiveTerminal = m_interactiveTerminalField->isChecked();
+        command.formattedOutput = m_formattedOutputField->isChecked();
         command.terminalTarget = m_terminalTargetField->currentData().toString();
     }
 

@@ -5,6 +5,8 @@
 
 #include <QTest>
 #include <QStringList>
+#include <QTemporaryFile>
+#include <QTextStream>
 
 #include "ipc/cli-client.h"
 
@@ -60,6 +62,41 @@ private slots:
         const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("list")});
         QVERIFY(o.handled);
         QCOMPARE(o.exitCode, 2); // 2 = não conseguiu conectar
+    }
+
+    // validate sem caminho de arquivo: erro de uso (exit 2), sem tentar IPC.
+    void validateWithoutFileIsUsageError()
+    {
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate")});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 2);
+    }
+
+    // validate roda OFFLINE (não precisa de instância) — um arquivo válido
+    // sai com 0, mesmo sem nenhum Kai rodando.
+    void validateValidFileExitsZeroWithoutInstance()
+    {
+        QTemporaryFile file;
+        QVERIFY(file.open());
+        QTextStream(&file) << QStringLiteral(R"({"commands": [{"name": "X", "type": "shell", "command": "echo hi"}]})");
+        file.close();
+
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate"), file.fileName()});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 0);
+    }
+
+    // Arquivo com erro estrutural: exit 1 (não 2 — não é falha de conexão).
+    void validateInvalidFileExitsOne()
+    {
+        QTemporaryFile file;
+        QVERIFY(file.open());
+        QTextStream(&file) << QStringLiteral(R"({"commands": [{"type": "shell"}]})");
+        file.close();
+
+        const CliOutcome o = runCliIfRequested({QStringLiteral("kai"), QStringLiteral("validate"), file.fileName()});
+        QVERIFY(o.handled);
+        QCOMPARE(o.exitCode, 1);
     }
 };
 

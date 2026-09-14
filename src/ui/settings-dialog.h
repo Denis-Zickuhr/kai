@@ -103,6 +103,10 @@ private:
     // Posição do painel de Saída: bottom (padrão)/left/right (pedido do
     // usuário).
     QComboBox *m_outputPositionField = nullptr;
+    // Tamanho máximo (KB) do buffer de log guardado por comando — pedido
+    // do usuário: "1mb por padrão, mas até mais, e ainda dar pra
+    // selecionar tamanho máximo da saída".
+    QSpinBox *m_outputMaxLogSizeField = nullptr;
     // Janela: modo de abertura + tamanho (LxA) com presets.
     QComboBox *m_windowModeField = nullptr;
     QComboBox *m_windowPresetField = nullptr;

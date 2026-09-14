@@ -64,6 +64,7 @@ SettingsDialog::SettingsDialog(const core::SettingsData &currentSettings,
     m_originalSettings = currentSettings;
     setupUi(currentSettings, availableThemeNames, commandsData, collections,
             std::move(persistCommands), std::move(persistCollections));
+    centerOnParent(this);
 }
 
 void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,
@@ -515,6 +516,18 @@ QWidget *SettingsDialog::buildAppearancePage(const core::SettingsData &currentSe
     opacityLayout->addWidget(opacityValue);
     addFieldToGrid(2, 2, QStringLiteral("settings.commands_background.opacity"), opacityRow);
 
+    // Tamanho máximo do log por comando (bug reportado: um script verboso
+    // perdia as linhas do INÍCIO ao passar do limite antigo, fixo em
+    // 200KB — "preciso de um limite de espaço MAIOR e configurável por
+    // LOG... bom seria pelo menos 1mb por padrão, mas até mais"). KB pra
+    // granularidade fina sem exigir decimais; até 64MB.
+    m_outputMaxLogSizeField = new QSpinBox(layoutGroup);
+    m_outputMaxLogSizeField->setRange(64, 64 * 1024);
+    m_outputMaxLogSizeField->setSingleStep(256);
+    m_outputMaxLogSizeField->setSuffix(QStringLiteral(" KB"));
+    m_outputMaxLogSizeField->setValue(currentSettings.outputMaxLogSizeKb);
+    addFieldToGrid(3, 0, QStringLiteral("settings.output_max_log_size"), m_outputMaxLogSizeField);
+
     layout->addWidget(layoutGroup);
 
     // --- Janela: modo de abertura e tamanho (pedido do usuário) ---
@@ -863,6 +876,21 @@ core::SettingsData SettingsDialog::buildSettings() const
     // "Mostrar ocultos" é um toggle rápido na barra de Exibição, não um
     // campo deste diálogo — preserva o valor atual.
     settings.showHiddenCommands = m_originalSettings.showHiddenCommands;
+    // Opções de exibição da Saída (achado de auditoria, ao mexer aqui pro
+    // campo de tamanho máximo de log: NENHUM destes 6 campos era
+    // preservado — settings de outputFontSize/etc são editados no MENU do
+    // próprio painel de Saída, não nesta tela, mas buildSettings() sempre
+    // constrói um core::SettingsData NOVO e default-construído; sem
+    // preservar aqui, salvar QUALQUER alteração nesta tela zerava
+    // silenciosamente as preferências de exibição da Saída de volta ao
+    // default). Só outputMaxLogSizeKb é de fato editado aqui.
+    settings.outputLineNumbers = m_originalSettings.outputLineNumbers;
+    settings.outputWrap = m_originalSettings.outputWrap;
+    settings.outputTimestamps = m_originalSettings.outputTimestamps;
+    settings.outputAutoScroll = m_originalSettings.outputAutoScroll;
+    settings.outputCompact = m_originalSettings.outputCompact;
+    settings.outputFontSize = m_originalSettings.outputFontSize;
+    settings.outputMaxLogSizeKb = m_outputMaxLogSizeField->value();
 
     // Alvos de terminal (nome -> template). Preserva a ordem de inserção
     // não é garantida pelo QMap, mas os alvos são referenciados por nome,

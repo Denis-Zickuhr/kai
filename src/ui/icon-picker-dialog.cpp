@@ -26,6 +26,7 @@ IconPickerDialog::IconPickerDialog(const QString &currentIconName, QWidget *pare
     setSizeGripEnabled(true);
     resize(560, 460);
     setupUi(currentIconName);
+    centerOnParent(this);
 }
 
 void IconPickerDialog::setupUi(const QString &currentIconName)

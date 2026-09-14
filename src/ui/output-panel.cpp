@@ -7,10 +7,16 @@
 #include "utils/translation-manager.h"
 
 #include <QAction>
+#include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
 #include <QDir>
+#include <QFileDialog>
+#include <QFontMetrics>
 #include <QGuiApplication>
+#include <QMessageBox>
+#include <QSaveFile>
 #include <QProcessEnvironment>
 #include <QStyle>
 #include <QHBoxLayout>
@@ -33,6 +39,7 @@
 #include <QPointer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 
 namespace kai::ui {
 namespace tk = kai::utils::tokens;
@@ -315,6 +322,17 @@ void OutputPanel::setupUi()
     connect(m_clearButton, &QToolButton::clicked, this, &OutputPanel::clearAll);
     extrasLayout->addWidget(m_clearButton, 0, Qt::AlignVCenter);
 
+    // Extrair pra arquivo — pedido do usuário: "o botão deve ser exterior
+    // ao lado da lixeira" (antes só vivia escondido dentro do menu de
+    // opções). Fica ao lado do m_clearButton, mesma caixinha.
+    m_exportButton = new QToolButton(m_headerExtras);
+    m_exportButton->setAutoRaise(true);
+    m_exportButton->setCursor(Qt::PointingHandCursor);
+    m_exportButton->setIcon(LucideIcons::icon(QStringLiteral("download"), QColor(tk::mutedFg()), 15));
+    m_exportButton->setToolTip(utils::tr(QStringLiteral("output.menu.export_to_file")));
+    connect(m_exportButton, &QToolButton::clicked, this, &OutputPanel::exportOutputToFile);
+    extrasLayout->addWidget(m_exportButton, 0, Qt::AlignVCenter);
+
     m_optionsButton = new QToolButton(m_headerExtras);
     m_optionsButton->setAutoRaise(true);
     m_optionsButton->setCursor(Qt::PointingHandCursor);
@@ -373,10 +391,27 @@ void OutputPanel::setupUi()
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("outputPages"));
 
-    m_outputView = new CodeOutputView(m_pages);
+    // m_outputContainer é a página REAL da aba "Saída" (ver comentário no
+    // header): um QStackedWidget alternando entre o texto cru e o
+    // LogLineView formatado (Command::formattedOutput), ambos sempre
+    // alimentados em paralelo (ver appendChunkNow) — ligar/desligar só
+    // troca qual está visível.
+    m_outputContainer = new QWidget(m_pages);
+    auto *outputContainerLayout = new QVBoxLayout(m_outputContainer);
+    outputContainerLayout->setContentsMargins(0, 0, 0, 0);
+    outputContainerLayout->setSpacing(0);
+    m_outputStack = new QStackedWidget(m_outputContainer);
+    outputContainerLayout->addWidget(m_outputStack);
+
+    m_outputView = new CodeOutputView(m_outputStack);
     m_outputView->setReadOnly(true);
     m_outputView->setFrameShape(QFrame::NoFrame);
     m_outputView->setMaximumBlockCount(20000);
+    m_outputStack->addWidget(m_outputView);
+
+    m_formattedView = new LogLineView(m_outputStack);
+    m_outputStack->addWidget(m_formattedView);
+    setupOutputSearchOverlay();
 
     m_jsonView = new JsonViewerWidget(m_pages);
     m_headersView = makeKeyValueTable(m_pages, utils::tr(QStringLiteral("output.headers.key")), utils::tr(QStringLiteral("output.headers.value")));
@@ -392,7 +427,7 @@ void OutputPanel::setupUi()
     // Saída, Headers. Definida ANTES do primeiro addTabPage — é ela
     // que decide em qual posição uma aba reaparece ao ser reexibida (ver
     // addTabPage).
-    m_tabOrder = {m_jsonView, m_requestView, m_outputView, m_headersView};
+    m_tabOrder = {m_jsonView, m_requestView, m_outputContainer, m_headersView};
 
     // "JSON" virou "Resposta" (pedido do usuário) — chave de i18n mantida
     // (output.tab.json), só o texto traduzido mudou.
@@ -401,7 +436,7 @@ void OutputPanel::setupUi()
     // requests http" — mostra o método/URL/headers/corpo REALMENTE
     // enviados, não só a resposta).
     addTabPage(m_requestView, utils::tr(QStringLiteral("output.tab.request")), QStringLiteral("send"));
-    addTabPage(m_outputView, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
+    addTabPage(m_outputContainer, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
                QStringLiteral("terminal"));
     addTabPage(m_headersView, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
 
@@ -655,6 +690,11 @@ void OutputPanel::rebuildOptionsMenu()
     auto *clear = menu->addAction(utils::tr(QStringLiteral("output.menu.clear")));
     connect(clear, &QAction::triggered, this, [this]() { clearAll(); });
 
+    // "Extrair para arquivo" saiu daqui — agora é um botão PRÓPRIO na
+    // caixinha, ao lado da lixeira (pedido do usuário: "o botão deve ser
+    // exterior ao lado da lixeira"), ver m_exportButton acima. Deixar a
+    // ação duplicada aqui dentro do menu também seria redundante.
+
     m_optionsButton->setMenu(menu);
 }
 
@@ -811,6 +851,14 @@ void OutputPanel::appendChunkNow(const QString &rawTextIn, bool isError)
         }
     }
 
+    // Alimenta a visão formatada (LogLineView) SEMPRE em paralelo, ligada ou
+    // não — ver setFormattedOutputEnabled: assim ligar/desligar o toggle só
+    // troca qual widget está visível, sem precisar reprocessar histórico.
+    // Texto ANTES do parse ANSI/prefixo de timestamp do cliente (o
+    // LogLineView faz sua própria limpeza de ANSI por linha e usa o campo de
+    // horário DO PRÓPRIO log estruturado, não o timestamp de recebimento).
+    m_formattedView->appendText(text);
+
     QScrollBar *bar = m_outputView->verticalScrollBar();
     const bool wasAtBottom = !bar || bar->value() >= bar->maximum() - 4;
 
@@ -949,6 +997,29 @@ QString OutputPanel::compactText(const QString &input)
 
 void OutputPanel::detectJsonInText(const QString &text)
 {
+    // NUNCA em modo interativo (bug relatado: terminal interativo normal
+    // "identificou uma aba Resposta bugada sem nada"). A causa: log bruto
+    // de um TTY real (prompts, escapes ANSI, saída de qualquer comando
+    // digitado à mão) facilmente contém um "{...}" que passa por JSON
+    // pra extractJsonBlock — vira m_hasJson=true e, via addTabPage (that
+    // auto-seleciona quando é a ÚNICA aba do stack), m_pages passa a
+    // apontar pra m_jsonView por baixo dos panos, mesmo com m_bodyStack
+    // ainda mostrando o PTY. Se o modo interativo for desligado depois
+    // (reconectar, trocar comando e voltar), a Saída reaparece já na aba
+    // Resposta — vazia/com lixo, porque nunca foi JSON de verdade.
+    // Detecção de JSON só faz sentido pra saída de comando/HTTP normal.
+    if (m_interactiveMode) {
+        return;
+    }
+    // SÓ para HTTP (pedido do usuário, revertendo uma versão anterior que
+    // detectava JSON em qualquer log de shell: "quero apenas para cmds
+    // http" — a Saída Formatada cobre logs de shell estruturados agora, e
+    // a detecção automática por conteúdo virava falso positivo/ruído nela,
+    // inclusive durante execução ao vivo — ver appendOutput). A aba "Saída"
+    // só é escondida (m_stdoutTabEnabled=false) para comandos HTTP.
+    if (m_stdoutTabEnabled) {
+        return;
+    }
     const QString block = JsonViewerWidget::extractJsonBlock(text);
     if (block.isEmpty()) {
         return;
@@ -1022,7 +1093,7 @@ void OutputPanel::updateTabVisibility()
     setVisible(m_jsonView, m_hasJson, utils::tr(QStringLiteral("output.tab.json")), QStringLiteral("braces"));
     setVisible(m_requestView, m_hasRequest, utils::tr(QStringLiteral("output.tab.request")), QStringLiteral("send"));
     // "Saída" (stdout/stderr) não faz sentido pra HTTP — ver setStdoutTabVisible.
-    setVisible(m_outputView, m_stdoutTabEnabled, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
+    setVisible(m_outputContainer, m_stdoutTabEnabled, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
                QStringLiteral("terminal"));
     setVisible(m_headersView, m_hasHeaders, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
 
@@ -1041,6 +1112,7 @@ void OutputPanel::updateTabVisibility()
 void OutputPanel::clearAll()
 {
     m_outputView->clear();
+    m_formattedView->clearLog();
     m_headersView->setRowCount(0);
     m_requestHeadersView->setRowCount(0);
     m_requestBodyView->clear();
@@ -1064,7 +1136,7 @@ void OutputPanel::clearAll()
     // usuário: "quero que fique a aba vazia de resposta como era antes,
     // enquanto o http tá em execução" — mostrar Requisição de cara, antes
     // da resposta chegar, não é o que se espera).
-    showPage(m_stdoutTabEnabled ? static_cast<QWidget *>(m_outputView) : static_cast<QWidget *>(m_jsonView));
+    showPage(m_stdoutTabEnabled ? static_cast<QWidget *>(m_outputContainer) : static_cast<QWidget *>(m_jsonView));
     // SÓ reseta a tela do terminal interativo se ele for o modo ATUAL desta
     // conexão. clearAll() é chamado toda vez que QUALQUER comando começa a
     // rodar (m_terminalDrawer->clear() em runCommandWithParams) — inclusive
@@ -1273,6 +1345,8 @@ void OutputPanel::addHeaderWidget(QWidget *widget)
 void OutputPanel::seedOutput(const QString &text)
 {
     m_outputView->setPlainText(text);
+    m_formattedView->clearLog();
+    m_formattedView->appendText(text);
     m_parser.resetFormat();
     detectJsonInText(text);
     updateTabVisibility();
@@ -1284,6 +1358,464 @@ void OutputPanel::seedOutput(const QString &text)
 QString OutputPanel::plainOutput() const
 {
     return m_outputView->toPlainText();
+}
+
+void OutputPanel::exportOutputToFile()
+{
+    // TIMESTAMP no nome sugerido (pedido do usuário: "deve gerar um
+    // timestamp de quando foi gerada") — evita sobrescrever silenciosamente
+    // uma extração anterior do MESMO comando sem querer, e já documenta
+    // quando aquele snapshot foi tirado sem precisar abrir o arquivo.
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HHmmss"));
+    const QString baseName = m_titleLabel && !m_titleLabel->text().isEmpty()
+        ? m_titleLabel->text() : QStringLiteral("saida");
+    const QString suggested = QStringLiteral("%1_%2.log").arg(baseName, timestamp);
+    const QString path = QFileDialog::getSaveFileName(this,
+        utils::tr(QStringLiteral("output.export.dialog_title")), suggested,
+        utils::tr(QStringLiteral("output.export.filter")));
+    if (path.isEmpty()) {
+        return;
+    }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("output.export.dialog_title")),
+            utils::tr(QStringLiteral("output.export.failed")));
+        return;
+    }
+    file.write(plainOutput().toUtf8());
+    if (!file.commit()) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("output.export.dialog_title")),
+            utils::tr(QStringLiteral("output.export.failed")));
+    }
+}
+
+void OutputPanel::setupOutputSearchOverlay()
+{
+    // Mesmo padrão visual do overlay de JsonViewerWidget (chip lupa + campo,
+    // flutuando sobre o canto superior direito do viewport), mas SEM os
+    // botões de expandir/colapsar dobras, copiar formatado e destacar —
+    // não fazem sentido pra texto simples de stdout/stderr (pedido do
+    // usuário: "ações que tem na resposta talvez não sejam pertinentes,
+    // então pule").
+    // Filho do CONTAINER (não do viewport de um dos dois widgets internos —
+    // ver comentário do header) para ficar por cima de qualquer um dos dois
+    // (texto cru ou LogLineView) independente de qual está visível.
+    m_outputSearchOverlay = new QWidget(m_outputContainer);
+    m_outputSearchOverlay->setObjectName(QStringLiteral("outputSearchOverlay"));
+    m_outputSearchOverlay->setAttribute(Qt::WA_StyledBackground, true);
+    {
+        QColor bg(tk::surface2());
+        bg.setAlphaF(0.92);
+        m_outputSearchOverlay->setStyleSheet(QStringLiteral(
+            "QWidget#outputSearchOverlay { background-color: rgba(%1,%2,%3,%4);"
+            " border: 1px solid %5; border-radius: %6px; }")
+            .arg(bg.red()).arg(bg.green()).arg(bg.blue()).arg(bg.alpha())
+            .arg(tk::borderColor()).arg(tk::radiusMd()));
+    }
+    auto *bar = new QHBoxLayout(m_outputSearchOverlay);
+    bar->setContentsMargins(tk::space(1), tk::space(1) / 2, tk::space(1), tk::space(1) / 2);
+    bar->setSpacing(tk::space(1));
+
+    const QColor iconColor(tk::mutedFg());
+
+    m_outputSearchToggle = new QToolButton(m_outputSearchOverlay);
+    m_outputSearchToggle->setIcon(LucideIcons::icon(QStringLiteral("search"), iconColor, 16));
+    m_outputSearchToggle->setToolTip(utils::tr(QStringLiteral("output.search.toggle")));
+    m_outputSearchToggle->setAutoRaise(true);
+    m_outputSearchToggle->setCheckable(true);
+    connect(m_outputSearchToggle, &QToolButton::clicked, this, [this]() {
+        setOutputSearchExpanded(!m_outputSearchExpanded);
+    });
+    bar->addWidget(m_outputSearchToggle);
+
+    m_outputSearchField = new QLineEdit(m_outputSearchOverlay);
+    m_outputSearchField->setPlaceholderText(utils::tr(QStringLiteral("output.search.placeholder")));
+    m_outputSearchField->setClearButtonEnabled(true);
+    m_outputSearchField->setFixedWidth(200);
+    {
+        const int h = tk::iconButtonSize();
+        m_outputSearchField->setFixedHeight(h);
+        m_outputSearchField->setStyleSheet(QStringLiteral(
+            "QLineEdit { min-height: 0px; padding: 1px %1px; border-radius: %2px; }")
+            .arg(tk::space(2)).arg(tk::radiusMd()));
+    }
+    m_outputSearchField->hide();
+    // Roteia pro filtro do widget ATUALMENTE visível — texto cru destaca
+    // ocorrências (mesmo padrão do JsonViewerWidget); LogLineView NÃO
+    // esconde linhas (pedido do usuário: "o jump não funcionou na view
+    // grafana" — filtrar escondia as não-batidas, o que tornava "próxima
+    // ocorrência" sem sentido), destaca as que casam e a atual num tom
+    // diferente, igual aos outros dois.
+    connect(m_outputSearchField, &QLineEdit::textChanged, this, [this](const QString &needle) {
+        if (m_formattedOutputEnabled) {
+            m_formattedView->setFilterText(needle);
+            updateOutputMatchCounterLabel();
+        } else {
+            applyOutputSearchFilter(needle);
+        }
+    });
+    // Enter/Shift+Enter navegam pras próximas/anteriores ocorrências, estilo
+    // Notepad — nos dois modos agora.
+    connect(m_outputSearchField, &QLineEdit::returnPressed, this, [this]() {
+        const bool previous = QApplication::keyboardModifiers() & Qt::ShiftModifier;
+        if (m_formattedOutputEnabled) {
+            if (previous) {
+                m_formattedView->goToPreviousMatch();
+            } else {
+                m_formattedView->goToNextMatch();
+            }
+            updateOutputMatchCounterLabel();
+        } else if (previous) {
+            goToPreviousOutputMatch();
+        } else {
+            goToNextOutputMatch();
+        }
+    });
+    bar->addWidget(m_outputSearchField);
+
+    // Filtro rápido por campo (só na Saída Formatada — pedido do usuário:
+    // "filtros por campo detectados na fly de pesquisa, e alguns padrões
+    // como level e etc"). Escondido em texto cru — não há "campos" ali.
+    m_outputFieldFilterButton = new QToolButton(m_outputSearchOverlay);
+    m_outputFieldFilterButton->setIcon(LucideIcons::icon(QStringLiteral("funnel"), iconColor, 16));
+    m_outputFieldFilterButton->setToolTip(utils::tr(QStringLiteral("output.search.field_filter")));
+    m_outputFieldFilterButton->setAutoRaise(true);
+    m_outputFieldFilterButton->hide();
+    connect(m_outputFieldFilterButton, &QToolButton::clicked, this, &OutputPanel::showFieldFilterMenu);
+    bar->addWidget(m_outputFieldFilterButton);
+
+    // Contador "N/M" + setas ↑/↓ — nos dois modos agora.
+    m_outputMatchCounterLabel = new QLabel(m_outputSearchOverlay);
+    m_outputMatchCounterLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_outputMatchCounterLabel->setMinimumWidth(QFontMetrics(m_outputMatchCounterLabel->font())
+        .horizontalAdvance(QStringLiteral("99/99")));
+    m_outputMatchCounterLabel->setAlignment(Qt::AlignCenter);
+    m_outputMatchCounterLabel->hide();
+    bar->addWidget(m_outputMatchCounterLabel);
+
+    m_outputPrevMatchButton = new QToolButton(m_outputSearchOverlay);
+    m_outputPrevMatchButton->setIcon(LucideIcons::icon(QStringLiteral("chevron-up"), iconColor, 16));
+    m_outputPrevMatchButton->setToolTip(utils::tr(QStringLiteral("json_viewer.search.previous")));
+    m_outputPrevMatchButton->setAutoRaise(true);
+    m_outputPrevMatchButton->hide();
+    connect(m_outputPrevMatchButton, &QToolButton::clicked, this, [this]() {
+        if (m_formattedOutputEnabled) {
+            m_formattedView->goToPreviousMatch();
+            updateOutputMatchCounterLabel();
+        } else {
+            goToPreviousOutputMatch();
+        }
+    });
+    bar->addWidget(m_outputPrevMatchButton);
+
+    m_outputNextMatchButton = new QToolButton(m_outputSearchOverlay);
+    m_outputNextMatchButton->setIcon(LucideIcons::icon(QStringLiteral("chevron-down"), iconColor, 16));
+    m_outputNextMatchButton->setToolTip(utils::tr(QStringLiteral("json_viewer.search.next")));
+    m_outputNextMatchButton->setAutoRaise(true);
+    m_outputNextMatchButton->hide();
+    connect(m_outputNextMatchButton, &QToolButton::clicked, this, [this]() {
+        if (m_formattedOutputEnabled) {
+            m_formattedView->goToNextMatch();
+            updateOutputMatchCounterLabel();
+        } else {
+            goToNextOutputMatch();
+        }
+    });
+    bar->addWidget(m_outputNextMatchButton);
+
+    m_outputSearchOverlay->adjustSize();
+    m_outputContainer->installEventFilter(this);
+    setOutputSearchExpanded(false);
+    repositionOutputSearchOverlay();
+}
+
+void OutputPanel::setOutputSearchExpanded(bool expanded)
+{
+    m_outputSearchExpanded = expanded;
+    if (m_outputSearchField) {
+        m_outputSearchField->setVisible(expanded);
+        if (expanded) {
+            m_outputSearchField->setFocus();
+        } else {
+            m_outputSearchField->clear(); // fechar a busca limpa o realce
+        }
+    }
+    if (!expanded) {
+        if (m_outputMatchCounterLabel) m_outputMatchCounterLabel->hide();
+        if (m_outputPrevMatchButton) m_outputPrevMatchButton->hide();
+        if (m_outputNextMatchButton) m_outputNextMatchButton->hide();
+        if (m_outputFieldFilterButton) m_outputFieldFilterButton->hide();
+    } else if (m_outputFieldFilterButton) {
+        m_outputFieldFilterButton->setVisible(m_formattedOutputEnabled);
+    }
+    if (m_outputSearchToggle) {
+        m_outputSearchToggle->setChecked(expanded);
+        m_outputSearchToggle->setIcon(LucideIcons::icon(
+            expanded ? QStringLiteral("x") : QStringLiteral("search"),
+            QColor(tk::mutedFg()), 16));
+        m_outputSearchToggle->setToolTip(utils::tr(expanded
+            ? QStringLiteral("json_viewer.search.close")
+            : QStringLiteral("output.search.toggle")));
+    }
+    repositionOutputSearchOverlay();
+}
+
+void OutputPanel::repositionOutputSearchOverlay()
+{
+    if (!m_outputSearchOverlay || !m_outputContainer) {
+        return;
+    }
+    if (m_outputSearchOverlay->layout()) {
+        m_outputSearchOverlay->layout()->activate();
+    }
+    m_outputSearchOverlay->adjustSize();
+    const int margin = tk::space(2);
+    // Desconta a barra de rolagem VERTICAL do widget atualmente visível
+    // (bug relatado: "o scroll da saída conflita levemente com o widget de
+    // pesquisa" — a margem fixa de espaço(2) não bastava pra não ficar por
+    // baixo/colado na barra quando ela aparece).
+    int scrollbarWidth = 0;
+    if (m_formattedOutputEnabled) {
+        if (QScrollBar *sb = m_formattedView->verticalScrollBar(); sb && sb->isVisible()) {
+            scrollbarWidth = sb->width();
+        }
+    } else if (QScrollBar *sb = m_outputView->verticalScrollBar(); sb && sb->isVisible()) {
+        scrollbarWidth = sb->width();
+    }
+    const int rightMargin = margin + scrollbarWidth;
+    const int x = m_outputContainer->width() - m_outputSearchOverlay->width() - rightMargin;
+    m_outputSearchOverlay->move(qMax(margin, x), margin);
+    m_outputSearchOverlay->raise();
+}
+
+void OutputPanel::applyOutputSearchFilter(const QString &needle)
+{
+    const QString trimmed = needle.trimmed();
+    m_outputMatches.clear();
+    m_outputCurrentMatchIndex = -1;
+    if (!trimmed.isEmpty()) {
+        QTextCursor cursor(m_outputView->document());
+        while (true) {
+            cursor = m_outputView->document()->find(trimmed, cursor);
+            if (cursor.isNull()) {
+                break;
+            }
+            m_outputMatches.append(cursor);
+        }
+        if (!m_outputMatches.isEmpty()) {
+            m_outputCurrentMatchIndex = 0;
+        }
+    }
+    // goToOutputMatch reaplica os realces (a atual num tom diferente das
+    // demais), pula pra 1ª ocorrência e atualiza o contador "N/M".
+    goToOutputMatch(m_outputCurrentMatchIndex);
+}
+
+void OutputPanel::goToOutputMatch(int index)
+{
+    QList<QTextEdit::ExtraSelection> selections;
+    QTextCharFormat highlightFormat;
+    highlightFormat.setBackground(QColor(tk::warningFg()).lighter(160));
+    highlightFormat.setForeground(Qt::black);
+    QTextCharFormat currentFormat;
+    currentFormat.setBackground(QColor(tk::accent()));
+    currentFormat.setForeground(Qt::white);
+
+    for (int i = 0; i < m_outputMatches.size(); ++i) {
+        QTextEdit::ExtraSelection sel;
+        sel.cursor = m_outputMatches.at(i);
+        sel.format = (i == index) ? currentFormat : highlightFormat;
+        selections.append(sel);
+    }
+    m_outputView->setExtraSelections(selections);
+
+    if (index >= 0 && index < m_outputMatches.size()) {
+        m_outputView->setTextCursor(m_outputMatches.at(index));
+        m_outputView->centerCursor();
+    }
+    updateOutputMatchCounterLabel();
+}
+
+void OutputPanel::updateOutputMatchCounterLabel()
+{
+    if (!m_outputMatchCounterLabel || !m_outputPrevMatchButton || !m_outputNextMatchButton) {
+        return;
+    }
+    const bool hasTerm = m_outputSearchField && !m_outputSearchField->text().trimmed().isEmpty();
+    m_outputMatchCounterLabel->setVisible(m_outputSearchExpanded && hasTerm);
+    m_outputPrevMatchButton->setVisible(m_outputSearchExpanded && hasTerm);
+    m_outputNextMatchButton->setVisible(m_outputSearchExpanded && hasTerm);
+    if (!hasTerm) {
+        return;
+    }
+    if (m_formattedOutputEnabled) {
+        const int total = m_formattedView->logModel()->matchCount();
+        const int ordinal = m_formattedView->logModel()->currentMatchOrdinal();
+        m_outputMatchCounterLabel->setText(total == 0
+            ? utils::tr(QStringLiteral("json_viewer.search.no_matches"))
+            : QStringLiteral("%1/%2").arg(ordinal).arg(total));
+    } else {
+        m_outputMatchCounterLabel->setText(m_outputMatches.isEmpty()
+            ? utils::tr(QStringLiteral("json_viewer.search.no_matches"))
+            : QStringLiteral("%1/%2").arg(m_outputCurrentMatchIndex + 1).arg(m_outputMatches.size()));
+    }
+    repositionOutputSearchOverlay();
+}
+
+void OutputPanel::goToNextOutputMatch()
+{
+    if (m_outputMatches.isEmpty()) {
+        return;
+    }
+    m_outputCurrentMatchIndex = (m_outputCurrentMatchIndex + 1) % m_outputMatches.size();
+    goToOutputMatch(m_outputCurrentMatchIndex);
+}
+
+void OutputPanel::goToPreviousOutputMatch()
+{
+    if (m_outputMatches.isEmpty()) {
+        return;
+    }
+    m_outputCurrentMatchIndex = (m_outputCurrentMatchIndex - 1 + m_outputMatches.size()) % m_outputMatches.size();
+    goToOutputMatch(m_outputCurrentMatchIndex);
+}
+
+void OutputPanel::insertFieldFilterToken(const QString &field, const QString &value)
+{
+    // Acrescenta ao que já está no campo (junta com espaço — vários tokens
+    // combinam em E, ver LogLineModel::entryMatchesTerm), permitindo
+    // empilhar filtros ("level:error" + clicar em "service" adiciona
+    // "service:" sem apagar o level já digitado).
+    QString text = m_outputSearchField->text();
+    if (!text.isEmpty() && !text.endsWith(QLatin1Char(' '))) {
+        text += QLatin1Char(' ');
+    }
+    text += value.isEmpty() ? QStringLiteral("%1:").arg(field) : QStringLiteral("%1:%2").arg(field, value);
+    m_outputSearchField->setText(text);
+    m_outputSearchField->setFocus();
+    m_outputSearchField->end(false); // cursor no fim, pronto pra digitar o valor (ou já filtrado, se veio completo)
+}
+
+void OutputPanel::showFieldFilterMenu()
+{
+    if (!m_formattedOutputEnabled) {
+        return;
+    }
+    LogLineModel *model = m_formattedView->logModel();
+    const QStringList fields = model->knownFieldNames();
+    const QStringList levels = model->knownLevelValues();
+    if (fields.isEmpty() && levels.isEmpty()) {
+        return; // nada detectado ainda (log vazio ou só linhas cruas)
+    }
+
+    QMenu menu(this);
+    if (!levels.isEmpty()) {
+        // "level" ganha um atalho dedicado com os valores JÁ VISTOS
+        // (pedido do usuário: "alguns padrões como level e etc"). MULTI-
+        // SELECT de verdade (pedido do usuário: "tem como fazer
+        // multiselect, e o que não está selecionado some do render?") —
+        // checkboxes de verdade (QWidgetAction), não QAction comuns, pra
+        // não fechar o menu a cada clique — o usuário marca/desmarca vários
+        // níveis seguidos numa passada só. Desmarcar ESCONDE de verdade
+        // (LogLineModel::setLevelFilter), diferente da busca por texto
+        // (que só destaca, nunca esconde).
+        QMenu *levelMenu = menu.addMenu(utils::tr(QStringLiteral("output.search.field_filter.level")));
+        const QSet<QString> currentFilter = model->levelFilter();
+        const QSet<QString> allLevelsSet(levels.begin(), levels.end());
+        for (const QString &lvl : levels) {
+            auto *checkbox = new QCheckBox(lvl, levelMenu);
+            checkbox->setChecked(currentFilter.isEmpty() || currentFilter.contains(lvl));
+            connect(checkbox, &QCheckBox::toggled, this, [model, lvl, allLevelsSet](bool checked) {
+                QSet<QString> filter = model->levelFilter();
+                if (filter.isEmpty()) {
+                    // "sem filtro" == todos visíveis; desmarcar um vira
+                    // "todos os conhecidos MENOS este".
+                    filter = allLevelsSet;
+                }
+                if (checked) {
+                    filter.insert(lvl);
+                } else {
+                    filter.remove(lvl);
+                }
+                // Voltou a conter TODOS os níveis conhecidos == equivalente
+                // a "sem filtro" — limpa pra manter o caminho rápido (sem
+                // filtro) e não ficar preso num conjunto que só parece vazio.
+                if (filter.size() == allLevelsSet.size()) {
+                    filter.clear();
+                }
+                model->setLevelFilter(filter);
+            });
+            auto *widgetAction = new QWidgetAction(levelMenu);
+            widgetAction->setDefaultWidget(checkbox);
+            levelMenu->addAction(widgetAction);
+        }
+        if (!currentFilter.isEmpty()) {
+            levelMenu->addSeparator();
+            QAction *clearAction = levelMenu->addAction(utils::tr(QStringLiteral("output.search.field_filter.level_clear")));
+            connect(clearAction, &QAction::triggered, this, [model]() {
+                model->setLevelFilter(QSet<QString>());
+            });
+        }
+        menu.addSeparator();
+    }
+    for (const QString &field : fields) {
+        if (field == QLatin1String("level")) {
+            continue; // já coberto pelo submenu acima
+        }
+        QAction *action = menu.addAction(field);
+        connect(action, &QAction::triggered, this, [this, field]() {
+            insertFieldFilterToken(field);
+        });
+    }
+    menu.exec(m_outputFieldFilterButton->mapToGlobal(
+        QPoint(0, m_outputFieldFilterButton->height())));
+}
+
+bool OutputPanel::focusSearch()
+{
+    // Não pertinente em terminal interativo (PTY cru, sem abas) nem no
+    // painel de "Requisição não executada" (ver setSkipped) — devolve false
+    // pro chamador cair no comportamento padrão (busca na árvore).
+    if (m_interactiveMode || m_skipped) {
+        return false;
+    }
+    QWidget *current = m_pages ? m_pages->currentWidget() : nullptr;
+    if (current == m_jsonView && m_jsonView) {
+        m_jsonView->focusSearch();
+        return true;
+    }
+    if (current == m_outputContainer && m_outputContainer) {
+        setOutputSearchExpanded(true);
+        return true;
+    }
+    return false;
+}
+
+void OutputPanel::setFormattedOutputEnabled(bool enabled)
+{
+    if (m_formattedOutputEnabled == enabled) {
+        return;
+    }
+    m_formattedOutputEnabled = enabled;
+    m_outputStack->setCurrentWidget(enabled ? static_cast<QWidget *>(m_formattedView)
+                                             : static_cast<QWidget *>(m_outputView));
+    if (m_outputFieldFilterButton) {
+        m_outputFieldFilterButton->setVisible(m_outputSearchExpanded && enabled);
+    }
+    // Trocar o widget visível muda qual busca o campo já aberto deveria
+    // filtrar — reaplica o termo atual no destino certo em vez de deixar um
+    // realce "morto" no widget que saiu de cena.
+    if (m_outputSearchExpanded) {
+        const QString needle = m_outputSearchField->text();
+        if (enabled) {
+            m_formattedView->setFilterText(needle);
+            applyOutputSearchFilter(QString()); // limpa o realce que ficou no texto cru
+        } else {
+            m_formattedView->setFilterText(QString());
+            applyOutputSearchFilter(needle);
+        }
+        updateOutputMatchCounterLabel();
+    }
 }
 
 void OutputPanel::setCommandName(const QString &name)
@@ -1464,6 +1996,9 @@ void OutputPanel::focusInput()
 
 bool OutputPanel::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_outputContainer && event->type() == QEvent::Resize) {
+        repositionOutputSearchOverlay();
+    }
     if (watched == m_inputField && event->type() == QEvent::KeyPress) {
         auto *ke = static_cast<QKeyEvent *>(event);
         if (ke->modifiers().testFlag(Qt::ControlModifier)) {

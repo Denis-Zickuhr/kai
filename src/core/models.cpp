@@ -1,6 +1,7 @@
 #include "core/models.h"
 
 #include <QJsonArray>
+#include <QUuid>
 
 namespace kai::core {
 
@@ -33,9 +34,9 @@ QJsonObject Parameter::toJson() const
 {
     QJsonObject obj;
     obj["name"] = name;
-    obj["label"] = label;
+    if (!label.isEmpty()) obj["label"] = label;
     obj["type"] = parameterTypeToString(type);
-    obj["default"] = defaultValue;
+    if (!defaultValue.isEmpty()) obj["default"] = defaultValue;
     if (!options.isEmpty()) {
         obj["options"] = QJsonArray::fromStringList(options);
     }
@@ -44,14 +45,21 @@ QJsonObject Parameter::toJson() const
     }
     if (!collectionId.isEmpty()) {
         obj["collection_id"] = collectionId;
-        obj["collection_display_field"] = collectionDisplayField;
+        if (!collectionDisplayField.isEmpty()) obj["collection_display_field"] = collectionDisplayField;
     }
-    obj["initial_dir"] = initialDir;
+    if (!initialDir.isEmpty()) obj["initial_dir"] = initialDir;
     if (filePathFormat != QStringLiteral("native")) {
         obj["file_path_format"] = filePathFormat;
     }
-    if (pickFolder) {
+    if (pickMode != QStringLiteral("file")) {
+        obj["pick_mode"] = pickMode;
+    }
+    // Compat: kai.json antigos (sem pick_mode) leem só pick_folder.
+    if (pickMode == QStringLiteral("folder")) {
         obj["pick_folder"] = true;
+    }
+    if (optional) {
+        obj["optional"] = true;
     }
     return obj;
 }
@@ -74,16 +82,28 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     p.initialDir = obj.value("initial_dir").toString();
     p.filePathFormat = obj.value("file_path_format").toString(QStringLiteral("native"));
     p.pickFolder = obj.value("pick_folder").toBool(false);
+    // pick_mode (novo) tem prioridade; sem ele, deriva de pick_folder
+    // (config antiga) para não quebrar arquivos exportados antes desta
+    // feature.
+    if (obj.contains(QStringLiteral("pick_mode"))) {
+        p.pickMode = obj.value("pick_mode").toString(QStringLiteral("file"));
+    } else {
+        p.pickMode = p.pickFolder ? QStringLiteral("folder") : QStringLiteral("file");
+    }
+    p.optional = obj.value("optional").toBool(false);
     return p;
 }
 
 QJsonObject EnvExtractor::toJson() const
 {
     QJsonObject obj;
-    obj["name"] = name;
+    if (!name.isEmpty()) obj["name"] = name;
     obj["json_path"] = jsonPath;
     obj["env_var"] = envVar;
-    obj["persist"] = persist;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
     return obj;
 }
 
@@ -95,18 +115,41 @@ EnvExtractor EnvExtractor::fromJson(const QJsonObject &obj)
     e.envVar = obj.value("env_var").toString();
     // default false — kai.json antigos sem o campo continuam efêmeros.
     e.persist = obj.value("persist").toBool(false);
+    // default "project" — kai.json antigos sem o campo continuam gravando
+    // no escopo ambiente de sempre (comportamento inalterado).
+    e.scope = obj.value("scope").toString(QStringLiteral("project"));
     return e;
+}
+
+QJsonObject DeclaredEnvVar::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
+    return obj;
+}
+
+DeclaredEnvVar DeclaredEnvVar::fromJson(const QJsonObject &obj)
+{
+    DeclaredEnvVar d;
+    d.name = obj.value("name").toString();
+    d.persist = obj.value("persist").toBool(false);
+    d.scope = obj.value("scope").toString(QStringLiteral("project"));
+    return d;
 }
 
 QJsonObject OutputResponder::toJson() const
 {
     QJsonObject obj;
-    obj["enabled"] = enabled;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
     obj["name"] = name;
-    obj["pattern"] = pattern;
-    obj["response"] = response;
-    obj["limit_triggers"] = limitTriggers;
-    obj["max_triggers"] = maxTriggers;
+    if (!pattern.isEmpty()) obj["pattern"] = pattern;
+    if (!response.isEmpty()) obj["response"] = response;
+    if (limitTriggers) obj["limit_triggers"] = true;
+    if (maxTriggers != 1) obj["max_triggers"] = maxTriggers;
     return obj;
 }
 
@@ -152,18 +195,22 @@ QJsonObject HttpConfig::toJson() const
     obj["method"] = httpMethodToString(method);
     obj["url"] = url;
 
-    QJsonObject headersObj;
-    for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
-        headersObj[it.key()] = it.value();
+    if (!headers.isEmpty()) {
+        QJsonObject headersObj;
+        for (auto it = headers.constBegin(); it != headers.constEnd(); ++it) {
+            headersObj[it.key()] = it.value();
+        }
+        obj["headers"] = headersObj;
     }
-    obj["headers"] = headersObj;
-    obj["body"] = body;
+    if (!body.isEmpty()) obj["body"] = body;
 
-    QJsonArray extractorsArr;
-    for (const EnvExtractor &e : envExtractors) {
-        extractorsArr.append(e.toJson());
+    if (!envExtractors.isEmpty()) {
+        QJsonArray extractorsArr;
+        for (const EnvExtractor &e : envExtractors) {
+            extractorsArr.append(e.toJson());
+        }
+        obj["env_extractors"] = extractorsArr;
     }
-    obj["env_extractors"] = extractorsArr;
     return obj;
 }
 
@@ -189,11 +236,11 @@ HttpConfig HttpConfig::fromJson(const QJsonObject &obj)
 QJsonObject ExecutionCondition::toJson() const
 {
     QJsonObject obj;
-    obj["name"] = name;
-    obj["left"] = left;
-    obj["op"] = op;
-    obj["right"] = right;
-    obj["enabled"] = enabled;
+    if (!name.isEmpty()) obj["name"] = name;
+    if (!left.isEmpty()) obj["left"] = left;
+    if (!op.isEmpty()) obj["op"] = op;
+    if (!right.isEmpty()) obj["right"] = right;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
     return obj;
 }
 
@@ -211,9 +258,9 @@ ExecutionCondition ExecutionCondition::fromJson(const QJsonObject &obj)
 QJsonObject Hooks::toJson() const
 {
     QJsonObject obj;
-    obj["pre"] = QJsonArray::fromStringList(pre);
-    obj["post"] = QJsonArray::fromStringList(post);
-    obj["cleanup"] = QJsonArray::fromStringList(cleanup);
+    if (!pre.isEmpty()) obj["pre"] = QJsonArray::fromStringList(pre);
+    if (!post.isEmpty()) obj["post"] = QJsonArray::fromStringList(post);
+    if (!cleanup.isEmpty()) obj["cleanup"] = QJsonArray::fromStringList(cleanup);
     return obj;
 }
 
@@ -244,64 +291,92 @@ CommandType commandTypeFromString(const QString &value)
 
 QJsonObject Command::toJson() const
 {
+    // OMITE CHAVES NO DEFAULT (pedido do usuário, testando um kai.yml de
+    // mão: "tem muita coisa que é false no def... queria que se for
+    // default, omite por padrão no export") — fromJson() já trata TODA
+    // chave ausente como seu próprio valor default (cada `.toBool(false)`/
+    // `.toString()`/`.toInt(N)` abaixo prova isso), então nunca escrever um
+    // `false`/""/0/lista vazia é 100% equivalente na releitura, só produz
+    // um arquivo bem mais enxuto pra quem edita/versiona um kai.json (ou
+    // kai.yml) à mão.
     QJsonObject obj;
     obj["id"] = id;
     obj["folder_id"] = folderId;
     obj["name"] = name;
-    obj["description"] = description;
+    if (!description.isEmpty()) obj["description"] = description;
     obj["type"] = commandTypeToString(type);
-    obj["icon"] = icon;
+    if (!icon.isEmpty()) obj["icon"] = icon;
     obj["command"] = command;
-    obj["working_dir"] = workingDir;
-    obj["is_background"] = isBackground;
-    obj["compact_output"] = compactOutput;
-    obj["hide_on_run"] = hideOnRun;
-    obj["ignore_exit_code"] = ignoreExitCode;
-    obj["hidden"] = hidden;
-    obj["capture_env"] = captureEnv;
-    obj["open_last_link"] = openLastLink;
-    obj["interactive_terminal"] = interactiveTerminal;
-    obj["terminal_target"] = terminalTarget;
-    obj["auto_run"] = autoRun;
-    obj["auto_run_delay_sec"] = autoRunDelaySec;
-    obj["order"] = order;
+    if (!workingDir.isEmpty()) obj["working_dir"] = workingDir;
+    if (isBackground) obj["is_background"] = true;
+    if (compactOutput) obj["compact_output"] = true;
+    if (hideOnRun) obj["hide_on_run"] = true;
+    if (ignoreExitCode) obj["ignore_exit_code"] = true;
+    if (hidden) obj["hidden"] = true;
+    if (captureEnv) obj["capture_env"] = true;
+    if (!declaredEnvVars.isEmpty()) {
+        QJsonArray declaredArr;
+        for (const DeclaredEnvVar &d : declaredEnvVars) {
+            declaredArr.append(d.toJson());
+        }
+        obj["declared_env_vars"] = declaredArr;
+    }
+    if (openLastLink) obj["open_last_link"] = true;
+    if (interactiveTerminal) obj["interactive_terminal"] = true;
+    if (formattedOutput) obj["formatted_output"] = true;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (autoRun) obj["auto_run"] = true;
+    if (autoRunDelaySec != 0) obj["auto_run_delay_sec"] = autoRunDelaySec;
+    if (order != -1) obj["order"] = order;
 
     if (httpConfig.has_value()) {
         obj["http_config"] = httpConfig->toJson();
     }
 
-    QJsonArray paramsArr;
-    for (const Parameter &p : params) {
-        paramsArr.append(p.toJson());
+    if (!params.isEmpty()) {
+        QJsonArray paramsArr;
+        for (const Parameter &p : params) {
+            paramsArr.append(p.toJson());
+        }
+        obj["params"] = paramsArr;
     }
-    obj["params"] = paramsArr;
-    obj["hooks"] = hooks.toJson();
+    if (!hooks.pre.isEmpty() || !hooks.post.isEmpty() || !hooks.cleanup.isEmpty()) {
+        obj["hooks"] = hooks.toJson();
+    }
 
-    QJsonArray conditionsArr;
-    for (const ExecutionCondition &c : executionConditions) {
-        conditionsArr.append(c.toJson());
+    if (!executionConditions.isEmpty()) {
+        QJsonArray conditionsArr;
+        for (const ExecutionCondition &c : executionConditions) {
+            conditionsArr.append(c.toJson());
+        }
+        obj["execution_conditions"] = conditionsArr;
     }
-    obj["execution_conditions"] = conditionsArr;
-    obj["condition_combinator"] = conditionCombinator;
-    obj["condition_skip_behavior"] = conditionSkipBehavior;
+    if (conditionCombinator != QStringLiteral("and")) obj["condition_combinator"] = conditionCombinator;
+    if (conditionSkipBehavior != QStringLiteral("success")) obj["condition_skip_behavior"] = conditionSkipBehavior;
 
-    QJsonArray respArr;
-    for (const OutputResponder &r : responders) {
-        respArr.append(r.toJson());
+    if (!responders.isEmpty()) {
+        QJsonArray respArr;
+        for (const OutputResponder &r : responders) {
+            respArr.append(r.toJson());
+        }
+        obj["responders"] = respArr;
     }
-    obj["responders"] = respArr;
 
-    QJsonObject lastParamsObj;
-    for (auto it = lastParamValues.constBegin(); it != lastParamValues.constEnd(); ++it) {
-        lastParamsObj[it.key()] = it.value();
+    if (!lastParamValues.isEmpty()) {
+        QJsonObject lastParamsObj;
+        for (auto it = lastParamValues.constBegin(); it != lastParamValues.constEnd(); ++it) {
+            lastParamsObj[it.key()] = it.value();
+        }
+        obj["last_param_values"] = lastParamsObj;
     }
-    obj["last_param_values"] = lastParamsObj;
 
-    QJsonObject usageObj;
-    for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
-        usageObj[it.key()] = QJsonArray::fromStringList(it.value());
+    if (!paramUsageHistory.isEmpty()) {
+        QJsonObject usageObj;
+        for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
+            usageObj[it.key()] = QJsonArray::fromStringList(it.value());
+        }
+        obj["param_usage_history"] = usageObj;
     }
-    obj["param_usage_history"] = usageObj;
     return obj;
 }
 
@@ -322,8 +397,12 @@ Command Command::fromJson(const QJsonObject &obj)
     c.ignoreExitCode = obj.value("ignore_exit_code").toBool(false);
     c.hidden = obj.value("hidden").toBool(false);
     c.captureEnv = obj.value("capture_env").toBool(false);
+    for (const QJsonValue &v : obj.value("declared_env_vars").toArray()) {
+        c.declaredEnvVars << DeclaredEnvVar::fromJson(v.toObject());
+    }
     c.openLastLink = obj.value("open_last_link").toBool(false);
     c.interactiveTerminal = obj.value("interactive_terminal").toBool(false);
+    c.formattedOutput = obj.value("formatted_output").toBool(false);
     c.terminalTarget = obj.value("terminal_target").toString();
     c.autoRun = obj.value("auto_run").toBool(false);
     c.autoRunDelaySec = obj.value("auto_run_delay_sec").toInt(0);
@@ -365,22 +444,27 @@ Command Command::fromJson(const QJsonObject &obj)
 
 QJsonObject Folder::toJson() const
 {
+    // Mesmo espírito de Command::toJson (pedido do usuário: omitir chaves
+    // no valor default deixa um kai.json/kai.yml editado à mão bem mais
+    // enxuto) — fromJson() já trata ausência como o default de cada campo.
     QJsonObject obj;
     obj["id"] = id;
     obj["name"] = name;
-    obj["icon"] = icon;
-    obj["parent_id"] = parentId.has_value() ? QJsonValue(parentId.value()) : QJsonValue(QJsonValue::Null);
-    obj["is_project"] = isProject;
-    obj["project_path"] = projectPath.has_value() ? QJsonValue(projectPath.value()) : QJsonValue(QJsonValue::Null);
-    obj["order"] = order;
-    obj["hidden"] = hidden;
-    obj["terminal_target"] = terminalTarget;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (parentId.has_value()) obj["parent_id"] = parentId.value();
+    if (isProject) obj["is_project"] = true;
+    if (projectPath.has_value()) obj["project_path"] = projectPath.value();
+    if (order != -1) obj["order"] = order;
+    if (hidden) obj["hidden"] = true;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
 
-    QJsonObject envObj;
-    for (auto it = envVars.constBegin(); it != envVars.constEnd(); ++it) {
-        envObj[it.key()] = it.value();
+    if (!envVars.isEmpty()) {
+        QJsonObject envObj;
+        for (auto it = envVars.constBegin(); it != envVars.constEnd(); ++it) {
+            envObj[it.key()] = it.value();
+        }
+        obj["env_vars"] = envObj;
     }
-    obj["env_vars"] = envObj;
     return obj;
 }
 
@@ -445,9 +529,10 @@ QJsonObject CollectionField::toJson() const
 {
     QJsonObject obj;
     obj["name"] = name;
-    obj["label"] = label;
+    if (!label.isEmpty()) obj["label"] = label;
     obj["type"] = collectionFieldTypeToString(type);
-    obj["visible"] = visible;
+    if (!visible) obj["visible"] = false; // default é true — só grava a exceção
+    if (secret) obj["secret"] = true; // default é false — só grava a exceção
     return obj;
 }
 
@@ -459,6 +544,7 @@ CollectionField CollectionField::fromJson(const QJsonObject &obj)
     f.type = collectionFieldTypeFromString(obj.value("type").toString());
     // Retrocompat: schemas antigos sem a chave assumem visível.
     f.visible = obj.value("visible").toBool(true);
+    f.secret = obj.value("secret").toBool(false);
     return f;
 }
 
@@ -471,7 +557,7 @@ QJsonObject CollectionEntry::toJson() const
         valuesObj[it.key()] = it.value();
     }
     obj["values"] = valuesObj;
-    obj["favorite"] = favorite;
+    if (favorite) obj["favorite"] = true;
     return obj;
 }
 
@@ -499,26 +585,31 @@ QVector<CollectionField> Collection::defaultSchema()
 
 QJsonObject Collection::toJson() const
 {
+    // Mesmo espírito de Command::toJson/Folder::toJson (omitir default).
     QJsonObject obj;
     obj["id"] = id;
     obj["folder_id"] = folderId;
     obj["name"] = name;
-    obj["icon"] = icon;
-    obj["order"] = order;
-    obj["source_path"] = sourcePath;
-    obj["hidden"] = hidden;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (order != -1) obj["order"] = order;
+    if (!sourcePath.isEmpty()) obj["source_path"] = sourcePath;
+    if (hidden) obj["hidden"] = true;
 
-    QJsonArray schemaArr;
-    for (const CollectionField &field : schema) {
-        schemaArr.append(field.toJson());
+    if (!schema.isEmpty()) {
+        QJsonArray schemaArr;
+        for (const CollectionField &field : schema) {
+            schemaArr.append(field.toJson());
+        }
+        obj["schema"] = schemaArr;
     }
-    obj["schema"] = schemaArr;
 
-    QJsonArray entriesArr;
-    for (const CollectionEntry &entry : entries) {
-        entriesArr.append(entry.toJson());
+    if (!entries.isEmpty()) {
+        QJsonArray entriesArr;
+        for (const CollectionEntry &entry : entries) {
+            entriesArr.append(entry.toJson());
+        }
+        obj["entries"] = entriesArr;
     }
-    obj["entries"] = entriesArr;
     return obj;
 }
 
@@ -543,7 +634,15 @@ Collection Collection::fromJson(const QJsonObject &obj)
     }
 
     for (const QJsonValue &v : obj.value("entries").toArray()) {
-        c.entries.append(CollectionEntry::fromJson(v.toObject()));
+        CollectionEntry e = CollectionEntry::fromJson(v.toObject());
+        // Entrada sem id (kai.json/kai.yml escrito à mão, sem se preocupar
+        // com ids — "o APP deve gerar em runtime") ganha um id novo AQUI:
+        // sem isto, várias entradas sem id colidiriam todas em "" e o
+        // favorito/edição de uma afetaria as outras.
+        if (e.id.isEmpty()) {
+            e.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        c.entries.append(e);
     }
     // tag_colors legado é ignorado (feature de tags removida).
     return c;

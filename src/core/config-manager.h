@@ -252,6 +252,13 @@ struct SettingsData {
     bool outputAutoScroll = true;
     bool outputCompact = false;
     int outputFontSize = 0; // 0 = usa o tamanho do tema
+    // Tamanho MÁXIMO (em KB) do buffer de log guardado por comando (ver
+    // MainWindow::appendToCommandLog) — pedido do usuário: "rodei um
+    // script grandinho e perdi logs, bom seria pelo menos 1mb por padrão,
+    // mas até mais, e ainda dar pra selecionar tamanho máximo da saída".
+    // Era um valor fixo de 200KB (descartava o INÍCIO do log ao
+    // ultrapassar), agora configurável; default 1024 (1MB).
+    int outputMaxLogSizeKb = 1024;
 
     // Iniciar o Kai automaticamente com o sistema (autoboot/autostart).
     // Configurável pelo usuário via SettingsDialog. Quando ligado, o Kai
@@ -359,17 +366,51 @@ public:
         bool environments = true;      // pacotes de variáveis
         bool collections = true;       // coleções (nome, pasta, SCHEMA)
         bool collectionEntries = true; // os DADOS das coleções (linhas)
+        // Alvos de terminal (TerminalProfile) — desacoplado de `settings`:
+        // antes viviam presos dentro do objeto settings inteiro, então não
+        // dava pra levar só os alvos (ex: versionar/compartilhar um perfil de
+        // terminal) sem levar junto tema/atalhos/janela/etc.
+        bool terminalProfiles = true;
     };
     // Gera o JSON conforme a seleção. Coleções sem entries saem só com o
     // schema, permitindo exportar a ESTRUTURA sem os dados.
+    //
+    // `lean` (pedido do usuário: "IDs tbm não devem ter no export/import,
+    // visto que o APP deve gerar em runtime" + "quero BEM enxuto os
+    // arquivos... pode botar na rotina de exportação UMA flag pra exportar
+    // completo"). true (padrão) = formato enxuto: sem ids (pastas por
+    // path "A/B", hooks pelo NOME do comando, Select por NOME da coleção —
+    // o app gera ids novos a cada import, então reimportar sempre ADICIONA
+    // em vez de atualizar no lugar) e sem chaves em valor default. false =
+    // formato "completo" de sempre: ids estáveis (reimportar atualiza no
+    // lugar por id) e toda chave sempre presente.
     static QString exportSelective(const ExportSelection &selection,
                                    const SettingsData &settings,
                                    const CommandsData &commands,
-                                   const QVector<Collection> &collections);
+                                   const QVector<Collection> &collections,
+                                   bool lean = true);
 
     static QString exportGlobal(const SettingsData &settings, const CommandsData &commands);
-    static QString exportFolder(const QString &folderId, const CommandsData &commands);
-    static QString exportCommand(const QString &commandId, const CommandsData &commands);
+    // `linkedCollections`: coleções VINCULADAS a incluir junto (pedido do
+    // usuário: exportar uma pasta/comando deve poder trazer junto as
+    // coleções que vivem nela, pro caso de uso de versionar uma coleção
+    // junto do que a usa — ver MainWindow::handleExportFolderRequested).
+    // Vazio (padrão) = comportamento de sempre, sem seção "collections".
+    // `terminalProfiles`: alvos de terminal a levar junto (pedido do
+    // usuário: exportar uma pasta/comando "ainda preciso de opções pra
+    // saber se vai levar a coleção ou alvos juntos (como no global)") —
+    // sem isso, reimportar noutra máquina/perfil um comando cujo
+    // terminalTarget aponta pra um alvo que não existe lá perde a conexão
+    // silenciosamente. Vazio (padrão) = sem seção de alvos, como antes.
+    // `lean`: ver exportSelective acima.
+    static QString exportFolder(const QString &folderId, const CommandsData &commands,
+                                const QVector<Collection> &linkedCollections = {},
+                                const QVector<TerminalProfile> &terminalProfiles = {},
+                                bool lean = true);
+    static QString exportCommand(const QString &commandId, const CommandsData &commands,
+                                 const QVector<Collection> &linkedCollections = {},
+                                 const QVector<TerminalProfile> &terminalProfiles = {},
+                                 bool lean = true);
 
     // Resultado da importação: itens a mesclar no estado atual. O chamador
     // decide como aplicar (append/merge) e persistir. `ok` false indica
@@ -391,6 +432,11 @@ public:
         // auditoria, o export global sequer escrevia esta seção (bug real:
         // "Exportar Configurações Globais" perdia todos os Environments).
         bool hasEnvironments = false;
+        // `hasTerminalProfiles`: pacote trouxe ALVOS DE TERMINAL, independente
+        // de `hasSettings`/`hasEnvironments` — ver `ExportSelection::terminalProfiles`.
+        // `result.settings.terminalProfiles` continua sendo onde os dados
+        // ficam (não duplicamos o campo), este flag só marca "veio algo aqui".
+        bool hasTerminalProfiles = false;
         SettingsData settings;
         // Coleções vindas no pacote (podem chegar sem entries, se o usuário
         // exportou apenas a estrutura).

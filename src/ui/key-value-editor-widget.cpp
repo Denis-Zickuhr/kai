@@ -269,14 +269,18 @@ void KeyValueEditorWidget::setShowOwnAddButton(bool show)
 void KeyValueEditorWidget::rebuildTable()
 {
     m_table->setRowCount(m_rows.size());
-    QFont monoFont(utils::tokens::monoFamily());
     for (int row = 0; row < m_rows.size(); ++row) {
         const Row &r = m_rows.at(row);
         auto makeItem = [this](const QString &text) {
             auto *item = new QTableWidgetItem(text);
             item->setFlags(item->flags() & ~Qt::ItemIsEditable);
             if (m_monospaceFont) {
-                item->setFont(QFont(utils::tokens::monoFamily()));
+                // NUNCA QFont(string CSS de fallback) direto — Qt trata a
+                // string inteira como UM nome literal de família, não
+                // entende a sintaxe de vírgulas (achado real, reportado
+                // pra Saída Formatada: "não suporta o char 'ç'" — mesma
+                // causa). tokens::monoFont() já monta certo via setFamilies().
+                item->setFont(utils::tokens::monoFont());
             }
             return item;
         };

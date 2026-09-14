@@ -1073,11 +1073,27 @@ void CommandTreeWidget::showTabContextMenu(int tabIndex, const QPoint &globalPos
         return;
     }
 
+    // Estado atual de "oculta" (pedido do usuário: "adicione a
+    // possibilidade de ocultar pastas de raiz") — precisa saber pra rotular
+    // a ação certa ("Ocultar" vs "Mostrar") e pra permitir REVERTER uma
+    // pasta que já ficou oculta antes de virar raiz (ex: era subpasta
+    // oculta, o pai foi excluído, ela virou órfã/raiz e ficou presa sem
+    // NENHUM outro jeito de desmarcar — o form de edição de pasta não tem
+    // campo "oculta", e o atalho normal só enxerga o item selecionado
+    // DENTRO da árvore, nunca a aba/raiz em si).
+    bool isHidden = false;
+    for (const core::Folder &f : m_folders) {
+        if (f.id == rootId) { isHidden = f.hidden; break; }
+    }
+
     QMenu menu(this);
     const QColor accent(utils::tokens::accent());
     const QColor killColor(255, 85, 85);
     QAction *editAction = menu.addAction(LucideIcons::icon(QStringLiteral("pencil"), accent, 16),
         utils::tr(QStringLiteral("ctx.folder.edit")));
+    QAction *toggleHiddenAction = menu.addAction(
+        LucideIcons::icon(isHidden ? QStringLiteral("eye") : QStringLiteral("eye-off"), accent, 16),
+        utils::tr(isHidden ? QStringLiteral("ctx.folder.show") : QStringLiteral("ctx.folder.hide")));
     menu.addSeparator();
     QAction *deleteAction = menu.addAction(LucideIcons::icon(QStringLiteral("trash-2"), killColor, 16),
         utils::tr(QStringLiteral("ctx.folder.delete")));
@@ -1094,6 +1110,8 @@ void CommandTreeWidget::showTabContextMenu(int tabIndex, const QPoint &globalPos
     QAction *chosen = menu.exec(globalPos);
     if (chosen == editAction) {
         emit editRequested(rootId, /*isFolder=*/true);
+    } else if (chosen == toggleHiddenAction) {
+        emit toggleFolderHiddenRequested(rootId);
     } else if (chosen == deleteAction) {
         emit deleteRequested(rootId, /*isFolder=*/true);
     }

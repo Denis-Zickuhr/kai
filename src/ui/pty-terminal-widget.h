@@ -5,7 +5,9 @@
 #include <QColor>
 #include <QFont>
 #include <QList>
+#include <QPoint>
 #include <QVector>
+#include <tuple>
 
 class QScrollBar;
 class QWheelEvent;
@@ -59,8 +61,16 @@ namespace kai::ui {
 // Limitada a kMaxScrollbackLines linhas (ver .cpp) pra não crescer sem fim
 // num comando que só imprime.
 //
+// SELEÇÃO DE TEXTO (pedido do usuário: "terminal interativo não permite
+// selecionar texto"): clique+arraste com o botão esquerdo (sem Ctrl, que
+// continua reservado pra abrir link) marca uma seleção linha-major
+// (âncora até posição atual, normalizada); soltar o botão copia
+// automaticamente pra área de transferência (mesma convenção de
+// "selecionar copia" de terminais reais tipo xterm) — Ctrl+Shift+C também
+// copia a seleção atual, sem mandar SIGINT (Ctrl+C sozinho continua indo
+// pro processo). Um clique simples sem arrastar limpa a seleção.
+//
 // ESCOPO desta versão (documentado explicitamente, não omitido):
-//   - SEM seleção de texto/copiar com mouse ainda.
 //   - A janela DESTACADA (detach) continua mostrando texto puro mesmo para
 //     comandos interativos — replicar um segundo terminal "ao vivo" (qual
 //     dos dois recebe o teclado?) fica para uma iteração futura.
@@ -95,6 +105,10 @@ public:
 
     int rows() const { return m_rows; }
     int cols() const { return m_cols; }
+    // Tamanho de célula em pixels — usado por testes pra converter
+    // linha/coluna em posição de mouse (ver urlAt/test_pty_terminal_widget).
+    int cellWidthPx() const { return m_cellWidth; }
+    int cellHeightPx() const { return m_cellHeight; }
 
     // Força reenviar o tamanho ATUAL (mesmo sem mudar) pro PTY do processo
     // — ver comentário na definição. Chamado ao reconectar a um comando.
@@ -104,6 +118,17 @@ public:
     // tests/test_pty_terminal_widget.cpp) e também serve de base pronta
     // para uma futura feature de copiar (fora do escopo desta versão).
     QString plainScreenText() const;
+
+    // URL sob a posição em PIXELS `widgetPos` (coordenadas deste widget),
+    // ou string vazia se não houver — mesma detecção usada pelo
+    // Ctrl+clique (ver mouseReleaseEvent) e pelo cursor de mãozinha no
+    // hover. Exposto pra testes.
+    QString urlAt(const QPoint &widgetPos) const;
+
+    // Texto atualmente selecionado (arraste do mouse), ou vazio se não há
+    // seleção — exposto pra testes.
+    QString selectedText() const;
+    bool hasSelection() const { return m_hasSelection; }
 
     // Quantas linhas o scrollback tem guardadas no momento, e a barra em
     // si — usados por testes (ver tests/test_pty_terminal_widget.cpp).
@@ -130,6 +155,15 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
+    // Ctrl+clique em URL (bug relatado: "terminais tty não suportam
+    // ctrl+clique em links" — este widget não tinha NENHUM tratamento de
+    // mouse antes). Convenção de Ctrl+clique (não clique simples) segue o
+    // padrão da maioria dos emuladores de terminal reais, já que um clique
+    // simples aqui pode legitimamente fazer parte de uma seleção de texto
+    // no futuro (fora do escopo desta versão — ver comentário no topo).
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     // Tab é uma TECLA DO TERMINAL (autocomplete de shell, etc.), não deve
     // mudar o foco do Qt para o próximo widget — técnica padrão do Qt para
     // widgets que consomem Tab eles mesmos (ex: editores de texto).
@@ -161,6 +195,28 @@ private:
     // Célula na linha lógica `row` da tela COMBINADA (scrollback + tela
     // viva) — usada pelo paintEvent. `row` já é absoluto (m_topIndex + r).
     bool cellAt(int absoluteRow, int col, VTermScreenCell *out) const;
+    // Texto puro de UMA linha lógica (absoluta), junto com o mapa
+    // char-index -> coluna (uma célula pode virar 0+ QChars — combinantes,
+    // surrogate pairs — então a busca de URL por regex precisa desta volta
+    // pra coluna pra saber em que retângulo de tela destacar/clicar). Usada
+    // por urlAt().
+    QString rowPlainTextWithColumns(int absoluteRow, QVector<int> &outColOfChar) const;
+
+    // URLs da linha `absoluteRow`: (texto, coluna inicial, coluna final
+    // EXCLUSIVA) — compartilhado por urlAt() e paintEvent() (sublinhado).
+    QVector<std::tuple<QString, int, int>> linkRangesForRow(int absoluteRow) const;
+
+    // Converte uma posição em pixels pra célula (linha ABSOLUTA, coluna),
+    // fazendo CLAMP para dentro da grade em vez de rejeitar fora dela —
+    // diferente da checagem de urlAt (que rejeita fora da grade, pois
+    // clicar fora nunca deveria "acertar" um link), arrastar a seleção
+    // pra fora da área visível deve continuar estendendo até a borda,
+    // como em qualquer terminal/editor de texto real.
+    void widgetPosToClampedCell(const QPoint &pos, int &outAbsoluteRow, int &outCol) const;
+    // true se a célula (linha ABSOLUTA, coluna) está dentro da seleção
+    // atual (âncora .. posição atual, normalizada linha-major).
+    bool isCellSelected(int absoluteRow, int col) const;
+    void copySelectionToClipboard() const;
 
     // --- Trampolins (C, sem captura) para os callbacks do libvterm ---
     static void outputCallbackTrampoline(const char *s, size_t len, void *user);
@@ -217,6 +273,12 @@ private:
     // de terminal real); vira false assim que o usuário rola pra cima, e
     // volta a true só se ele rolar de volta até o fim.
     bool m_pinnedToBottom = true;
+
+    // --- Seleção de texto (arraste do mouse) ---
+    bool m_selecting = false;   // botão esquerdo pressionado, arrastando
+    bool m_hasSelection = false; // âncora != posição atual (seleção real, não só um clique)
+    int m_selAnchorRow = 0, m_selAnchorCol = 0;   // linha ABSOLUTA
+    int m_selCurrentRow = 0, m_selCurrentCol = 0; // linha ABSOLUTA
 };
 
 } // namespace kai::ui

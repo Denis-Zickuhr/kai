@@ -48,6 +48,11 @@ public:
     // ZERO marcados; a contagem ali só é informativa (via o badge), não
     // significa "nada pra ver".
     void setAlwaysShowBody(bool alwaysShow);
+    // Esconde o badge de contagem no cabeçalho — pra seções que agrupam
+    // campos de formulário fixos (sem noção de "quantos itens"), onde o
+    // badge só ficava mostrando "0" pra sempre, sem significar nada
+    // (achado real: "tem um contador que não conta nada").
+    void setShowCountBadge(bool show);
     // Texto do botão de ação rápida no cabeçalho (ex: "+ Add Parameter").
     // Chamar só se a seção tiver uma ação de adicionar; sem chamar, o
     // cabeçalho fica só com chevron/título/badge.

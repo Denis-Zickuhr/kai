@@ -315,6 +315,7 @@ bool ExecutionConditionsEditorWidget::editRowViaForm(int row)
     outer->addWidget(box);
 
     dialog.setMinimumWidth(420);
+    dialog.adjustSize();
     centerOnParent(&dialog);
 
     if (dialog.exec() != QDialog::Accepted) {

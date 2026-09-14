@@ -28,6 +28,10 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QMessageBox>
+#include <QMenu>
+#include <QAction>
+#include <QPoint>
+#include <QTimer>
 #include <algorithm>
 #include <limits>
 
@@ -36,6 +40,17 @@
 namespace kai::ui {
 
 namespace {
+
+// Prefixo BEM improvável de colidir com um nome de parâmetro de verdade —
+// a checkbox "Informar <label>?" de um Parameter::optional pede pra
+// LEMBRAR se estava marcada da última vez (pedido do usuário), e o jeito
+// mais simples de persistir isso sem tocar em Command/MainWindow é reusar
+// o MESMO mapa lastParamValues que já persiste os valores dos campos —
+// esta chave sintética anda junto, sem exigir um campo novo no modelo.
+QString optionalEnabledKey(const QString &paramName)
+{
+    return QStringLiteral("__kai_optional_enabled__%1").arg(paramName);
+}
 
 // Rótulo empilhado ACIMA do campo (Top Label) — diretriz de arquitetura
 // visual do usuário: evita o "label na esquerda empurra o campo" que
@@ -126,7 +141,8 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
     // acompanha o conteúdo mas com um piso razoável. Um pouco mais larga que
     // antes (era 460) porque a grade de 2 colunas (booleano/número/lookup
     // lado a lado) precisa de espaço para não ficar espremida.
-    setMinimumWidth(560);
+    const bool spacious = !params.isEmpty() && params.size() <= 5;
+    setMinimumWidth(spacious ? 620 : 560);
     adjustSize();
     if (height() < 180) {
         resize(width(), 180);
@@ -136,9 +152,18 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
 
 void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
 {
+    // MODO ESPAÇOSO vs. COMPACTO (pedido do usuário: "o diálogo de
+    // parâmetros está MUITO compacto... se tiver pouco campos, se tiver
+    // mais de 5 usa aquele modo compacto") — poucos campos (≤5) ganham
+    // margens/espaçamento maiores, aproveitando melhor um diálogo que
+    // sobraria vazio; a partir de 6 mantém a densidade de sempre (o modo
+    // que já existia, pensado pra caber muitos campos sem rolar demais).
+    const bool spacious = !params.isEmpty() && params.size() <= 5;
+
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(20, 20, 20, 16);
-    mainLayout->setSpacing(14);
+    mainLayout->setContentsMargins(spacious ? 28 : 20, spacious ? 26 : 20,
+                                    spacious ? 28 : 20, spacious ? 22 : 16);
+    mainLayout->setSpacing(spacious ? 20 : 14);
 
     // Título + subtítulo (mockup enviado pelo usuário): o subtítulo explica
     // o propósito da tela numa cor secundária, acima da grade de campos.
@@ -154,8 +179,8 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     // campos longos ocupam as duas colunas; campos compactos fluem lado a
     // lado, otimizando o aproveitamento vertical do diálogo.
     auto *grid = new QGridLayout();
-    grid->setHorizontalSpacing(utils::tokens::space(4));
-    grid->setVerticalSpacing(utils::tokens::space(4));
+    grid->setHorizontalSpacing(utils::tokens::space(spacious ? 6 : 4));
+    grid->setVerticalSpacing(utils::tokens::space(spacious ? 6 : 4));
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
 
@@ -192,6 +217,54 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
         }
     };
     auto addField = [&](const core::Parameter &param, QWidget *w) {
+        if (param.optional) {
+            // OPCIONAL (pedido do usuário): o campo de verdade nasce
+            // ESCONDIDO atrás de uma checkbox "Informar <label>?" — só
+            // aparece quando o usuário marca que quer preenchê-lo. Sempre
+            // full-width (a altura de `w` varia ao aparecer/sumir, o que
+            // bagunçaria o pareamento lado-a-lado dos campos compactos).
+            auto *container = new QWidget(this);
+            // Transparente, QUALIFICADO por objectName (bug relatado: "o
+            // fundo do parâmetro opcional ficou visível, não deveria ter
+            // fundo" — a regra global "QWidget { background-color: bg }"
+            // do tema pinta QUALQUER QWidget puro sem isto; mesma técnica
+            // do wrapWithLabel logo acima, restrita ao próprio wrap pra não
+            // vazar transparência aos filhos — ver comentário lá).
+            container->setObjectName(QStringLiteral("paramOptionalWrap"));
+            container->setStyleSheet(QStringLiteral(
+                "QWidget#paramOptionalWrap { background: transparent; }"));
+            auto *vbox = new QVBoxLayout(container);
+            vbox->setContentsMargins(0, 0, 0, 0);
+            vbox->setSpacing(utils::tokens::space(1));
+            const QString label = param.label.isEmpty() ? param.name : param.label;
+            auto *checkbox = new QCheckBox(
+                utils::tr(QStringLiteral("params.optional.ask")).arg(label), container);
+            checkbox->setProperty("kaiRole", QStringLiteral("switch"));
+            // Lembra se estava marcada da última vez (pedido do usuário) —
+            // mesma fonte (lastValues) que já pré-preenche o resto do form.
+            checkbox->setChecked(m_lastValues.value(optionalEnabledKey(param.name)) == QStringLiteral("1"));
+            vbox->addWidget(checkbox);
+            w->setParent(container);
+            w->setVisible(checkbox->isChecked());
+            vbox->addWidget(w);
+            // Ao expandir, o diálogo cresce sozinho (Qt propaga o sizeHint
+            // maior pro layout automaticamente) — mas ao encolher de volta
+            // NÃO, o diálogo fica "esticado" mesmo com o campo escondido de
+            // novo (achado real: "ao expandir, e encolher, o form não
+            // volta ao tamanho original"). QTimer::singleShot(0, ...)
+            // porque o layout só recalcula o sizeHint DEPOIS deste evento
+            // de toggle; resize() só na ALTURA preserva uma largura que o
+            // usuário tenha ajustado manualmente (setSizeGripEnabled).
+            connect(checkbox, &QCheckBox::toggled, this, [this, w](bool checked) {
+                w->setVisible(checked);
+                QTimer::singleShot(0, this, [this]() {
+                    resize(width(), sizeHint().height());
+                });
+            });
+            m_optionalCheckboxByParamName[param.name] = checkbox;
+            addFull(container);
+            return;
+        }
         if (isCompactParam(param)) {
             addCompact(w);
         } else {
@@ -465,9 +538,7 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // os botões ▲/▼ já ganham destaque via QSS global do app.
             auto *field = new QSpinBox(this);
             field->setRange(-1000000000, 1000000000);
-            QFont monoFont(utils::tokens::monoFamily());
-            monoFont.setPointSize(field->font().pointSize());
-            field->setFont(monoFont);
+            field->setFont(utils::tokens::monoFont(field->font().pointSize()));
             bool ok = false;
             const int v = initialValue.toInt(&ok);
             field->setValue(ok ? v : 0);
@@ -503,13 +574,19 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // QToolButton cru com texto "..." e chrome padrão do SO, destoando
             // da borda arredondada/tema do QLineEdit ao lado (bug relatado).
             // Agora colado ao campo, com só um separador fino entre os dois.
-            // Ícone/tooltip refletem PASTA quando param.pickFolder (feedback
-            // do usuário: "às vezes o param é uma pasta").
-            auto *browseButton = makeIconButton(container,
-                param.pickFolder ? QStringLiteral("folder") : QStringLiteral("file"),
-                utils::tr(param.pickFolder ? QStringLiteral("params.folder.browse")
-                                            : QStringLiteral("params.file.browse")),
-                QColor(utils::tokens::accent()));
+            // Ícone/tooltip refletem o MODO configurado (pedido do usuário:
+            // "arquivo, pastas ou ambos"). "both" usa um ícone neutro (o
+            // botão abre um menu perguntando qual dos dois, ver abaixo).
+            const QString pickMode = param.pickMode.isEmpty() ? QStringLiteral("file") : param.pickMode;
+            const QString browseIcon = pickMode == QStringLiteral("folder") ? QStringLiteral("folder")
+                : pickMode == QStringLiteral("both") ? QStringLiteral("folder-open")
+                                                      : QStringLiteral("file");
+            const QString browseTip = pickMode == QStringLiteral("folder")
+                ? utils::tr(QStringLiteral("params.folder.browse"))
+                : pickMode == QStringLiteral("both")
+                ? utils::tr(QStringLiteral("params.pick_mode.both"))
+                : utils::tr(QStringLiteral("params.file.browse"));
+            auto *browseButton = makeIconButton(container, browseIcon, browseTip, QColor(utils::tokens::accent()));
             browseButton->setStyleSheet(QStringLiteral(
                 "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
                 " border-radius: 0px; }")
@@ -520,9 +597,23 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // processo visitou — na primeira vez, a pasta de instalação do Kai.
             const QString startDir = param.initialDir;
             const QString pathFormat = param.filePathFormat;
-            const bool pickFolder = param.pickFolder;
-            connect(browseButton, &QToolButton::clicked, this, [this, field, startDir, pathFormat, pickFolder]() {
-                handleBrowseFileClicked(field, startDir, pathFormat, pickFolder);
+            connect(browseButton, &QToolButton::clicked, this, [this, browseButton, field, startDir, pathFormat, pickMode]() {
+                if (pickMode == QStringLiteral("both")) {
+                    // Nenhum QFileDialog nativo deixa escolher arquivo OU
+                    // pasta ao mesmo tempo — pergunta qual dos dois antes de
+                    // abrir o diálogo de verdade.
+                    QMenu menu(this);
+                    QAction *fileAction = menu.addAction(utils::tr(QStringLiteral("params.pick_mode.choose_file")));
+                    QAction *folderAction = menu.addAction(utils::tr(QStringLiteral("params.pick_mode.choose_folder")));
+                    QAction *chosen = menu.exec(browseButton->mapToGlobal(QPoint(0, browseButton->height())));
+                    if (chosen == fileAction) {
+                        handleBrowseFileClicked(field, startDir, pathFormat, false);
+                    } else if (chosen == folderAction) {
+                        handleBrowseFileClicked(field, startDir, pathFormat, true);
+                    }
+                    return;
+                }
+                handleBrowseFileClicked(field, startDir, pathFormat, pickMode == QStringLiteral("folder"));
             });
 
             rowLayout->addWidget(field, 1);
@@ -715,6 +806,19 @@ QMap<QString, QString> ParameterFormDialog::values() const
             continue;
         }
 
+        // Opcional e o usuário deixou "Informar <label>?" DESMARCADA:
+        // "não informado" tem que valer de verdade, mesmo que o campo
+        // escondido ainda tenha um valor antigo/default parado nele (não é
+        // limpo ao esconder — mais simples, mas sem isto o valor "antigo"
+        // seria enviado como se tivesse sido informado agora).
+        if (param.optional) {
+            QCheckBox *checkbox = m_optionalCheckboxByParamName.value(param.name);
+            if (checkbox && !checkbox->isChecked()) {
+                result[param.name] = QString();
+                continue;
+            }
+        }
+
         switch (param.type) {
         case core::ParameterType::Text:
         case core::ParameterType::File: {
@@ -790,6 +894,15 @@ QMap<QString, QString> ParameterFormDialog::values() const
             break;
         }
         }
+    }
+
+    // Estado das checkboxes "Informar <label>?" dos parâmetros opcionais —
+    // persiste junto (mesma chave sintética lida em setupUi) pra lembrar
+    // sim/não da próxima vez (pedido do usuário).
+    for (auto it = m_optionalCheckboxByParamName.constBegin();
+         it != m_optionalCheckboxByParamName.constEnd(); ++it) {
+        result[optionalEnabledKey(it.key())] = it.value()->isChecked()
+            ? QStringLiteral("1") : QStringLiteral("0");
     }
 
     return result;

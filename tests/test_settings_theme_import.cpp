@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QComboBox>
+#include <QSpinBox>
 
 #include "ui/settings-dialog.h"
 #include "core/config-manager.h"
@@ -116,6 +117,68 @@ private slots:
         QFile destFile(destPath);
         QVERIFY(destFile.open(QIODevice::ReadOnly));
         QCOMPARE(destFile.readAll(), QByteArray("{\"schema_version\":1}"));
+    }
+
+    // Achado de auditoria (mexendo no campo novo de tamanho máximo de
+    // log): buildSettings() construía um core::SettingsData NOVO
+    // (default-construído) e nunca preservava outputLineNumbers/outputWrap/
+    // outputTimestamps/outputAutoScroll/outputCompact/outputFontSize (só
+    // editados no MENU do painel de Saída, não nesta tela) — salvar
+    // QUALQUER mudança nesta tela zerava essas preferências de volta ao
+    // default silenciosamente.
+    void buildSettingsPreservesOutputViewOptionsNotEditedHere()
+    {
+        QTemporaryDir themesDir;
+        QVERIFY(themesDir.isValid());
+
+        kai::core::SettingsData settings;
+        settings.outputLineNumbers = true;
+        settings.outputWrap = true;
+        settings.outputTimestamps = true;
+        settings.outputAutoScroll = false;
+        settings.outputCompact = true;
+        settings.outputFontSize = 14;
+        kai::core::CommandsData commandsData;
+        QVector<kai::core::Collection> collections;
+        SettingsDialog dialog(settings, {}, themesDir.path(), commandsData, collections, [] {}, [] {});
+
+        const kai::core::SettingsData rebuilt = dialog.buildSettings();
+        QCOMPARE(rebuilt.outputLineNumbers, true);
+        QCOMPARE(rebuilt.outputWrap, true);
+        QCOMPARE(rebuilt.outputTimestamps, true);
+        QCOMPARE(rebuilt.outputAutoScroll, false);
+        QCOMPARE(rebuilt.outputCompact, true);
+        QCOMPARE(rebuilt.outputFontSize, 14);
+    }
+
+    // Pedido do usuário: "preciso de um limite de espaço MAIOR e
+    // configurável por LOG... bom seria pelo menos 1mb por padrão, mas até
+    // mais, e ainda dar pra selecionar tamanho máximo da saída".
+    void buildSettingsReadsMaxLogSizeFromField()
+    {
+        QTemporaryDir themesDir;
+        QVERIFY(themesDir.isValid());
+
+        kai::core::SettingsData settings;
+        QCOMPARE(settings.outputMaxLogSizeKb, 1024); // default = 1MB
+
+        kai::core::CommandsData commandsData;
+        QVector<kai::core::Collection> collections;
+        SettingsDialog dialog(settings, {}, themesDir.path(), commandsData, collections, [] {}, [] {});
+
+        // Vários QSpinBox existem no diálogo; localiza pelo range
+        // configurado (64..65536 KB) — evita amarrar o teste a um
+        // objectName interno.
+        QSpinBox *maxLogField = nullptr;
+        for (QSpinBox *sb : dialog.findChildren<QSpinBox *>()) {
+            if (sb->minimum() == 64 && sb->maximum() == 64 * 1024) { maxLogField = sb; break; }
+        }
+        QVERIFY(maxLogField != nullptr);
+        QCOMPARE(maxLogField->value(), 1024);
+
+        maxLogField->setValue(4096);
+        const kai::core::SettingsData rebuilt = dialog.buildSettings();
+        QCOMPARE(rebuilt.outputMaxLogSizeKb, 4096);
     }
 };
 

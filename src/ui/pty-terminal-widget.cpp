@@ -9,8 +9,12 @@
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QDesktopServices>
+#include <QMouseEvent>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QUrl>
 #include <algorithm>
 
 namespace kai::ui {
@@ -53,6 +57,9 @@ PtyTerminalWidget::PtyTerminalWidget(QWidget *parent)
     // o fundo antes (custo duplo) já que sempre preenchemos tudo.
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setCursor(Qt::IBeamCursor);
+    // Necessário pra mouseMoveEvent disparar SEM botão pressionado — é
+    // assim que o cursor de mãozinha do Ctrl+URL é detectado no hover.
+    setMouseTracking(true);
 
     // Barra de rolagem FILHA comum — de propósito NÃO uma QAbstractScrollArea
     // (ver comentário do cabeçalho da classe: a máquina de viewport dela
@@ -247,6 +254,235 @@ QString PtyTerminalWidget::plainScreenText() const
     return QString::fromUtf8(buffer.constData(), static_cast<int>(written));
 }
 
+QString PtyTerminalWidget::rowPlainTextWithColumns(int absoluteRow, QVector<int> &outColOfChar) const
+{
+    QString text;
+    outColOfChar.clear();
+    for (int col = 0; col < m_cols; ++col) {
+        VTermScreenCell cell;
+        if (!cellAt(absoluteRow, col, &cell)) {
+            continue;
+        }
+        if (cell.width == 0) {
+            continue; // continuação de caractere largo — ver comentário do paintEvent
+        }
+        for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i] != 0; ++i) {
+            const QString glyph = QString::fromUcs4(reinterpret_cast<const char32_t *>(&cell.chars[i]), 1);
+            for (const QChar &ch : glyph) {
+                text += ch;
+                outColOfChar.append(col);
+            }
+        }
+    }
+    return text;
+}
+
+namespace {
+// Mesma regex de CodeOutputView::urlAt (URLs só têm caracteres ASCII de
+// largura única, então a coluna de cada QChar do match nunca precisa de
+// tratamento especial de caractere largo/combinante).
+const QRegularExpression &terminalUrlPattern()
+{
+    static const QRegularExpression re(
+        QStringLiteral(R"((https?://|ftp://)[^\s<>"'\]\)]+)"));
+    return re;
+}
+} // namespace
+
+// URLs da linha `absoluteRow`, como (texto, colInicial, colFinalExclusiva) —
+// compartilhado por urlAt() (Ctrl+clique) e paintEvent() (sublinhado visual
+// de "isto é clicável", pedido do usuário: "não renderiza links
+// clicáveis" — Ctrl+clique já funcionava, mas nada na tela indicava isso).
+QVector<std::tuple<QString, int, int>> PtyTerminalWidget::linkRangesForRow(int absoluteRow) const
+{
+    QVector<std::tuple<QString, int, int>> ranges;
+    QVector<int> colOfChar;
+    const QString line = rowPlainTextWithColumns(absoluteRow, colOfChar);
+    if (line.isEmpty()) {
+        return ranges;
+    }
+    auto it = terminalUrlPattern().globalMatch(line);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        QString url = m.captured(0);
+        // Remove pontuação final que normalmente não pertence à URL.
+        while (!url.isEmpty() && QStringLiteral(".,;:!?").contains(url.back())) {
+            url.chop(1);
+        }
+        if (url.isEmpty()) {
+            continue;
+        }
+        const int startIdx = m.capturedStart(0);
+        const int endIdx = startIdx + url.length(); // exclusivo, já sem a pontuação cortada
+        if (startIdx >= colOfChar.size() || endIdx - 1 >= colOfChar.size()) {
+            continue; // não deveria acontecer, mas evita um out-of-range
+        }
+        const int startCol = colOfChar.at(startIdx);
+        const int endCol = colOfChar.at(endIdx - 1) + 1; // exclusivo
+        ranges.append({url, startCol, endCol});
+    }
+    return ranges;
+}
+
+QString PtyTerminalWidget::urlAt(const QPoint &widgetPos) const
+{
+    if (!m_screen || m_cellWidth <= 0 || m_cellHeight <= 0) {
+        return QString();
+    }
+    const int viewportRow = widgetPos.y() / m_cellHeight;
+    const int col = widgetPos.x() / m_cellWidth;
+    if (viewportRow < 0 || viewportRow >= m_rows || col < 0 || col >= m_cols) {
+        return QString();
+    }
+    const int absoluteRow = m_topIndex + viewportRow;
+    for (const auto &[url, startCol, endCol] : linkRangesForRow(absoluteRow)) {
+        if (col >= startCol && col < endCol) {
+            return url;
+        }
+    }
+    return QString();
+}
+
+void PtyTerminalWidget::widgetPosToClampedCell(const QPoint &pos, int &outAbsoluteRow, int &outCol) const
+{
+    const int viewportRow = qBound(0, m_cellHeight > 0 ? pos.y() / m_cellHeight : 0, m_rows - 1);
+    outCol = qBound(0, m_cellWidth > 0 ? pos.x() / m_cellWidth : 0, m_cols - 1);
+    outAbsoluteRow = m_topIndex + viewportRow;
+}
+
+bool PtyTerminalWidget::isCellSelected(int absoluteRow, int col) const
+{
+    if (!m_hasSelection) {
+        return false;
+    }
+    // Normaliza âncora/atual em ordem linha-major (início <= fim), senão
+    // arrastar "de baixo pra cima" inverteria a lógica abaixo.
+    int startRow = m_selAnchorRow, startCol = m_selAnchorCol;
+    int endRow = m_selCurrentRow, endCol = m_selCurrentCol;
+    if (startRow > endRow || (startRow == endRow && startCol > endCol)) {
+        std::swap(startRow, endRow);
+        std::swap(startCol, endCol);
+    }
+    if (absoluteRow < startRow || absoluteRow > endRow) {
+        return false;
+    }
+    if (startRow == endRow) {
+        return col >= startCol && col <= endCol;
+    }
+    if (absoluteRow == startRow) {
+        return col >= startCol;
+    }
+    if (absoluteRow == endRow) {
+        return col <= endCol;
+    }
+    return true; // linha inteira, estritamente entre início e fim
+}
+
+QString PtyTerminalWidget::selectedText() const
+{
+    if (!m_hasSelection) {
+        return QString();
+    }
+    int startRow = m_selAnchorRow, startCol = m_selAnchorCol;
+    int endRow = m_selCurrentRow, endCol = m_selCurrentCol;
+    if (startRow > endRow || (startRow == endRow && startCol > endCol)) {
+        std::swap(startRow, endRow);
+        std::swap(startCol, endCol);
+    }
+    QStringList lines;
+    for (int row = startRow; row <= endRow; ++row) {
+        QVector<int> colOfChar;
+        const QString text = rowPlainTextWithColumns(row, colOfChar);
+        const int lineStartCol = (row == startRow) ? startCol : 0;
+        const int lineEndCol = (row == endRow) ? endCol : m_cols - 1; // inclusivo
+        QString piece;
+        for (int i = 0; i < text.size(); ++i) {
+            const int c = colOfChar.at(i);
+            if (c >= lineStartCol && c <= lineEndCol) {
+                piece += text.at(i);
+            }
+        }
+        // Só à DIREITA (padding de célula vazia no fim da linha) — trimmed()
+        // também cortaria indentação de verdade no COMEÇO de uma linha do
+        // meio da seleção, perdendo a formatação original.
+        int end = piece.size();
+        while (end > 0 && piece.at(end - 1).isSpace()) {
+            --end;
+        }
+        lines << piece.left(end);
+    }
+    return lines.join(QStringLiteral("\n"));
+}
+
+void PtyTerminalWidget::copySelectionToClipboard() const
+{
+    const QString text = selectedText();
+    if (!text.isEmpty()) {
+        QGuiApplication::clipboard()->setText(text);
+    }
+}
+
+void PtyTerminalWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ControlModifier)) {
+        // Novo clique: limpa qualquer seleção anterior (mesmo comportamento
+        // de qualquer editor/terminal — clicar em outro lugar desmarca) e
+        // começa a rastrear um possível arraste a partir daqui.
+        m_hasSelection = false;
+        m_selecting = true;
+        widgetPosToClampedCell(event->pos(), m_selAnchorRow, m_selAnchorCol);
+        m_selCurrentRow = m_selAnchorRow;
+        m_selCurrentCol = m_selAnchorCol;
+        update();
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void PtyTerminalWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_selecting && (event->buttons() & Qt::LeftButton)) {
+        int row, col;
+        widgetPosToClampedCell(event->pos(), row, col);
+        if (row != m_selCurrentRow || col != m_selCurrentCol) {
+            m_selCurrentRow = row;
+            m_selCurrentCol = col;
+            m_hasSelection = (m_selCurrentRow != m_selAnchorRow || m_selCurrentCol != m_selAnchorCol);
+            update();
+        }
+        setCursor(Qt::IBeamCursor);
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    const bool overLink = (event->modifiers() & Qt::ControlModifier) && !urlAt(event->pos()).isEmpty();
+    setCursor(overLink ? Qt::PointingHandCursor : Qt::IBeamCursor);
+    QWidget::mouseMoveEvent(event);
+}
+
+void PtyTerminalWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier)) {
+        const QString url = urlAt(event->pos());
+        if (!url.isEmpty()) {
+            QDesktopServices::openUrl(QUrl(url));
+            event->accept();
+            return;
+        }
+    }
+    if (m_selecting && event->button() == Qt::LeftButton) {
+        m_selecting = false;
+        // SELECIONAR COPIA (pedido do usuário: "não permite selecionar
+        // texto") — convenção já usada por terminais reais (xterm e
+        // afins): soltar o botão após um arraste real já deixa o texto na
+        // área de transferência, sem precisar de um atalho/menu extra.
+        if (m_hasSelection) {
+            copySelectionToClipboard();
+        }
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
 void PtyTerminalWidget::setAcceptingInput(bool accepting)
 {
     m_acceptingInput = accepting;
@@ -321,6 +557,24 @@ void PtyTerminalWidget::paintEvent(QPaintEvent * /*event*/)
     // história, não faz sentido mostrar um cursor "no meio do nada").
     const bool viewingLive = (m_topIndex >= m_scrollback.size());
 
+    // Faixas de link (sublinhado) desta tela visível, uma passada por linha
+    // ANTES do laço de colunas — pedido do usuário: "não renderiza links
+    // clicáveis" (Ctrl+clique já funcionava, mas nada indicava visualmente
+    // que dava pra clicar). QVector<bool> por linha/coluna é mais barato de
+    // consultar dentro do laço quente do que rodar regex de novo por célula.
+    QVector<QVector<bool>> isLinkCellByRow(m_rows);
+    for (int row = 0; row < m_rows; ++row) {
+        const int absoluteRow = m_topIndex + row;
+        QVector<bool> lineFlags(m_cols, false);
+        for (const auto &[url, startCol, endCol] : linkRangesForRow(absoluteRow)) {
+            Q_UNUSED(url);
+            for (int c = qMax(0, startCol); c < qMin(m_cols, endCol); ++c) {
+                lineFlags[c] = true;
+            }
+        }
+        isLinkCellByRow[row] = std::move(lineFlags);
+    }
+
     for (int row = 0; row < m_rows; ++row) {
         const int absoluteRow = m_topIndex + row;
         for (int col = 0; col < m_cols; ++col) {
@@ -350,17 +604,34 @@ void PtyTerminalWidget::paintEvent(QPaintEvent * /*event*/)
                 std::swap(fg, bg);
             }
 
+            const bool isLink = isLinkCellByRow[row][col];
+
             const int cellPixelWidth = m_cellWidth * cell.width;
             p.fillRect(x, y, cellPixelWidth, m_cellHeight, bg);
+
+            // Realce de SELEÇÃO (pedido do usuário: "não permite selecionar
+            // texto") — tingido por cima do fundo já pintado, translúcido
+            // pra não esconder completamente a cor original da célula (ex:
+            // uma linha de erro em vermelho continua reconhecível
+            // selecionada).
+            if (isCellSelected(absoluteRow, col)) {
+                QColor sel(m_defaultFg);
+                sel.setAlpha(70);
+                p.fillRect(x, y, cellPixelWidth, m_cellHeight, sel);
+            }
 
             if (cell.chars[0] != 0) {
                 QFont f = m_font;
                 f.setBold(cell.attrs.bold != 0);
                 f.setItalic(cell.attrs.italic != 0);
-                f.setUnderline(cell.attrs.underline != 0);
+                // Link detectado (Ctrl+clique já abria; isto só deixa VISÍVEL
+                // que dá pra clicar) força sublinhado, mesmo que a célula
+                // não tenha o atributo de underline vindo do próprio
+                // programa.
+                f.setUnderline(cell.attrs.underline != 0 || isLink);
                 f.setStrikeOut(cell.attrs.strike != 0);
                 p.setFont(f);
-                p.setPen(fg);
+                p.setPen(isLink ? QColor(tk::accent()) : fg);
 
                 // Monta a string a partir dos codepoints combinados (glifo
                 // base + combinantes), parando no primeiro slot vazio.
@@ -435,6 +706,19 @@ void PtyTerminalWidget::wheelEvent(QWheelEvent *event)
 
 void PtyTerminalWidget::keyPressEvent(QKeyEvent *event)
 {
+    // COPIAR seleção (Ctrl+Shift+C) — ANTES do gate de "processo rodando"
+    // abaixo: o usuário deve poder copiar um texto já selecionado mesmo
+    // com o processo finalizado, e ANTES do fallback geral de Ctrl+<letra>
+    // mais abaixo (que trataria Ctrl+Shift+C como um Ctrl+C igual —
+    // SIGINT — já que aquele código ignora Shift de propósito). Ctrl+C
+    // SOZINHO (sem Shift) continua indo pro processo, como sempre.
+    if ((event->modifiers() & Qt::ControlModifier) && (event->modifiers() & Qt::ShiftModifier)
+        && event->key() == Qt::Key_C && m_hasSelection) {
+        copySelectionToClipboard();
+        event->accept();
+        return;
+    }
+
     // Processo não está rodando (finalizado/morto): não encaminha teclas —
     // evita digitar "no vazio" ou tentar reviver um processo morto.
     if (!m_acceptingInput || !m_vt) {

@@ -94,6 +94,8 @@ add_library(kai-core STATIC
     src/core/cli-path-resolver.cpp
     src/core/cli-param-binder.h
     src/core/cli-param-binder.cpp
+    src/core/cli-trust-store.h
+    src/core/cli-trust-store.cpp
     src/core/folder-path-resolver.h
     src/utils/path-format.h
     src/utils/path-format.cpp

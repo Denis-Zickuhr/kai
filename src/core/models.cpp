@@ -78,6 +78,7 @@ QJsonObject Parameter::toJson() const
     if (!group.isEmpty()) {
         obj["group"] = group;
     }
+    if (!description.isEmpty()) obj["description"] = description;
     return obj;
 }
 
@@ -113,6 +114,7 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     p.dateFormat = obj.value("date_format").toString(QStringLiteral("iso_date"));
     p.dateFormatCustom = obj.value("date_format_custom").toString();
     p.group = obj.value("group").toString();
+    p.description = obj.value("description").toString();
     return p;
 }
 
@@ -399,6 +401,7 @@ QJsonObject Command::toJson() const
         }
         obj["param_usage_history"] = usageObj;
     }
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
     return obj;
 }
 
@@ -461,6 +464,7 @@ Command Command::fromJson(const QJsonObject &obj)
         }
         c.paramUsageHistory[it.key()] = values;
     }
+    c.cliPath = obj.value("cli_path").toString();
     return c;
 }
 
@@ -479,6 +483,7 @@ QJsonObject Folder::toJson() const
     if (order != -1) obj["order"] = order;
     if (hidden) obj["hidden"] = true;
     if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
 
     if (!envVars.isEmpty()) {
         QJsonObject envObj;
@@ -512,6 +517,7 @@ Folder Folder::fromJson(const QJsonObject &obj)
     f.order = obj.value("order").toInt(-1);
     f.hidden = obj.value("hidden").toBool(false);
     f.terminalTarget = obj.value("terminal_target").toString();
+    f.cliPath = obj.value("cli_path").toString();
 
     const QJsonObject envObj = obj.value("env_vars").toObject();
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {

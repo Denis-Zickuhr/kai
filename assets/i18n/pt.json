@@ -986,6 +986,8 @@
   "validate.error.wrong_type": "O campo '%1' deveria ser do tipo %2.",
   "validate.error.invalid_enum": "O campo '%1' tem o valor '%2', mas só um destes é válido: %3.",
   "validate.error.folder_needs_path_or_name": "Uma entrada de folders[] precisa de pelo menos um 'path' (pra dar ícone a uma subpasta criada por um comando) ou um 'name' (uma definição completa de pasta).",
+  "validate.error.duplicate_cli_path": "cli_path '%1' já é usado por outro item alcançável pelo EXATO mesmo caminho de CLI — escolha outro.",
+  "validate.error.reserved_cli_path": "cli_path '%1' colide com um verbo/flag reservado do CLI do Kai — nunca seria alcançável.",
 
   "notifications.history.title": "Notificações",
   "notifications.history.action.mark_all_read": "Marcar todas como lidas",

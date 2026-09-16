@@ -167,6 +167,12 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     folder.icon = root.contains(QStringLiteral("icon"))
         ? root.value(QStringLiteral("icon")).toString()
         : projectMetaFolder.value(QStringLiteral("icon")).toString();
+    // CLI PATH da raiz do projeto (feature CLI Paths) — mesma convenção de
+    // "icon": chave top-level "cli_path" tem prioridade; sem ela, cai pro
+    // fallback do "folders" com is_project:true, mesmo espírito de name/icon.
+    folder.cliPath = root.contains(QStringLiteral("cli_path"))
+        ? root.value(QStringLiteral("cli_path")).toString()
+        : projectMetaFolder.value(QStringLiteral("cli_path")).toString();
     // Todo projeto IMPORTADO já é, por definição, um "projeto" — vira
     // fronteira de escopo de variáveis DINÂMICAS de cara, sem precisar
     // marcar manualmente (ver EnvironmentManager::setDynamicVarScope).
@@ -228,6 +234,13 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
                 sub.id = id;
                 sub.name = name;
                 sub.icon = folderResolver.explicitMetadataFor(path).value(QStringLiteral("icon")).toString();
+                // CLI PATH também pode vir pela mesma entrada "folders":
+                // [{"path":..., "icon":..., "cli_path":...}] usada pra dar
+                // ícone a uma subpasta criada implicitamente por "folder" —
+                // sem isto, a única forma de marcar cli_path numa subpasta
+                // seria via Export/Import Configuration completo (com id),
+                // nunca num kai.json/kai.yml de projeto escrito à mão.
+                sub.cliPath = folderResolver.explicitMetadataFor(path).value(QStringLiteral("cli_path")).toString();
                 sub.parentId = parentId;
                 sub.isProject = false;
                 sub.order = subFolderOrder++;

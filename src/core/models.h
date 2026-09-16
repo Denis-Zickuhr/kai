@@ -57,6 +57,14 @@ struct Parameter {
     QString defaultValue;
     QStringList options; // usado quando type == Select
 
+    // DESCRIÇÃO (feature CLI Paths): texto livre opcional explicando o que o
+    // parâmetro representa — o `label` já basta pro form da GUI (compacto,
+    // ao lado do campo), mas o `--help` de um CLI Path precisa de mais
+    // contexto do que um rótulo de 2 palavras costuma dar. Vazio = omitido
+    // do texto de ajuda (sem fallback pro label — evita repetir a mesma
+    // string duas vezes na tela de ajuda).
+    QString description;
+
     // MULTI-SELECT (feedback do usuário): quando true e type == Select de
     // opções fixas (sem collectionId), o form de run mostra uma lista
     // checkable e junta os valores marcados (separados por vírgula) no valor
@@ -506,6 +514,15 @@ struct Command {
     // Auto-responsores de saída (listeners que respondem prompts por você).
     QVector<OutputResponder> responders;
 
+    // CLI PATH (feature CLI Paths): segmento opcional que torna este
+    // comando ALCANÇÁVEL/executável a partir da linha de comando (ex:
+    // "env" em `kai zephyr env prod`) — o último segmento de um cli path
+    // sempre precisa terminar num Command (uma Folder sozinha nunca é
+    // executável, só navega). Vazio (padrão) = comando não aparece em
+    // nenhum namespace de CLI, só na GUI. Ver comentário equivalente em
+    // Folder::cliPath.
+    QString cliPath;
+
     QJsonObject toJson() const;
     static Command fromJson(const QJsonObject &obj);
 };
@@ -537,6 +554,17 @@ struct Folder {
     // comando -> pasta do comando -> pasta pai -> ... -> default global
     // (ver ExecutionPipeline::effectiveTerminalProfileName).
     QString terminalTarget;
+
+    // CLI PATH (feature CLI Paths — "usar o kai como CLI app é ruim"):
+    // segmento opcional usado pra ENDEREÇAR esta pasta a partir da linha de
+    // comando (ex: "zephyr" em `kai zephyr env prod`). Vazio (padrão) = a
+    // pasta é TRANSPARENTE no namespace de CLI — não aparece como segmento,
+    // mas não bloqueia os filhos dela que tiverem cli_path próprio (eles
+    // "sobem" e viram alcançáveis a partir do ancestral opt-in mais
+    // próximo, ou da raiz, ver CliPathResolver). Só precisa ser único entre
+    // os IRMÃOS DE FATO no namespace de CLI já colapsado — kai-file-
+    // validator.cpp cobre essa checagem.
+    QString cliPath;
 
     QJsonObject toJson() const;
     static Folder fromJson(const QJsonObject &obj);

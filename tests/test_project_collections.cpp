@@ -286,6 +286,42 @@ folders:
         QVERIFY(folderByName(QStringLiteral("Nao Usada")) == nullptr);
     }
 
+    // CLI Paths: mesmo mecanismo de "folders": [{"path", "icon"}] usado
+    // acima também carrega "cli_path" pra uma subpasta implícita, e o
+    // top-level "cli_path" vira o cli_path da RAIZ do projeto (mesma
+    // convenção de project_name/icon).
+    void importAppliesCliPathFromTopLevelAndFoldersArray()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(R"json({
+            "project_name": "API",
+            "cli_path": "api",
+            "commands": [
+                {"name": "API dev", "type": "shell", "command": "go run", "folder": "Backend/Zaphyr", "cli_path": "env"}
+            ],
+            "folders": [
+                {"path": "Backend/Zaphyr", "cli_path": "zephyr"}
+            ]
+        })json");
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.folder.cliPath, QStringLiteral("api"));
+
+        const Folder *zaphyr = nullptr;
+        for (const Folder &f : result.subFolders) {
+            if (f.name == QStringLiteral("Zaphyr")) { zaphyr = &f; break; }
+        }
+        QVERIFY(zaphyr != nullptr);
+        QCOMPARE(zaphyr->cliPath, QStringLiteral("zephyr"));
+        QCOMPARE(result.commands.first().cliPath, QStringLiteral("env"));
+    }
+
     // Bug real reportado (arquivo real anexado): "path" escrito INCLUINDO
     // o nome do projeto como prefixo ("Amazon Marketplace API/Sincronizar"
     // pra um comando com "folder": "Sincronizar") — o ícone nunca batia

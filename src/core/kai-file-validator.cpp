@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMap>
 #include <QSet>
 
 namespace kai::core {
@@ -120,6 +121,7 @@ const QSet<QString> &parameterKeys()
         QStringLiteral("collection"), QStringLiteral("collection_display_field"),
         QStringLiteral("initial_dir"), QStringLiteral("pick_mode"),
         QStringLiteral("file_path_format"), QStringLiteral("optional"),
+        QStringLiteral("description"),
         QStringLiteral("date_mode"), QStringLiteral("date_range"),
         QStringLiteral("date_format"), QStringLiteral("date_format_custom"),
         QStringLiteral("group"),
@@ -172,7 +174,7 @@ const QSet<QString> &commandKeys()
         QStringLiteral("auto_run_delay_sec"), QStringLiteral("order"), QStringLiteral("params"),
         QStringLiteral("responders"), QStringLiteral("execution_conditions"),
         QStringLiteral("condition_combinator"), QStringLiteral("condition_skip_behavior"),
-        QStringLiteral("hooks"), QStringLiteral("id"),
+        QStringLiteral("hooks"), QStringLiteral("id"), QStringLiteral("cli_path"),
     };
     return keys;
 }
@@ -234,7 +236,7 @@ const QSet<QString> &folderKeys()
         QStringLiteral("path"), QStringLiteral("name"), QStringLiteral("icon"),
         QStringLiteral("hidden"), QStringLiteral("is_project"), QStringLiteral("order"),
         QStringLiteral("terminal_target"), QStringLiteral("env_vars"), QStringLiteral("id"),
-        QStringLiteral("parent_id"),
+        QStringLiteral("parent_id"), QStringLiteral("cli_path"),
     };
     return keys;
 }
@@ -328,9 +330,142 @@ const QSet<QString> &topLevelKeys()
         QStringLiteral("settings"), QStringLiteral("folders"), QStringLiteral("commands"),
         QStringLiteral("collections"), QStringLiteral("terminal_profiles"),
         QStringLiteral("shortcuts"), QStringLiteral("dynamic_vars"), QStringLiteral("id"),
-        QStringLiteral("name"),
+        QStringLiteral("name"), QStringLiteral("cli_path"),
     };
     return keys;
+}
+
+// Verbos/flags reservados do CLI do Kai (ver ipc::runCliIfRequested) — um
+// cli_path que colidisse com um destes nunca seria alcançável (o parser de
+// argv trataria o token como o verbo, não como o 1º segmento do caminho).
+const QSet<QString> &reservedCliTokens()
+{
+    static const QSet<QString> tokens = {
+        QStringLiteral("run"), QStringLiteral("list"), QStringLiteral("env"),
+        QStringLiteral("show"), QStringLiteral("help"), QStringLiteral("import"),
+        QStringLiteral("validate"), QStringLiteral("ps"), QStringLiteral("attach"),
+        QStringLiteral("kill"), QStringLiteral("global"),
+        QStringLiteral("--help"), QStringLiteral("-h"),
+        QStringLiteral("--global"), QStringLiteral("-g"),
+    };
+    return tokens;
+}
+
+// Quebra um path de pasta ("A/B/C") em segmentos, tolerando barras extras/
+// espaços — mesmo espírito de FolderPathResolver, só que sem gerar id (essa
+// checagem roda ANTES/sem nunca importar nada).
+QStringList splitFolderPath(const QString &path)
+{
+    QStringList segments = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (QString &s : segments) {
+        s = s.trimmed();
+    }
+    segments.removeAll(QString());
+    return segments;
+}
+
+// Mapa "path da pasta" -> cli_path, só das entradas de folders[] que têm os
+// dois (path E cli_path) — cobre o formato de convenção de projeto
+// (folders[] só como decorador de ícone/cli_path de uma subpasta implícita).
+// NÃO cobre o formato completo de Export/Import Config (id/parent_id, sem
+// "path") — colisão nesse formato fica pro próprio app checar na hora de
+// editar, não neste validador standalone.
+QMap<QString, QString> collectFolderCliPathByPath(const QJsonArray &foldersArr)
+{
+    QMap<QString, QString> map;
+    for (const QJsonValue &v : foldersArr) {
+        const QJsonObject f = v.toObject();
+        const QString path = f.value(QStringLiteral("path")).toString();
+        const QString cli = f.value(QStringLiteral("cli_path")).toString();
+        if (!path.isEmpty() && !cli.isEmpty()) {
+            map.insert(splitFolderPath(path).join(QLatin1Char('/')), cli);
+        }
+    }
+    return map;
+}
+
+// Cadeia de cli_path JÁ COLAPSADA (pulando ancestrais sem cli_path próprio)
+// que leva ATÉ (mas sem incluir) o path dado — usada tanto pra achar o
+// "grupo de colisão" de uma pasta (ancestrais da MÃE dela) quanto de um
+// comando (ancestrais da pasta em que ele vive, o caminho INTEIRO desta).
+QStringList resolveAncestorCliChain(const QStringList &pathSegments,
+                                    const QMap<QString, QString> &folderCliPathByPath)
+{
+    QStringList chain;
+    QStringList prefix;
+    for (const QString &seg : pathSegments) {
+        prefix << seg;
+        const QString cli = folderCliPathByPath.value(prefix.join(QLatin1Char('/')));
+        if (!cli.isEmpty()) {
+            chain << cli;
+        }
+    }
+    return chain;
+}
+
+// Checa (1) cli_path duplicado entre itens que seriam ALCANÇADOS PELO MESMO
+// CAMINHO (não irmãos literais do JSON — irmãos no namespace de CLI JÁ
+// COLAPSADO, pulando pastas transparentes) e (2) cli_path batendo com um
+// verbo/flag reservado do CLI.
+void validateCliPaths(ValidationResult &result, const QJsonObject &root)
+{
+    const QJsonArray foldersArr = root.value(QStringLiteral("folders")).toArray();
+    const QJsonArray commandsArr = root.value(QStringLiteral("commands")).toArray();
+    const QMap<QString, QString> folderCliPathByPath = collectFolderCliPathByPath(foldersArr);
+
+    // scopeKey ("" pra raiz, senão a cadeia já resolvida junta por " > ")
+    // -> conjunto de cli_path já vistos naquele escopo.
+    QMap<QString, QSet<QString>> seenByScope;
+
+    auto checkOne = [&](const QString &cliPath, const QStringList &scopeChain, const QString &itemPath) {
+        if (cliPath.isEmpty()) {
+            return;
+        }
+        // Só é ambíguo com um verbo reservado quando ALCANÇÁVEL COMO 1º
+        // TOKEN (scopeChain vazia) — o parser de CLI só olha pra
+        // run/list/env/etc. na posição 0 do argv; um segmento aninhado
+        // (ex: "env" em `kai zephyr env prod`) nunca é confundido com o
+        // verbo `kai env list`, porque a essa altura o token 0 ("zephyr")
+        // já saiu do caminho de detecção de verbo.
+        if (scopeChain.isEmpty() && reservedCliTokens().contains(cliPath)) {
+            addError(result, itemPath,
+                utils::tr(QStringLiteral("validate.error.reserved_cli_path")).arg(cliPath));
+        }
+        const QString scopeKey = scopeChain.join(QStringLiteral(" > "));
+        QSet<QString> &seen = seenByScope[scopeKey];
+        if (seen.contains(cliPath)) {
+            addError(result, itemPath,
+                utils::tr(QStringLiteral("validate.error.duplicate_cli_path")).arg(cliPath));
+        } else {
+            seen.insert(cliPath);
+        }
+    };
+
+    for (int i = 0; i < foldersArr.size(); ++i) {
+        const QJsonObject f = foldersArr.at(i).toObject();
+        const QString cli = f.value(QStringLiteral("cli_path")).toString();
+        if (cli.isEmpty()) {
+            continue;
+        }
+        const QStringList segments = splitFolderPath(f.value(QStringLiteral("path")).toString());
+        // Escopo de uma PASTA é definido pelos ancestrais da MÃE dela — o
+        // último segmento é a própria pasta, não entra no cálculo do
+        // ancestral.
+        const QStringList parentSegments = segments.isEmpty() ? segments : segments.mid(0, segments.size() - 1);
+        checkOne(cli, resolveAncestorCliChain(parentSegments, folderCliPathByPath),
+            QStringLiteral("folders[%1]").arg(i));
+    }
+
+    for (int i = 0; i < commandsArr.size(); ++i) {
+        const QJsonObject c = commandsArr.at(i).toObject();
+        const QString cli = c.value(QStringLiteral("cli_path")).toString();
+        if (cli.isEmpty()) {
+            continue;
+        }
+        const QStringList folderSegments = splitFolderPath(c.value(QStringLiteral("folder")).toString());
+        checkOne(cli, resolveAncestorCliChain(folderSegments, folderCliPathByPath),
+            QStringLiteral("commands[%1]").arg(i));
+    }
 }
 
 } // namespace
@@ -372,6 +507,9 @@ ValidationResult validateKaiFileText(const QString &text)
     }
     if (root.contains(QStringLiteral("icon"))) {
         requireString(result, root, QStringLiteral("(root)"), QStringLiteral("icon"), false);
+    }
+    if (root.contains(QStringLiteral("cli_path"))) {
+        requireString(result, root, QStringLiteral("(root)"), QStringLiteral("cli_path"), false);
     }
 
     if (root.contains(QStringLiteral("env_vars"))) {
@@ -429,6 +567,8 @@ ValidationResult validateKaiFileText(const QString &text)
             }
         }
     }
+
+    validateCliPaths(result, root);
 
     return result;
 }

@@ -200,6 +200,94 @@ private slots:
         const ValidationResult result = validateKaiFileText(json);
         QVERIFY(!result.hasErrors());
     }
+
+    // --- CLI Paths ---------------------------------------------------------
+
+    void cliPathIsAcceptedAsKnownKey()
+    {
+        const QString json = QStringLiteral(R"({
+            "cli_path": "zephyr",
+            "folders": [ {"path": "Zaphyr", "cli_path": "zephyr"} ],
+            "commands": [ {"name": "Env", "type": "shell", "command": "up", "folder": "Zaphyr", "cli_path": "env"} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
+
+    // Duas pastas DIFERENTES, mas ambas na RAIZ (mesmo escopo de CLI) usando
+    // o mesmo cli_path — colisão real, um dos dois nunca seria alcançável.
+    void duplicateCliPathAtSameLevelIsError()
+    {
+        const QString json = QStringLiteral(R"({
+            "folders": [
+                {"path": "A", "cli_path": "x"},
+                {"path": "B", "cli_path": "x"}
+            ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(result.hasErrors());
+    }
+
+    // Mesmo cli_path, mas em ESCOPOS DIFERENTES (dentro de pastas-pai
+    // distintas, cada uma com seu próprio cli_path) — não é colisão, porque
+    // o caminho completo de CLI é diferente em cada caso.
+    void sameCliPathInDifferentScopesIsNotError()
+    {
+        const QString json = QStringLiteral(R"({
+            "folders": [
+                {"path": "A", "cli_path": "a"},
+                {"path": "B", "cli_path": "b"}
+            ],
+            "commands": [
+                {"name": "X1", "type": "shell", "command": "echo 1", "folder": "A", "cli_path": "run"},
+                {"name": "X2", "type": "shell", "command": "echo 2", "folder": "B", "cli_path": "run"}
+            ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+    }
+
+    // Uma pasta TRANSPARENTE (sem cli_path próprio) não impede a checagem
+    // de colisão dos filhos dela — os filhos "sobem" pro escopo do
+    // ancestral opt-in mais próximo (ou a raiz), exatamente como na
+    // resolução de verdade.
+    void collisionIsDetectedThroughTransparentFolder()
+    {
+        const QString json = QStringLiteral(R"({
+            "folders": [
+                {"path": "API Vendas", "icon": "server"},
+                {"path": "API Vendas/Zaphyr", "cli_path": "zephyr"}
+            ],
+            "commands": [
+                {"name": "X1", "type": "shell", "command": "echo 1", "folder": "API Vendas/Zaphyr", "cli_path": "env"},
+                {"name": "X2", "type": "shell", "command": "echo 2", "folder": "API Vendas/Zaphyr", "cli_path": "env"}
+            ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(result.hasErrors());
+    }
+
+    void cliPathCollidingWithReservedVerbIsError()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "X", "type": "shell", "command": "echo 1", "cli_path": "validate"} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(result.hasErrors());
+    }
+
+    void parameterDescriptionIsAcceptedAsKnownKey()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "X", "type": "shell", "command": "echo hi", "params": [
+                {"name": "env", "type": "select", "options": ["dev", "prod"], "description": "Ambiente alvo."}
+            ]} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
 };
 
 QTEST_MAIN(TestKaiFileValidator)

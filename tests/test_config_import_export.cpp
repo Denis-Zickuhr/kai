@@ -304,6 +304,43 @@ private slots:
             "valor de campo secret vazou no export por pasta");
     }
 
+    // CLI Paths: cli_path (Folder/Command) e description (Parameter)
+    // precisam sobreviver ao round-trip JSON — mesmo contrato de qualquer
+    // outro campo opcional destes modelos.
+    void cliPathAndParameterDescriptionRoundTrip()
+    {
+        Folder f;
+        f.id = QStringLiteral("f1");
+        f.name = QStringLiteral("Zaphyr");
+        f.cliPath = QStringLiteral("zephyr");
+        const Folder backF = Folder::fromJson(f.toJson());
+        QCOMPARE(backF.cliPath, QStringLiteral("zephyr"));
+
+        Parameter p;
+        p.name = QStringLiteral("ambiente");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("dev"), QStringLiteral("prod")};
+        p.description = QStringLiteral("Ambiente alvo.");
+
+        Command c;
+        c.id = QStringLiteral("c1");
+        c.name = QStringLiteral("Subir ambiente");
+        c.type = CommandType::Shell;
+        c.command = QStringLiteral("up.sh");
+        c.cliPath = QStringLiteral("env");
+        c.params << p;
+
+        const Command backC = Command::fromJson(c.toJson());
+        QCOMPARE(backC.cliPath, QStringLiteral("env"));
+        QCOMPARE(backC.params.size(), 1);
+        QCOMPARE(backC.params.first().description, QStringLiteral("Ambiente alvo."));
+
+        // Ausente (padrão) continua vazio — retrocompat com commands.json antigos.
+        Command bare;
+        bare.name = QStringLiteral("Sem cli_path");
+        QVERIFY(Command::fromJson(bare.toJson()).cliPath.isEmpty());
+    }
+
     // REGRESSÃO (achado real, testando o próprio formato enxuto: "revise
     // as outra cfg, todas devem ter importar se ter" — um comando ligado
     // DIRETAMENTE na pasta raiz exportada [não numa subpasta] perdia o

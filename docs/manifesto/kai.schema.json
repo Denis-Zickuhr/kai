@@ -17,6 +17,10 @@
       "type": "string",
       "description": "Icon of the project's/export's root folder. Must be one of the names listed in kai-icons.md — an unrecognized name silently falls back to a generic icon instead of erroring."
     },
+    "cli_path": {
+      "type": "string",
+      "description": "CLI Paths feature. Segment used to address the project's/export's ROOT from `kai <cli_path> ...` — see docs/manifesto/cli-paths.md. Only meaningful as the FIRST segment (global mode requires the root to have one); a project run in local mode (no import) doesn't need it at the root, since local mode has no cross-project namespace to disambiguate."
+    },
     "env_vars": {
       "type": "object",
       "additionalProperties": { "type": "string" },
@@ -66,6 +70,7 @@
         "is_project": { "type": "boolean", "description": "Internal flag Kai sets on the folder created by importing a project (dynamic-variable scope boundary). A folders[] entry with is_project: true is understood, as a convenience fallback, as \"this names the root\" when project_name/icon are missing at the top level — prefer the top-level keys instead. Never meaningful on an entry that only decorates a subfolder." },
         "order": { "type": "integer" },
         "terminal_target": { "type": "string" },
+        "cli_path": { "type": "string", "description": "CLI Paths feature. Segment used to reach this folder from the CLI, e.g. \"zephyr\" in `kai zephyr env prod`. Absent (default) = this folder is TRANSPARENT in the CLI namespace — invisible as a segment, but doesn't block its own children that do have one (they surface at the nearest opted-in ancestor instead). See docs/manifesto/cli-paths.md." },
         "env_vars": { "type": "object", "additionalProperties": { "type": "string" } }
       },
       "additionalProperties": false
@@ -120,7 +125,8 @@
         },
         "condition_combinator": { "type": "string", "enum": ["and", "or"], "default": "and" },
         "condition_skip_behavior": { "type": "string", "enum": ["success", "failure"], "default": "success" },
-        "hooks": { "$ref": "#/$defs/hooks" }
+        "hooks": { "$ref": "#/$defs/hooks" },
+        "cli_path": { "type": "string", "description": "CLI Paths feature. Segment that makes this command REACHABLE/executable from the CLI, e.g. \"env\" in `kai zephyr env prod`. The last segment of any usable CLI path always resolves to a command — a folder alone is never executable, only navigable. Absent (default) = not reachable from the CLI at all, GUI-only. See docs/manifesto/cli-paths.md." }
       },
       "additionalProperties": false
     },
@@ -180,7 +186,8 @@
         "initial_dir": { "type": "string", "description": "file only. Used LITERALLY — {{VAR}} is not resolved here." },
         "pick_mode": { "type": "string", "enum": ["file", "folder", "both"], "default": "file", "description": "file only." },
         "file_path_format": { "type": "string", "enum": ["native", "posix", "windows"], "default": "native", "description": "file only." },
-        "optional": { "type": "boolean", "default": false, "description": "Any type. Field starts hidden behind a checkbox." },
+        "optional": { "type": "boolean", "default": false, "description": "Any type. Field starts hidden behind a checkbox in the GUI form; on a CLI Path, an optional parameter is never positional — it's only settable as `--name=value`." },
+        "description": { "type": "string", "description": "CLI Paths feature. Longer explanation shown in a command's `--help` output — `label` is usually too short for that. Not shown anywhere in the GUI form (label already covers that)." },
         "date_mode": { "type": "string", "enum": ["date", "time", "datetime"], "default": "date", "description": "date only. What the date picker popup asks for." },
         "date_range": { "type": "boolean", "default": false, "description": "date only. Picks a start AND end value instead of one. The parameter itself ({{name}}) always carries the start; the end is injected as {{name.end}} (same convention as a collection-backed select's {{param.field}})." },
         "date_format": { "type": "string", "enum": ["iso_date", "iso_datetime", "br_date", "us_date", "time_24h", "time_24h_short", "unix_seconds", "unix_millis", "custom"], "default": "iso_date", "description": "date only. How the picked value is written into the command. \"custom\" uses date_format_custom instead of a fixed preset." },

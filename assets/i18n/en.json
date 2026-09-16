@@ -986,6 +986,8 @@
   "validate.error.wrong_type": "Field '%1' should be of type %2.",
   "validate.error.invalid_enum": "Field '%1' has value '%2', but only one of these is valid: %3.",
   "validate.error.folder_needs_path_or_name": "A folders[] entry needs at least a 'path' (to set an icon on a subfolder created by a command) or a 'name' (a full folder definition).",
+  "validate.error.duplicate_cli_path": "cli_path '%1' is already used by another item reachable from the exact same CLI path — pick a different one.",
+  "validate.error.reserved_cli_path": "cli_path '%1' collides with a reserved Kai CLI verb/flag — it would never be reachable.",
 
   "notifications.history.title": "Notifications",
   "notifications.history.action.mark_all_read": "Mark all as read",

@@ -171,6 +171,20 @@ private slots:
         QVERIFY(result.hasErrors());
     }
 
+    // "group" (agrupamento opcional de parâmetros, pedido do usuário): uma
+    // string qualquer é aceita sem gerar aviso de chave desconhecida.
+    void validGroupOnParameterHasNoIssues()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "X", "type": "shell", "command": "echo hi", "params": [
+                {"name": "timeout", "type": "number", "group": "Avançado"}
+            ]} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
+
     // REGRESSÃO encontrada ao adicionar "date": "textarea"/"json" já eram
     // tipos de parâmetro válidos no app, mas nunca entraram no enum
     // checado aqui — um kai.json real usando qualquer um dos dois era

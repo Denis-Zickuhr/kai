@@ -184,7 +184,8 @@
         "date_mode": { "type": "string", "enum": ["date", "time", "datetime"], "default": "date", "description": "date only. What the date picker popup asks for." },
         "date_range": { "type": "boolean", "default": false, "description": "date only. Picks a start AND end value instead of one. The parameter itself ({{name}}) always carries the start; the end is injected as {{name.end}} (same convention as a collection-backed select's {{param.field}})." },
         "date_format": { "type": "string", "enum": ["iso_date", "iso_datetime", "br_date", "us_date", "time_24h", "time_24h_short", "unix_seconds", "unix_millis", "custom"], "default": "iso_date", "description": "date only. How the picked value is written into the command. \"custom\" uses date_format_custom instead of a fixed preset." },
-        "date_format_custom": { "type": "string", "description": "date only, and only read when date_format is \"custom\". Qt date/time token template (yyyy, MM, dd, HH, mm, ss...)." }
+        "date_format_custom": { "type": "string", "description": "date only, and only read when date_format is \"custom\". Qt date/time token template (yyyy, MM, dd, HH, mm, ss...)." },
+        "group": { "type": "string", "description": "Any type. Optional group name. Parameters sharing the exact same group are bundled into one collapsible section (collapsed by default) in the parameter-fill dialog, instead of appearing loose." }
       },
       "additionalProperties": false
     },

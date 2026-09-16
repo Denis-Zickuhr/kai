@@ -122,6 +122,7 @@ const QSet<QString> &parameterKeys()
         QStringLiteral("file_path_format"), QStringLiteral("optional"),
         QStringLiteral("date_mode"), QStringLiteral("date_range"),
         QStringLiteral("date_format"), QStringLiteral("date_format_custom"),
+        QStringLiteral("group"),
     };
     return keys;
 }

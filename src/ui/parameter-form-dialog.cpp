@@ -2,6 +2,7 @@
 #include "ui/dialog-utils.h"
 #include "ui/collection-selector-dialog.h"
 #include "ui/date-picker-dialog.h"
+#include "ui/collapsible-section-card.h"
 #include "ui/table-utils.h"
 #include "ui/lucide-icons.h"
 #include "ui/inline-code-field.h"
@@ -34,7 +35,11 @@
 #include <QAction>
 #include <QPoint>
 #include <QTimer>
+#include <QScrollArea>
+#include <QFrame>
 #include <algorithm>
+#include <memory>
+#include <vector>
 #include <limits>
 
 #include "utils/translation-manager.h"
@@ -153,6 +158,12 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
     if (height() < 180) {
         resize(width(), 180);
     }
+    // TETO de altura (pedido do usuário: "deixe ele menor, com scroll
+    // interno") — acima disso, o QScrollArea da grade absorve o excesso em
+    // vez do diálogo continuar crescendo com o conteúdo.
+    if (height() > 640) {
+        resize(width(), 640);
+    }
     centerOnParent(this);
 }
 
@@ -184,13 +195,37 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     // Grade de 1 ou 2 colunas (diretriz do usuário — ver isCompactParam):
     // campos longos ocupam as duas colunas; campos compactos fluem lado a
     // lado, otimizando o aproveitamento vertical do diálogo.
-    auto *grid = new QGridLayout();
-    grid->setHorizontalSpacing(utils::tokens::space(spacious ? 6 : 4));
-    grid->setVerticalSpacing(utils::tokens::space(spacious ? 6 : 4));
-    grid->setColumnStretch(0, 1);
-    grid->setColumnStretch(1, 1);
+    //
+    // AGRUPAMENTO opcional (pedido do usuário: "possibilidade de criar
+    // grupo de dados, o que irá começar colapsados") — cada parâmetro com
+    // um `group` não-vazio ganha sua PRÓPRIA grade, embrulhada depois num
+    // CollapsibleSectionCard; parâmetros sem grupo continuam na grade
+    // "solta" de sempre. `GridTarget` é o estado (grade/linha/compacto
+    // pendente) que as closures abaixo manipulam — trocado a cada
+    // parâmetro conforme seu grupo (ver `currentTarget` no laço).
+    struct GridTarget {
+        QGridLayout *grid;
+        int row = 0;
+        QWidget *pendingCompact = nullptr;
+    };
+    auto makeGrid = [&]() {
+        auto *g = new QGridLayout();
+        g->setHorizontalSpacing(utils::tokens::space(spacious ? 6 : 4));
+        g->setVerticalSpacing(utils::tokens::space(spacious ? 6 : 4));
+        g->setColumnStretch(0, 1);
+        g->setColumnStretch(1, 1);
+        return g;
+    };
 
-    int gridRow = 0;
+    GridTarget ungroupedTarget{makeGrid()};
+    QMap<QString, GridTarget *> groupTargets;
+    std::vector<std::unique_ptr<GridTarget>> ownedGroupTargets;
+    QStringList groupOrder;
+    // Contagem de PARÂMETROS por grupo (não de linhas da grade — campos
+    // compactos pareiam 2 por linha, o que subcontaria o badge do card).
+    QMap<QString, int> groupParamCount;
+    GridTarget *currentTarget = &ungroupedTarget;
+
     // Campo compacto "pendente": um compacto só é colocado na grade quando
     // sabemos se vai ter um par ao lado ou não. Sem isso, um compacto que
     // acaba sozinho na linha (único parâmetro do form, ou o último de uma
@@ -199,27 +234,26 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     // uma célula, estranho"). Resolvido: guarda o compacto até o próximo
     // campo decidir seu destino (pareia com outro compacto, ou — se vier
     // um full ou o form acabar — vira full-width sozinho também.
-    QWidget *pendingCompact = nullptr;
     auto flushPendingCompact = [&]() {
-        if (pendingCompact) {
-            grid->addWidget(pendingCompact, gridRow, 0, 1, 2);
-            pendingCompact = nullptr;
-            ++gridRow;
+        if (currentTarget->pendingCompact) {
+            currentTarget->grid->addWidget(currentTarget->pendingCompact, currentTarget->row, 0, 1, 2);
+            currentTarget->pendingCompact = nullptr;
+            ++currentTarget->row;
         }
     };
     auto addFull = [&](QWidget *w) {
         flushPendingCompact();
-        grid->addWidget(w, gridRow, 0, 1, 2);
-        ++gridRow;
+        currentTarget->grid->addWidget(w, currentTarget->row, 0, 1, 2);
+        ++currentTarget->row;
     };
     auto addCompact = [&](QWidget *w) {
-        if (pendingCompact) {
-            grid->addWidget(pendingCompact, gridRow, 0);
-            grid->addWidget(w, gridRow, 1);
-            pendingCompact = nullptr;
-            ++gridRow;
+        if (currentTarget->pendingCompact) {
+            currentTarget->grid->addWidget(currentTarget->pendingCompact, currentTarget->row, 0);
+            currentTarget->grid->addWidget(w, currentTarget->row, 1);
+            currentTarget->pendingCompact = nullptr;
+            ++currentTarget->row;
         } else {
-            pendingCompact = w;
+            currentTarget->pendingCompact = w;
         }
     };
     auto addField = [&](const core::Parameter &param, QWidget *w) {
@@ -279,6 +313,19 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     };
 
     for (const core::Parameter &param : params) {
+        const QString groupName = param.group.trimmed();
+        if (groupName.isEmpty()) {
+            currentTarget = &ungroupedTarget;
+        } else {
+            if (!groupTargets.contains(groupName)) {
+                ownedGroupTargets.push_back(std::make_unique<GridTarget>(GridTarget{makeGrid()}));
+                groupTargets[groupName] = ownedGroupTargets.back().get();
+                groupOrder << groupName;
+            }
+            currentTarget = groupTargets.value(groupName);
+            ++groupParamCount[groupName];
+        }
+
         const QString label = param.label.isEmpty() ? param.name : param.label;
         // Valor inicial: último valor informado (se houver) tem prioridade
         // sobre o defaultValue do parâmetro (salvar últimos params).
@@ -811,9 +858,50 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
         }
         }
     }
+    // Fecha o compacto pendente de CADA grade (a solta e cada grupo), não só
+    // da última usada no laço acima.
+    currentTarget = &ungroupedTarget;
     flushPendingCompact();
+    for (const auto &owned : ownedGroupTargets) {
+        currentTarget = owned.get();
+        flushPendingCompact();
+    }
 
-    mainLayout->addLayout(grid);
+    // Diálogo "menor, com scroll interno" (pedido do usuário: form ficava
+    // enorme/mal espaçado com muitos parâmetros) — o conteúdo (grade solta +
+    // um CollapsibleSectionCard colapsado por padrão por grupo) vive dentro
+    // de um QScrollArea; é a altura do VIEWPORT que é limitada no construtor
+    // (ver kai::ui::ParameterFormDialog::ParameterFormDialog), não a do
+    // conteúdo — ele pode crescer à vontade e rolar.
+    auto *contentHost = new QWidget(this);
+    auto *contentLayout = new QVBoxLayout(contentHost);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(spacious ? 20 : 14);
+    if (ungroupedTarget.row > 0) {
+        contentLayout->addLayout(ungroupedTarget.grid);
+    } else {
+        delete ungroupedTarget.grid;
+    }
+    for (const QString &groupName : groupOrder) {
+        GridTarget *target = groupTargets.value(groupName);
+        auto *body = new QWidget(this);
+        body->setLayout(target->grid);
+        auto *card = new kai::ui::CollapsibleSectionCard(groupName, this);
+        card->setAlwaysShowBody(true);
+        card->setShowCountBadge(true);
+        card->setCount(groupParamCount.value(groupName));
+        card->setExpanded(false);
+        card->setBody(body);
+        contentLayout->addWidget(card);
+    }
+    contentLayout->addStretch(1);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidget(contentHost);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    mainLayout->addWidget(scrollArea, 1);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     stripDialogButtonIcons(buttonBox);
@@ -932,17 +1020,24 @@ QMap<QString, QString> ParameterFormDialog::values() const
                 result[param.name] = m_collectionSelectionByParam.value(param.name).join(QLatin1Char(','));
                 break;
             }
-            // Multi-select de opções fixas: junta os values marcados.
+            // Multi-select de opções fixas: junta os values marcados —
+            // e, de quebra (pedido do usuário: "faça a injeção dos
+            // rótulos do select"), também o CSV dos RÓTULOS em
+            // {{nome__labels}} (útil quando as opções são "Rótulo:valor"
+            // e o comando quer mostrar/logar o nome amigável, não o id).
             if (param.multiSelect) {
                 if (auto *list = qobject_cast<QListWidget *>(field)) {
                     QStringList chosen;
+                    QStringList chosenLabels;
                     for (int i = 0; i < list->count(); ++i) {
                         QListWidgetItem *item = list->item(i);
                         if (item->checkState() == Qt::Checked) {
                             chosen << item->data(Qt::UserRole).toString();
+                            chosenLabels << item->text();
                         }
                     }
                     result[param.name] = chosen.join(QLatin1Char(','));
+                    result[QStringLiteral("%1__labels").arg(param.name)] = chosenLabels.join(QLatin1Char(','));
                 } else {
                     result[param.name] = QString();
                 }
@@ -958,17 +1053,24 @@ QMap<QString, QString> ParameterFormDialog::values() const
             // casa exatamente com o rótulo de algum item, usa o value dele;
             // 2) senão, se casa com algum value, usa esse value; 3) senão,
             // cai no currentData (item selecionado) e, por fim, no texto.
+            // Em qualquer um dos três casos, {{nome__label}} guarda o
+            // RÓTULO exibido (mesmo pedido do multi-select acima).
             const QString text = comboBox->currentText();
             int idx = comboBox->findText(text);
             if (idx >= 0) {
                 result[param.name] = comboBox->itemData(idx).toString();
+                result[QStringLiteral("%1__label").arg(param.name)] = comboBox->itemText(idx);
             } else {
                 idx = comboBox->findData(text);
                 if (idx >= 0) {
                     result[param.name] = text;
+                    result[QStringLiteral("%1__label").arg(param.name)] = comboBox->itemText(idx);
                 } else {
                     const QString data = comboBox->currentData().toString();
                     result[param.name] = data.isEmpty() ? text : data;
+                    // Nenhum item bateu (texto digitado livre): rótulo == o
+                    // próprio texto, não tem outro rótulo "de verdade".
+                    result[QStringLiteral("%1__label").arg(param.name)] = text;
                 }
             }
             break;
@@ -1008,26 +1110,52 @@ QMap<QString, QString> ParameterFormDialog::values() const
 
 QMap<QString, QStringList> ParameterFormDialog::updatedUsageHistory() const
 {
-    // Parte do histórico existente e promove, para cada parâmetro, o valor
-    // recém-escolhido ao topo (mais recente), sem duplicatas. Limita o
-    // tamanho para não crescer sem controle. Aplica a todos os tipos, mas
-    // é especialmente útil para Select (ordena as opções na próxima vez).
+    // Parte do histórico existente e promove, para cada parâmetro, o(s)
+    // valor(es) recém-escolhido(s) ao topo (mais recente), sem duplicatas.
+    // Limita o tamanho para não crescer sem controle. Aplica a todos os
+    // tipos, mas é especialmente útil para Select (ordena as opções/
+    // entradas de coleção na próxima vez).
+    //
+    // Itera m_params (não mais o mapa de values() direto): precisamos de
+    // param.collectionId/param.multiSelect abaixo, e de quebra isso já
+    // exclui naturalmente as chaves SINTÉTICAS que values() também
+    // devolve (ex: "nome__label", "nome.end", a flag de "Informar X?") —
+    // nenhuma delas é útil como histórico de reabertura, só o valor do
+    // parâmetro em si.
     constexpr int kMaxHistory = 50;
     QMap<QString, QStringList> updated = m_usageHistory;
     const QMap<QString, QString> chosen = values();
-    for (auto it = chosen.constBegin(); it != chosen.constEnd(); ++it) {
-        const QString &name = it.key();
-        const QString &value = it.value();
-        if (value.isEmpty()) {
+    for (const core::Parameter &param : m_params) {
+        const QString raw = chosen.value(param.name);
+        if (raw.isEmpty()) {
             continue;
         }
-        QStringList list = updated.value(name);
-        list.removeAll(value);       // remove ocorrência anterior (se houver)
-        list.prepend(value);         // mais recente no topo
+        // BUG RELATADO ("collections, ao selecionar multi valores não
+        // salva como parâmetro recente"): coleção (single OU multi) e
+        // select multi de opções fixas guardam vários ids/valores JUNTOS
+        // numa CSV só (ver values()) — mas CollectionSelectorDialog (e o
+        // combo de opções fixas) procuram cada id/valor ISOLADO dentro de
+        // m_history via indexOf(). Uma CSV inteira ("id1,id2,id3") nunca
+        // bate com um indexOf("id1") avulso — o histórico até era
+        // gravado, só nunca surtia efeito nenhum ao reabrir. Cada valor
+        // precisa virar SUA PRÓPRIA entrada na lista.
+        const bool isMultiValued = !param.collectionId.isEmpty() || param.multiSelect;
+        const QStringList incoming = isMultiValued
+            ? raw.split(QLatin1Char(','), Qt::SkipEmptyParts)
+            : QStringList{raw};
+
+        QStringList list = updated.value(param.name);
+        // Prepend em ordem REVERSA: processar o ÚLTIMO escolhido primeiro
+        // faz o PRIMEIRO escolhido acabar na posição 0 (mais "recente")
+        // depois de todos os prepends — preserva a ordem de escolha.
+        for (auto it = incoming.crbegin(); it != incoming.crend(); ++it) {
+            list.removeAll(*it);
+            list.prepend(*it);
+        }
         while (list.size() > kMaxHistory) {
             list.removeLast();
         }
-        updated[name] = list;
+        updated[param.name] = list;
     }
     return updated;
 }

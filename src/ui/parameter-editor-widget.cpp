@@ -128,6 +128,16 @@ public:
         m_label = new QLineEdit(param.label, this);
         form->addRow(utils::tr(QStringLiteral("field.label.label")), m_label);
 
+        // GRUPO (pedido do usuário: "função opcional para agrupar
+        // parâmetros... basta dar um nome, os com o mesmo nome são
+        // carregados dentro da própria caixinha colapsada por default").
+        // Opcional — vazio (padrão) renderiza o parâmetro direto no form,
+        // como sempre.
+        m_group = new QLineEdit(param.group, this);
+        m_group->setPlaceholderText(utils::tr(QStringLiteral("params.group.placeholder")));
+        m_group->setToolTip(utils::tr(QStringLiteral("params.group.tip")));
+        form->addRow(utils::tr(QStringLiteral("params.group.label")), m_group);
+
         m_type = new QComboBox(this);
         m_type->addItems({QStringLiteral("text"), QStringLiteral("select"),
                           QStringLiteral("bool"), QStringLiteral("file"),
@@ -398,6 +408,7 @@ public:
         p.dateRange = m_dateRange->isChecked();
         p.dateFormat = m_dateFormat->currentData().toString();
         p.dateFormatCustom = m_dateFormatCustom->text();
+        p.group = m_group->text().trimmed();
         return p;
     }
 
@@ -422,6 +433,7 @@ private:
     QVector<core::Collection> m_collections;
     QLineEdit *m_name = nullptr;
     QLineEdit *m_label = nullptr;
+    QLineEdit *m_group = nullptr;
     QComboBox *m_type = nullptr;
     QLineEdit *m_default = nullptr;
     QLineEdit *m_options = nullptr;

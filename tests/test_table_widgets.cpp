@@ -255,6 +255,33 @@ private slots:
         QCOMPARE(widgetBack.at(0).dateRange, true);
         QCOMPARE(widgetBack.at(0).dateFormatCustom, QStringLiteral("dd.MM.yy HH:mm"));
     }
+
+    // "group" (agrupamento opcional de parâmetros, pedido do usuário) —
+    // round-trip via JSON e via ParameterEditorWidget, mesmo padrão acima.
+    void groupFieldRoundTripsThroughJsonAndWidget()
+    {
+        kai::core::Parameter p;
+        p.name = QStringLiteral("timeout");
+        p.type = kai::core::ParameterType::Number;
+        p.group = QStringLiteral("Avançado");
+
+        const kai::core::Parameter back = kai::core::Parameter::fromJson(p.toJson());
+        QCOMPARE(back.group, QStringLiteral("Avançado"));
+
+        // Sem grupo (padrão): não aparece no JSON nem quebra o round-trip.
+        kai::core::Parameter noGroup;
+        noGroup.name = QStringLiteral("x");
+        noGroup.type = kai::core::ParameterType::Text;
+        const QJsonObject json = noGroup.toJson();
+        QVERIFY(!json.contains(QStringLiteral("group")));
+        QVERIFY(kai::core::Parameter::fromJson(json).group.isEmpty());
+
+        ParameterEditorWidget editor;
+        editor.setParameters({p});
+        const QVector<kai::core::Parameter> widgetBack = editor.parameters();
+        QCOMPARE(widgetBack.size(), 1);
+        QCOMPARE(widgetBack.at(0).group, QStringLiteral("Avançado"));
+    }
 };
 
 QTEST_MAIN(TestTableWidgets)

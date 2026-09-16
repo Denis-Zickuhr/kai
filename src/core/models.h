@@ -150,6 +150,16 @@ struct Parameter {
     QString dateFormat = QStringLiteral("iso_date");
     QString dateFormatCustom;
 
+    // AGRUPAMENTO opcional (pedido do usuário: "função opcional para
+    // agrupar parâmetros... pra criar grupos basta dar um nome, os com o
+    // mesmo nome são carregados dentro da própria caixinha colapsada por
+    // default"). Vazio (padrão) = parâmetro renderizado direto no form,
+    // como sempre. Todo parâmetro com o MESMO texto aqui (comparado
+    // trimmed) entra na MESMA seção colapsável (ver
+    // ParameterFormDialog::setupUi) — não precisa declarar o grupo em
+    // lugar nenhum à parte, só repetir o nome.
+    QString group;
+
     QJsonObject toJson() const;
     static Parameter fromJson(const QJsonObject &obj);
 };

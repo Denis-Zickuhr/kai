@@ -15,6 +15,7 @@
 
 #include "ui/parameter-form-dialog.h"
 #include "ui/inline-code-field.h"
+#include "ui/collapsible-section-card.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -316,6 +317,120 @@ private slots:
             }
         }
         QCOMPARE(dialog.values().value(QStringLiteral("envs")), QStringLiteral("dev,qa,prod"));
+    }
+
+    // Pedido do usuário: "faça a injeção dos rótulos do select" — além do
+    // valor, o multi-select de opções fixas também injeta os RÓTULOS
+    // marcados (CSV) em "<nome>__labels".
+    void multiSelectInjectsCheckedLabels()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("Desenvolvimento:dev"), QStringLiteral("Qualidade:qa"),
+                     QStringLiteral("Produção:prod")};
+        p.multiSelect = true;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("envs")] = QStringLiteral("dev,prod");
+
+        ParameterFormDialog dialog(params, nullptr, initial);
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("envs")), QStringLiteral("dev,prod"));
+        QCOMPARE(values.value(QStringLiteral("envs__labels")),
+                 QStringLiteral("Desenvolvimento,Produção"));
+    }
+
+    // Idem para o select de seleção única: injeta "<nome>__label" com o
+    // rótulo exibido, distinto do valor injetado em "<nome>".
+    void singleSelectInjectsChosenLabel()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("cliente");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("Produção:prod"), QStringLiteral("Qualidade:qa")};
+        params << p;
+
+        ParameterFormDialog dialog(params, nullptr);
+        auto *field = dialog.findChild<QComboBox *>();
+        QVERIFY(field != nullptr);
+        field->setCurrentIndex(1);
+
+        const QMap<QString, QString> values = dialog.values();
+        QCOMPARE(values.value(QStringLiteral("cliente")), QStringLiteral("qa"));
+        QCOMPARE(values.value(QStringLiteral("cliente__label")), QStringLiteral("Qualidade"));
+    }
+
+    // Bug reportado: seleção múltipla (opções fixas OU vinculadas a
+    // coleção) salvava o CSV inteiro como UMA entrada de histórico, então
+    // nenhum valor individual era reconhecido depois (CollectionSelectorDialog
+    // e a ordenação por uso comparam ids individuais). updatedUsageHistory
+    // deve gravar cada valor escolhido como entrada separada.
+    void updatedUsageHistorySplitsMultiSelectValuesIndividually()
+    {
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("envs");
+        p.type = ParameterType::Select;
+        p.options = {QStringLiteral("dev"), QStringLiteral("qa"), QStringLiteral("prod")};
+        p.multiSelect = true;
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("envs")] = QStringLiteral("dev,prod");
+
+        ParameterFormDialog dialog(params, nullptr, initial);
+        const QStringList updated = dialog.updatedUsageHistory().value(QStringLiteral("envs"));
+        // Cada valor escolhido vira uma entrada INDIVIDUAL, não o CSV inteiro.
+        QVERIFY(!updated.contains(QStringLiteral("dev,prod")));
+        QVERIFY(updated.contains(QStringLiteral("dev")));
+        QVERIFY(updated.contains(QStringLiteral("prod")));
+        QCOMPARE(updated.count(), 2);
+    }
+
+    // Feature pedida pelo usuário: "possibilidade de criar grupo de dados,
+    // o que irá começar colapsados". Parâmetros com o mesmo `group` (não
+    // vazio) caem dentro de um ÚNICO CollapsibleSectionCard nomeado com o
+    // grupo, colapsado por padrão; parâmetros sem grupo continuam soltos
+    // no form (fora de qualquer card).
+    void parametersWithSameGroupAreBundledIntoOneCollapsedCard()
+    {
+        QVector<Parameter> params;
+        Parameter ungrouped;
+        ungrouped.name = QStringLiteral("solto");
+        ungrouped.type = ParameterType::Text;
+        params << ungrouped;
+
+        Parameter a;
+        a.name = QStringLiteral("a");
+        a.type = ParameterType::Text;
+        a.group = QStringLiteral("Avançado");
+        params << a;
+
+        Parameter b;
+        b.name = QStringLiteral("b");
+        b.type = ParameterType::Text;
+        b.group = QStringLiteral("Avançado");
+        params << b;
+
+        ParameterFormDialog dialog(params, nullptr);
+
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 1);
+        CollapsibleSectionCard *card = cards.first();
+        QVERIFY(!card->isExpanded()); // colapsado por padrão
+
+        // Os dois campos do grupo estão DENTRO do card; o campo solto está
+        // fora (é filho do diálogo, não do card).
+        const auto fieldsInCard = card->findChildren<QLineEdit *>();
+        QCOMPARE(fieldsInCard.size(), 2);
+
+        auto *soltoField = dialog.findChild<QLineEdit *>();
+        QVERIFY(soltoField != nullptr);
+        QVERIFY(card->findChildren<QLineEdit *>().indexOf(soltoField) < 0);
     }
 
     // Textarea (novo tipo, pedido do usuário: "campo de texto com

@@ -75,6 +75,9 @@ QJsonObject Parameter::toJson() const
     if (!dateFormatCustom.isEmpty()) {
         obj["date_format_custom"] = dateFormatCustom;
     }
+    if (!group.isEmpty()) {
+        obj["group"] = group;
+    }
     return obj;
 }
 
@@ -109,6 +112,7 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     p.dateRange = obj.value("date_range").toBool(false);
     p.dateFormat = obj.value("date_format").toString(QStringLiteral("iso_date"));
     p.dateFormatCustom = obj.value("date_format_custom").toString();
+    p.group = obj.value("group").toString();
     return p;
 }
 

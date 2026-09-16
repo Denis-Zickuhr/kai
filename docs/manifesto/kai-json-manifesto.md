@@ -382,6 +382,7 @@ Each item in `params`:
 | `date_range` | bool | Only for `date` (default `false`): pick a start **and** end value — see §4.7. |
 | `date_format` | see §4.7 | Only for `date` (default `"iso_date"`): how the picked value is written into the command. |
 | `date_format_custom` | string | Only for `date`, and only read when `date_format` is `"custom"`. |
+| `group` | string | Any type. Optional group name — parameters sharing the exact same `group` are bundled into one collapsible section (collapsed by default) in the fill-in dialog, instead of appearing loose. See §4.8. |
 
 ### 4.1 Parameter types
 
@@ -442,6 +443,14 @@ Result in `{{SERVICES}}`: e.g. `api,worker`.
 
 **(c) Tied to a collection** (`collection`): see §6. Choosing an entry
 injects **all its fields** as `{{name.field}}`.
+
+**Label injection:** besides the value(s) above, a fixed-options `select`
+(mode a or b — not collection-tied, which already exposes full field
+access) also injects the **displayed label**: `{{name__label}}` for a
+single choice, `{{name__labels}}` (comma-joined) for `multi_select`. Useful
+when an option is written as `"label:value"` (label shown, value injected
+— e.g. `"Produção:prod"`) and the command also needs the human-readable
+label somewhere, e.g. in a log message or approval prompt.
 
 ### 4.6 File picker (`type: "file"`)
 
@@ -517,6 +526,24 @@ Used as: `journalctl --since "{{SINCE}}"`.
   template of Qt date/time tokens: `yyyy`/`yy` (year), `MM`/`M` (month),
   `dd`/`d` (day), `HH`/`H` (24h hour), `hh`/`h` (12h hour), `mm` (minute),
   `ss` (second), `AP` (AM/PM). Example: `"dd.MM.yy 'at' HH:mm"`.
+
+### 4.8 Grouping parameters (`group`)
+
+Any parameter type accepts an optional `group` string. Parameters that
+share the **exact same** `group` value are rendered inside one
+collapsible section, named after the group, which starts **collapsed** —
+instead of each one appearing as a loose field. Useful to keep a form with
+many parameters tidy, tucking away advanced/rarely-changed ones.
+
+```json
+{ "name": "ENV", "label": "Environment", "type": "select", "options": ["dev", "prod"] },
+{ "name": "TIMEOUT", "label": "Timeout (s)", "type": "number", "default": "30", "group": "Advanced" },
+{ "name": "RETRIES", "label": "Retries", "type": "number", "default": "3", "group": "Advanced" }
+```
+Here `ENV` renders as a normal loose field; `TIMEOUT` and `RETRIES` are
+bundled together inside a collapsed "Advanced" section. Parameter order
+within a group follows their order in `params`; groups appear (in the
+order first seen) after all loose parameters.
 
 ---
 

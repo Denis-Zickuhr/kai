@@ -1003,5 +1003,13 @@
   "notifications.history.action.clear": "Limpar",
 
   "template.autocomplete.if": "if … %} … {% endif %}",
-  "template.autocomplete.if_else": "if … %} … {% else %} … {% endif %}"
+  "template.autocomplete.if_else": "if … %} … {% else %} … {% endif %}",
+
+  "cli_params.error.invalid_bool": "Parâmetro '%1' espera true/false (ou 1/0), veio '%2'.",
+  "cli_params.error.invalid_number": "Parâmetro '%1' espera um número, veio '%2'.",
+  "cli_params.error.invalid_option": "Parâmetro '%1' recebeu '%2', mas só um destes é válido: %3.",
+  "cli_params.error.required_via_flag": "'%1' é um parâmetro obrigatório — é posicional, não uma --flag.",
+  "cli_params.error.unknown_flag": "Flag desconhecida '--%1' — nenhum parâmetro opcional com esse nome.",
+  "cli_params.error.missing_required": "Falta o parâmetro obrigatório '%1'.",
+  "cli_params.error.too_many_positional": "Argumentos demais: este comando recebe %1, vieram %2."
 }

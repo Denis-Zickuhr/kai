@@ -1003,5 +1003,13 @@
   "notifications.history.action.clear": "Clear",
 
   "template.autocomplete.if": "if … %} … {% endif %}",
-  "template.autocomplete.if_else": "if … %} … {% else %} … {% endif %}"
+  "template.autocomplete.if_else": "if … %} … {% else %} … {% endif %}",
+
+  "cli_params.error.invalid_bool": "Parameter '%1' expects true/false (or 1/0), got '%2'.",
+  "cli_params.error.invalid_number": "Parameter '%1' expects a number, got '%2'.",
+  "cli_params.error.invalid_option": "Parameter '%1' got '%2', but only one of these is valid: %3.",
+  "cli_params.error.required_via_flag": "'%1' is a required parameter — it's positional, not a --flag.",
+  "cli_params.error.unknown_flag": "Unknown flag '--%1' — no optional parameter with that name.",
+  "cli_params.error.missing_required": "Missing required parameter '%1'.",
+  "cli_params.error.too_many_positional": "Too many arguments: this command takes %1, got %2."
 }

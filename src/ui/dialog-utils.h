@@ -471,9 +471,16 @@ inline void centerOnParent(QWidget *dialog)
     int y = refGeom.center().y() - size.height() / 2;
 
     if (screen) {
+        // NÃO usar qBound aqui: qBound(min, val, max) faz Q_ASSERT(!(max <
+        // min)) no Qt6 — quando o diálogo é maior que a área disponível
+        // (max < min), o app CRASHA em build Debug em vez de só cair no
+        // canto superior-esquerdo como documentado acima (achado real: fez
+        // test_collection_editor abortar num build Debug fresco). qMax(qMin(...))
+        // não faz esse assert nunca, e dá exatamente esse fallback: se
+        // max < min, qMin já devolve max, e qMax(min, max) = min.
         const QRect avail = screen->availableGeometry();
-        x = qBound(avail.left(), x, avail.right() - size.width() + 1);
-        y = qBound(avail.top(), y, avail.bottom() - size.height() + 1);
+        x = qMax(avail.left(), qMin(x, avail.right() - size.width() + 1));
+        y = qMax(avail.top(), qMin(y, avail.bottom() - size.height() + 1));
     } else {
         x = qMax(0, x);
         y = qMax(0, y);

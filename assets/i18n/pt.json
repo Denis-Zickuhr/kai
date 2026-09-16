@@ -1011,5 +1011,12 @@
   "cli_params.error.required_via_flag": "'%1' é um parâmetro obrigatório — é posicional, não uma --flag.",
   "cli_params.error.unknown_flag": "Flag desconhecida '--%1' — nenhum parâmetro opcional com esse nome.",
   "cli_params.error.missing_required": "Falta o parâmetro obrigatório '%1'.",
-  "cli_params.error.too_many_positional": "Argumentos demais: este comando recebe %1, vieram %2."
+  "cli_params.error.too_many_positional": "Argumentos demais: este comando recebe %1, vieram %2.",
+
+  "cli_local.error.import_failed": "Não consegui ler o kai.json/kai.yml deste diretório: %1",
+  "cli_local.error.path_not_found": "Nenhum caminho de CLI bate com '%1'.",
+  "cli_local.trust.prompt": "Primeira vez rodando %1 neste diretório — confiar e rodar?",
+  "cli_local.trust.declined": "Não confiado — nada foi executado.",
+  "cli_local.help.required": "obrigatório",
+  "cli_local.help.optional": "opcional"
 }

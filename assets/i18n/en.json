@@ -1011,5 +1011,12 @@
   "cli_params.error.required_via_flag": "'%1' is a required parameter — it's positional, not a --flag.",
   "cli_params.error.unknown_flag": "Unknown flag '--%1' — no optional parameter with that name.",
   "cli_params.error.missing_required": "Missing required parameter '%1'.",
-  "cli_params.error.too_many_positional": "Too many arguments: this command takes %1, got %2."
+  "cli_params.error.too_many_positional": "Too many arguments: this command takes %1, got %2.",
+
+  "cli_local.error.import_failed": "Could not read this directory's kai.json/kai.yml: %1",
+  "cli_local.error.path_not_found": "No CLI path matches '%1'.",
+  "cli_local.trust.prompt": "First time running %1 in this directory — trust and run it?",
+  "cli_local.trust.declined": "Not trusted — nothing was run.",
+  "cli_local.help.required": "required",
+  "cli_local.help.optional": "optional"
 }

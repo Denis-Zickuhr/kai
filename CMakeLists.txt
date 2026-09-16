@@ -96,6 +96,7 @@ add_library(kai-core STATIC
     src/core/cli-param-binder.cpp
     src/core/cli-trust-store.h
     src/core/cli-trust-store.cpp
+    src/core/cli-reserved-verbs.h
     src/core/folder-path-resolver.h
     src/utils/path-format.h
     src/utils/path-format.cpp
@@ -291,13 +292,27 @@ add_library(kai-ipc STATIC
 target_include_directories(kai-ipc PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(kai-ipc PUBLIC kai-core Qt6::Core Qt6::Network)
 
+# --- Biblioteca "kai-cli": modo LOCAL de CLI Paths (ver src/cli/cli-local-
+# executor.h) — fica ACIMA de kai-ui na hierarquia de dependência (kai-ui
+# NÃO pode depender dela, senão vira ciclo), porque precisa reaproveitar
+# tanto ui::ProjectSelector (parser de kai.json/kai.yml, vive em kai-ui)
+# quanto engine::ExecutionPipeline (motor de execução, vive em kai-engine)
+# juntos — nenhuma das duas bibliotecas existentes pode depender da outra
+# na direção que isto exigiria.
+add_library(kai-cli STATIC
+    src/cli/cli-local-executor.h
+    src/cli/cli-local-executor.cpp
+)
+target_include_directories(kai-cli PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(kai-cli PUBLIC kai-core kai-engine kai-ui Qt6::Core Qt6::Widgets Qt6::Network)
+
 # --- Binário principal ---
 # WIN32: no Windows, marca o executável como GUI app (subsystem WINDOWS),
 # evitando que um console (terminal) seja aberto ao rodar o Kai — que é um
 # app de bandeja/GUI. Em Linux/macOS a flag é ignorada pelo CMake, sem
 # efeito no build nativo.
 add_executable(kai WIN32 src/main.cpp)
-target_link_libraries(kai PRIVATE kai-core kai-engine kai-ui kai-ipc Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+target_link_libraries(kai PRIVATE kai-core kai-engine kai-ui kai-ipc kai-cli Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
 
 # Ícone do executável no Windows: compila o recurso .rc (que referencia
 # packaging/windows/kai.ico) e o adiciona ao alvo. Sem isto, o Windows

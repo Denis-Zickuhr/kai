@@ -1,4 +1,5 @@
 #include "core/kai-file-validator.h"
+#include "core/cli-reserved-verbs.h"
 #include "core/yaml-bridge.h"
 #include "utils/translation-manager.h"
 
@@ -335,22 +336,6 @@ const QSet<QString> &topLevelKeys()
     return keys;
 }
 
-// Verbos/flags reservados do CLI do Kai (ver ipc::runCliIfRequested) — um
-// cli_path que colidisse com um destes nunca seria alcançável (o parser de
-// argv trataria o token como o verbo, não como o 1º segmento do caminho).
-const QSet<QString> &reservedCliTokens()
-{
-    static const QSet<QString> tokens = {
-        QStringLiteral("run"), QStringLiteral("list"), QStringLiteral("env"),
-        QStringLiteral("show"), QStringLiteral("help"), QStringLiteral("import"),
-        QStringLiteral("validate"), QStringLiteral("ps"), QStringLiteral("attach"),
-        QStringLiteral("kill"), QStringLiteral("global"),
-        QStringLiteral("--help"), QStringLiteral("-h"),
-        QStringLiteral("--global"), QStringLiteral("-g"),
-    };
-    return tokens;
-}
-
 // Quebra um path de pasta ("A/B/C") em segmentos, tolerando barras extras/
 // espaços — mesmo espírito de FolderPathResolver, só que sem gerar id (essa
 // checagem roda ANTES/sem nunca importar nada).
@@ -427,7 +412,7 @@ void validateCliPaths(ValidationResult &result, const QJsonObject &root)
         // (ex: "env" em `kai zephyr env prod`) nunca é confundido com o
         // verbo `kai env list`, porque a essa altura o token 0 ("zephyr")
         // já saiu do caminho de detecção de verbo.
-        if (scopeChain.isEmpty() && reservedCliTokens().contains(cliPath)) {
+        if (scopeChain.isEmpty() && reservedCliVerbs().contains(cliPath)) {
             addError(result, itemPath,
                 utils::tr(QStringLiteral("validate.error.reserved_cli_path")).arg(cliPath));
         }

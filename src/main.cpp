@@ -4,6 +4,7 @@
 #include "ui/no-scroll-combo-filter.h"
 #include "ipc/cli-client.h"
 #include "ipc/ipc-server.h"
+#include "cli/cli-local-executor.h"
 #include "utils/logger.h"
 
 #ifdef Q_OS_WIN
@@ -77,6 +78,32 @@ int main(int argc, char *argv[])
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")
         && !qEnvironmentVariableIsEmpty("DISPLAY")) {
         qputenv("QT_QPA_PLATFORM", QByteArray("xcb"));
+    }
+
+    // --- CLI Paths, modo LOCAL (kai <cli_path...> dentro de um diretório
+    // com kai.json/kai.yml) ---
+    // Decidido ANTES de construir QUALQUER QCoreApplication/QApplication —
+    // Qt só permite UMA instância de aplicação por processo, e o modo
+    // local roda sob QCoreApplication de propósito (sem exigir nenhuma
+    // plataforma gráfica/display — é o ponto central da portabilidade:
+    // funciona em CI headless sem QT_QPA_PLATFORM=offscreen nenhum). Se
+    // não for este caso (nenhum kai.json/kai.yml no diretório atual, ou o
+    // 1º argumento já é um verbo conhecido como "run"/"list"/etc.), segue
+    // pro fluxo de sempre logo abaixo, sem nenhum efeito colateral.
+    //
+    // Monta os args À MÃO (não QCoreApplication::arguments(), que exige
+    // uma instância já construída — exatamente o que ainda não decidimos
+    // qual classe será).
+    QStringList rawArgs;
+    rawArgs.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        rawArgs << QString::fromLocal8Bit(argv[i]);
+    }
+    if (kai::cli::looksLikeLocalCliPathAttempt(rawArgs)) {
+        QCoreApplication localApp(argc, argv);
+        Q_UNUSED(localApp); // precisa existir (event loop pro pipeline), nunca usada diretamente
+        QCoreApplication::setApplicationName(QStringLiteral("kai"));
+        return kai::cli::runLocalCliPath(rawArgs).exitCode;
     }
 
     QApplication app(argc, argv);

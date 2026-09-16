@@ -1,6 +1,6 @@
 function(kai_add_test test_name test_source)
     add_executable(${test_name} ${test_source})
-    target_link_libraries(${test_name} PRIVATE kai-core kai-engine kai-ui kai-ipc Qt6::Test Qt6::Core Qt6::Network Qt6::Widgets)
+    target_link_libraries(${test_name} PRIVATE kai-core kai-engine kai-ui kai-ipc kai-cli Qt6::Test Qt6::Core Qt6::Network Qt6::Widgets)
     add_test(NAME ${test_name} COMMAND ${test_name})
     # Vários testes resolvem assets (assets/help, assets/i18n) por caminho
     # relativo ao diretório de trabalho — precisa ser a raiz do repo, não o
@@ -76,3 +76,4 @@ kai_add_test(test_date_param_format test_date_param_format.cpp)
 kai_add_test(test_cli_path_resolver test_cli_path_resolver.cpp)
 kai_add_test(test_cli_param_binder test_cli_param_binder.cpp)
 kai_add_test(test_cli_trust_store test_cli_trust_store.cpp)
+kai_add_test(test_cli_local_executor test_cli_local_executor.cpp)

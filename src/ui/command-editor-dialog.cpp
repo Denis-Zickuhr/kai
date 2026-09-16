@@ -247,6 +247,17 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     m_orderField->setValue(m_existingOrder);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("editor.order")), m_orderField), 1, 1);
 
+    // CLI PATH (feature CLI Paths — "usar o kai como CLI app é ruim"):
+    // segmento opcional que torna este comando executável da linha de
+    // comando (ex: "env" em `kai zephyr env prod`). Vazio (padrão) =
+    // comando GUI-only, sem efeito nenhum aqui.
+    m_cliPathField = new QLineEdit(identityCard);
+    m_cliPathField->setObjectName(QStringLiteral("cliPathField"));
+    m_cliPathField->setPlaceholderText(utils::tr(QStringLiteral("command.field.cli_path.placeholder")));
+    m_cliPathField->setToolTip(utils::tr(QStringLiteral("command.field.cli_path.tip")));
+    identityGrid->addWidget(wrapWithLabel(identityCard,
+        utils::tr(QStringLiteral("command.field.cli_path")), m_cliPathField), 2, 0, 1, 2);
+
     mainLayout->addWidget(identityCard);
 
     // Card "Execution Config" (mockup enviado pelo usuário): cabeçalho com
@@ -566,6 +577,7 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
         m_nameField->setText(existingCommand->name);
         m_descriptionField->setPlainText(existingCommand->description);
         m_iconPicker->setSelectedIconName(existingCommand->icon);
+        m_cliPathField->setText(existingCommand->cliPath);
 
         if (existingCommand->type == core::CommandType::Http && existingCommand->httpConfig.has_value()) {
             setExecutionMode(true);
@@ -1359,6 +1371,7 @@ core::Command CommandEditorDialog::buildCommand() const
     command.name = m_nameField->text().trimmed();
     command.description = m_descriptionField->toPlainText();
     command.icon = m_iconPicker->selectedIconName();
+    command.cliPath = m_cliPathField ? m_cliPathField->text().trimmed() : QString();
     command.hooks = m_hooksEditor->hooks();
     command.executionConditions = m_conditionsEditor->conditions();
     command.conditionCombinator = m_conditionsEditor->combinator();

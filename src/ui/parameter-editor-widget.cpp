@@ -138,6 +138,14 @@ public:
         m_group->setToolTip(utils::tr(QStringLiteral("params.group.tip")));
         form->addRow(utils::tr(QStringLiteral("params.group.label")), m_group);
 
+        // DESCRIÇÃO (feature CLI Paths): não aparece em lugar nenhum da GUI
+        // (o `label` já basta ali) — só existe pro `--help` de um CLI Path
+        // ter mais contexto do que um rótulo de 2 palavras dá.
+        m_description = new QLineEdit(param.description, this);
+        m_description->setPlaceholderText(utils::tr(QStringLiteral("params.description.placeholder")));
+        m_description->setToolTip(utils::tr(QStringLiteral("params.description.tip")));
+        form->addRow(utils::tr(QStringLiteral("params.description.label")), m_description);
+
         m_type = new QComboBox(this);
         m_type->addItems({QStringLiteral("text"), QStringLiteral("select"),
                           QStringLiteral("bool"), QStringLiteral("file"),
@@ -409,6 +417,7 @@ public:
         p.dateFormat = m_dateFormat->currentData().toString();
         p.dateFormatCustom = m_dateFormatCustom->text();
         p.group = m_group->text().trimmed();
+        p.description = m_description->text().trimmed();
         return p;
     }
 
@@ -434,6 +443,7 @@ private:
     QLineEdit *m_name = nullptr;
     QLineEdit *m_label = nullptr;
     QLineEdit *m_group = nullptr;
+    QLineEdit *m_description = nullptr;
     QComboBox *m_type = nullptr;
     QLineEdit *m_default = nullptr;
     QLineEdit *m_options = nullptr;

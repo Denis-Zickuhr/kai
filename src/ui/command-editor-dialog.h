@@ -141,6 +141,7 @@ private:
 
     // Campos comuns.
     QLineEdit *m_nameField = nullptr;
+    QLineEdit *m_cliPathField = nullptr;
     QComboBox *m_folderField = nullptr;
     IconPickerWidget *m_iconPicker = nullptr;
     QSpinBox *m_orderField = nullptr;

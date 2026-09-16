@@ -76,6 +76,7 @@ private:
     // existia no modelo/JSON (reservado, nunca ligado a nada); esta é a
     // primeira UI que de fato o liga a um comportamento.
     QCheckBox *m_isProjectField = nullptr;
+    QLineEdit *m_cliPathField = nullptr;
     QVector<core::TerminalProfile> m_terminalProfiles;
     KeyValueEditorWidget *m_envVarsEditor = nullptr;
     CollapsibleSectionCard *m_envVarsCard = nullptr;

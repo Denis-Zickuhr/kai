@@ -183,6 +183,17 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     m_isProjectField->setToolTip(utils::tr(QStringLiteral("folder.is_project.tip")));
     identityGrid->addWidget(m_isProjectField, 3, 0, 1, 2);
 
+    // CLI PATH (feature CLI Paths — "usar o kai como CLI app é ruim"):
+    // segmento opcional pra endereçar esta pasta a partir da linha de
+    // comando (ex: "zephyr" em `kai zephyr env prod`). Vazio (padrão) =
+    // pasta transparente no namespace de CLI, sem efeito nenhum na GUI.
+    m_cliPathField = new QLineEdit(identityCard);
+    m_cliPathField->setObjectName(QStringLiteral("cliPathField"));
+    m_cliPathField->setPlaceholderText(utils::tr(QStringLiteral("folder.field.cli_path.placeholder")));
+    m_cliPathField->setToolTip(utils::tr(QStringLiteral("folder.field.cli_path.tip")));
+    identityGrid->addWidget(wrapWithLabel(identityCard,
+        utils::tr(QStringLiteral("folder.field.cli_path")), m_cliPathField), 4, 0, 1, 2);
+
     mainLayout->addWidget(identityCard);
 
     m_existingId = existingFolder ? existingFolder->id : QString();
@@ -194,6 +205,7 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
         m_nameField->setText(existingFolder->name);
         m_iconPicker->setSelectedIconName(existingFolder->icon);
         m_isProjectField->setChecked(existingFolder->isProject);
+        m_cliPathField->setText(existingFolder->cliPath);
 
         const QString targetParentId = existingFolder->parentId.value_or(QString());
         for (int i = 0; i < m_parentField->count(); ++i) {
@@ -373,6 +385,7 @@ core::Folder FolderEditorDialog::buildFromForm() const
     folder.terminalTarget = m_profileField ? m_profileField->currentData().toString() : QString();
     // Ordem: agora editável no formulário (substitui o drag&drop de filhos).
     folder.order = m_orderField ? m_orderField->value() : m_existingOrder;
+    folder.cliPath = m_cliPathField ? m_cliPathField->text().trimmed() : QString();
 
     return folder;
 }

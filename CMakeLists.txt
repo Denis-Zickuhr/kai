@@ -90,6 +90,8 @@ add_library(kai-core STATIC
     src/core/date-param-format.cpp
     src/core/kai-file-validator.h
     src/core/kai-file-validator.cpp
+    src/core/cli-path-resolver.h
+    src/core/cli-path-resolver.cpp
     src/core/folder-path-resolver.h
     src/utils/path-format.h
     src/utils/path-format.cpp

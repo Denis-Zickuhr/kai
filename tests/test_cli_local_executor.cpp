@@ -6,6 +6,7 @@
 
 #include "cli/cli-local-executor.h"
 #include "core/cli-trust-store.h"
+#include "core/config-manager.h"
 
 using namespace kai::cli;
 using namespace kai::core;
@@ -145,6 +146,53 @@ private slots:
         QFile out(outputFile);
         QVERIFY(out.open(QIODevice::ReadOnly));
         QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("Hello Mundo"));
+    }
+
+    // Pedido do usuário ("resolve o do global"): a variável do pacote de
+    // Ambiente ATIVO (Configurações > Ambientes, a MESMA fonte que a GUI
+    // usa) precisa ser injetada na execução local também — antes disso, o
+    // executor local só olhava env_vars de pasta + parâmetros, ignorando o
+    // "Global" por completo (limitação documentada, agora corrigida).
+    // QStandardPaths::setTestModeEnabled(true) (ligado em initTestCase)
+    // já isola o settings.json deste teste do ~/.config/kai real.
+    void activeGlobalEnvironmentIsInjectedIntoLocalExecution()
+    {
+        ConfigManager configManager;
+        SettingsData settings = configManager.loadSettings();
+        Environment env;
+        env.id = QStringLiteral("env_test");
+        env.name = QStringLiteral("Test");
+        env.vars[QStringLiteral("SAUDACAO")] = QStringLiteral("Salve");
+        settings.environments = {env};
+        settings.activeEnvironmentId = env.id;
+        QVERIFY(configManager.saveSettings(settings));
+
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path());
+
+        const QString outputFile = dir.filePath(QStringLiteral("out.txt"));
+        const QString yaml = QStringLiteral(
+            "project_name: \"Demo\"\n"
+            "commands:\n"
+            "  - name: \"Hello\"\n"
+            "    type: shell\n"
+            "    cli_path: hello\n"
+            "    command: \"echo {{SAUDACAO}} Kai > %1\"\n").arg(outputFile);
+        QFile kaiYml(dir.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(yaml.toUtf8());
+        kaiYml.close();
+        const QString content = QString::fromUtf8(
+            [&]() { QFile f(kaiYml.fileName()); f.open(QIODevice::ReadOnly); return f.readAll(); }());
+        CliTrustStore().trust(dir.path(), CliTrustStore::hashContent(content));
+
+        const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("hello")});
+        QCOMPARE(outcome.exitCode, 0);
+
+        QFile out(outputFile);
+        QVERIFY(out.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("Salve Kai"));
     }
 
     // Caminho que não bate com nada: exit 2, handled=true.

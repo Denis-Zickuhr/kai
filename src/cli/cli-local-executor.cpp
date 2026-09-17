@@ -4,6 +4,7 @@
 #include "core/cli-param-binder.h"
 #include "core/cli-trust-store.h"
 #include "core/cli-reserved-verbs.h"
+#include "core/config-manager.h"
 #include "core/environment-manager.h"
 #include "engine/execution-pipeline.h"
 #include "ui/project-selector.h"
@@ -227,11 +228,25 @@ LocalExecutionOutcome runLocalCliPath(const QStringList &args)
         trustStore.trust(cwd, contentHash);
     }
 
-    // --- Ambiente: env_vars da cadeia de pastas (raiz -> pasta do comando,
-    // filho sobrescreve pai) + valores de parâmetro ligados (default pros
-    // não informados). Sem "Global" (não há Settings de app em modo local)
-    // nem persistência de dinâmicas entre chamadas (ver conversa de design
-    // — limitação conhecida do v1: cada invocação local é isolada). ---
+    // --- Ambiente: variáveis GLOBAIS (Configurações > Ambientes, o mesmo
+    // ambiente ATIVO que a GUI usa — lido direto do settings.json persistido
+    // pelo ConfigManager; não precisa de QApplication/GUI, só QCoreApplication
+    // já é suficiente porque ConfigManager não depende de Qt Widgets) +
+    // env_vars da cadeia de pastas (raiz -> pasta do comando, filho
+    // sobrescreve pai) + valores de parâmetro ligados (default pros não
+    // informados). Ainda SEM persistência de dinâmicas entre chamadas
+    // separadas (ver conversa de design — limitação conhecida do v1: cada
+    // invocação local é isolada nesse aspecto específico). ---
+    core::ConfigManager configManager;
+    const core::SettingsData settings = configManager.loadSettings();
+    QMap<QString, QString> globalVars;
+    for (const core::Environment &e : settings.environments) {
+        if (e.id == settings.activeEnvironmentId) {
+            globalVars = e.vars;
+            break;
+        }
+    }
+
     const QVector<core::Folder> chain = folderChainFor(command->folderId, allFolders);
     QMap<QString, QString> mergedFolderVars;
     for (const core::Folder &f : chain) {
@@ -248,6 +263,7 @@ LocalExecutionOutcome runLocalCliPath(const QStringList &args)
     }
 
     core::EnvironmentManager envManager;
+    envManager.setGlobalVars(globalVars);
     envManager.setFolderVars(mergedFolderVars);
     envManager.setDynamicVarScope(dynamicScope);
     QMap<QString, QString> paramVars;

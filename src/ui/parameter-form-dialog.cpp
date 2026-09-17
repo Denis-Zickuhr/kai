@@ -152,17 +152,19 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
     // acompanha o conteúdo mas com um piso razoável. Um pouco mais larga que
     // antes (era 460) porque a grade de 2 colunas (booleano/número/lookup
     // lado a lado) precisa de espaço para não ficar espremida.
+    // Espaço horizontal/vertical padrão aumentado (achado real: o form
+    // ficava apertado) — largura mínima e teto de altura maiores que antes.
     const bool spacious = !params.isEmpty() && params.size() <= 5;
-    setMinimumWidth(spacious ? 620 : 560);
+    setMinimumWidth(spacious ? 700 : 640);
     adjustSize();
-    if (height() < 180) {
-        resize(width(), 180);
+    if (height() < 220) {
+        resize(width(), 220);
     }
     // TETO de altura (pedido do usuário: "deixe ele menor, com scroll
     // interno") — acima disso, o QScrollArea da grade absorve o excesso em
     // vez do diálogo continuar crescendo com o conteúdo.
-    if (height() > 640) {
-        resize(width(), 640);
+    if (height() > 720) {
+        resize(width(), 720);
     }
     centerOnParent(this);
 }
@@ -178,9 +180,9 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     const bool spacious = !params.isEmpty() && params.size() <= 5;
 
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(spacious ? 28 : 20, spacious ? 26 : 20,
-                                    spacious ? 28 : 20, spacious ? 22 : 16);
-    mainLayout->setSpacing(spacious ? 20 : 14);
+    mainLayout->setContentsMargins(spacious ? 34 : 26, spacious ? 32 : 26,
+                                    spacious ? 34 : 26, spacious ? 28 : 22);
+    mainLayout->setSpacing(spacious ? 24 : 18);
 
     // Título + subtítulo (mockup enviado pelo usuário): o subtítulo explica
     // o propósito da tela numa cor secundária, acima da grade de campos.
@@ -197,34 +199,45 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     // lado, otimizando o aproveitamento vertical do diálogo.
     //
     // AGRUPAMENTO opcional (pedido do usuário: "possibilidade de criar
-    // grupo de dados, o que irá começar colapsados") — cada parâmetro com
-    // um `group` não-vazio ganha sua PRÓPRIA grade, embrulhada depois num
-    // CollapsibleSectionCard; parâmetros sem grupo continuam na grade
-    // "solta" de sempre. `GridTarget` é o estado (grade/linha/compacto
-    // pendente) que as closures abaixo manipulam — trocado a cada
-    // parâmetro conforme seu grupo (ver `currentTarget` no laço).
+    // grupo de dados, o que irá começar colapsados", depois corrigido:
+    // "ordem dos grupos ainda respeitar ordem dos params") — cada
+    // parâmetro com um `group` não-vazio ganha sua PRÓPRIA grade,
+    // embrulhada depois num CollapsibleSectionCard; parâmetros sem grupo
+    // caem numa grade "solta". A ORDEM final segue a ordem de `params`:
+    // cada `Segment` nasce na posição do primeiro parâmetro que o usa —
+    // um grupo cujos parâmetros aparecem intercalados com soltos (ex:
+    // solto, grupo A, solto de novo) faz o segmento solto ser "cortado"
+    // em dois pedaços consecutivos em vez de um só, mas a ORDEM visual
+    // continua fiel à declaração. `GridTarget` é o estado (grade/linha/
+    // compacto pendente) que as closures abaixo manipulam — trocado a
+    // cada parâmetro conforme seu grupo (ver `currentTarget` no laço).
     struct GridTarget {
         QGridLayout *grid;
         int row = 0;
         QWidget *pendingCompact = nullptr;
     };
+    struct Segment {
+        bool isGroup;
+        QString groupName; // só quando isGroup
+        GridTarget *target;
+    };
     auto makeGrid = [&]() {
         auto *g = new QGridLayout();
-        g->setHorizontalSpacing(utils::tokens::space(spacious ? 6 : 4));
-        g->setVerticalSpacing(utils::tokens::space(spacious ? 6 : 4));
+        g->setHorizontalSpacing(utils::tokens::space(spacious ? 8 : 6));
+        g->setVerticalSpacing(utils::tokens::space(spacious ? 8 : 6));
         g->setColumnStretch(0, 1);
         g->setColumnStretch(1, 1);
         return g;
     };
 
-    GridTarget ungroupedTarget{makeGrid()};
-    QMap<QString, GridTarget *> groupTargets;
-    std::vector<std::unique_ptr<GridTarget>> ownedGroupTargets;
-    QStringList groupOrder;
+    std::vector<std::unique_ptr<GridTarget>> allTargets;
+    QVector<Segment> segments;
+    QMap<QString, GridTarget *> groupTargetByName;
     // Contagem de PARÂMETROS por grupo (não de linhas da grade — campos
     // compactos pareiam 2 por linha, o que subcontaria o badge do card).
     QMap<QString, int> groupParamCount;
-    GridTarget *currentTarget = &ungroupedTarget;
+    GridTarget *looseTarget = nullptr; // segmento solto "aberto" no momento
+    GridTarget *currentTarget = nullptr;
 
     // Campo compacto "pendente": um compacto só é colocado na grade quando
     // sabemos se vai ter um par ao lado ou não. Sem isso, um compacto que
@@ -315,14 +328,23 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     for (const core::Parameter &param : params) {
         const QString groupName = param.group.trimmed();
         if (groupName.isEmpty()) {
-            currentTarget = &ungroupedTarget;
-        } else {
-            if (!groupTargets.contains(groupName)) {
-                ownedGroupTargets.push_back(std::make_unique<GridTarget>(GridTarget{makeGrid()}));
-                groupTargets[groupName] = ownedGroupTargets.back().get();
-                groupOrder << groupName;
+            if (!looseTarget) {
+                // Novo segmento solto — ou é o primeiro, ou o anterior foi
+                // "interrompido" por um grupo entre um solto e outro (ver
+                // comentário acima do struct Segment).
+                allTargets.push_back(std::make_unique<GridTarget>(GridTarget{makeGrid()}));
+                looseTarget = allTargets.back().get();
+                segments.push_back(Segment{false, QString(), looseTarget});
             }
-            currentTarget = groupTargets.value(groupName);
+            currentTarget = looseTarget;
+        } else {
+            looseTarget = nullptr; // fecha o segmento solto corrente, se houver
+            if (!groupTargetByName.contains(groupName)) {
+                allTargets.push_back(std::make_unique<GridTarget>(GridTarget{makeGrid()}));
+                groupTargetByName[groupName] = allTargets.back().get();
+                segments.push_back(Segment{true, groupName, groupTargetByName.value(groupName)});
+            }
+            currentTarget = groupTargetByName.value(groupName);
             ++groupParamCount[groupName];
         }
 
@@ -858,38 +880,47 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
         }
         }
     }
-    // Fecha o compacto pendente de CADA grade (a solta e cada grupo), não só
-    // da última usada no laço acima.
-    currentTarget = &ungroupedTarget;
-    flushPendingCompact();
-    for (const auto &owned : ownedGroupTargets) {
+    // Fecha o compacto pendente de CADA grade (cada segmento solto e cada
+    // grupo), não só da última usada no laço acima.
+    for (const auto &owned : allTargets) {
         currentTarget = owned.get();
         flushPendingCompact();
     }
 
     // Diálogo "menor, com scroll interno" (pedido do usuário: form ficava
-    // enorme/mal espaçado com muitos parâmetros) — o conteúdo (grade solta +
-    // um CollapsibleSectionCard colapsado por padrão por grupo) vive dentro
-    // de um QScrollArea; é a altura do VIEWPORT que é limitada no construtor
-    // (ver kai::ui::ParameterFormDialog::ParameterFormDialog), não a do
-    // conteúdo — ele pode crescer à vontade e rolar.
+    // enorme/mal espaçado com muitos parâmetros) — o conteúdo (segmentos
+    // soltos + um CollapsibleSectionCard colapsado por padrão por grupo,
+    // montados na ORDEM de `segments` — ver comentário acima do struct
+    // Segment) vive dentro de um QScrollArea; é a altura do VIEWPORT que é
+    // limitada no construtor (ver ParameterFormDialog::ParameterFormDialog),
+    // não a do conteúdo — ele pode crescer à vontade e rolar.
     auto *contentHost = new QWidget(this);
+    // Transparente (achado real: "fundo ficou visualmente feio" — o
+    // QScrollArea/viewport/host sem isto usam o branco padrão da paleta,
+    // que vaza como uma tarja clara nas bordas por cima do tema escuro;
+    // mesma técnica de wrap transparente qualificado por objectName usada
+    // pelos outros containers deste arquivo, ver comentário em paramOptionalWrap).
+    contentHost->setObjectName(QStringLiteral("paramScrollHost"));
+    contentHost->setStyleSheet(QStringLiteral(
+        "QWidget#paramScrollHost { background: transparent; }"));
     auto *contentLayout = new QVBoxLayout(contentHost);
     contentLayout->setContentsMargins(0, 0, 0, 0);
-    contentLayout->setSpacing(spacious ? 20 : 14);
-    if (ungroupedTarget.row > 0) {
-        contentLayout->addLayout(ungroupedTarget.grid);
-    } else {
-        delete ungroupedTarget.grid;
-    }
-    for (const QString &groupName : groupOrder) {
-        GridTarget *target = groupTargets.value(groupName);
+    contentLayout->setSpacing(spacious ? 24 : 18);
+    for (const Segment &seg : segments) {
+        if (!seg.isGroup) {
+            if (seg.target->row > 0) {
+                contentLayout->addLayout(seg.target->grid);
+            } else {
+                delete seg.target->grid;
+            }
+            continue;
+        }
         auto *body = new QWidget(this);
-        body->setLayout(target->grid);
-        auto *card = new kai::ui::CollapsibleSectionCard(groupName, this);
+        body->setLayout(seg.target->grid);
+        auto *card = new kai::ui::CollapsibleSectionCard(seg.groupName, this);
         card->setAlwaysShowBody(true);
         card->setShowCountBadge(true);
-        card->setCount(groupParamCount.value(groupName));
+        card->setCount(groupParamCount.value(seg.groupName));
         card->setExpanded(false);
         card->setBody(body);
         contentLayout->addWidget(card);
@@ -897,10 +928,15 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
     contentLayout->addStretch(1);
 
     auto *scrollArea = new QScrollArea(this);
+    scrollArea->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
     scrollArea->setWidget(contentHost);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // O VIEWPORT é um QWidget filho separado do scroll area (não pega o
+    // "background: transparent" do seletor acima sozinho) — sem isto, ele
+    // usa o branco padrão da paleta e vaza uma tarja clara nas bordas.
+    scrollArea->viewport()->setStyleSheet(QStringLiteral("background: transparent;"));
     mainLayout->addWidget(scrollArea, 1);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);

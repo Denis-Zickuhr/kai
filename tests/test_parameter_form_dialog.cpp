@@ -433,6 +433,64 @@ private slots:
         QVERIFY(card->findChildren<QLineEdit *>().indexOf(soltoField) < 0);
     }
 
+    // Achado real (screenshot): um grupo cujos parâmetros aparecem no MEIO
+    // de uma sequência de parâmetros soltos acabava sempre renderizado no
+    // FIM do form (depois de TODOS os soltos), mesmo quando declarado antes
+    // de alguns deles — a ordem visual devia seguir a ordem de `params`, com
+    // o card aparecendo na posição do PRIMEIRO parâmetro do grupo.
+    void groupPositionRespectsDeclarationOrderAmongLooseParams()
+    {
+        QVector<Parameter> params;
+        Parameter p1;
+        p1.name = QStringLiteral("par1");
+        p1.type = ParameterType::Text;
+        p1.defaultValue = QStringLiteral("v1");
+        params << p1;
+
+        Parameter a;
+        a.name = QStringLiteral("a");
+        a.type = ParameterType::Text;
+        a.defaultValue = QStringLiteral("va");
+        a.group = QStringLiteral("Acesso");
+        params << a;
+
+        Parameter b;
+        b.name = QStringLiteral("b");
+        b.type = ParameterType::Text;
+        b.defaultValue = QStringLiteral("vb");
+        b.group = QStringLiteral("Acesso");
+        params << b;
+
+        Parameter p4;
+        p4.name = QStringLiteral("par4");
+        p4.type = ParameterType::Text;
+        p4.defaultValue = QStringLiteral("v4");
+        params << p4;
+
+        ParameterFormDialog dialog(params, nullptr);
+        dialog.show();
+
+        QLineEdit *field1 = nullptr;
+        QLineEdit *field4 = nullptr;
+        for (QLineEdit *le : dialog.findChildren<QLineEdit *>()) {
+            if (le->text() == QStringLiteral("v1")) { field1 = le; }
+            if (le->text() == QStringLiteral("v4")) { field4 = le; }
+        }
+        QVERIFY(field1 != nullptr);
+        QVERIFY(field4 != nullptr);
+
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 1);
+        CollapsibleSectionCard *card = cards.first();
+
+        // Ordem visual esperada: par1 (solto) -> card "Acesso" -> par4 (solto).
+        const int y1 = field1->mapTo(&dialog, QPoint(0, 0)).y();
+        const int yCard = card->mapTo(&dialog, QPoint(0, 0)).y();
+        const int y4 = field4->mapTo(&dialog, QPoint(0, 0)).y();
+        QVERIFY(y1 < yCard);
+        QVERIFY(yCard < y4);
+    }
+
     // Textarea (novo tipo, pedido do usuário: "campo de texto com
     // expansão"): renderiza um InlineCodeField (por baixo, um QPlainTextEdit
     // real — é ele que este teste encontra via findChild<QPlainTextEdit*>)

@@ -4,6 +4,12 @@
 #include <QLineEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QComboBox>
+#include <QApplication>
+#include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPushButton>
 
 #include "ui/key-value-editor-widget.h"
 #include "ui/terminal-profiles-editor-widget.h"
@@ -281,6 +287,57 @@ private slots:
         const QVector<kai::core::Parameter> widgetBack = editor.parameters();
         QCOMPARE(widgetBack.size(), 1);
         QCOMPARE(widgetBack.at(0).group, QStringLiteral("Avançado"));
+    }
+
+    // Pedido do usuário: "por hora está muito solto... um select livre ia
+    // ser perfeito, aceita texto livre, mas permite escolher entre as
+    // opções já usadas naquele cmd". O campo Grupo do ParameterRowDialog
+    // vira um combo EDITÁVEL: (a) sugere os nomes de grupo já usados pelos
+    // OUTROS parâmetros do mesmo comando, e (b) ainda aceita texto livre pra
+    // criar um grupo novo. Interação real com o diálogo modal (não dá pra
+    // acessar ParameterRowDialog diretamente — vive num namespace anônimo em
+    // parameter-editor-widget.cpp), mesmo padrão de QTimer::singleShot +
+    // activeModalWidget já usado em test_parameter_form_dialog.cpp.
+    void groupComboSuggestsNamesAlreadyUsedByOtherParamsInSameCommand()
+    {
+        kai::core::Parameter existing;
+        existing.name = QStringLiteral("timeout");
+        existing.type = kai::core::ParameterType::Number;
+        existing.group = QStringLiteral("Avançado");
+
+        ParameterEditorWidget editor;
+        editor.setParameters({existing});
+
+        // handleAddRowClicked() abre o ParameterRowDialog modal pra um NOVO
+        // parâmetro — captura ele via activeModalWidget() assim que abre.
+        QTimer::singleShot(50, [&editor]() {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+
+            auto *groupCombo = dialog->findChild<QComboBox *>();
+            QVERIFY(groupCombo != nullptr);
+            QVERIFY(groupCombo->isEditable());
+
+            // Sugestão do grupo já usado por "timeout" está na lista.
+            QVERIFY(groupCombo->findText(QStringLiteral("Avançado")) >= 0);
+
+            // Mas o campo também aceita texto LIVRE (grupo novo).
+            groupCombo->setCurrentText(QStringLiteral("Depuração"));
+
+            auto *nameField = dialog->findChild<QLineEdit *>();
+            QVERIFY(nameField != nullptr);
+            nameField->setText(QStringLiteral("novo_param"));
+
+            auto *buttonBox = dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(buttonBox != nullptr);
+            buttonBox->button(QDialogButtonBox::Ok)->click();
+        });
+        editor.handleAddRowClicked();
+
+        const QVector<kai::core::Parameter> params = editor.parameters();
+        QCOMPARE(params.size(), 2);
+        QCOMPARE(params.at(1).name, QStringLiteral("novo_param"));
+        QCOMPARE(params.at(1).group, QStringLiteral("Depuração"));
     }
 };
 

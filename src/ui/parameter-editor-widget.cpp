@@ -17,6 +17,7 @@
 #include <QHeaderView>
 #include <QToolButton>
 #include <QComboBox>
+#include <QCompleter>
 #include <QLineEdit>
 #include <QLabel>
 #include <QDialog>
@@ -109,6 +110,7 @@ class ParameterRowDialog : public QDialog {
 public:
     ParameterRowDialog(const core::Parameter &param,
                        const QVector<core::Collection> &collections,
+                       const QStringList &existingGroups,
                        QWidget *parent)
         : QDialog(parent)
         , m_collections(collections)
@@ -132,9 +134,25 @@ public:
         // parâmetros... basta dar um nome, os com o mesmo nome são
         // carregados dentro da própria caixinha colapsada por default").
         // Opcional — vazio (padrão) renderiza o parâmetro direto no form,
-        // como sempre.
-        m_group = new QLineEdit(param.group, this);
-        m_group->setPlaceholderText(utils::tr(QStringLiteral("params.group.placeholder")));
+        // como sempre. Combo EDITÁVEL (feedback do usuário: "ficou muito
+        // solto... um select livre ia ser perfeito, aceita texto livre, mas
+        // permite escolher entre as opções já usadas naquele cmd") — texto
+        // livre pra criar um grupo novo, com os nomes já usados nOS OUTROS
+        // parâmetros deste MESMO comando como sugestões (evita o typo
+        // clássico de agrupamento por nome: "Acesso" numa linha e "acesso"
+        // ou "Aceso" noutra viram DOIS grupos sem querer).
+        m_group = new QComboBox(this);
+        m_group->setEditable(true);
+        m_group->setInsertPolicy(QComboBox::NoInsert);
+        m_group->addItem(QString()); // opção vazia = sem grupo
+        m_group->addItems(existingGroups);
+        if (auto *completer = m_group->completer()) {
+            completer->setCaseSensitivity(Qt::CaseInsensitive);
+            completer->setFilterMode(Qt::MatchContains);
+            completer->setCompletionMode(QCompleter::PopupCompletion);
+        }
+        m_group->setCurrentText(param.group);
+        m_group->lineEdit()->setPlaceholderText(utils::tr(QStringLiteral("params.group.placeholder")));
         m_group->setToolTip(utils::tr(QStringLiteral("params.group.tip")));
         form->addRow(utils::tr(QStringLiteral("params.group.label")), m_group);
 
@@ -416,7 +434,7 @@ public:
         p.dateRange = m_dateRange->isChecked();
         p.dateFormat = m_dateFormat->currentData().toString();
         p.dateFormatCustom = m_dateFormatCustom->text();
-        p.group = m_group->text().trimmed();
+        p.group = m_group->currentText().trimmed();
         p.description = m_description->text().trimmed();
         return p;
     }
@@ -442,7 +460,7 @@ private:
     QVector<core::Collection> m_collections;
     QLineEdit *m_name = nullptr;
     QLineEdit *m_label = nullptr;
-    QLineEdit *m_group = nullptr;
+    QComboBox *m_group = nullptr;
     QLineEdit *m_description = nullptr;
     QComboBox *m_type = nullptr;
     QLineEdit *m_default = nullptr;
@@ -590,7 +608,19 @@ bool ParameterEditorWidget::editParameter(int row)
     if (row < 0 || row >= m_params.size()) {
         return false;
     }
-    ParameterRowDialog dialog(m_params.at(row), m_collections, this);
+    // Grupos já usados por OUTROS parâmetros deste mesmo comando (ordem de
+    // primeira aparição, sem repetir) — vira sugestão no combo editável de
+    // Grupo, pra não reescrever o mesmo nome de grupo com uma variação sutil
+    // à toa (ver comentário no ParameterRowDialog).
+    QStringList existingGroups;
+    for (int i = 0; i < m_params.size(); ++i) {
+        if (i == row) { continue; }
+        const QString g = m_params.at(i).group.trimmed();
+        if (!g.isEmpty() && !existingGroups.contains(g)) {
+            existingGroups << g;
+        }
+    }
+    ParameterRowDialog dialog(m_params.at(row), m_collections, existingGroups, this);
     if (dialog.exec() != QDialog::Accepted) {
         return false;
     }

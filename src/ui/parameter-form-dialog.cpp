@@ -923,6 +923,19 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
         card->setCount(groupParamCount.value(seg.groupName));
         card->setExpanded(false);
         card->setBody(body);
+        // O card usa "surface2" por padrão (bom pra Configurações > Aparência,
+        // onde nasceu) — mas aqui, ao lado de campos com fundo "bg" comum,
+        // essa caixa mais clara destoava do resto do form (achado real:
+        // "fundo dos campos fora de padrão... deve seguir o padrão do resto
+        // do sistema, fundo escuro"). Sobrescreve só a cor de fundo do card
+        // (mesma borda/raio da constução) pra usar "bg" — o mesmo tom dos
+        // campos e do próprio diálogo, mantendo só a borda como indicação
+        // visual do agrupamento.
+        card->setStyleSheet(QStringLiteral(
+            "QWidget#collapsibleSectionCard { background-color: %1; border: 1px solid %2;"
+            " border-radius: %3px; }")
+            .arg(utils::tokens::bg(), utils::tokens::borderColor())
+            .arg(utils::tokens::radiusLg()));
         contentLayout->addWidget(card);
     }
     contentLayout->addStretch(1);

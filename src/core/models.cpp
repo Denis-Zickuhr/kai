@@ -3,6 +3,8 @@
 #include <QJsonArray>
 #include <QUuid>
 
+#include <algorithm>
+
 namespace kai::core {
 
 QString parameterTypeToString(ParameterType type)
@@ -309,12 +311,31 @@ Hooks Hooks::fromJson(const QJsonObject &obj)
 
 QString commandTypeToString(CommandType type)
 {
-    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("shell");
+    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("command");
 }
 
 CommandType commandTypeFromString(const QString &value)
 {
-    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Shell;
+    // "shell" (nome anterior) e qualquer valor desconhecido caem em Command.
+    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Command;
+}
+
+QString commandLanguageToString(CommandLanguage language)
+{
+    switch (language) {
+        case CommandLanguage::Python: return QStringLiteral("python");
+        case CommandLanguage::Node:   return QStringLiteral("node");
+        case CommandLanguage::Native: break;
+    }
+    return QStringLiteral("native");
+}
+
+CommandLanguage commandLanguageFromString(const QString &value)
+{
+    const QString v = value.trimmed().toLower();
+    if (v == QStringLiteral("python")) return CommandLanguage::Python;
+    if (v == QStringLiteral("node"))   return CommandLanguage::Node;
+    return CommandLanguage::Native;
 }
 
 QJsonObject Command::toJson() const
@@ -335,6 +356,8 @@ QJsonObject Command::toJson() const
     obj["type"] = commandTypeToString(type);
     if (!icon.isEmpty()) obj["icon"] = icon;
     obj["command"] = command;
+    if (language != CommandLanguage::Native) obj["language"] = commandLanguageToString(language);
+    if (!interpreter.isEmpty()) obj["interpreter"] = interpreter;
     if (!workingDir.isEmpty()) obj["working_dir"] = workingDir;
     if (isBackground) obj["is_background"] = true;
     if (compactOutput) obj["compact_output"] = true;
@@ -353,9 +376,15 @@ QJsonObject Command::toJson() const
     if (interactiveTerminal) obj["interactive_terminal"] = true;
     if (formattedOutput) obj["formatted_output"] = true;
     if (renderMarkdown) obj["render_markdown"] = true;
+    if (kip) obj["kip"] = true;
+    if (kipOpenInWindow) obj["kip_window"] = true;
+    if (kipAutoCloseWindow) obj["kip_auto_close"] = true;
+    if (kipAutoCloseDelaySec != 2) obj["kip_auto_close_delay_sec"] = kipAutoCloseDelaySec;
     if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
     if (autoRun) obj["auto_run"] = true;
     if (autoRunDelaySec != 0) obj["auto_run_delay_sec"] = autoRunDelaySec;
+    if (!cronExpression.isEmpty()) obj["cron_expression"] = cronExpression;
+    if (cronNotifyOnRun) obj["cron_notify_on_run"] = true;
     if (order != -1) obj["order"] = order;
 
     if (httpConfig.has_value()) {
@@ -399,6 +428,8 @@ QJsonObject Command::toJson() const
         obj["last_param_values"] = lastParamsObj;
     }
 
+    if (!kipLastValues.isEmpty()) obj["kip_last_values"] = kipLastValues;
+
     if (!paramUsageHistory.isEmpty()) {
         QJsonObject usageObj;
         for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
@@ -420,6 +451,8 @@ Command Command::fromJson(const QJsonObject &obj)
     c.type = commandTypeFromString(obj.value("type").toString());
     c.icon = obj.value("icon").toString();
     c.command = obj.value("command").toString();
+    c.language = commandLanguageFromString(obj.value("language").toString());
+    c.interpreter = obj.value("interpreter").toString();
     c.workingDir = obj.value("working_dir").toString();
     c.isBackground = obj.value("is_background").toBool(false);
     c.compactOutput = obj.value("compact_output").toBool(false);
@@ -434,9 +467,15 @@ Command Command::fromJson(const QJsonObject &obj)
     c.interactiveTerminal = obj.value("interactive_terminal").toBool(false);
     c.formattedOutput = obj.value("formatted_output").toBool(false);
     c.renderMarkdown = obj.value("render_markdown").toBool(false);
+    c.kip = obj.value("kip").toBool(false);
+    c.kipOpenInWindow = obj.value("kip_window").toBool(false);
+    c.kipAutoCloseWindow = obj.value("kip_auto_close").toBool(false);
+    c.kipAutoCloseDelaySec = qBound(0, obj.value("kip_auto_close_delay_sec").toInt(2), 60);
     c.terminalTarget = obj.value("terminal_target").toString();
     c.autoRun = obj.value("auto_run").toBool(false);
     c.autoRunDelaySec = obj.value("auto_run_delay_sec").toInt(0);
+    c.cronExpression = obj.value("cron_expression").toString();
+    c.cronNotifyOnRun = obj.value("cron_notify_on_run").toBool(false);
     c.order = obj.value("order").toInt(-1);
 
     if (obj.contains("http_config") && obj.value("http_config").isObject()) {
@@ -462,6 +501,7 @@ Command Command::fromJson(const QJsonObject &obj)
     for (auto it = lastParamsObj.constBegin(); it != lastParamsObj.constEnd(); ++it) {
         c.lastParamValues[it.key()] = it.value().toString();
     }
+    c.kipLastValues = obj.value("kip_last_values").toObject();
     const QJsonObject usageObj = obj.value("param_usage_history").toObject();
     for (auto it = usageObj.constBegin(); it != usageObj.constEnd(); ++it) {
         QStringList values;
@@ -490,6 +530,7 @@ QJsonObject Folder::toJson() const
     if (hidden) obj["hidden"] = true;
     if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
     if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
+    if (!cliDescription.isEmpty()) obj["cli_description"] = cliDescription;
 
     if (!envVars.isEmpty()) {
         QJsonObject envObj;
@@ -524,6 +565,7 @@ Folder Folder::fromJson(const QJsonObject &obj)
     f.hidden = obj.value("hidden").toBool(false);
     f.terminalTarget = obj.value("terminal_target").toString();
     f.cliPath = obj.value("cli_path").toString();
+    f.cliDescription = obj.value("cli_description").toString();
 
     const QJsonObject envObj = obj.value("env_vars").toObject();
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
@@ -680,6 +722,40 @@ Collection Collection::fromJson(const QJsonObject &obj)
     }
     // tag_colors legado é ignorado (feature de tags removida).
     return c;
+}
+
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured)
+{
+    // ESCOLHA EXPLÍCITA sempre vence, mesmo se for um campo Key — o
+    // usuário questionou exatamente esse caso ("o campo no param como
+    // exibido é key, mas ele tá exibindo o valor... tá certo?" — não
+    // estava: ignorar uma escolha deliberada era o bug errado a corrigir).
+    // O auto-fallback abaixo (que evita Key) só existe pra quando NADA foi
+    // configurado — o problema real era o EDITOR pré-selecionar Key
+    // silenciosamente sem o usuário escolher nada (corrigido em
+    // parameter-editor-widget.cpp: refreshDisplayFields), não este
+    // resolver ignorar uma escolha de verdade.
+    if (!configured.isEmpty()) {
+        const bool exists = std::any_of(collection.schema.constBegin(), collection.schema.constEnd(),
+            [&configured](const CollectionField &f) { return f.name == configured; });
+        if (exists) {
+            return configured;
+        }
+        // `configured` não existe mais no schema (campo removido/renomeado
+        // depois de salvo) — cai pro auto-fallback abaixo, igual a "nada
+        // configurado".
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type == CollectionFieldType::Value) {
+            return f.name;
+        }
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type != CollectionFieldType::Key) {
+            return f.name;
+        }
+    }
+    return collection.schema.isEmpty() ? QString() : collection.schema.first().name;
 }
 
 } // namespace kai::core

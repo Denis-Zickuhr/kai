@@ -218,7 +218,7 @@ private slots:
     }
 
     // REGRESSÃO (achado auditando o schema/JSON de um export real, ver
-    // docs/manifesto/kai.schema.json): um export ENXUTO ainda vazava o id
+    // assets/manifesto/kai.schema.json): um export ENXUTO ainda vazava o id
     // interno de cada ENTRY de coleção — CollectionEntry::toJson escreve
     // "id" incondicionalmente, e stripIdsFromExport nunca olhava dentro
     // de "entries" pra removê-lo (só tratava id/folder_id no nível da
@@ -325,7 +325,7 @@ private slots:
         Command c;
         c.id = QStringLiteral("c1");
         c.name = QStringLiteral("Subir ambiente");
-        c.type = CommandType::Shell;
+        c.type = CommandType::Command;
         c.command = QStringLiteral("up.sh");
         c.cliPath = QStringLiteral("env");
         c.params << p;
@@ -425,7 +425,7 @@ private slots:
         Command c;
         c.id = QStringLiteral("c1");
         c.name = QStringLiteral("Cmd");
-        c.type = CommandType::Shell;
+        c.type = CommandType::Command;
         c.command = QStringLiteral("echo oi");
         data.commands.append(c);
 

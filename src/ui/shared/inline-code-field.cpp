@@ -61,10 +61,9 @@ InlineCodeField::InlineCodeField(QWidget *parent)
         mono.setPointSize(tk::fontSizePt());
         m_edit->setFont(mono);
     }
-    m_editPadding = tk::space(1);
-    m_edit->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 padding: %2px; }")
-                              .arg(tk::codeAreaQss())
-                              .arg(m_editPadding));
+    m_editPadding = tk::space(2);
+    m_editPaddingX = tk::space(3);
+    setPlainField(true);
     // Sem margem interna extra do documento: ela some da conta da altura e
     // empurra a primeira linha para baixo.
     m_edit->document()->setDocumentMargin(0);
@@ -146,12 +145,12 @@ void InlineCodeField::setPlainField(bool plain)
     if (plain) {
         m_edit->setStyleSheet(QStringLiteral(
             "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3;"
-            " border-radius: %4px; padding: %5px; }")
+            " border-radius: %4px; padding: %5px %6px; }")
             .arg(tk::bg(), tk::fg(), tk::borderColor())
-            .arg(tk::radiusMd()).arg(m_editPadding));
+            .arg(tk::radiusMd()).arg(m_editPadding).arg(m_editPaddingX));
     } else {
-        m_edit->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 padding: %2px; }")
-            .arg(tk::codeAreaQss()).arg(m_editPadding));
+        m_edit->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 padding: %2px %3px; }")
+            .arg(tk::codeAreaQss()).arg(m_editPadding).arg(m_editPaddingX));
     }
 }
 

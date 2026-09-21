@@ -1,5 +1,6 @@
 #include "ui/shared/help-dialog.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/ai-manifestos-page.h"
 #include "ui/shared/fuzzy-search.h"
 
 #include <QHBoxLayout>
@@ -10,8 +11,13 @@
 #include <QLabel>
 #include <QDialogButtonBox>
 #include <QSplitter>
+#include <QColor>
+#include <QFont>
+#include <QListWidgetItem>
 #include <QScrollBar>
+#include <QStackedWidget>
 
+#include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 
 namespace kai::ui {
@@ -25,9 +31,7 @@ HelpDialog::HelpDialog(QWidget *parent)
     buildTopics();
     setupUi();
     reloadList();
-    if (m_list->count() > 0) {
-        m_list->setCurrentRow(0);
-    }
+    selectFirstTopic();
     centerOnParent(this);
 }
 
@@ -65,8 +69,13 @@ void HelpDialog::setupUi()
         }
     });
 
+    m_manifestos = new AiManifestosPage();
+    m_right = new QStackedWidget(splitter);
+    m_right->addWidget(m_browser);
+    m_right->addWidget(m_manifestos);
+
     splitter->addWidget(left);
-    splitter->addWidget(m_browser);
+    splitter->addWidget(m_right);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({260, 640});
@@ -79,17 +88,31 @@ void HelpDialog::setupUi()
     outer->addWidget(buttonBox);
 }
 
+int HelpDialog::currentTopicRow() const
+{
+    return m_list ? m_list->currentRow() : -1;
+}
+
 void HelpDialog::handleSearchChanged(const QString &query)
 {
     reloadList(query);
-    if (m_list->count() > 0) {
-        m_list->setCurrentRow(0);
+    selectFirstTopic();
+}
+
+// Pula os cabeçalhos de grupo (linhas sem id).
+void HelpDialog::selectFirstTopic()
+{
+    for (int row = 0; row < m_visibleIds.size(); ++row) {
+        if (!m_visibleIds.at(row).isEmpty()) {
+            m_list->setCurrentRow(row);
+            return;
+        }
     }
 }
 
 void HelpDialog::handleTopicSelected(int row)
 {
-    if (row < 0 || row >= m_visibleIds.size()) {
+    if (row < 0 || row >= m_visibleIds.size() || m_visibleIds.at(row).isEmpty()) {
         return;
     }
     showTopic(m_visibleIds.at(row));
@@ -101,8 +124,22 @@ void HelpDialog::reloadList(const QString &query)
     m_visibleIds.clear();
 
     if (query.trimmed().isEmpty()) {
-        // Sem busca: mostra todos os tópicos na ordem de definição.
+        // Sem busca: todos os tópicos na ordem de definição, sob o cabeçalho do
+        // grupo (linha desabilitada: o teclado e o clique a ignoram).
+        QString lastGroup;
         for (const HelpTopic &t : m_topics) {
+            if (t.group != lastGroup) {
+                lastGroup = t.group;
+                auto *header = new QListWidgetItem(
+                    utils::tr(QStringLiteral("help.group.") + t.group).toUpper(), m_list);
+                header->setFlags(Qt::NoItemFlags);
+                QFont font = header->font();
+                font.setBold(true);
+                font.setPointSizeF(font.pointSizeF() * 0.85);
+                header->setFont(font);
+                header->setForeground(QColor(utils::tokens::mutedFg()));
+                m_visibleIds.append(QString());
+            }
             m_list->addItem(t.title);
             m_visibleIds.append(t.id);
         }
@@ -127,8 +164,13 @@ void HelpDialog::showTopic(const QString &topicId)
 {
     for (int i = 0; i < m_topics.size(); ++i) {
         if (m_topics.at(i).id == topicId) {
-            m_browser->setHtml(m_topics.at(i).html);
-            m_browser->verticalScrollBar()->setValue(0);
+            if (topicId == QLatin1String("ai_manifestos")) {
+                m_right->setCurrentWidget(m_manifestos);
+            } else {
+                m_right->setCurrentWidget(m_browser);
+                m_browser->setHtml(m_topics.at(i).html);
+                m_browser->verticalScrollBar()->setValue(0);
+            }
             // Sincroniza a seleção da lista se o tópico estiver visível.
             const int visIdx = m_visibleIds.indexOf(topicId);
             if (visIdx >= 0 && m_list->currentRow() != visIdx) {

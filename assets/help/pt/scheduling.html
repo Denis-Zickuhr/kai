@@ -1,0 +1,20 @@
+<h2>Agendamentos e auto-run</h2>
+<p>Um comando pode começar sozinho — num horário, ou quando o Kai inicia. As duas opções ficam na aba <b>Configuração</b> do editor do comando e passam pelo mesmo pipeline de um clique: hooks, condições, notificações e histórico de execuções valem.</p>
+<h3>Agendamento (CRON)</h3>
+<p>Digite uma expressão cron padrão de 5 campos: <code>minuto hora dia-do-mês mês dia-da-semana</code>.</p>
+<pre>0 9 * * 1-5      # 9:00, de segunda a sexta
+*/15 * * * *     # a cada 15 minutos
+30 2 1 * *       # 2:30 no dia 1 de cada mês
+0 8 * * mon,fri  # 8:00 às segundas e sextas</pre>
+<p>Aceita: <code>*</code>, listas (<code>1,2,3</code>), intervalos (<code>1-5</code>), passos (<code>*/15</code>) e nomes de dia/mês (<code>mon</code>, <code>jan</code>). O editor mostra uma leitura em linguagem natural sob o campo (<i>Dias úteis às 09:00</i>). Como no cron clássico, quando dia-do-mês e dia-da-semana estão definidos, qualquer um que case dispara.</p>
+<div class='tip'><b>Os horários são avaliados em UTC, não no seu fuso local.</b> Se você está em UTC−3, <code>0 9 * * *</code> dispara às 06:00 local.</div>
+<ul>
+<li><b>Notificar ao executar</b> envia uma <a href='help://notifications'>notificação</a> com o resultado a cada execução; desligado por padrão para um agendamento frequente não virar spam.</li>
+<li>O Kai precisa estar rodando (ele vive na bandeja) para um agendamento disparar.</li>
+</ul>
+<h3>Rodar ao iniciar o Kai</h3>
+<p><b>Executar quando o Kai iniciar</b> dispara o comando sozinho depois do <b>Atraso</b> definido (segundos). Usa os <b>últimos valores</b> dos parâmetros; se um parâmetro obrigatório não tem histórico, o comando é pulado e o motivo é registrado (a inicialização nunca para para fazer uma pergunta).</p>
+<pre>{ "name": "Sync", "type": "command", "command": "./sync.sh", "is_background": true,
+  "auto_run": true, "auto_run_delay_sec": 5 }</pre>
+<h3>Não combina com</h3>
+<p>Comandos <a href='help://kip'>KIP</a> não podem ser agendados nem ter auto-run (eles precisam de uma tela para conversar).</p>

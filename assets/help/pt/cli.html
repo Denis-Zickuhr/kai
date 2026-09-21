@@ -1,2 +1,79 @@
-<h2>CLI — controle o Kai pelo terminal</h2>
-<p>Com o Kai aberto, use o binário como cliente (vibe CopyQ):</p><table><tr><td><code>kai run "Deploy"</code></td><td>executa um comando pelo nome</td></tr><tr><td><code>kai list</code></td><td>lista os comandos</td></tr><tr><td><code>kai env list</code></td><td>lista os environments</td></tr><tr><td><code>kai env use Prod</code></td><td>ativa um environment</td></tr><tr><td><code>kai ps</code></td><td>lista os processos em execução (nome, PID, status)</td></tr><tr><td><code>kai attach &lt;pid|nome&gt;</code></td><td>conecta a saída a um processo</td></tr><tr><td><code>kai kill &lt;pid|nome&gt;</code></td><td>encerra um processo</td></tr><tr><td><code>kai show</code></td><td>traz a janela à frente</td></tr></table><p>Ótimo para scripts, Makefiles e CI. Abrir o Kai duas vezes só reexibe a janela (instância única).</p>
+<h2>CLI — o Kai no terminal</h2>
+<p>O mesmo binário <code>kai</code> funciona de três jeitos no terminal:</p>
+<table>
+<tr><td><b>CLI Paths local</b></td><td>dentro de uma pasta com <code>kai.json</code>/<code>kai.yml</code>, roda os comandos <i>daquele arquivo</i> — sem precisar do Kai aberto</td></tr>
+<tr><td><b>CLI Paths global</b></td><td>fora dessas pastas (ou com <code>-g</code>), roda os comandos com caminho de CLI cadastrados no app</td></tr>
+<tr><td><b>Controle da instância</b></td><td><code>kai run</code>, <code>kai ps</code>, <code>kai env</code>... falam com o Kai em execução</td></tr>
+</table>
+
+<h3>1. Dando um caminho de CLI a um comando</h3>
+<p>Só aparece no terminal o que tiver um <b>Caminho de CLI</b> (campo no editor de comando e de pasta, ou <code>cli_path</code> no arquivo). Cada pasta com caminho vira um segmento; o comando é sempre o último:</p>
+<pre>folders:
+  - path: Docker
+    cli_path: docker
+commands:
+  - name: Subir container
+    folder: Docker
+    cli_path: up
+    type: command
+    command: docker compose up -d {{servico}}
+    params:
+      - name: servico
+        type: text
+      - name: build
+        type: bool
+        optional: true</pre>
+<p>Isso vira <code>kai docker up api --build=true</code>. Pastas <b>sem</b> caminho de CLI são transparentes: não viram segmento, mas os filhos delas com caminho próprio continuam alcançáveis pela pasta de cima.</p>
+
+<h3>2. Descobrir e rodar</h3>
+<table>
+<tr><td><code>kai</code></td><td>lista os caminhos disponíveis na raiz</td></tr>
+<tr><td><code>kai docker</code></td><td>caminho incompleto: lista as subpastas e, para cada comando, a descrição, a linha de uso e cada parâmetro (obrigatório ou opcional, opções, padrão e descrição)</td></tr>
+<tr><td><code>kai docker up api</code></td><td>roda o comando</td></tr>
+<tr><td><code>kai docker up --help</code></td><td>mostra uso, descrição e parâmetros do comando, sem rodar nada</td></tr>
+</table>
+<p><b>Parâmetros:</b> os obrigatórios são <b>posicionais</b>, na ordem em que foram definidos; os opcionais só entram como <code>--nome=valor</code> e, se omitidos, usam o valor padrão. Tipos <code>bool</code>, <code>number</code> e <code>select</code> com opções fixas são validados antes de rodar.</p>
+<p><b>Código de saída:</b> <code>0</code> sucesso; se o comando falhar, o <b>código real dele</b> (ex.: <code>127</code>, <code>130</code> no <code>Ctrl+C</code>; <code>1</code> quando não há um, como numa requisição HTTP); <code>2</code> erro de uso (caminho inexistente, parâmetro faltando ou inválido) — dá pra usar em scripts e CI.</p>
+
+<h3>3. Local × global</h3>
+<p><b>Local</b> — há um <code>kai.json</code>, <code>kai.yml</code> ou <code>kai.yaml</code> no diretório atual. Só os caminhos <i>desse arquivo</i> são listados e rodados. O comando é executado a partir da definição do arquivo: template renderizado e rodado direto no shell do sistema (bash no Linux, <code>cmd.exe</code> no Windows — ou a própria distro, quando o <code>kai.exe</code> é chamado de uma pasta do WSL). <b>Alvos de terminal e demais ajustes feitos no app são ignorados</b>; a única coisa do app que entra são as variáveis do Environment ativo. O comando usa o seu terminal direto: prompts interativos, cores e <code>Ctrl+C</code> funcionam como num comando comum — por isso auto-responsores, <code>open_last_link</code> e <code>compact_output</code> não se aplicam aqui. Não fica registrado no app.</p>
+<p><b>Global</b> — sem arquivo no diretório atual, <code>kai</code> resolve contra as pastas e comandos cadastrados no app (qualquer um com caminho de CLI) e <b>roda pelo próprio app</b>: aparece na lista de processos (<code>kai ps</code>), no histórico e no painel de saída, com alvo de terminal (inclusive o padrão), variáveis dinâmicas salvas e Environment ativo. A saída volta pro terminal e o que você digita vai pro comando (inclusive <code>Ctrl+C</code>). Com o Kai fechado, ele é aberto na bandeja sozinho — sem nunca abrir uma segunda instância. Fechar o terminal não para o comando: ele segue no app (<code>kai kill</code> para). Um comando <code>is_background</code> só é disparado, e o <code>kai</code> devolve o terminal com o PID. Para usar os globais <i>de dentro</i> de uma pasta com arquivo local, use a flag <code>-g</code> (ou <code>--global</code>), sempre antes do caminho.</p>
+<h3>Flags</h3>
+<table>
+<tr><td><code>-g</code>, <code>--global</code></td><td>usa os caminhos do app mesmo dentro de uma pasta com <code>kai.json</code>/<code>kai.yml</code></td></tr>
+<tr><td><code>-d</code>, <code>--detached</code></td><td>dispara e devolve o terminal na hora. No global, o app registra e roda (acompanhe com <code>kai attach</code>, pare com <code>kai kill</code>); no local, o comando roda em segundo plano e a saída vai para um arquivo de log, cujo caminho é mostrado</td></tr>
+<tr><td><code>-n</code>, <code>--notify</code></td><td>notificação na bandeja quando o comando terminar, com o tempo que levou (combina com <code>-d</code>: <code>kai -dn …</code>)</td></tr>
+<tr><td><code>--dry-run</code></td><td>mostra o que <b>seria</b> executado — comando já renderizado (parâmetros, variáveis, <code>{% if %}</code>), diretório, alvo de terminal e hooks — sem executar</td></tr>
+<tr><td><code>--json</code></td><td>listagem e <code>--dry-run</code> em JSON, pra scripts (<code>kai --json docker | jq</code>)</td></tr>
+</table>
+<p>As curtas combinam (<code>-gdn</code>) — <code>kai -gd docker up api</code> é o mesmo que <code>kai --global --detached docker up api</code>. As flags ficam <b>antes</b> do caminho; o que vem depois dele é do comando.</p>
+<div class='tip'>Os nomes <code>run</code>, <code>list</code>, <code>env</code>, <code>show</code>, <code>help</code>, <code>import</code>, <code>validate</code>, <code>ps</code>, <code>attach</code>, <code>kill</code>, <code>raise</code>, <code>history</code>, <code>last</code>, <code>init</code> e <code>completion</code> são reservados e não podem ser usados como caminho de CLI — o <code>kai validate</code> avisa sobre isso e sobre caminhos duplicados.</div>
+
+<h3>4. Controlando o Kai em execução</h3>
+<p>Estes verbos falam com a instância aberta (com o Kai fechado, saem com código <code>2</code>). O comando roda <b>dentro do app</b>, com todas as configurações dele — alvo de terminal, variáveis dinâmicas, histórico e lista de processos:</p>
+<table>
+<tr><td><code>kai run "Deploy"</code></td><td>executa um comando pelo nome</td></tr>
+<tr><td><code>kai list</code></td><td>lista os comandos</td></tr>
+<tr><td><code>kai env list</code></td><td>lista os environments</td></tr>
+<tr><td><code>kai env use Prod</code></td><td>ativa um environment</td></tr>
+<tr><td><code>kai ps [--json]</code></td><td>lista os processos em execução (nome, PID, status)</td></tr>
+<tr><td><code>kai attach &lt;pid|nome&gt;</code></td><td>acompanha <b>no terminal</b> a saída de um processo que já está rodando (mostra o que ele já imprimiu e segue ao vivo); o teclado vai pro processo, e <code>Ctrl+]</code> solta o terminal sem pará-lo</td></tr>
+<tr><td><code>kai history [N] [--json]</code></td><td>últimas execuções registradas pelo Kai (status e duração) — não precisa do Kai aberto</td></tr>
+<tr><td><code>kai last [--log] [--json]</code></td><td>a execução mais recente; <code>--log</code> mostra a saída dela</td></tr>
+<tr><td><code>kai init [--json] [--force]</code></td><td>cria um <code>kai.yml</code> na pasta atual a partir do que for detectado (<code>package.json</code>, <code>docker-compose.yml</code>, <code>Makefile</code>, <code>pyproject</code>…), já com caminhos de CLI; sem nada detectado, um exemplo pra editar</td></tr>
+<tr><td><code>kai kill &lt;pid|nome&gt;</code></td><td>encerra um processo</td></tr>
+<tr><td><code>kai import [arquivo|pasta]</code></td><td>importa o <code>kai.json</code>/<code>kai.yml</code>/<code>kai.yaml</code> como projeto (sem argumento, procura na pasta atual)</td></tr>
+<tr><td><code>kai raise --level error "deu pau"</code></td><td>mostra uma notificação na bandeja do Kai — níveis <code>info</code> (padrão), <code>warning</code> e <code>error</code>; <code>--title</code> troca o título. Fica também no histórico de notificações. Útil no fim de scripts</td></tr>
+<tr><td><code>kai show</code></td><td>traz a janela à frente</td></tr>
+</table>
+<p>Não precisa do Kai aberto: <code>kai validate &lt;arquivo&gt;</code> confere um <code>kai.json</code>/<code>kai.yml</code> (estrutura, caminhos de CLI duplicados ou reservados) e sai com <code>1</code> se houver erros. <code>kai help</code> mostra o resumo de tudo isto.</p>
+
+<h3>Autocomplete (Tab)</h3>
+<p>Com o script instalado, <kbd>Tab</kbd> completa caminhos, verbos, <code>--opcao=</code> e valores de <code>select</code>/<code>bool</code> — no modo local e no global (inclusive depois de <code>-g</code>). Coloque no seu <code>~/.bashrc</code> (funciona também com uma função <code>kai</code> que chama o <code>kai.exe</code>):</p>
+<pre>eval "$(kai completion bash)"     # zsh: eval "$(kai completion zsh)"</pre>
+<p>No PowerShell: <code>kai completion powershell | Out-String | Invoke-Expression</code> (no <code>$PROFILE</code>).</p>
+<div class='tip'>Uma pasta pode ter <b>Descrição de CLI</b> (aba <b>Interface CLI</b> do editor de pasta, ou <code>cli_description</code> no arquivo) — ela aparece ao lado do caminho quando o <code>kai</code> lista a pasta. Nos comandos, a aba <b>Interface CLI</b> reúne o caminho e a descrição usada na listagem e no <code>--help</code>.</div>
+
+<h3>Windows e WSL</h3>
+<p>Para usar o Kai do Windows a partir do WSL, crie um atalho, por exemplo <code>alias kai='kai.exe'</code>. Chamado de uma pasta do WSL, o modo local roda o comando <b>dentro da mesma distro</b> (via <code>wsl.exe</code>, com <code>{{PROJECT_PATH}}</code> no formato Linux), igual a um Kai nativo. O modo global segue o alvo de terminal configurado no app.</p>
+<p>Veja também: <a href='help://kai_json'>Arquivo kai.json</a>, <a href='help://terminal_targets'>Terminais e WSL</a>, <a href='help://processes'>Processos</a>. Scripts em Python ou Node fazem as mesmas coisas pelo módulo <code>kai</code> embutido — veja <a href='help://languages'>Python e Node</a>.</p>

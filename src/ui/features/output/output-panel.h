@@ -9,25 +9,34 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QPointer>
 #include <QMap>
 #include <QString>
 #include <QTextCursor>
 #include <QVector>
 #include <QWidget>
 
+#include <optional>
+
+namespace kai::engine { class KipSession; }
+
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QShortcut;
 class QTabBar;
 class QTabWidget;
 class QTextBrowser;
 class QToolButton;
 class QTableWidget;
 class QStackedWidget;
+class QScrollArea;
 
 namespace kai::ui {
 
 class JsonViewerWidget;
+class KipView;
+class OverflowIndicator;
 
 // Estado de execução refletido no badge do painel.
 // Skipped: comando HTTP pulado por Execution Condition (não é sucesso nem
@@ -85,7 +94,7 @@ public:
     void setStatus(OutputStatus status);
     void setInputEnabled(bool enabled);
     void focusInput();
-    // Texto do atalho que foca este campo (ex: "Ctrl+`"), já formatado para
+    // Texto do atalho que foca este campo (ex: "Ctrl+'"), já formatado para
     // exibição — usado no placeholder convidativo em vez de autofoco (ver
     // MainWindow::setupActionShortcuts). Vazio = atalho desabilitado/limpo
     // pelo usuário: o placeholder cai para o texto genérico sem menção.
@@ -109,6 +118,15 @@ public:
     // Injeta um botão/widget no cabeçalho (usado pelo drawer para colocar
     // colapsar/destacar sem duplicar o cabeçalho numa segunda implementação).
     void addHeaderWidget(QWidget *widget);
+    // Como addHeaderWidget, mas o widget vai para o FIM da fileira de ações
+    // e é o ÚNICO que continua visível com o painel colapsado (o botão de
+    // expandir/colapsar do drawer).
+    void addTrailingHeaderWidget(QWidget *widget);
+    // Altura ÚNICA das barras do painel (cabeçalho e rodapé de resposta). O
+    // MainWindow passa a altura REAL das barras de ação vizinhas, para as
+    // linhas separadoras dos painéis ficarem alinhadas em qualquer densidade.
+    void setBarHeight(int height);
+    int barHeight() const { return m_barHeight; }
     // Colapsa APENAS o corpo (abas + entrada), mantendo o CABEÇALHO visível.
     // Esconder o painel inteiro escondia também o botão de expandir, deixando
     // o usuário sem como voltar (bug reportado: "uso o colapsar e o terminal
@@ -157,6 +175,23 @@ public:
     void setInteractiveMode(bool interactive);
     bool interactiveMode() const { return m_interactiveMode; }
 
+    // --- KIP (spec 11 §13.1/§13.4) --------------------------------------------
+    // Troca o CORPO do painel pela view KIP da `session` (nullptr volta ao modo
+    // normal). O cabeçalho continua o mesmo. A view se desenha a partir do
+    // modelo da sessão, então este painel pode ser recriado (janela destacada)
+    // sem perder nada.
+    void setKipSession(engine::KipSession *session);
+    engine::KipSession *kipSession() const;
+    bool kipMode() const { return m_kipMode; }
+    // A view está viva em OUTRA janela (destacada): o painel embutido mostra um
+    // cartão "Rodando na própria janela" + "Focar janela" no lugar dela.
+    void setKipDetachedPlaceholder(bool detached);
+    // O botão "janela própria" da view KIP (falso na própria janela destacada).
+    void setKipDetachable(bool detachable);
+    bool kipDetachedPlaceholder() const { return m_kipDetachedPlaceholder; }
+    // nullptr até o primeiro comando KIP aparecer neste painel.
+    KipView *kipView() const { return m_kipView; }
+
     // Comando HTTP pulado por Execution Condition (feedback do usuário:
     // "perco o feedback visual que isso ocorreu, e perco acesso as abas
     // gerais do comando" — o resultado HTTP anterior, em cache, ficava
@@ -183,6 +218,14 @@ public:
     // Semeia a saída com um texto já existente (usado ao destacar: a nova
     // instância começa com o histórico do painel embutido).
     void seedOutput(const QString &text);
+
+    // Badge atual (o mesmo valor passado a setStatus).
+    OutputStatus status() const { return m_status; }
+    // Copia TUDO que o painel `source` mostra para o comando conectado a ele
+    // (nome, status, abas de resposta HTTP, texto, opções de exibição). Usado
+    // ao destacar a saída: a janela nasce idêntica ao painel embutido, com as
+    // abas certas para o tipo do comando, e depois acompanha o comando.
+    void copyStateFrom(const OutputPanel &source);
 
     // Texto puro acumulado (usado para semear outra instância no detach).
     QString plainOutput() const;
@@ -217,12 +260,35 @@ signals:
     // (MainWindow: sabe o toggle de configuração e como montar o texto).
     void firstErrorInFormattedOutput();
 
+    // KIP: "Run again" do cartão de resultado e "Focar janela" do placeholder.
+    void kipRunAgainRequested();
+    // A view KIP pediu uma janela própria (o cabeçalho do painel não existe nesse modo).
+    void kipDetachRequested();
+    void kipFocusWindowRequested();
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void setupUi();
+    // Estilo do cabeçalho (botões planos + linha separadora); reaplicado no
+    // tema e ao colapsar/expandir.
+    void applyHeaderStyle();
+    // Altura da linha rolável de abas/ícones (a da barra, menos a faixa de
+    // overflow quando ela está visível).
+    void applyHeaderRowHeight();
+    void setHeaderActionsVisible(bool visible);
+    void refreshHeaderExtrasWidth();
     void rebuildOptionsMenu();
+    // Compartilhados pelo item de menu, pelo QShortcut (Ctrl+=/Ctrl+-) e
+    // pelo Ctrl+scroll (ver eventFilter) — um só lugar decide o cálculo do
+    // novo tamanho e dispara a persistência via viewOptionsChanged.
+    void increaseFontSize();
+    void decreaseFontSize();
+    // Copia a saída (texto cru) inteira pro clipboard — usado pelo botão
+    // dedicado na caixinha de ações do cabeçalho (antes um item do menu de
+    // opções, ver rebuildOptionsMenu).
+    void copyAllOutput();
     // Salva o texto cru acumulado num arquivo escolhido pelo usuário (ver
     // rebuildOptionsMenu — item "Extrair para arquivo").
     void exportOutputToFile();
@@ -248,6 +314,7 @@ private:
     // JsonViewerWidget (chip lupa + campo, flutuando no canto superior
     // direito do viewport).
     void setupOutputSearchOverlay();
+    void applyOutputSearchOverlayStyle();
     void setOutputSearchExpanded(bool expanded);
     void repositionOutputSearchOverlay();
     void applyOutputSearchFilter(const QString &needle);
@@ -267,6 +334,9 @@ private:
     // é só Shell, skipped é só HTTP), mas centralizar evita um dos dois
     // pisar no outro se algum dia coincidirem. Interativo tem prioridade.
     void updateBodyStackPage();
+    void updateHeaderVisibility();
+    bool hasAnyContent() const;
+    void applyEmptyStateStyle();
     void appendChunkNow(const QString &rawText, bool isError);
     // Aplica a compactação (colapsa linhas vazias, apara espaços).
     QString compactText(const QString &input);
@@ -276,6 +346,8 @@ private:
     void refreshLineNumberArea();
 
     QString m_commandId;
+    OutputStatus m_status = OutputStatus::Idle;
+    std::optional<engine::HttpResult> m_lastHttpResult;
     // Ver firstErrorInFormattedOutput() — resetado a cada início de
     // execução (setStatus(OutputStatus::Running)), já que este painel é
     // REUSADO entre execuções/comandos diferentes (não há uma instância
@@ -287,19 +359,43 @@ private:
     QWidget *m_statusBadge = nullptr;
     QLabel *m_statusDot = nullptr;
     QLabel *m_statusLabel = nullptr;
-    QLabel *m_metricsLabel = nullptr; // status HTTP • tempo • tamanho
-    QToolButton *m_copyPidButton = nullptr; // copia o PID do processo pro clipboard
+    // m_metricsLabel removido: métricas HTTP migraram pra dentro da aba de
+    // Request (ver m_requestMetricsHeader).
+    // m_copyPidButton removido: o PID agora só vive no tooltip/clique do
+    // próprio m_statusBadge (ver setProcessPid).
     qint64 m_processPid = 0;
     QLabel *m_promptLabel = nullptr;
     QToolButton *m_optionsButton = nullptr;
     QToolButton *m_clearButton = nullptr; // atalho de "limpar saída" no cabeçalho (ver rebuildOptionsMenu)
+    QToolButton *m_copyOutputButton = nullptr; // copia a saída inteira pro clipboard
     QToolButton *m_exportButton = nullptr; // "Extrair para arquivo", ao lado da lixeira
+    QShortcut *m_increaseFontShortcut = nullptr; // Ctrl+=
+    QShortcut *m_decreaseFontShortcut = nullptr; // Ctrl+-
     QWidget *m_header = nullptr;
     QLabel *m_requestMethodBadge = nullptr;
     QLabel *m_requestUrlLabel = nullptr;
+    // Métricas HTTP (status/tempo/tamanho) — dentro da aba de Request desde
+    // a padronização de abas (antes soltas no header, ver m_metricsLabel,
+    // mantido só como fallback de compat com telas estreitas).
+    class OutputMetricsHeader *m_requestMetricsHeader = nullptr;
+    // Barra "verbo + URL" da aba Requisição — guardada pra reaplicar seu
+    // estilo (gradiente/cor de superfície) no live reload de tema (ver
+    // applyThemeVariables()); sem isso ficava presa nas cores calculadas na
+    // criação do widget, "chumbada" (relatado pelo usuário).
+    QWidget *m_requestUrlBar = nullptr;
     int m_headerHeight = 0;
     int m_barHeight = 0; // altura fixa única da barra (abas + ícones alinhados)
     QWidget *m_headerExtras = nullptr;
+    QWidget *m_trailingHeaderWidget = nullptr; // ver addTrailingHeaderWidget
+    // Abas + ícones ficam numa linha que ROLA na horizontal quando não cabe
+    // (barra escondida; a faixa de destaque em m_headerOverflow mostra a
+    // posição). O chevron fica FORA da área rolável, sempre visível.
+    QScrollArea *m_headerScroll = nullptr;
+    QWidget *m_headerRow = nullptr;
+    OverflowIndicator *m_headerOverflow = nullptr;
+    // Raio do canto de baixo do conteúdo (0 com o rodapé de resposta visível;
+    // senão o raio concêntrico à moldura) — ver updateInputFieldStyle.
+    int m_bodyBottomRadius = 0;
 
     // Barra de abas PRÓPRIA (QTabBar) + pilha de páginas (QStackedWidget), em
     // vez de um QTabWidget. Motivo: o QTabWidget desenha as abas e o corner
@@ -332,9 +428,21 @@ private:
     QWidget *m_normalBody = nullptr;
     PtyTerminalWidget *m_ptyTerminal = nullptr;
     // 3ª página de m_bodyStack — ver setSkipped.
+    QWidget *m_emptyPanel = nullptr;   // "nada rodou ainda" (ver updateBodyStackPage)
+    QLabel *m_emptyIcon = nullptr;
+    QLabel *m_emptyTitle = nullptr;
+    QLabel *m_emptyHint = nullptr;
     QWidget *m_skippedPanel = nullptr;
     QLabel *m_skippedReasonLabel = nullptr;
     bool m_skipped = false;
+    // KIP: 5ª página (a view) e 6ª (placeholder da janela destacada) do corpo.
+    KipView *m_kipView = nullptr;
+    QWidget *m_kipPlaceholder = nullptr;
+    QPointer<engine::KipSession> m_kipSession;
+    bool m_kipMode = false;
+    bool m_kipDetachedPlaceholder = false;
+    bool m_kipDetachable = true;
+    void createKipView();
     bool m_interactiveMode = false;
 
     // A aba "Saída" é, de fato, m_outputContainer (QStackedLayout alternando
@@ -370,6 +478,7 @@ private:
     int m_outputCurrentMatchIndex = -1;
     JsonViewerWidget *m_jsonView = nullptr;
     QTableWidget *m_headersView = nullptr;
+    QWidget *m_headersPage = nullptr; // wrapper com margem em volta de m_headersView (identidade da página/aba)
     // Aba "Requisição" (feedback do usuário: "a aba de saída é meio inútil
     // pra requests http, podemos ver o que foi enviado?") — mostra
     // método+URL, headers e corpo REALMENTE enviados (já interpolados),
@@ -379,6 +488,9 @@ private:
     QTableWidget *m_requestHeadersView = nullptr;
     CodeOutputView *m_requestBodyView = nullptr;
     QLineEdit *m_inputField = nullptr;
+    // Rodapé de resposta: contêiner de altura própria que desenha o fundo, a
+    // linha do topo e o canto de baixo; o QLineEdit fica dentro, transparente.
+    QWidget *m_inputFooter = nullptr;
 
     AnsiTextParser m_parser;
     QString m_workingDirectory;

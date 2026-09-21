@@ -1,0 +1,49 @@
+<h2>Python &amp; Node</h2>
+<p>A command's text can be <b>code</b> instead of a shell line. Pick the <b>Language</b> at the top right of the command field: <b>Native (shell)</b> (the default), <b>Python</b> or <b>Node</b>. No <code>python3 -c "..."</code>, no heredoc: you write the code, Kai builds the call.</p>
+<pre>import os
+for f in os.listdir('.'):
+    print(f, os.path.getsize(f))</pre>
+<h3>How it runs</h3>
+<p>Kai hands the code to the interpreter encoded, so there are <b>no quoting problems</b> (any quote, <code>$</code>, backtick or newline works) and <b>stdin stays free</b>: <code>input()</code> works and so does <a href='help://kip'>KIP</a>. The call is just one more shell line, so it goes through <a href='help://terminal_targets'>execution profiles</a> such as WSL.</p>
+<ul>
+<li>Python output is unbuffered and UTF-8 — there is no <code>flush</code> to forget.</li>
+<li>Node code runs inside an async function: top-level <code>await</code> works and <code>return</code> ends the script. An uncaught error exits with code 1.</li>
+<li><b>Exit code</b> decides success as usual (<code>sys.exit(3)</code>, <code>process.exitCode = 3</code>).</li>
+</ul>
+<h3>Variables and parameters</h3>
+<p><code>{{VAR}}</code> collides with real code (<code>f"{{x}}"</code>, dictionaries, JS template strings), so Python/Node code is <b>never interpolated</b>. Variables and <a href='help://parameters'>parameters</a> arrive as <b>environment variables</b>, with the usual precedence:</p>
+<pre>import os
+print("Deploying to", os.environ["TARGET"])</pre>
+<pre>console.log("Deploying to", process.env.TARGET);</pre>
+<h3>Which interpreter</h3>
+<ul>
+<li><b>Settings → Languages</b> holds the global ones: <code>python3</code> and <code>node</code> by default (on Windows without an execution profile, Python defaults to <code>python</code>).</li>
+<li>A command can override it in its <b>Interpreter</b> field.</li>
+<li>The value is a <b>shell line resolved where the command runs</b>: on a WSL profile it is the WSL's <code>python3</code>, and a login shell already loads pyenv and nvm. It can have arguments (<code>uv run python</code>); quote paths with spaces yourself.</li>
+</ul>
+<h3>The <code>kai</code> module: talk to the app</h3>
+<p>Every Python/Node command has a <code>kai</code> module injected (nothing to install) — the same things the <a href='help://cli'>kai CLI</a> does:</p>
+<pre>import kai
+kai.notify("Backup finished", title="Backup", level="info")   # tray notification + history
+kai.commands()              # names of the registered commands
+kai.env.list(); kai.env.active(); kai.env.use("Prod")
+kai.run("Deploy")           # start another command (fire and forget)
+kai.ps(); kai.kill("api")   # tracked processes: {id, name, pid, status}
+kai.show()                  # bring the window to the front
+kai.import_project("/path/to/kai.json")</pre>
+<pre>await kai.notify('Backup finished', { title: 'Backup', level: 'info' });
+console.log(await kai.commands(), await kai.env.active());
+await kai.env.use('Prod');
+await kai.run('Deploy');</pre>
+<p>In Node <code>kai</code> is a global (and <code>require('kai')</code>) and every call returns a promise. Failures raise <code>kai.Error</code>. Kai exports <code>KAI_IPC_SOCKET</code>; when the socket can't be reached (a script in WSL under a Windows Kai) the module falls back to the <code>kai</code> CLI for notify, show, run, env.use and kill.</p>
+<h3>The <code>kip</code> module: turn the command into an app</h3>
+<p>With <b>KIP</b> turned on, the command text is the whole program and a <code>kip</code> module is injected too (<code>import kip</code>; in Node the global <code>kip</code>):</p>
+<pre>import kip
+v = kip.prompt([{"name": "env", "type": "select", "options": ["dev", "prod"]}],
+               id="where", title="Where to?")
+kip.progress(50, "Deploying...")
+kip.done(title="Deployed to " + v["env"])</pre>
+<p>Back raises <code>kip.Back</code>, Cancel exits with code 130, <code>hello</code> is sent for you. Full reference in <a href='help://kip'>KIP</a>.</p>
+<h3>Limits</h3>
+<p><b>Export variables</b> does not apply (there is no <code>export</code>): use KIP's <code>set_env</code>. Everything else — background, hooks, conditions, profiles, schedules — works as for any command.</p>
+<div class='tip'>A long example using both modules ships with Kai: <code>sample/languages/showcase.py</code>.</div>

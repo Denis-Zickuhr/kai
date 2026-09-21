@@ -25,6 +25,7 @@ constexpr const char *kCommandsFileName = "commands.json";
 constexpr const char *kSettingsFileName = "settings.json";
 constexpr const char *kCollectionsFileName = "collections.json";
 constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
+constexpr const char *kCollectionFiltersFileName = "collection-filters.json";
 
 QString shellFlavorToString(ShellFlavor s)
 {
@@ -130,6 +131,40 @@ bool ConfigManager::savePersistedDynamicVars(const QMap<QString, QMap<QString, Q
         root[jsonKey] = scopeObj;
     }
     return writeJsonAtomic(dynamicVarsFilePath(), QJsonDocument(root));
+}
+
+QString ConfigManager::collectionFiltersFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kCollectionFiltersFileName));
+}
+
+QMap<QString, CollectionFilterState> ConfigManager::loadCollectionFilters()
+{
+    QMap<QString, CollectionFilterState> result;
+    if (!QFile::exists(collectionFiltersFilePath())) {
+        return result; // primeira execução / nada persistido ainda — normal.
+    }
+    const QJsonObject root = readJsonWithRecovery(collectionFiltersFilePath());
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+        const QJsonObject obj = it.value().toObject();
+        CollectionFilterState state;
+        state.search = obj.value(QStringLiteral("search")).toString();
+        state.favoritesOnly = obj.value(QStringLiteral("favoritesOnly")).toBool();
+        result[it.key()] = state;
+    }
+    return result;
+}
+
+bool ConfigManager::saveCollectionFilters(const QMap<QString, CollectionFilterState> &data)
+{
+    QJsonObject root;
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        QJsonObject obj;
+        obj[QStringLiteral("search")] = it.value().search;
+        obj[QStringLiteral("favoritesOnly")] = it.value().favoritesOnly;
+        root[it.key()] = obj;
+    }
+    return writeJsonAtomic(collectionFiltersFilePath(), QJsonDocument(root));
 }
 
 QString ConfigManager::backupCorruptedFile(const QString &filePath)
@@ -330,6 +365,9 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("fx_animations")) {
         data.fxAnimations = root.value("fx_animations").toBool();
     }
+    if (root.contains("gradients_enabled")) {
+        data.gradientsEnabled = root.value("gradients_enabled").toBool();
+    }
     if (root.contains("auto_hide_on_focus_loss")) {
         data.autoHideOnFocusLoss = root.value("auto_hide_on_focus_loss").toBool();
     }
@@ -342,8 +380,17 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("window_height")) {
         data.windowHeight = root.value("window_height").toInt(data.windowHeight);
     }
+    if (root.contains("detached_window_width")) {
+        data.detachedWindowWidth = root.value("detached_window_width").toInt(data.detachedWindowWidth);
+    }
+    if (root.contains("detached_window_height")) {
+        data.detachedWindowHeight = root.value("detached_window_height").toInt(data.detachedWindowHeight);
+    }
     if (root.contains("global_hotkey")) {
         data.globalHotkey = root.value("global_hotkey").toString();
+    }
+    if (root.contains("auto_collapse_output_on_folders")) {
+        data.autoCollapseOutputOnFolders = root.value("auto_collapse_output_on_folders").toBool(data.autoCollapseOutputOnFolders);
     }
     if (root.contains("start_visible")) {
         data.startVisible = root.value("start_visible").toBool(data.startVisible);
@@ -457,6 +504,29 @@ SettingsData ConfigManager::loadSettings()
                     .arg(data.shortcuts.size()));
         }
     }
+    for (const QJsonValue &v : root.value("applied_migrations").toArray()) {
+        data.appliedMigrations << v.toString();
+    }
+    // Atalho padrão de "Focar saída" trocou de Ctrl+` para Ctrl+' (pedido do
+    // usuário: a crase é tecla morta no teclado ABNT2 e o atalho ficava
+    // como "Ctrl+´"). O shortcuts_v2 grava TODOS os atalhos, inclusive os
+    // que ficaram no padrão — sem isto, quem já salvou as Configurações
+    // nunca veria o padrão novo. Só troca quem ainda está EXATAMENTE no
+    // padrão antigo, uma única vez (o marcador impede reverter quem voltar
+    // pra Ctrl+` de propósito depois).
+    const QString focusOutputMigration = QStringLiteral("focus_output_apostrophe");
+    if (!data.appliedMigrations.contains(focusOutputMigration)) {
+        const QString oldDefault = QStringLiteral("Ctrl+`");
+        const QString newDefault = QStringLiteral("Ctrl+'");
+        const QString actionId = QStringLiteral("action.focus_output");
+        if (data.shortcuts.value(actionId) == QStringList{oldDefault}) {
+            data.shortcuts[actionId] = {newDefault};
+        }
+        if (data.focusOutputShortcut == oldDefault) {
+            data.focusOutputShortcut = newDefault;
+        }
+        data.appliedMigrations << focusOutputMigration;
+    }
     if (root.contains("show_hidden_commands")) {
         data.showHiddenCommands = root.value("show_hidden_commands").toBool();
     }
@@ -477,6 +547,7 @@ SettingsData ConfigManager::loadSettings()
     data.outputCompact     = root.value("output_compact").toBool(data.outputCompact);
     data.outputFontSize    = root.value("output_font_size").toInt(data.outputFontSize);
     data.outputMaxLogSizeKb = root.value("output_max_log_size_kb").toInt(data.outputMaxLogSizeKb);
+    data.gracefulStopTimeoutSec = root.value("graceful_stop_timeout_sec").toInt(data.gracefulStopTimeoutSec);
     if (root.contains("autostart")) {
         data.autostart = root.value("autostart").toBool(false);
     }
@@ -646,6 +717,22 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("notify_even_when_focused")) {
         data.notifyEvenWhenFocused = root.value("notify_even_when_focused").toBool();
     }
+    if (root.value("kip").isObject()) {
+        const QJsonObject k = root.value("kip").toObject();
+        KipSettings kip;
+        kip.handshakeTimeoutSec = k.value("handshake_timeout_sec").toInt(kip.handshakeTimeoutSec);
+        kip.changeTimeoutSec = k.value("change_timeout_sec").toInt(kip.changeTimeoutSec);
+        kip.cancelGraceSec = k.value("cancel_grace_sec").toInt(kip.cancelGraceSec);
+        kip.rememberAnswers = k.value("remember_answers").toBool(kip.rememberAnswers);
+        kip.expandDetailsOnFailure = k.value("expand_details_on_failure").toBool(kip.expandDetailsOnFailure);
+        kip.detachedWindowMode = k.value("detached_window_mode").toString(kip.detachedWindowMode);
+        data.kip = kip.clamped();
+    }
+    if (root.value("interpreters").isObject()) {
+        const QJsonObject i = root.value("interpreters").toObject();
+        data.interpreters.python = i.value("python").toString(data.interpreters.python);
+        data.interpreters.node = i.value("node").toString(data.interpreters.node);
+    }
 
     return data;
 }
@@ -668,12 +755,16 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["fx_translucency"] = data.fxTranslucency;
     root["fx_blur"] = data.fxBlur;
     root["fx_animations"] = data.fxAnimations;
+    root["gradients_enabled"] = data.gradientsEnabled;
     root["auto_hide_on_focus_loss"] = data.autoHideOnFocusLoss;
     root["window_mode"] = data.windowMode;
     root["window_width"] = data.windowWidth;
     root["window_height"] = data.windowHeight;
+    root["detached_window_width"] = data.detachedWindowWidth;
+    root["detached_window_height"] = data.detachedWindowHeight;
     root["global_hotkey"] = data.globalHotkey;
     root["start_visible"] = data.startVisible;
+    root["auto_collapse_output_on_folders"] = data.autoCollapseOutputOnFolders;
     root["next_tab_shortcut"] = data.nextTabShortcut;
     root["previous_tab_shortcut"] = data.previousTabShortcut;
     root["edit_item_shortcut"] = data.editItemShortcut;
@@ -717,6 +808,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
             v2[it.key()] = seqs;
         }
         root["shortcuts_v2"] = v2;
+        root["applied_migrations"] = QJsonArray::fromStringList(data.appliedMigrations);
     }
     root["show_hidden_commands"] = data.showHiddenCommands;
     root["command_creation_mode"] = data.commandCreationMode;
@@ -729,6 +821,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["output_compact"] = data.outputCompact;
     root["output_font_size"] = data.outputFontSize;
     root["output_max_log_size_kb"] = data.outputMaxLogSizeKb;
+    root["graceful_stop_timeout_sec"] = data.gracefulStopTimeoutSec;
     root["autostart"] = data.autostart;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
@@ -774,6 +867,23 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["notify_on_config_recovered"] = data.notifyOnConfigRecovered;
     root["notify_on_first_error_in_formatted_output"] = data.notifyOnFirstErrorInFormattedOutput;
     root["notify_even_when_focused"] = data.notifyEvenWhenFocused;
+    {
+        const KipSettings kip = data.kip.clamped();
+        QJsonObject k;
+        k["handshake_timeout_sec"] = kip.handshakeTimeoutSec;
+        k["change_timeout_sec"] = kip.changeTimeoutSec;
+        k["cancel_grace_sec"] = kip.cancelGraceSec;
+        k["remember_answers"] = kip.rememberAnswers;
+        k["expand_details_on_failure"] = kip.expandDetailsOnFailure;
+        k["detached_window_mode"] = kip.detachedWindowMode;
+        root["kip"] = k;
+    }
+    {
+        QJsonObject i;
+        i["python"] = data.interpreters.python;
+        i["node"] = data.interpreters.node;
+        root["interpreters"] = i;
+    }
 
     return writeJsonAtomic(settingsFilePath(), QJsonDocument(root));
 }
@@ -838,12 +948,14 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.fxTranslucency = result.settings.fxTranslucency;
         currentSettings.fxBlur = result.settings.fxBlur;
         currentSettings.fxAnimations = result.settings.fxAnimations;
+        currentSettings.gradientsEnabled = result.settings.gradientsEnabled;
         currentSettings.autoHideOnFocusLoss = result.settings.autoHideOnFocusLoss;
         currentSettings.windowMode = result.settings.windowMode;
         currentSettings.windowWidth = result.settings.windowWidth;
         currentSettings.windowHeight = result.settings.windowHeight;
         currentSettings.globalHotkey = result.settings.globalHotkey;
         currentSettings.startVisible = result.settings.startVisible;
+        currentSettings.autoCollapseOutputOnFolders = result.settings.autoCollapseOutputOnFolders;
         currentSettings.language = result.settings.language;
         currentSettings.commandCreationMode = result.settings.commandCreationMode;
         currentSettings.commandEditMode = result.settings.commandEditMode;
@@ -855,6 +967,7 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.outputCompact = result.settings.outputCompact;
         currentSettings.outputFontSize = result.settings.outputFontSize;
         currentSettings.outputMaxLogSizeKb = result.settings.outputMaxLogSizeKb;
+        currentSettings.gracefulStopTimeoutSec = result.settings.gracefulStopTimeoutSec;
         // global_env_vars é legado (pré-Environments) — mesclado (não
         // sobrescrito) para não apagar chaves locais que o pacote importado
         // não conhecia.
@@ -1110,12 +1223,14 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["fx_translucency"] = settings.fxTranslucency;
     settingsObj["fx_blur"] = settings.fxBlur;
     settingsObj["fx_animations"] = settings.fxAnimations;
+    settingsObj["gradients_enabled"] = settings.gradientsEnabled;
     settingsObj["auto_hide_on_focus_loss"] = settings.autoHideOnFocusLoss;
     settingsObj["window_mode"] = settings.windowMode;
     settingsObj["window_width"] = settings.windowWidth;
     settingsObj["window_height"] = settings.windowHeight;
     settingsObj["global_hotkey"] = settings.globalHotkey;
     settingsObj["start_visible"] = settings.startVisible;
+    settingsObj["auto_collapse_output_on_folders"] = settings.autoCollapseOutputOnFolders;
     settingsObj["language"] = settings.language;
     settingsObj["global_env_vars"] = envObj;
     // AUDITORIA de import/export: estes campos existem em SettingsData e são
@@ -1133,6 +1248,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["output_compact"] = settings.outputCompact;
     settingsObj["output_font_size"] = settings.outputFontSize;
     settingsObj["output_max_log_size_kb"] = settings.outputMaxLogSizeKb;
+    settingsObj["graceful_stop_timeout_sec"] = settings.gracefulStopTimeoutSec;
     settingsObj["autostart"] = settings.autostart;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
@@ -1743,12 +1859,14 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.fxTranslucency = s.value("fx_translucency").toBool(result.settings.fxTranslucency);
         result.settings.fxBlur = s.value("fx_blur").toBool(result.settings.fxBlur);
         result.settings.fxAnimations = s.value("fx_animations").toBool(result.settings.fxAnimations);
+        result.settings.gradientsEnabled = s.value("gradients_enabled").toBool(result.settings.gradientsEnabled);
         result.settings.autoHideOnFocusLoss = s.value("auto_hide_on_focus_loss").toBool(result.settings.autoHideOnFocusLoss);
         result.settings.windowMode = s.value("window_mode").toString(result.settings.windowMode);
         result.settings.windowWidth = s.value("window_width").toInt(result.settings.windowWidth);
         result.settings.windowHeight = s.value("window_height").toInt(result.settings.windowHeight);
         result.settings.globalHotkey = s.value("global_hotkey").toString(result.settings.globalHotkey);
         result.settings.startVisible = s.value("start_visible").toBool(result.settings.startVisible);
+        result.settings.autoCollapseOutputOnFolders = s.value("auto_collapse_output_on_folders").toBool(result.settings.autoCollapseOutputOnFolders);
         result.settings.language = s.value("language").toString(result.settings.language);
         const QJsonObject envObj = s.value("global_env_vars").toObject();
         for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
@@ -1787,6 +1905,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.outputCompact = s.value("output_compact").toBool(result.settings.outputCompact);
         result.settings.outputFontSize = s.value("output_font_size").toInt(result.settings.outputFontSize);
         result.settings.outputMaxLogSizeKb = s.value("output_max_log_size_kb").toInt(result.settings.outputMaxLogSizeKb);
+        result.settings.gracefulStopTimeoutSec = s.value("graceful_stop_timeout_sec").toInt(result.settings.gracefulStopTimeoutSec);
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {

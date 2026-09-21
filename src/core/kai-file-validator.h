@@ -14,7 +14,7 @@ namespace kai::core {
 // faltando ou um valor fora do enum esperado, sem precisar abrir o app e
 // tentar importar por tentativa e erro.
 //
-// Espelha manualmente docs/manifesto/kai.schema.json ($defs: command,
+// Espelha manualmente assets/manifesto/kai.schema.json ($defs: command,
 // parameter, folderMeta, collection, collectionField) — NÃO carrega o
 // schema JSON em runtime (evita depender de uma lib de JSON Schema em C++
 // só por isto). Se o schema mudar, atualize IssueChecks::* aqui junto.

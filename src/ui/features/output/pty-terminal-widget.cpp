@@ -746,8 +746,24 @@ void PtyTerminalWidget::keyPressEvent(QKeyEvent *event)
     // do fallback "Ctrl+<letra>" mais abaixo, senão Ctrl+V viraria o
     // caractere de controle literal (SYN, 0x16) em vez de colar.
     if ((mods & VTERM_MOD_CTRL) && key == Qt::Key_V) {
-        const QString clipboardText = QGuiApplication::clipboard()->text();
+        QString clipboardText = QGuiApplication::clipboard()->text();
         if (!clipboardText.isEmpty()) {
+            // Normaliza quebras de linha ANTES de colar (bug real
+            // reportado: "se eu der um ctrl v no term avançado ele copia
+            // errado o valor"). O clipboard costuma trazer CRLF ("\r\n") —
+            // texto copiado do Windows (Notepad, navegador, etc.) quase
+            // sempre vem assim, mesmo rodando o Kai fora do Windows. Colado
+            // CRU dentro do PTY, cada "\r" extra é um caractere de
+            // controle de VERDADE ("volta o cursor pro início da linha"),
+            // interpretado na hora pelo terminal — o texto colado aparece
+            // (e é executado) com pedaços sobrescritos/embaralhados.
+            // Normaliza pra UM único "\r" por quebra de linha — o mesmo
+            // caractere que uma tecla Enter de verdade envia em modo raw
+            // — deixando a disciplina de linha do pty (ICRNL) fazer a
+            // mesma tradução de sempre, igual a digitar Enter.
+            clipboardText.replace(QStringLiteral("\r\n"), QStringLiteral("\r"));
+            clipboardText.replace(QChar(u'\n'), QChar(u'\r'));
+
             // vterm_keyboard_start/end_paste emitem os marcadores de
             // bracketed paste (CSI 200~/201~) quando o app dentro do
             // terminal os habilitou (bash com bracketed-paste, a maioria

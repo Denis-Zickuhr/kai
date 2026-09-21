@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QSet>
 #include <QVector>
 
 #include "core/models.h"
@@ -35,16 +36,24 @@ class CollectionSelectorDialog : public QDialog {
 public:
     // history: ids de entradas em ordem de uso (mais recente primeiro),
     // usado para ordenação inicial. multiSelect habilita escolher N valores.
+    // initialFilter: busca + favoritos salvos da ÚLTIMA vez que esta
+    // coleção foi filtrada (pedido do usuário: "os filtros de coleções
+    // devem ser salvos"), pré-aplicado na abertura. O chamador persiste o
+    // estado final lendo filterState() após exec().
     explicit CollectionSelectorDialog(const core::Collection &collection,
                                       const QStringList &history = {},
                                       bool multiSelect = true,
-                                      QWidget *parent = nullptr);
+                                      QWidget *parent = nullptr,
+                                      const core::CollectionFilterState &initialFilter = {});
 
     QVector<core::CollectionEntry> selectedEntries() const { return m_selected; }
     // Coleção possivelmente atualizada (toggles de favorito) — o chamador
     // deve persistir se favoritesChanged() for true.
     core::Collection updatedCollection() const { return m_collection; }
     bool favoritesChanged() const { return m_favoritesChanged; }
+    // Busca + favoritos-only no momento do fechamento — o chamador persiste
+    // via ConfigManager::saveCollectionFilters, chaveado por Collection::id.
+    core::CollectionFilterState filterState() const;
 
 signals:
     void favoriteToggled(const QString &entryId, bool favorite);
@@ -70,6 +79,18 @@ private:
     void addFilterCard(const core::CollectionField &field); // cria um cartão
     void rebuildFilterCards();   // reconstrói o container a partir de m_filters
 
+    // Multiseleção INDEPENDENTE DE PÁGINA (feature pedida pelo usuário:
+    // "atualmente só consigo os da mesma pagina"). A QTableWidget é
+    // reconstruída do zero a cada troca de página/filtro (ver
+    // applyFilterAndPaginate), o que apaga a seleção NATIVA dela — por
+    // isso o conjunto de ids escolhidos vive À PARTE, aqui, e é reaplicado
+    // visualmente toda vez que a tabela é reconstruída.
+    void syncSelectedIdsFromTableSelection(); // conectado a itemSelectionChanged
+    void reapplySelectionToCurrentPage();     // após rebuildar as linhas
+    void updateSelectionCountLabel();
+    void selectAllFiltered(); // "selecionar tudo (filtrados)", todas as páginas
+    void clearSelection();    // "limpar seleção"
+
     core::Collection m_collection;
     QStringList m_history;
     bool m_multiSelect = true;
@@ -87,6 +108,15 @@ private:
     int m_pageSize = 25;
 
     QVector<FieldFilter> m_filters; // filtros ativos (AND)
+
+    // Ids escolhidos, através de TODAS as páginas/filtros já vistos nesta
+    // sessão do diálogo — ver comentário dos métodos de sincronização
+    // acima. accept() lê ESTE conjunto, não mais m_table->selectedRanges().
+    QSet<QString> m_selectedIds;
+    QLabel *m_selectionCountLabel = nullptr;
+    QToolButton *m_selectAllButton = nullptr;
+    QToolButton *m_clearSelectionButton = nullptr;
+    bool m_rebuildingTable = false; // suprime o sync durante clear()/populate
 
     QVector<core::CollectionEntry> m_selected;
     bool m_favoritesChanged = false;

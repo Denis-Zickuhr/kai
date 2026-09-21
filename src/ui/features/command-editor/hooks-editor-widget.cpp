@@ -214,9 +214,23 @@ void HooksEditorWidget::applyFilter(QListWidget *list, const QString &query)
     populateList(list, filtered, selected);
 }
 
+namespace {
+// Comando KIP não pode ser hook (spec 11 §15): o picker nem o oferece.
+QVector<core::Command> withoutKipCommands(const QVector<core::Command> &commands)
+{
+    QVector<core::Command> out;
+    for (const core::Command &c : commands) {
+        if (!(c.kip && c.type == core::CommandType::Command)) {
+            out.append(c);
+        }
+    }
+    return out;
+}
+} // namespace
+
 void HooksEditorWidget::setAvailableCommands(const QVector<core::Command> &availableCommands)
 {
-    m_availableCommands = availableCommands;
+    m_availableCommands = withoutKipCommands(availableCommands);
     populateList(m_preList, m_availableCommands, {});
     populateList(m_postList, m_availableCommands, {});
     populateList(m_cleanupList, m_availableCommands, {});
@@ -225,7 +239,7 @@ void HooksEditorWidget::setAvailableCommands(const QVector<core::Command> &avail
 
 void HooksEditorWidget::setAllAvailableCommands(const QVector<core::Command> &allCommands)
 {
-    m_allCommands = allCommands;
+    m_allCommands = withoutKipCommands(allCommands);
 }
 
 void HooksEditorWidget::populateList(QListWidget *list, const QVector<core::Command> &source, const QStringList &selectedIds)

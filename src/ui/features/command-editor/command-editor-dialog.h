@@ -21,6 +21,7 @@ class QVBoxLayout;
 namespace kai::ui {
 
 class JsonSyntaxHighlighter;
+class FolderPickerWidget;
 
 class KeyValueEditorWidget;
 class ParameterEditorWidget;
@@ -101,20 +102,63 @@ private:
 
     void setupUi(const core::Command *existingCommand);
     // Troca a página Shell/HTTP (m_tabWidget) E sincroniza o segmented
-    // control (m_shellModeButton/m_httpModeButton) — os cliques nos
+    // control (m_commandModeButton/m_httpModeButton) — os cliques nos
     // próprios botões já fazem isso inline; este helper cobre as trocas
     // PROGRAMÁTICAS (carregar um comando HTTP existente, importar cURL).
     void setExecutionMode(bool isHttp);
     void populateFolderCombo(const QVector<core::Folder> &allFolders, const QString &selectedFolderId);
-    QWidget *buildShellTab();
+
+    // --- Construção das abas do sidebar, uma por arquivo em tabs/ (pedido
+    // do usuário: "CADA aba dela deveria estar separada na própria pasta
+    // de tabs DELA") — cada método chama addNavPage() internamente e monta
+    // sua própria página; setupUi() só orquestra a ORDEM e o que sobra
+    // (autocomplete de {{var}}, população de um comando existente, botões
+    // de rodapé), que toca campos de VÁRIAS abas ao mesmo tempo e por isso
+    // continua aqui, não em nenhuma aba específica.
+    void buildGeneralTab();
+    QWidget *buildCommandTab();
     QWidget *buildHttpTab();
     // Aba 2 "Configuração" (pedido do usuário: era um popup "Configurações
     // Avançadas", virou aba do sidebar) — constrói CLI Path (sempre
-    // visível) + working dir/detalhamento/flags (Shell-only, agrupados em
-    // m_shellConfigContainer, escondido em HTTP por setExecutionMode).
-    void buildConfigurationTab(QVBoxLayout *pageLayout);
+    // visível) + working dir/detalhamento/seções por função (Shell-only,
+    // todas em m_commandConfigContainer, escondido em HTTP por
+    // setExecutionMode). As seções por função (Execução/Integração/
+    // Agendamento) já tiveram abas PRÓPRIAS num experimento anterior
+    // ("separar por funções em mais abas") — voltaram todas pra cá, como
+    // CollapsibleSectionCard dentro da mesma aba (pedido do usuário:
+    // "ficou abas demais... quebrar em menos abas de config", "essa aba
+    // não tem nexo se chamar agendamento... melhor tudo virar configuração
+    // numa aba mesmo").
+    void buildConfigurationTab();
+    void buildKipTab();
+    void refreshKipRemembered();
+    void buildHeadersTab();
+    void buildExtractorsTab();
+    void buildDeclaredEnvVarsTab();
+    void buildParamsTab();
+    void buildRespondersTab();
+    void buildConditionsTab();
+    void buildHooksTab();
+    void buildCliTab();
+    // Aplica as exclusões de §15 aos controles conforme "Interface KIP".
+    void updateKipExclusions();
+    // Linguagem do comando (Nativa/Python/Node): mostra/esconde o interpretador,
+    // troca placeholder e dica do campo de código e desabilita o que não vale.
+    void updateLanguageUi();
+    core::CommandLanguage currentLanguage() const;
     void populateEnvExtractorsEditor(const QVector<core::EnvExtractor> &extractors);
     QVector<core::EnvExtractor> readEnvExtractors() const;
+
+    // Cria uma página nova no sidebar de abas (wrapper fino sobre
+    // addSidebarTabPage/dialog-utils.h usando m_sideNav/m_sidePages) —
+    // membro (em vez da lambda local de antes) para ser chamável de
+    // qualquer arquivo tabs/*.cpp.
+    QVBoxLayout *addNavPage(const QString &title, const QString &iconName);
+    // Atualiza o rótulo do item de nav com "(N)" quando a aba tem N>0
+    // itens (Headers/Extractors/Variáveis/Parâmetros/Auto-respostas/
+    // Condições/Hooks) — mesmo motivo do addNavPage acima: virou membro
+    // pra ser reaproveitado pelos arquivos tabs/*.cpp.
+    void bindNavItemCount(int navRow, const QString &baseTitle, int count);
 
     QString m_folderId;
     QString m_existingId;
@@ -122,6 +166,7 @@ private:
     // Preservados na edição para não se perderem ao salvar (não editáveis
     // neste diálogo, mas parte do comando).
     QMap<QString, QString> m_lastParamValues;
+    QJsonObject m_kipLastValues; // respostas KIP lembradas (idem lastParamValues)
     // Ordem manual de exibição do comando existente (drag-and-drop). Deve
     // ser preservada ao editar — senão o comando volta com order == -1 e
     // "pula" para o fim da lista / sai do lugar (bug real reportado).
@@ -133,30 +178,37 @@ private:
 
     // Corpo Shell/HTTP: QStackedWidget (não mais QTabWidget) trocado pelo
     // segmented control "Shell | HTTP" no cabeçalho do card "Execution
-    // Config" (mockup enviado pelo usuário) — ver m_shellModeButton/
+    // Config" (mockup enviado pelo usuário) — ver m_commandModeButton/
     // m_httpModeButton.
     QStackedWidget *m_tabWidget = nullptr;
-    QPushButton *m_shellModeButton = nullptr;
+    QPushButton *m_commandModeButton = nullptr;
     QPushButton *m_httpModeButton = nullptr;
 
     // Campos comuns.
     QLineEdit *m_nameField = nullptr;
     QLineEdit *m_cliPathField = nullptr;
-    QComboBox *m_folderField = nullptr;
+    FolderPickerWidget *m_folderField = nullptr;
     IconPickerWidget *m_iconPicker = nullptr;
     QSpinBox *m_orderField = nullptr;
     HooksEditorWidget *m_hooksEditor = nullptr;
     ExecutionConditionsEditorWidget *m_conditionsEditor = nullptr;
 
-    // Aba Shell.
+    // Aba Comando.
     InlineCodeField *m_commandField = nullptr;
+    QComboBox *m_languageField = nullptr;
+    QLineEdit *m_interpreterField = nullptr;
+    QWidget *m_interpreterRow = nullptr;
+    QLabel *m_languageHint = nullptr;
+    QLabel *m_kipModuleHint = nullptr;
+    // Interpretadores globais (placeholder do campo por comando).
+    core::InterpreterSettings m_globalInterpreters;
     InlineCodeField *m_descriptionField = nullptr;
     QLineEdit *m_workingDirField = nullptr;
     // Agrupa working dir/detalhamento/flags — tudo Shell-only na aba
     // "Configuração" — pra esconder/mostrar de uma vez via
     // setExecutionMode() (CLI Path, na mesma aba, fica de fora: vale pros
     // dois tipos de comando).
-    QWidget *m_shellConfigContainer = nullptr;
+    QWidget *m_commandConfigContainer = nullptr;
     QCheckBox *m_backgroundField = nullptr;
     QCheckBox *m_captureEnvField = nullptr;
     QCheckBox *m_openLastLinkField = nullptr;
@@ -165,6 +217,14 @@ private:
     QCheckBox *m_interactiveTerminalField = nullptr;
     QCheckBox *m_formattedOutputField = nullptr;
     QCheckBox *m_renderMarkdownField = nullptr;
+    // KIP (spec 11 §2/§15): liga a sessão KIP e, quando ligada, desabilita tudo
+    // que compete com o stdin/stdout do protocolo.
+    QCheckBox *m_kipField = nullptr;
+    QCheckBox *m_kipWindowField = nullptr;
+    QCheckBox *m_kipAutoCloseField = nullptr;
+    QSpinBox *m_kipAutoCloseDelayField = nullptr;
+    QLabel *m_kipRememberedLabel = nullptr;
+    QPushButton *m_kipForgetButton = nullptr;
     QComboBox *m_terminalTargetField = nullptr;
     // Wrapper (rótulo "PERFIL" + combo) — só faz sentido em modo Shell,
     // escondido em modo HTTP (ver setExecutionMode).
@@ -172,8 +232,13 @@ private:
     ParameterEditorWidget *m_paramsEditor = nullptr;
     QStringList m_availableDynamicVarNames; // ver setAvailableDynamicVarNames
     OutputRespondersEditorWidget *m_respondersEditor = nullptr;
+    QWidget *m_respondersCard = nullptr; // aba inteira de auto-respostas (desabilitada com KIP)
     QCheckBox *m_autoRunField = nullptr;
     QSpinBox *m_autoRunDelayField = nullptr;
+    // CRON Scheduler (Etapa 5).
+    QLineEdit *m_cronExpressionField = nullptr;
+    QLabel *m_cronExpressionHintLabel = nullptr;
+    QCheckBox *m_cronNotifyOnRunField = nullptr;
     // Params originais do comando (preservados para reaplicar em
     // setAvailableCollections sem perder o collectionId escolhido, já que
     // setParameters roda no construtor antes das coleções chegarem).
@@ -208,6 +273,8 @@ private:
     int m_navRowHeaders = -1;
     int m_navRowExtractors = -1;
     int m_navRowDeclaredEnvVars = -1;
+    int m_navRowConfiguration = -1;
+    int m_navRowKip = -1;
 };
 
 } // namespace kai::ui

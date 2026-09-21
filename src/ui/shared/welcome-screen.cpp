@@ -166,7 +166,27 @@ QWidget *buildStepCard(QWidget *parent, int number,
 WelcomeScreen::WelcomeScreen(QWidget *parent)
     : QWidget(parent)
 {
-    auto *outerLayout = new QVBoxLayout(this);
+    auto *hostLayout = new QVBoxLayout(this);
+    hostLayout->setContentsMargins(0, 0, 0, 0);
+    hostLayout->setSpacing(0);
+    m_root = new QWidget(this);
+    hostLayout->addWidget(m_root);
+    buildContent(m_root);
+}
+
+void WelcomeScreen::applyTheme()
+{
+    auto *hostLayout = layout();
+    delete m_root;
+    m_root = new QWidget(this);
+    hostLayout->addWidget(m_root);
+    buildContent(m_root);
+    m_root->show();
+}
+
+void WelcomeScreen::buildContent(QWidget *root)
+{
+    auto *outerLayout = new QVBoxLayout(root);
     outerLayout->setContentsMargins(0, 0, 0, 0);
     outerLayout->setSpacing(0);
 
@@ -178,7 +198,7 @@ WelcomeScreen::WelcomeScreen(QWidget *parent)
     closeRow->setContentsMargins(utils::tokens::space(3), utils::tokens::space(2),
                                   utils::tokens::space(3), 0);
     closeRow->addStretch(1);
-    auto *closeButton = new QToolButton(this);
+    auto *closeButton = new QToolButton(root);
     closeButton->setIcon(LucideIcons::icon(QStringLiteral("x"), QColor(utils::tokens::mutedFg()), 18));
     closeButton->setAutoRaise(true);
     closeButton->setCursor(Qt::PointingHandCursor);
@@ -191,7 +211,7 @@ WelcomeScreen::WelcomeScreen(QWidget *parent)
     // mínimo configurável — ver MainWindow::setupUi) a tela de boas-vindas
     // com todas as seções não cabe inteira; scroll evita cortar conteúdo
     // em vez de exigir uma janela maior.
-    auto *scrollArea = new QScrollArea(this);
+    auto *scrollArea = new QScrollArea(root);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
     scrollArea->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
@@ -238,10 +258,11 @@ WelcomeScreen::WelcomeScreen(QWidget *parent)
         logoWidget = new QLabel(QStringLiteral("K"), centerCol);
         logoWidget->setFixedSize(56, 56);
         logoWidget->setAlignment(Qt::AlignCenter);
-        // Fundo em gradiente quando o tema ativo declara um (ex: Dracula
-        // roxo->rosa); cai no accent sólido em temas sem gradiente definido.
-        const QString logoBg = utils::tokens::hasGradient()
-            ? utils::tokens::gradientQss(QStringLiteral("background"))
+        // Fundo em gradiente quando o tema ativo declara a base "tertiary"
+        // (botões e entalhes — ex: Dracula roxo->rosa); cai no accent
+        // sólido em temas sem gradiente definido pra essa base.
+        const QString logoBg = utils::tokens::hasGradient(QStringLiteral("tertiary"))
+            ? utils::tokens::gradientQss(QStringLiteral("background"), QStringLiteral("tertiary"))
             : QStringLiteral("background-color: %1;").arg(utils::tokens::accent());
         logoWidget->setStyleSheet(QStringLiteral(
             "%1 color: white; border-radius: %2px; font-size: %3pt; font-weight: 700;")
@@ -436,9 +457,9 @@ QWidget *WelcomeScreen::buildProTipCard()
     // stop entra com a MESMA opacidade baixa do tint sólido anterior, só a
     // direção/cores vêm do tema; sem gradiente, cai no tint plano de accent.
     QString proTipBg;
-    if (utils::tokens::hasGradient()) {
-        QColor start(utils::tokens::gradientStart());
-        QColor end(utils::tokens::gradientEnd());
+    if (utils::tokens::hasGradient(QStringLiteral("tertiary"))) {
+        QColor start(utils::tokens::gradientStart(QStringLiteral("tertiary")));
+        QColor end(utils::tokens::gradientEnd(QStringLiteral("tertiary")));
         start.setAlphaF(0.10);
         end.setAlphaF(0.10);
         proTipBg = QStringLiteral(
@@ -462,7 +483,7 @@ QWidget *WelcomeScreen::buildProTipCard()
     layout->setSpacing(utils::tokens::space(2));
 
     auto *icon = new QLabel(card);
-    icon->setPixmap(LucideIcons::icon(QStringLiteral("lightbulb"), QColor(utils::tokens::accent()), 18).pixmap(18, 18));
+    icon->setPixmap(LucideIcons::icon(QStringLiteral("sparkles"), QColor(utils::tokens::accent()), 18).pixmap(18, 18));
     layout->addWidget(icon, 0, Qt::AlignTop);
 
     auto *textCol = makeTransparentContainer(card);

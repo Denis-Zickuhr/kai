@@ -43,4 +43,8 @@ struct CliParamBindingResult {
 
 CliParamBindingResult bindCliParams(const QVector<Parameter> &params, const QStringList &args);
 
+// Valores aceitos por um `select` de opções fixas, na forma canônica que é
+// injetada ("Rótulo:valor" -> "valor"). Vazio pra select ligado a coleção.
+QStringList selectOptionValues(const Parameter &param);
+
 } // namespace kai::core

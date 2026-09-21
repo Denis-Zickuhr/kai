@@ -3,6 +3,7 @@
 // marcar como lida/todas como lidas e limpar. Mesmo padrão de test_run_history.
 
 #include <QTest>
+#include <QSignalSpy>
 #include <QStandardPaths>
 
 #include "core/notification-history.h"
@@ -45,6 +46,61 @@ private slots:
         nh.append(r);
         QCOMPARE(nh.load().at(0).read, false);
         QCOMPARE(nh.unreadCount(), 1);
+    }
+
+    // A barra inferior destaca o botão de notificações pela contagem: o sinal
+    // acompanha cada mudança (nova, lida, todas lidas, limpar).
+    void unreadCountChangedSignalTracksEveryChange()
+    {
+        NotificationHistory nh;
+        nh.clear();
+        QSignalSpy spy(&nh, &NotificationHistory::unreadCountChanged);
+
+        NotificationRecord a; a.title = "A";
+        NotificationRecord b; b.title = "B";
+        nh.append(a);
+        nh.append(b);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy.at(0).at(0).toInt(), 1);
+        QCOMPARE(spy.at(1).at(0).toInt(), 2);
+
+        nh.markRead(nh.load().at(0).id);
+        QCOMPARE(spy.last().at(0).toInt(), 1);
+
+        nh.markAllRead();
+        QCOMPARE(spy.last().at(0).toInt(), 0);
+
+        nh.append(a);
+        QCOMPARE(spy.last().at(0).toInt(), 1);
+        nh.clear();
+        QCOMPARE(spy.last().at(0).toInt(), 0);
+    }
+
+    // Excluir uma, marcar como não lida e guardar o comando de origem.
+    void removeSetReadAndCommandIdWork()
+    {
+        NotificationHistory nh;
+        nh.clear();
+        NotificationRecord a; a.title = "A"; a.commandId = "cmd_a";
+        NotificationRecord b; b.title = "B";
+        nh.append(a);
+        nh.append(b);
+        QCOMPARE(nh.load().at(1).commandId, QStringLiteral("cmd_a"));
+        QVERIFY(nh.load().at(0).commandId.isEmpty());
+
+        const QString idOfB = nh.load().at(0).id;
+        nh.markRead(idOfB);
+        QCOMPARE(nh.unreadCount(), 1);
+        nh.setRead(idOfB, false);
+        QCOMPARE(nh.unreadCount(), 2);
+
+        QSignalSpy spy(&nh, &NotificationHistory::unreadCountChanged);
+        nh.remove(idOfB);
+        QCOMPARE(nh.load().size(), 1);
+        QCOMPARE(nh.load().at(0).title, QStringLiteral("A"));
+        QCOMPARE(spy.last().at(0).toInt(), 1);
+        nh.remove(QStringLiteral("nao-existe")); // no-op
+        QCOMPARE(nh.load().size(), 1);
     }
 
     void markReadUpdatesOnlyThatRecord()

@@ -225,9 +225,10 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
     // leitura da lista sem molduras. Requer setAlternatingRowColors(true)
     // no QTreeWidget (feito em CommandTreeWidget::createTreeForRoot).
     qss += QStringLiteral(
-        "QTreeWidget, QListWidget, QTreeView, QListView { "
-        "alternate-background-color: %1; }\n")
-        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")));
+        "QTreeWidget, QListWidget, QTreeView, QListView, QTableWidget, QTableView { "
+        "alternate-background-color: %1; background-color: %2; }\n")
+        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
+             variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
     // Espaçamento e tipografia consolidados em um único bloco
     // ("ainda tá meio sem espaço os textos"). Regras
@@ -264,7 +265,13 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         // escuro (alt_bg), criando a separação visual do CopyQ.
         "QTabBar::tab:selected { background-color: %7; border-bottom: 2px solid %5; }\n"
         "QTabBar::tab:!selected { color: %6; }\n"
-        "QTabBar::tab:hover:!selected { background-color: %5; }\n"
+        // %2 (sel_bg), não %5 (accent_color): os ícones das abas (Projetos/
+        // Geral etc.) são recoloridos com accent_color (ver
+        // IconPickerWidget::iconForName) — um hover com fundo NA MESMA cor
+        // do ícone o deixava invisível (bug relatado: "hover na aba faz o
+        // ícone sumir"). sel_bg dá o mesmo destaque visual de hover sem
+        // colidir com a cor do ícone.
+        "QTabBar::tab:hover:!selected { background-color: %2; }\n"
         "QLabel { padding: 2px; background: transparent; border: none; }\n"
         "QComboBox { min-height: 24px; padding: 6px 10px; }\n"
         "QCheckBox { spacing: 8px; padding: 3px; }\n"
@@ -325,11 +332,9 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
     qss += QStringLiteral(
         "QMainWindow { background-color: %1; }\n"
         "QWidget#rootContainer { background-color: %1; border-radius: 8px; border: 1px solid %1; }\n"
-        // Diálogos com a decoração NATIVA do sistema (barra de título +
-        // moldura do WM), garantindo drag/resize/fechar funcionais e uma
-        // borda visível fornecida pelo próprio window manager. O conteúdo
-        // interno já é escuro e sem bordas brancas (regras acima). Só
-        // definimos o fundo escuro do tema aqui.
+        // Diálogos NÃO usam a decoração do sistema: ganham a moldura própria do
+        // Kai (ver ui/shared/dialog-frame.h — barra de título, borda e raio),
+        // com a borda/raio em app-stylesheet.cpp. Aqui só o fundo do tema.
         "QDialog { background-color: %1; }\n"
         "QMessageBox { background-color: %1; }\n"
         "QMainWindow::separator { background-color: %1; width: 0px; height: 0px; }\n"
@@ -369,21 +374,9 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         "QGroupBox { background-color: %1; border: none; border-radius: 8px; "
         "margin-top: 14px; padding: 14px 12px 12px 12px; font-weight: 600; }\n"
         "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; "
-        "left: 12px; top: 2px; padding: 0px 4px; color: %4; font-size: 10pt; }\n"
-        // Botões de diálogo (OK/Cancel): SEM ícones nativos (o estilo do
-        // Qt injeta um check/► verde e um X que destoavam do app — bug
-        // reportado: "ícones feios e fora de padrão"). Os ícones são
-        // removidos programaticamente (stripDialogButtonIcons), e aqui só
-        // estilizamos: cantos arredondados, sem borda dura (borda na cor do
-        // próprio fundo do botão = invisível), hover na cor de acento; o
-        // botão default/primário (OK) recebe fundo de acento com texto
-        // contrastante e negrito, destacando a ação primária.
-        "QDialogButtonBox QPushButton { min-width: 88px; padding: 7px 18px; border-radius: %3; "
-        "border: 1px solid %2; background-color: %2; icon-size: 0px; }\n"
-        "QDialogButtonBox QPushButton:hover { border: 1px solid %4; background-color: %4; color: %1; }\n"
-        "QDialogButtonBox QPushButton:default { background-color: %4; color: %1; border: 1px solid %4; "
-        "font-weight: 600; }\n"
-        "QDialogButtonBox QPushButton:default:hover { background-color: %4; }\n")
+        "left: 12px; top: 2px; padding: 0px 4px; color: %4; font-size: 10pt; }\n")
+        // Botões de diálogo (QDialogButtonBox): estilizados em
+        // buildModernStylesheet() (app-stylesheet.cpp), numa regra só.
         .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
              variables.value(QStringLiteral("sel_bg"), QStringLiteral("#44475a")),
              variables.value(QStringLiteral("border_radius"), QStringLiteral("4px")),

@@ -15,6 +15,8 @@ class QStackedWidget;
 
 namespace kai::ui {
 
+class FolderPickerWidget;
+
 // ============================================================================
 // TELA ÚNICA de exportação — pedido do usuário: "queria um menu unificado
 // para exportação, não 3 (ele deixa eu escolher o modo)". Substitui os 3

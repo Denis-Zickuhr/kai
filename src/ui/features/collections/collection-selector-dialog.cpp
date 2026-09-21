@@ -19,6 +19,7 @@
 #include <QListWidget>
 #include <QDialogButtonBox>
 #include <QAbstractItemView>
+#include <QItemSelectionModel>
 #include <QUuid>
 
 #include <algorithm>
@@ -36,7 +37,8 @@ constexpr int kFirstFieldColumn = 0;
 CollectionSelectorDialog::CollectionSelectorDialog(const core::Collection &collection,
                                                    const QStringList &history,
                                                    bool multiSelect,
-                                                   QWidget *parent)
+                                                   QWidget *parent,
+                                                   const core::CollectionFilterState &initialFilter)
     : QDialog(parent)
     , m_collection(collection)
     , m_history(history)
@@ -49,8 +51,26 @@ CollectionSelectorDialog::CollectionSelectorDialog(const core::Collection &colle
     setSizeGripEnabled(true);
     resize(760, 560);
     setupUi();
+    // Reaplica o filtro salvo da última vez ANTES da primeira paginação —
+    // sem isto o usuário reabre e vê a lista inteira de novo, tendo que
+    // redigitar a busca/reclicar em "favoritos" toda vez (pedido do
+    // usuário).
+    if (m_searchField) {
+        m_searchField->setText(initialFilter.search);
+    }
+    if (m_favoritesOnly) {
+        m_favoritesOnly->setChecked(initialFilter.favoritesOnly);
+    }
     applyFilterAndPaginate();
     centerOnParent(this);
+}
+
+core::CollectionFilterState CollectionSelectorDialog::filterState() const
+{
+    core::CollectionFilterState state;
+    state.search = m_searchField ? m_searchField->text().trimmed() : QString();
+    state.favoritesOnly = m_favoritesOnly && m_favoritesOnly->isChecked();
+    return state;
 }
 
 void CollectionSelectorDialog::setupUi()
@@ -179,6 +199,39 @@ void CollectionSelectorDialog::setupUi()
         }
     });
     mainLayout->addWidget(m_table, 1);
+    connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]() {
+        syncSelectedIdsFromTableSelection();
+    });
+
+    // --- Barra de multiseleção (feature pedida pelo usuário: "melhoria
+    // pra multiselect de coleções... uma caixinha de select que lembre pra
+    // permitir selecionar vários... label dizendo quantos tem
+    // selecionados... botão pra limpar e um selecionar tudo filtrados").
+    // Só faz sentido em modo multi-select — em single-select a seleção é
+    // sempre 0 ou 1 e a tela já fecha ao aceitar.
+    if (m_multiSelect) {
+        auto *selectionBar = new QHBoxLayout();
+        m_selectionCountLabel = new QLabel(this);
+        m_selectionCountLabel->setProperty("kaiRole", QStringLiteral("caption"));
+        selectionBar->addWidget(m_selectionCountLabel);
+        selectionBar->addStretch();
+
+        m_selectAllButton = new QToolButton(this);
+        m_selectAllButton->setObjectName(QStringLiteral("collectionSelectorSelectAllButton"));
+        m_selectAllButton->setText(utils::tr(QStringLiteral("collection.selector.select_all_filtered")));
+        connect(m_selectAllButton, &QToolButton::clicked, this, &CollectionSelectorDialog::selectAllFiltered);
+        selectionBar->addWidget(m_selectAllButton);
+
+        m_clearSelectionButton = new QToolButton(this);
+        m_clearSelectionButton->setObjectName(QStringLiteral("collectionSelectorClearSelectionButton"));
+        m_clearSelectionButton->setText(utils::tr(QStringLiteral("collection.selector.clear_selection")));
+        connect(m_clearSelectionButton, &QToolButton::clicked, this, &CollectionSelectorDialog::clearSelection);
+        selectionBar->addWidget(m_clearSelectionButton);
+
+        mainLayout->addLayout(selectionBar);
+        updateSelectionCountLabel();
+    }
+
     // Clique na ESTRELA embutida (ícone da 1a coluna) alterna o favorito, sem
     // selecionar a entrada. Fora da faixa do ícone, o clique é normal.
     connect(m_table, &QTableWidget::cellClicked, this, [this](int row, int column) {
@@ -234,6 +287,7 @@ void CollectionSelectorDialog::setupUi()
     pageBar->addWidget(m_pageLabel);
 
     m_nextButton = new QToolButton(this);
+    m_nextButton->setObjectName(QStringLiteral("collectionSelectorNextButton"));
     m_nextButton->setText(utils::tr(QStringLiteral("collection.selector.next")));
     connect(m_nextButton, &QToolButton::clicked, this, [this]() {
         ++m_currentPage;
@@ -246,22 +300,31 @@ void CollectionSelectorDialog::setupUi()
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     stripDialogButtonIcons(buttonBox);
     connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
-        // Coleta as entradas selecionadas (pela linha atual/seleção).
+        // Coleta as entradas escolhidas do conjunto de ids acumulado
+        // (TODAS as páginas já vistas, não só a página atual — ver
+        // m_selectedIds). Em modo single-select, m_selectedIds nunca
+        // ultrapassa 1 elemento (a tabela usa SingleSelection).
         m_selected.clear();
-        const auto ranges = m_table->selectedRanges();
-        QList<int> rows;
-        for (const QTableWidgetSelectionRange &r : ranges) {
-            for (int row = r.topRow(); row <= r.bottomRow(); ++row) {
-                if (!rows.contains(row)) rows << row;
+        if (m_multiSelect) {
+            for (const core::CollectionEntry &e : m_collection.entries) {
+                if (m_selectedIds.contains(e.id)) {
+                    m_selected << e;
+                }
             }
-        }
-        for (int row : rows) {
-            const QTableWidgetItem *idItem = m_table->item(row, kFirstFieldColumn);
-            const QString entryId = idItem ? idItem->data(Qt::UserRole).toString() : QString();
-            const auto it = std::find_if(m_collection.entries.constBegin(), m_collection.entries.constEnd(),
-                [&entryId](const core::CollectionEntry &e) { return e.id == entryId; });
-            if (it != m_collection.entries.constEnd()) {
-                m_selected << *it;
+        } else {
+            // Single-select: mantém a leitura direta da linha selecionada
+            // na página atual (comportamento original, mais simples e já
+            // coberto por teste).
+            const auto ranges = m_table->selectedRanges();
+            if (!ranges.isEmpty()) {
+                const int row = ranges.first().topRow();
+                const QTableWidgetItem *idItem = m_table->item(row, kFirstFieldColumn);
+                const QString entryId = idItem ? idItem->data(Qt::UserRole).toString() : QString();
+                const auto it = std::find_if(m_collection.entries.constBegin(), m_collection.entries.constEnd(),
+                    [&entryId](const core::CollectionEntry &e) { return e.id == entryId; });
+                if (it != m_collection.entries.constEnd()) {
+                    m_selected << *it;
+                }
             }
         }
         accept();
@@ -374,6 +437,89 @@ void CollectionSelectorDialog::rebuildFilterCards()
     cardsLayout->addStretch();
 }
 
+void CollectionSelectorDialog::syncSelectedIdsFromTableSelection()
+{
+    // Ignorado durante clear()/setRowCount()/populate em
+    // applyFilterAndPaginate (m_rebuildingTable) — os itens ainda não têm
+    // id nenhum nesse meio-tempo, então não há nada de útil pra ler; a
+    // restauração de verdade acontece em reapplySelectionToCurrentPage(),
+    // chamada DEPOIS de popular a página.
+    if (m_rebuildingTable || !m_table) {
+        return;
+    }
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        const QTableWidgetItem *idItem = m_table->item(row, kFirstFieldColumn);
+        if (!idItem) {
+            continue;
+        }
+        const QString entryId = idItem->data(Qt::UserRole).toString();
+        if (entryId.isEmpty()) {
+            continue;
+        }
+        if (m_table->selectionModel() && m_table->selectionModel()->isRowSelected(row, QModelIndex())) {
+            m_selectedIds.insert(entryId);
+        } else {
+            m_selectedIds.remove(entryId);
+        }
+    }
+    updateSelectionCountLabel();
+}
+
+void CollectionSelectorDialog::reapplySelectionToCurrentPage()
+{
+    if (!m_table || !m_table->selectionModel() || m_selectedIds.isEmpty()) {
+        return;
+    }
+    // NÃO usa selectRow() num loop: QTableView::selectRow() decide
+    // limpar-ou-acumular via selectionCommand(), que lê os modificadores de
+    // teclado AMBIENTES no momento da chamada — sem Ctrl/Shift pressionado
+    // (sempre o caso aqui, é código, não clique de usuário), cada chamada
+    // LIMPA a seleção anterior e deixa só a última linha marcada (achado
+    // real: um teste com 30 entradas devolvia só 6 selecionadas em vez de
+    // 30 depois de "selecionar tudo"). Monta a seleção inteira e aplica de
+    // UMA VEZ com o flag Select explícito, que é sempre aditivo.
+    QItemSelection selection;
+    const int lastColumn = qMax(0, m_table->columnCount() - 1);
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        const QTableWidgetItem *idItem = m_table->item(row, kFirstFieldColumn);
+        const QString entryId = idItem ? idItem->data(Qt::UserRole).toString() : QString();
+        if (!entryId.isEmpty() && m_selectedIds.contains(entryId)) {
+            selection.select(m_table->model()->index(row, 0), m_table->model()->index(row, lastColumn));
+        }
+    }
+    if (!selection.isEmpty()) {
+        m_table->selectionModel()->select(selection, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+}
+
+void CollectionSelectorDialog::updateSelectionCountLabel()
+{
+    if (m_selectionCountLabel) {
+        m_selectionCountLabel->setText(
+            utils::tr(QStringLiteral("collection.selector.selected_count")).arg(m_selectedIds.size()));
+    }
+}
+
+void CollectionSelectorDialog::selectAllFiltered()
+{
+    // TODAS as páginas do filtro atual, não só a visível (pedido do
+    // usuário: "selecionar tudo (filtrados)").
+    for (const core::CollectionEntry &e : filteredEntries()) {
+        m_selectedIds.insert(e.id);
+    }
+    updateSelectionCountLabel();
+    reapplySelectionToCurrentPage();
+}
+
+void CollectionSelectorDialog::clearSelection()
+{
+    m_selectedIds.clear();
+    if (m_table) {
+        m_table->clearSelection();
+    }
+    updateSelectionCountLabel();
+}
+
 QVector<core::CollectionEntry> CollectionSelectorDialog::orderedEntries() const
 {
     QVector<core::CollectionEntry> entries = m_collection.entries;
@@ -468,6 +614,11 @@ void CollectionSelectorDialog::applyFilterAndPaginate()
         if (f.visible) visibleFields.append(f);
     }
     const int schemaCount = visibleFields.size();
+    // Suprime syncSelectedIdsFromTableSelection() enquanto clear()/
+    // setRowCount()/população disparam itemSelectionChanged com itens
+    // ainda sem id — a seleção de verdade é restaurada explicitamente
+    // logo abaixo, depois que a página tem dados.
+    m_rebuildingTable = true;
     m_table->setSortingEnabled(false);
     m_table->clear();
     m_table->setColumnCount(schemaCount);
@@ -502,6 +653,15 @@ void CollectionSelectorDialog::applyFilterAndPaginate()
         }
     }
     m_table->setSortingEnabled(true);
+    m_rebuildingTable = false;
+    // Restaura visualmente, NA PÁGINA RECÉM-CONSTRUÍDA, a seleção
+    // acumulada de todas as páginas (m_selectedIds) — sem isto a troca de
+    // página/filtro perderia a marcação visual de quem já tinha sido
+    // escolhido antes (bug original: "atualmente só consigo os da mesma
+    // pagina").
+    if (m_multiSelect) {
+        reapplySelectionToCurrentPage();
+    }
 
     // Rótulo/estado da paginação.
     if (m_pageLabel) {

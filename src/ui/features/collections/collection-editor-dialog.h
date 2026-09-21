@@ -18,6 +18,8 @@ class QWidget;
 
 namespace kai::ui {
 
+class FolderPickerWidget;
+
 // Grid moderno de edição de uma Collection (feature "Coleções").
 // Exibe as entradas (entries) numa tabela cujas colunas seguem o schema da
 // coleção, com:
@@ -69,7 +71,7 @@ private:
     QVector<core::Folder> m_folders;
 
     QLineEdit *m_nameField = nullptr;
-    QComboBox *m_folderCombo = nullptr;
+    FolderPickerWidget *m_folderCombo = nullptr;
     QSpinBox *m_orderField = nullptr;
     QLineEdit *m_searchField = nullptr;
     QComboBox *m_searchFieldSelector = nullptr;

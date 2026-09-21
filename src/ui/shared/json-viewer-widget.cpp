@@ -41,12 +41,7 @@ void JsonViewerWidget::setupUi()
     m_view->setReadOnly(true);
     m_view->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_view->setFont(utils::tokens::monoFont());
-    m_view->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
-        "border-radius: %4px; }")
-        .arg(utils::tokens::codeBg(), utils::tokens::codeFg(), utils::tokens::codeBorder())
-        .arg(utils::tokens::radiusMd()));
-    m_view->setGutterColors(QColor(utils::tokens::codeBg()), QColor(utils::tokens::mutedFg()));
+    applyViewStyle();
     new JsonSyntaxHighlighter(m_view->document());
     layout->addWidget(m_view, 1);
 
@@ -260,6 +255,40 @@ void JsonViewerWidget::setEmbeddedMode(bool embedded)
     if (m_view && embedded) {
         m_view->setMinimumHeight(160);
     }
+}
+
+void JsonViewerWidget::applyViewStyle()
+{
+    if (!m_view) {
+        return;
+    }
+    if (m_flush) {
+        m_view->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit { background: %1; color: %2; border: none;"
+            " border-top-left-radius: 0px; border-top-right-radius: 0px;"
+            " border-bottom-left-radius: %3px; border-bottom-right-radius: %3px; }")
+            .arg(m_flushBackground, utils::tokens::codeFg())
+            .arg(m_flushBottomRadius));
+        m_view->setGutterColors(QColor(utils::tokens::codeBg()), QColor(utils::tokens::mutedFg()));
+        return;
+    }
+    m_view->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3; "
+        "border-radius: %4px; }")
+        .arg(utils::tokens::codeBg(), utils::tokens::codeFg(), utils::tokens::codeBorder())
+        .arg(utils::tokens::radiusMd()));
+    m_view->setGutterColors(QColor(utils::tokens::codeBg()), QColor(utils::tokens::mutedFg()));
+}
+
+void JsonViewerWidget::setFlushBody(const QString &background, int bottomRadius)
+{
+    if (m_flush && m_flushBackground == background && m_flushBottomRadius == bottomRadius) {
+        return;
+    }
+    m_flush = true;
+    m_flushBackground = background;
+    m_flushBottomRadius = bottomRadius;
+    applyViewStyle();
 }
 
 void JsonViewerWidget::setDetachedMode(bool detached)

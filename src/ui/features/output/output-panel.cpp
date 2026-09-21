@@ -2,7 +2,14 @@
 
 #include "ui/shared/json-viewer-widget.h"
 #include "ui/shared/lucide-icons.h"
+#include "ui/shared/overflow-indicator.h"
+#include "ui/shared/panel-metrics.h"
+#include "ui/shared/tab-bar-style.h"
 #include "ui/shared/table-utils.h"
+#include "ui/shared/tab-strip-background.h"
+#include "ui/features/output/output-metrics-header.h"
+#include "ui/features/kip/kip-view.h"
+#include "engine/kip-session.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 
@@ -27,26 +34,96 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QStackedWidget>
+#include <QPushButton>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTableWidget>
 #include <QTextCursor>
 #include <QTimer>
 #include <QPointer>
+#include <QShortcut>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QWidgetAction>
 
 namespace kai::ui {
 namespace tk = kai::utils::tokens;
 
 namespace {
+
+// Faixa de overflow do cabeçalho: distância até a linha separadora de baixo
+// (1px) e respiro entre ela e a linha de abas/ícones.
+// Faixa de overflow do cabeçalho: fica ABAIXO da linha de abas, em espaço
+// próprio (o cabeçalho cresce enquanto há overflow — a linha de abas mantém a
+// altura normal). Gap = distância até a linha de abas; Inset = respiro até a
+// linha que separa do corpo da Saída (antes: 1px, colada no corpo).
+constexpr int kHeaderOverflowInset = 4;
+constexpr int kHeaderOverflowGap = 2;
+
+// Declaração de "background-color: ...;" pronta pra QSS, usando o
+// gradiente de tema (base "primary" — "app e saídas", pedido do usuário)
+// quando disponível. Reutilizada pelos containers "cartão" deste painel
+// (barra de URL, tabela de headers, caixinha de ações, cabeçalho de
+// métricas), em vez de cravar surface2() sólido em cada um.
+QString surfaceBgDecl()
+{
+    return tk::hasGradient(QStringLiteral("primary"))
+        ? tk::gradientQss(QStringLiteral("background-color"), QStringLiteral("primary"))
+        : QStringLiteral("background-color: %1;").arg(tk::surface2());
+}
+
+// QSS da barra de URL (verbo + endereço) da aba Requisição — extraída pra
+// função porque precisa ser reaplicada tanto na criação quanto no live
+// reload de tema (ver applyThemeVariables). Achado real: antes só era
+// aplicada UMA VEZ, na criação do widget — se o tema ainda não estivesse
+// totalmente publicado (utils::tokens::publishTheme) naquele instante, o
+// painel congelava com as cores de FALLBACK genéricas do design-tokens
+// (visual "cinza chumbado" relatado, que nunca acompanhava trocas de tema
+// depois).
+QString requestUrlBarQss()
+{
+    return QStringLiteral(
+        "QWidget#requestUrlBar {"
+        "  %1"
+        "  border: 1px solid %2;"
+        "  border-radius: %3px;"
+        "}"
+    ).arg(surfaceBgDecl(), tk::borderColor()).arg(tk::radiusMd());
+}
+
+// QSS da tabela de headers (mesmo motivo/achado de requestUrlBarQss()
+// acima — reaplicada no live reload, não só na criação).
+QString keyValueTableQss()
+{
+    return QStringLiteral(
+        "QTableWidget {"
+        "  background-color: %1;"
+        "  border: 1px solid %2;"
+        "  border-radius: %3px;"
+        "  gridline-color: %2;"
+        // Recuo interno: as células têm fundo próprio (zebra) e o viewport é
+        // quadrado, então sem isto a primeira/última linha vazava sobre o canto
+        // arredondado do cartão. O recuo acompanha o raio do token (~30%).
+        "  padding: %5px;"
+        "}"
+        "QHeaderView::section {"
+        "  background-color: %1;"
+        "  color: %4;"
+        "  border: none;"
+        "  border-bottom: 1px solid %2;"
+        "  padding: 4px;"
+        "}"
+    ).arg(tk::surface2(), tk::borderColor()).arg(tk::radiusMd()).arg(tk::mutedFg())
+     .arg((tk::radiusMd() * 3 + 9) / 10);
+}
 
 // Tabela somente-leitura padronizada para Headers e Envs.
 QTableWidget *makeKeyValueTable(QWidget *parent, const QString &keyHeader, const QString &valueHeader)
@@ -55,7 +132,14 @@ QTableWidget *makeKeyValueTable(QWidget *parent, const QString &keyHeader, const
     table->setHorizontalHeaderLabels({keyHeader, valueHeader});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table->setAlternatingRowColors(true);
+    // NÃO liga setAlternatingRowColors: mesma lição aprendida com a árvore
+    // de comandos (ver DraggableTreeWidget) — quando o widget também tem
+    // "background-color" explícito no próprio stylesheet (como este tem,
+    // logo abaixo em output-panel.cpp), o fallback nativo de zebra do Qt
+    // ignora "alternate-background-color" e cai num cinza genérico da
+    // paleta, sem seguir o tema (relatado pelo usuário: "cinza fixo" nas
+    // linhas ímpares da tabela de headers). A listra é pintada manualmente,
+    // item por item, em fillKeyValueTable().
     table->verticalHeader()->setVisible(false);
     table->setFrameShape(QFrame::NoFrame);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -94,10 +178,19 @@ QTableWidgetItem *makeCopyItem(const QString &text)
 
 void fillKeyValueTable(QTableWidget *table, const QList<QPair<QString, QString>> &rows)
 {
+    // Listra de zebra pintada à MÃO (ver comentário em makeKeyValueTable):
+    // linhas ímpares recebem o mesmo tom sutil usado na árvore de comandos.
+    const QColor stripe(tk::treeStripeBg());
     table->setRowCount(rows.size());
     for (int i = 0; i < rows.size(); ++i) {
-        table->setItem(i, 0, makeCopyItem(rows[i].first));
-        table->setItem(i, 1, makeCopyItem(rows[i].second));
+        auto *keyItem = makeCopyItem(rows[i].first);
+        auto *valueItem = makeCopyItem(rows[i].second);
+        if (i % 2 == 1) {
+            keyItem->setBackground(stripe);
+            valueItem->setBackground(stripe);
+        }
+        table->setItem(i, 0, keyItem);
+        table->setItem(i, 1, valueItem);
     }
 }
 
@@ -143,6 +236,8 @@ void updateHttpVerbPill(QLabel *badge, const QString &method)
 
 struct RequestViewWidgets {
     QWidget *page = nullptr;
+    OutputMetricsHeader *metricsHeader = nullptr;
+    QWidget *urlBar = nullptr;
     QLabel *methodBadge = nullptr;
     QLabel *urlLabel = nullptr;
     QLabel *bodyLabel = nullptr;
@@ -161,17 +256,19 @@ RequestViewWidgets makeRequestView(QWidget *parent)
     layout->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
     layout->setSpacing(tk::space(3));
 
+    // --- Métricas da resposta (status, tempo, tamanho) — DENTRO da aba de
+    // Request, não mais soltas no header do painel inteiro (pedido do
+    // usuário: "colocar as métricas de resposta DENTRO da aba de resposta
+    // da requisição, ao invés de fora"). Topo da aba, antes da URL.
+    w.metricsHeader = new OutputMetricsHeader(w.page);
+    layout->addWidget(w.metricsHeader);
+
     // --- Container Visual Bonito para Verbo + URL ---
     auto *urlBar = new QWidget(w.page);
+    w.urlBar = urlBar;
     urlBar->setObjectName(QStringLiteral("requestUrlBar"));
     urlBar->setAttribute(Qt::WA_StyledBackground, true);
-    urlBar->setStyleSheet(QStringLiteral(
-        "QWidget#requestUrlBar {"
-        "  background-color: %1;"
-        "  border: 1px solid %2;"
-        "  border-radius: %3px;"
-        "}"
-    ).arg(tk::surface2(), tk::borderColor()).arg(tk::radiusMd()));
+    urlBar->setStyleSheet(requestUrlBarQss());
 
     auto *urlBarLayout = new QHBoxLayout(urlBar);
     urlBarLayout->setContentsMargins(tk::space(2), tk::space(2), tk::space(2), tk::space(2));
@@ -200,21 +297,7 @@ RequestViewWidgets makeRequestView(QWidget *parent)
     w.headers = makeKeyValueTable(w.page, utils::tr(QStringLiteral("output.headers.key")),
                                    utils::tr(QStringLiteral("output.headers.value")));
     w.headers->setMaximumHeight(160);
-    w.headers->setStyleSheet(QStringLiteral(
-        "QTableWidget {"
-        "  background-color: %1;"
-        "  border: 1px solid %2;"
-        "  border-radius: %3px;"
-        "  gridline-color: %2;"
-        "}"
-        "QHeaderView::section {"
-        "  background-color: %1;"
-        "  color: %4;"
-        "  border: none;"
-        "  border-bottom: 1px solid %2;"
-        "  padding: 4px;"
-        "}"
-    ).arg(tk::surface2(), tk::borderColor()).arg(tk::radiusMd()).arg(tk::mutedFg()));
+    w.headers->setStyleSheet(keyValueTableQss());
     
     layout->addWidget(w.headers);
 
@@ -254,36 +337,13 @@ QString ucFirst(const QString &text)
     return text.left(1).toUpper() + text.mid(1);
 }
 
-// Estilo limpo e sem margens parasitas na aba
-void applyTabBarStyle(QTabBar *tabBar)
+// Abas da Saída: estilo ÚNICO compartilhado com as demais barras de abas
+// (ver ui/shared/tab-bar-style.h).
+void applyTabBarStyle(QTabBar *tabBar, int barHeight)
 {
-    if (!tabBar) {
-        return;
+    if (tabBar) {
+        tabBar->setStyleSheet(flatTabBarQss(barHeight));
     }
-    tabBar->setStyleSheet(QStringLiteral(
-        "QTabBar { background: transparent; border: none; margin: 0px; padding: 0px; }"
-        "QTabBar::tab {"
-        "   background: transparent;"
-        "   color: %1;"
-        "   border: none;"
-        "   border-radius: %2px;"
-        "   padding: 3px 10px;"
-        "   margin: 0px;"
-        "}"
-        "QTabBar::tab:hover:!selected {"
-        "   background-color: %3;"
-        "   color: %4;"
-        "}"
-        "QTabBar::tab:selected {"
-        "   background-color: %5;"
-        "   color: %6;"
-        "}"
-    ).arg(tk::mutedFg())
-     .arg(tk::radiusSm())
-     .arg(tk::hoverBg())
-     .arg(tk::fg())
-     .arg(tk::surface())
-     .arg(tk::accent()));
 }
 
 } // namespace
@@ -308,24 +368,21 @@ void OutputPanel::setupUi()
     auto *header = new QWidget(this);
     header->setObjectName(QStringLiteral("outputHeader"));
     header->setFixedHeight(m_barHeight);
+    header->setAttribute(Qt::WA_StyledBackground, true);
 
     auto *headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(0, 0, 0, 0);
+    // Mais respiro à direita: o chevron de recolher ficava encostado na borda.
+    headerLayout->setContentsMargins(tk::space(1), 0, tk::space(2), 0);
     headerLayout->setSpacing(0);
     headerLayout->setAlignment(Qt::AlignVCenter);
 
-    header->setStyleSheet(QStringLiteral(
-        "QToolButton { border: none; border-radius: %1px; background: transparent;"
-        "padding: 2px;"
-        "min-width: 1px;" 
-        "min-height: 0;" 
-        "}"
-        "QToolButton:hover { background: %2; }")
-        .arg(tk::radiusSm()).arg(tk::hoverBg()));
+    m_header = header;
+    // Faixa do cabeçalho/abas com o MESMO fundo da faixa de abas da caixa de
+    // comandos (Projetos/Testes).
+    new TabStripBackground(this, header);
+    applyHeaderStyle();
 
-    // Container visual das Abas
-    const int boxPadding = 3;
-
+    // Container das abas: sem fundo nem margem (abas planas, ver applyTabBarStyle)
     m_tabsBox = new QWidget(header);
     m_tabsBox->setObjectName(QStringLiteral("outputTabsBox"));
     m_tabsBox->setAttribute(Qt::WA_StyledBackground, true);
@@ -339,7 +396,7 @@ void OutputPanel::setupUi()
     m_tabBar->setExpanding(false);
     m_tabBar->setTabsClosable(false);
 
-    applyTabBarStyle(m_tabBar);
+    applyTabBarStyle(m_tabBar, m_barHeight);
 
     connect(m_tabBar, &QTabBar::currentChanged, this, [this](int index) {
         if (index >= 0 && index < m_tabPages.size()) {
@@ -351,14 +408,61 @@ void OutputPanel::setupUi()
     });
 
     auto *tabsBoxLayout = new QHBoxLayout(m_tabsBox);
-    tabsBoxLayout->setContentsMargins(boxPadding, boxPadding, boxPadding, boxPadding);
+    tabsBoxLayout->setContentsMargins(0, 0, 0, 0);
     tabsBoxLayout->setSpacing(0);
     tabsBoxLayout->setSizeConstraint(QLayout::SetFixedSize);
 
     tabsBoxLayout->addWidget(m_tabBar, 0, Qt::AlignCenter);
 
-    headerLayout->addWidget(m_tabsBox, 0, Qt::AlignVCenter);
-    headerLayout->addStretch(1);
+    // Linha rolável: abas + ações. Quando o painel é estreito demais para os
+    // dois, a linha rola na horizontal (roda do mouse) e uma faixa na cor de
+    // destaque mostra quanto está visível. Estilo/altura: ver setBarHeight.
+    m_headerScroll = new QScrollArea(header);
+    m_headerScroll->setObjectName(QStringLiteral("outputHeaderScroll"));
+    m_headerScroll->setFrameShape(QFrame::NoFrame);
+    m_headerScroll->setWidgetResizable(true);
+    m_headerScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_headerScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_headerScroll->setFixedHeight(m_barHeight);
+    m_headerScroll->setStyleSheet(QStringLiteral(
+        "QScrollArea#outputHeaderScroll { background: transparent; border: none; }"
+        "QWidget#outputHeaderRow { background: transparent; }"));
+    m_headerScroll->viewport()->setAutoFillBackground(false);
+    m_headerScroll->viewport()->installEventFilter(this);
+
+    m_headerRow = new QWidget;
+    m_headerRow->setObjectName(QStringLiteral("outputHeaderRow"));
+    auto *rowLayout = new QHBoxLayout(m_headerRow);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(0);
+    rowLayout->addWidget(m_tabsBox, 0, Qt::AlignVCenter);
+    rowLayout->addStretch(1);
+    m_headerScroll->setWidget(m_headerRow);
+
+    // O espaçador (fator 0) só cresce quando a área rolável está escondida
+    // (painel colapsado), empurrando o chevron para a direita.
+    headerLayout->addWidget(m_headerScroll, 1);
+    headerLayout->addStretch(0);
+
+    // Barra de rolagem própria (arrastável), na BASE do cabeçalho, abaixo das
+    // abas e dos ícones. Com overflow a linha acima encolhe (applyHeaderRowHeight)
+    // para o sublinhado da aba selecionada ficar acima dela, sem conflito.
+    QScrollBar *headerBar = m_headerScroll->horizontalScrollBar();
+    m_headerOverflow = new OverflowIndicator(header, OverflowIndicator::forScrollBar(headerBar),
+                                             OverflowIndicator::scrollToForScrollBar(headerBar));
+    m_headerOverflow->setInsets(tk::space(1), tk::space(1));
+    m_headerOverflow->setBottomInset(kHeaderOverflowInset);
+    connect(headerBar, &QScrollBar::valueChanged, m_headerOverflow, [this]() {
+        if (m_headerOverflow) {
+            m_headerOverflow->update();
+        }
+    });
+    connect(headerBar, &QScrollBar::rangeChanged, m_headerOverflow, [this]() {
+        if (m_headerOverflow) {
+            m_headerOverflow->refresh();
+            applyHeaderRowHeight();
+        }
+    });
 
     // Labels de Título e Prompt (Invisíveis)
     m_titleLabel = new QLabel(header);
@@ -369,36 +473,33 @@ void OutputPanel::setupUi()
     m_promptLabel->setProperty("kaiRole", QStringLiteral("caption"));
     m_promptLabel->hide();
 
-    // Métricas
-    m_metricsLabel = new QLabel(header);
-    m_metricsLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    headerLayout->addWidget(m_metricsLabel, 0, Qt::AlignVCenter);
-
-    // Botão de Copiar PID
-    m_copyPidButton = new QToolButton(header);
-    m_copyPidButton->setAutoRaise(true);
-    m_copyPidButton->setCursor(Qt::PointingHandCursor);
-    m_copyPidButton->setIcon(LucideIcons::icon(QStringLiteral("copy"), QColor(tk::mutedFg()), 15));
-    m_copyPidButton->hide();
-    connect(m_copyPidButton, &QToolButton::clicked, this, [this]() {
-        if (m_processPid > 0) {
-            QGuiApplication::clipboard()->setText(QString::number(m_processPid));
-        }
-    });
-    headerLayout->addWidget(m_copyPidButton, 0, Qt::AlignVCenter);
+    // Métricas HTTP (status/tempo/tamanho) NÃO ficam mais aqui — migraram
+    // para dentro da aba de Request via OutputMetricsHeader (pedido do
+    // usuário: "ao invés de fora"). Ver m_requestMetricsHeader.
 
     // Caixinha de Ações do Header
     m_headerExtras = new QWidget(header);
     m_headerExtras->setObjectName(QStringLiteral("outputActionsBox"));
     m_headerExtras->setAttribute(Qt::WA_StyledBackground, true);
+    // Ações planas, sem caixa em volta (estilo tool window da JetBrains).
     m_headerExtras->setStyleSheet(QStringLiteral(
-        "QWidget#outputActionsBox { background-color: %1; border-radius: %2px; }")
-        .arg(tk::surface2()).arg(tk::radiusMd()));
+        "QWidget#outputActionsBox { background: transparent; border: none; }"));
     m_headerExtras->setFixedHeight(m_barHeight - tk::space(1));
 
     auto *extrasLayout = new QHBoxLayout(m_headerExtras);
-    extrasLayout->setContentsMargins(tk::space(1), 0, tk::space(1), 0);
+    extrasLayout->setContentsMargins(0, 0, 0, 0);
     extrasLayout->setSpacing(tk::space(1));
+
+    // Separador fino entre os grupos de ações (limpar | copiar/exportar |
+    // opções/janela): a lixeira (destrutiva) não fica colada em copiar.
+    auto addHeaderSeparator = [this, extrasLayout]() {
+        auto *separator = new QFrame(m_headerExtras);
+        separator->setObjectName(QStringLiteral("outputHeaderSeparator"));
+        separator->setFixedSize(1, 14);
+        extrasLayout->addSpacing(tk::space(1));
+        extrasLayout->addWidget(separator, 0, Qt::AlignVCenter);
+        extrasLayout->addSpacing(tk::space(1));
+    };
 
     // Botão Limpar
     m_clearButton = new QToolButton(m_headerExtras);
@@ -408,6 +509,19 @@ void OutputPanel::setupUi()
     m_clearButton->setToolTip(utils::tr(QStringLiteral("output.menu.clear")));
     connect(m_clearButton, &QToolButton::clicked, this, &OutputPanel::clearAll);
     extrasLayout->addWidget(m_clearButton, 0, Qt::AlignVCenter);
+    addHeaderSeparator();
+
+    // Botão Copiar Saída (pedido do usuário: "a barra de fora vai ter um
+    // ícone de copiar saída toda" — substitui o item "Copiar tudo" que
+    // existia no menu de opções, agora na caixinha de ações junto com
+    // limpar/exportar).
+    m_copyOutputButton = new QToolButton(m_headerExtras);
+    m_copyOutputButton->setAutoRaise(true);
+    m_copyOutputButton->setCursor(Qt::PointingHandCursor);
+    m_copyOutputButton->setIcon(LucideIcons::icon(QStringLiteral("clipboard-copy"), QColor(tk::mutedFg()), 15));
+    m_copyOutputButton->setToolTip(utils::tr(QStringLiteral("output.menu.copy_all")));
+    connect(m_copyOutputButton, &QToolButton::clicked, this, &OutputPanel::copyAllOutput);
+    extrasLayout->addWidget(m_copyOutputButton, 0, Qt::AlignVCenter);
 
     // Botão Exportar
     m_exportButton = new QToolButton(m_headerExtras);
@@ -417,6 +531,7 @@ void OutputPanel::setupUi()
     m_exportButton->setToolTip(utils::tr(QStringLiteral("output.menu.export_to_file")));
     connect(m_exportButton, &QToolButton::clicked, this, &OutputPanel::exportOutputToFile);
     extrasLayout->addWidget(m_exportButton, 0, Qt::AlignVCenter);
+    addHeaderSeparator();
 
     // Botão Opções
     m_optionsButton = new QToolButton(m_headerExtras);
@@ -434,11 +549,18 @@ void OutputPanel::setupUi()
         .arg(tk::radiusSm()).arg(tk::hoverBg()));
     extrasLayout->addWidget(m_optionsButton, 0, Qt::AlignVCenter);
 
-    // Badge de Status
+    // Badge de Status — o antigo botão separado de "copiar PID" foi removido
+    // (pedido do usuário: "o botão de copiar pid vai ser o PRÓPRIO tip de
+    // state do comando, vai ter tooltip, logo o botão some"): o PID agora
+    // aparece só no tooltip deste badge (ver setProcessPid/
+    // updateStatusBadgeTooltip), e um clique nele copia o PID pro
+    // clipboard quando houver um processo — preserva a função antiga sem
+    // um segundo ícone dedicado.
     m_statusBadge = new QWidget(m_headerExtras);
     m_statusBadge->setObjectName(QStringLiteral("outputStatusBadge"));
     m_statusBadge->setAttribute(Qt::WA_StyledBackground, true);
     m_statusBadge->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    m_statusBadge->installEventFilter(this);
 
     auto *statusLayout = new QHBoxLayout(m_statusBadge);
     statusLayout->setContentsMargins(tk::space(2), tk::space(1), tk::space(2), tk::space(1));
@@ -453,15 +575,19 @@ void OutputPanel::setupUi()
 
     extrasLayout->addWidget(m_statusBadge, 0, Qt::AlignVCenter);
 
-    headerLayout->addWidget(m_headerExtras, 0, Qt::AlignVCenter);
+    rowLayout->addWidget(m_headerExtras, 0, Qt::AlignVCenter);
 
-    m_header = header;
     rebuildOptionsMenu();
     root->addWidget(header, 0);
 
     // Stack de Páginas
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("outputPages"));
+    // A altura mínima das páginas (tabelas, JSON...) não pode entrar na conta
+    // do layout: sem espaço, o QBoxLayout espremia TODOS os itens abaixo do
+    // mínimo, inclusive o rodapé de resposta, que ficava mais baixo que a
+    // barra de ações vizinha. Ignorando a dica, só as páginas encolhem.
+    m_pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
 
     m_outputContainer = new QWidget(m_pages);
     auto *outputContainerLayout = new QVBoxLayout(m_outputContainer);
@@ -497,24 +623,22 @@ void OutputPanel::setupUi()
 
     m_jsonView = new JsonViewerWidget(m_pages);
     m_headersView = makeKeyValueTable(m_pages, utils::tr(QStringLiteral("output.headers.key")), utils::tr(QStringLiteral("output.headers.value")));
-    m_headersView->setStyleSheet(QStringLiteral(
-        "QTableWidget {"
-        "  border: 1px solid %2;"
-        "  border-radius: %3px;"
-        "  gridline-color: %2;"
-        "}"
-        "QHeaderView::section {"
-        "  background-color: %1;"
-        "  color: %4;"
-        "  border: none;"
-        "  border-bottom: 1px solid %2;"
-        "  padding: 4px;"
-        "}"
-    ).arg(tk::surface2(), tk::borderColor()).arg(tk::radiusMd()).arg(tk::mutedFg()));
+    m_headersView->setStyleSheet(keyValueTableQss());
+    // Container com margem própria (pedido do usuário: "o container de
+    // headers ainda não tem bordas e as mesmas estilizações dos demais") —
+    // sem isto, m_headersView era inserido DIRETO como página da aba, colado
+    // nas bordas do painel, diferente de todas as outras abas (Resposta/
+    // Requisição/Saída), que têm margem interna via seu próprio layout.
+    m_headersPage = new QWidget(m_pages);
+    auto *headersPageLayout = new QVBoxLayout(m_headersPage);
+    headersPageLayout->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
+    headersPageLayout->addWidget(m_headersView);
 
     {
         const RequestViewWidgets rv = makeRequestView(m_pages);
         m_requestView = rv.page;
+        m_requestMetricsHeader = rv.metricsHeader;
+        m_requestUrlBar = rv.urlBar;
         m_requestMethodBadge = rv.methodBadge;
         m_requestUrlLabel = rv.urlLabel;
         m_requestHeadersView = rv.headers;
@@ -522,17 +646,29 @@ void OutputPanel::setupUi()
         m_requestBodyLabel = rv.bodyLabel;
     }
 
-    m_tabOrder = {m_jsonView, m_requestView, m_outputContainer, m_headersView};
+    m_tabOrder = {m_jsonView, m_requestView, m_outputContainer, m_headersPage};
 
     addTabPage(m_jsonView, utils::tr(QStringLiteral("output.tab.json")), QStringLiteral("braces"));
     addTabPage(m_requestView, utils::tr(QStringLiteral("output.tab.request")), QStringLiteral("send"));
     addTabPage(m_outputContainer, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))), QStringLiteral("terminal"));
-    addTabPage(m_headersView, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
+    addTabPage(m_headersPage, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
 
     // Campo de Entrada (stdin)
-    m_inputField = new QLineEdit(this);
+    // O rodapé (contêiner) tem a altura fixa da barra — a mesma do cabeçalho e
+    // das barras de ação da árvore — e desenha a linha do topo; o campo só
+    // preenche o miolo. Assim a altura/linha não dependem do QSS do QLineEdit.
+    m_inputFooter = new QWidget(this);
+    m_inputFooter->setObjectName(QStringLiteral("outputFooter"));
+    m_inputFooter->setAttribute(Qt::WA_StyledBackground, true);
+    m_inputFooter->setFixedHeight(m_barHeight);
+    auto *footerLayout = new QHBoxLayout(m_inputFooter);
+    footerLayout->setContentsMargins(0, 0, 0, 0);
+    footerLayout->setSpacing(0);
+
+    m_inputField = new QLineEdit(m_inputFooter);
     m_inputField->setObjectName(QStringLiteral("outputInput"));
     m_inputField->setEnabled(false);
+    footerLayout->addWidget(m_inputField);
     m_inputField->installEventFilter(this);
     connect(m_inputField, &QLineEdit::returnPressed, this, [this]() {
         const QString text = m_inputField->text();
@@ -543,9 +679,11 @@ void OutputPanel::setupUi()
     m_normalBody = new QWidget(this);
     auto *normalBodyLayout = new QVBoxLayout(m_normalBody);
     normalBodyLayout->setContentsMargins(0, 0, 0, 0);
+    // A barra de resposta é um rodapé colado na saída, sem respiro entre os
+    // dois (ver updateInputFieldStyle).
     normalBodyLayout->setSpacing(0);
     normalBodyLayout->addWidget(m_pages, 1);
-    normalBodyLayout->addWidget(m_inputField);
+    normalBodyLayout->addWidget(m_inputFooter);
 
     // Terminal PTY
     m_ptyTerminal = new PtyTerminalWidget(this);
@@ -581,13 +719,72 @@ void OutputPanel::setupUi()
         skippedLayout->addWidget(m_skippedReasonLabel);
     }
 
+    // Estado vazio: antes de qualquer execução o corpo era um retângulo preto
+    // sem pista do que fazer. Mesmo desenho do painel "Pulado".
+    m_emptyPanel = new QWidget(this);
+    {
+        // Centralizado com espaçadores (e não com alinhamento do layout): um
+        // QLabel com quebra de linha perde a altura certa quando o layout o
+        // alinha, e o texto saía cortado em painéis estreitos.
+        auto *emptyLayout = new QVBoxLayout(m_emptyPanel);
+        emptyLayout->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(4));
+        emptyLayout->setSpacing(tk::space(2));
+        emptyLayout->addStretch(1);
+
+        m_emptyIcon = new QLabel(m_emptyPanel);
+        m_emptyIcon->setAlignment(Qt::AlignCenter);
+        emptyLayout->addWidget(m_emptyIcon);
+
+        m_emptyTitle = new QLabel(utils::tr(QStringLiteral("output.empty.title")), m_emptyPanel);
+        QFont emptyTitleFont = m_emptyTitle->font();
+        emptyTitleFont.setBold(true);
+        emptyTitleFont.setPointSize(emptyTitleFont.pointSize() + 1);
+        m_emptyTitle->setFont(emptyTitleFont);
+        m_emptyTitle->setAlignment(Qt::AlignCenter);
+        m_emptyTitle->setWordWrap(true);
+        emptyLayout->addWidget(m_emptyTitle);
+
+        m_emptyHint = new QLabel(utils::tr(QStringLiteral("output.empty.hint")), m_emptyPanel);
+        m_emptyHint->setAlignment(Qt::AlignCenter);
+        m_emptyHint->setWordWrap(true);
+        emptyLayout->addWidget(m_emptyHint);
+        emptyLayout->addStretch(1);
+    }
+    applyEmptyStateStyle();
+
     m_bodyStack = new QStackedWidget(this);
+    m_bodyStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     m_bodyStack->addWidget(m_normalBody);
     m_bodyStack->addWidget(m_ptyTerminal);
     m_bodyStack->addWidget(m_skippedPanel);
+    m_bodyStack->addWidget(m_emptyPanel);
+    // (As páginas KIP — view e placeholder — só são criadas no 1º comando KIP:
+    // ver setKipSession. Painéis que nunca mostram um app KIP não pagam por elas.)
     root->addWidget(m_bodyStack, 1);
 
     root->addStretch(0);
+
+    // Atalhos de fonte (pedido do usuário: "vai funcionar atalhos tbm,
+    // padrão: ctrl scroll up e ctrl scroll down, e ctrl + e ctrl -
+    // defaults"). Qt::WidgetWithChildrenShortcut: dispara com o
+    // painel ou QUALQUER filho dele em foco (Saída, JSON, Headers,
+    // Requisição), não só o painel em si. Ctrl+scroll é tratado à parte no
+    // eventFilter (evento de Wheel, não tem QKeySequence).
+    m_increaseFontShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+=")), this);
+    m_increaseFontShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_increaseFontShortcut, &QShortcut::activated, this, &OutputPanel::increaseFontSize);
+    // Ctrl+Shift+= cobre o "Ctrl +" de teclados onde o "+" físico exige Shift.
+    auto *increaseFontShortcutAlt = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+=")), this);
+    increaseFontShortcutAlt->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(increaseFontShortcutAlt, &QShortcut::activated, this, &OutputPanel::increaseFontSize);
+    m_decreaseFontShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+-")), this);
+    m_decreaseFontShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_decreaseFontShortcut, &QShortcut::activated, this, &OutputPanel::decreaseFontSize);
+
+    // Ctrl+scroll no corpo da Saída/Requisição ajusta a fonte (mesmo padrão
+    // de editores de código/navegadores).
+    m_outputView->viewport()->installEventFilter(this);
+    m_requestBodyView->viewport()->installEventFilter(this);
 
     applyOptionsToOutput();
     updateTabVisibility();
@@ -705,50 +902,103 @@ void OutputPanel::rebuildOptionsMenu()
               utils::tr(QStringLiteral("output.menu.compact.tip")));
 
     menu->addSeparator();
+    // Atalhos padrão (pedido do usuário): Ctrl+scroll pra cima/baixo e
+    // Ctrl+/Ctrl- fazem a MESMA coisa que estes itens — ver os QShortcut em
+    // setupUi() e o Ctrl+wheel tratado em eventFilter(). O texto do atalho
+    // aparece aqui só como dica visual (o menu não é a única forma de
+    // disparar).
+    // O atalho de VERDADE é um QShortcut persistente criado uma vez em
+    // setupUi() (ver m_increaseFontShortcut/m_decreaseFontShortcut) — não um
+    // QAction::setShortcut aqui, porque este menu é RECRIADO a cada toggle
+    // (rebuildOptionsMenu), e a QMenu antiga não é destruída (QToolButton::
+    // setMenu não toma posse) — um shortcut por QAction se acumularia a
+    // cada rebuild e viraria "atalho ambíguo" depois de poucos toggles.
     auto *bigger = menu->addAction(utils::tr(QStringLiteral("output.menu.font_bigger")));
-    connect(bigger, &QAction::triggered, this, [this]() {
-        m_options.fontPointSize = (m_options.fontPointSize > 0 ? m_options.fontPointSize
-                                                               : tk::fontSizePt()) + 1;
-        applyOptionsToOutput();
-        emit viewOptionsChanged(m_options);
-    });
+    bigger->setToolTip(QStringLiteral("Ctrl+="));
+    connect(bigger, &QAction::triggered, this, &OutputPanel::increaseFontSize);
     auto *smaller = menu->addAction(utils::tr(QStringLiteral("output.menu.font_smaller")));
-    connect(smaller, &QAction::triggered, this, [this]() {
-        const int base = m_options.fontPointSize > 0 ? m_options.fontPointSize : tk::fontSizePt();
-        m_options.fontPointSize = qMax(7, base - 1);
-        applyOptionsToOutput();
-        emit viewOptionsChanged(m_options);
-    });
-
-    menu->addSeparator();
-    auto *copyAll = menu->addAction(utils::tr(QStringLiteral("output.menu.copy_all")));
-    connect(copyAll, &QAction::triggered, this, [this]() {
-        m_outputView->selectAll();
-        m_outputView->copy();
-        QTextCursor c = m_outputView->textCursor();
-        c.clearSelection();
-        m_outputView->setTextCursor(c);
-    });
-    auto *clear = menu->addAction(utils::tr(QStringLiteral("output.menu.clear")));
-    connect(clear, &QAction::triggered, this, [this]() { clearAll(); });
+    smaller->setToolTip(QStringLiteral("Ctrl+-"));
+    connect(smaller, &QAction::triggered, this, &OutputPanel::decreaseFontSize);
 
     m_optionsButton->setMenu(menu);
+}
+
+void OutputPanel::increaseFontSize()
+{
+    m_options.fontPointSize = (m_options.fontPointSize > 0 ? m_options.fontPointSize
+                                                           : tk::fontSizePt()) + 1;
+    applyOptionsToOutput();
+    emit viewOptionsChanged(m_options);
+}
+
+void OutputPanel::decreaseFontSize()
+{
+    const int base = m_options.fontPointSize > 0 ? m_options.fontPointSize : tk::fontSizePt();
+    m_options.fontPointSize = qMax(7, base - 1);
+    applyOptionsToOutput();
+    emit viewOptionsChanged(m_options);
+}
+
+void OutputPanel::copyAllOutput()
+{
+    m_outputView->selectAll();
+    m_outputView->copy();
+    QTextCursor c = m_outputView->textCursor();
+    c.clearSelection();
+    m_outputView->setTextCursor(c);
 }
 
 void OutputPanel::applyOptionsToOutput()
 {
     const int pt = m_options.fontPointSize > 0 ? m_options.fontPointSize : tk::fontSizePt();
     const QString mono = tk::monoFamily();
+    // Primeiro: calcula o raio do canto de baixo (m_bodyBottomRadius), usado
+    // pelas views de texto abaixo.
+    updateInputFieldStyle();
+    // Raio EXPLÍCITO nas views de texto da aba Saída: sem redeclarar, o estilo
+    // local herdava o raio global de QPlainTextEdit/QTextEdit e o texto
+    // ganhava cantos arredondados próprios, fora do padrão. Topo reto (colado
+    // no cabeçalho); embaixo o raio concêntrico à moldura do painel.
+    const QString viewRadius = QStringLiteral(
+        "border-top-left-radius: 0px; border-top-right-radius: 0px;"
+        " border-bottom-left-radius: %1px; border-bottom-right-radius: %1px;")
+        .arg(m_bodyBottomRadius);
+    // Aba Saída: visual de TERMINAL de verdade — sem borda, encostado nas
+    // bordas do stack (ver borda do PRÓPRIO m_outputStack logo abaixo, que
+    // padroniza a moldura por FORA em vez de por dentro do texto).
     const QString style = QStringLiteral(
         "background-color: %1; color: %2; border: none;"
         " font-family: %3; font-size: %4pt;")
         .arg(tk::terminalBg(), tk::terminalFg(), mono)
         .arg(pt);
-    const QString paddedStyle = QStringLiteral("%1 padding: 0px %2px %2px %2px;")
-        .arg(style).arg(tk::space(2));
+    const QString paddedStyle = QStringLiteral("%1 padding: 0px %2px %2px %2px; %3")
+        .arg(style).arg(tk::space(2)).arg(viewRadius);
     m_outputView->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 }").arg(paddedStyle));
-    m_requestBodyView->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 }").arg(paddedStyle));
-    updateInputFieldStyle();
+    m_markdownView->setStyleSheet(QStringLiteral("QTextBrowser { border: none; %1 }").arg(viewRadius));
+    m_formattedView->setStyleSheet(QStringLiteral("QListView { background-color: %1; border: none; %2 }")
+        .arg(tk::codeBg(), viewRadius));
+    // Resposta JSON: colada na moldura (sem borda própria), mesmo padrão das
+    // demais views de texto — a borda/raio vêm da moldura, que segue a
+    // preferência de cantos do usuário.
+    m_jsonView->setFlushBody(tk::codeBg(), m_bodyBottomRadius);
+
+    // Corpo da aba Requisição: card com borda/raio, igual à url bar e à
+    // tabela de headers ao lado (mesmo padrão visual de makeRequestView) —
+    // bug real corrigido aqui: esta função reaplicava o MESMO estilo de
+    // terminal (sem borda) do m_outputView em cima de m_requestBodyView
+    // toda vez que as opções de fonte/wrap mudavam, apagando
+    // silenciosamente a borda que makeRequestView tinha acabado de
+    // desenhar — o corpo da requisição nunca chegava a mostrar a borda na
+    // prática (relatado: "padronizar bordas em toda aba de saída").
+    const QString requestBodyStyle = QStringLiteral(
+        "background-color: %1; color: %2; border: 1px solid %3; border-radius: %4px;"
+        " font-family: %5; font-size: %6pt; padding: %7px;")
+        .arg(tk::surface2(), tk::fg(), tk::borderColor())
+        .arg(tk::radiusMd()).arg(mono).arg(pt).arg(tk::space(2));
+    m_requestBodyView->setStyleSheet(QStringLiteral("QPlainTextEdit { %1 }").arg(requestBodyStyle));
+
+    // A moldura (borda + raio) da Saída agora vem do container do painel
+    // ("panelCard", ver TerminalDrawer); o texto não tem mais uma borda própria.
 
     const auto wrap = m_options.wrapLines ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap;
     m_outputView->setLineWrapMode(wrap);
@@ -759,12 +1009,43 @@ void OutputPanel::updateInputFieldStyle()
 {
     const int pt = m_options.fontPointSize > 0 ? m_options.fontPointSize : tk::fontSizePt();
     const QString mono = tk::monoFamily();
-    const QString borderColor = m_inputField->isEnabled() ? tk::accent() : tk::borderColor();
+    // Rodapé PLANO do painel, mesma linguagem do cabeçalho: sem caixa própria,
+    // só uma linha separadora no topo, na cor de borda padrão (com foco ela
+    // vira a cor de destaque, como qualquer campo do app). A altura fixa é a
+    // mesma da barra de ações da árvore (ver setupUi), então as duas linhas
+    // ficam alinhadas. O painel vive dentro da moldura "panelCard" (inset de
+    // 2px), então o canto de baixo usa o raio CONCÊNTRICO (radiusMd - inset)
+    // para o fundo do terminal não vazar sobre a borda arredondada; o de cima
+    // fica reto, colado na linha.
+    const bool accepting = m_inputField->isEnabled();
+    const int innerRadius = panelInnerRadius();
+    // Contêiner: fundo do terminal, linha do topo e canto de baixo concêntrico;
+    // com foco no campo (propriedade "focused", ver eventFilter) a linha vira
+    // a cor de destaque.
+    const QString footerRule = QStringLiteral(
+        " background-color: %1; border: none; border-top: 1px solid %2;"
+        " border-top-left-radius: 0px; border-top-right-radius: 0px;"
+        " border-bottom-left-radius: %3px; border-bottom-right-radius: %3px; }");
+    m_inputFooter->setStyleSheet(
+        QStringLiteral("QWidget#outputFooter {") + footerRule.arg(tk::terminalBg(), tk::borderColor()).arg(innerRadius)
+        + QStringLiteral("QWidget#outputFooter[focused=\"true\"] {")
+        + footerRule.arg(tk::terminalBg(), tk::accent()).arg(innerRadius));
+    // Campo: transparente e sem borda própria (o contêiner desenha tudo).
     m_inputField->setStyleSheet(QStringLiteral(
-        "QLineEdit#outputInput { background-color: %1; color: %2; border: none;"
-        " border-top: 2px solid %3; font-family: %4; font-size: %5pt; padding: %6px %7px; }")
-        .arg(tk::terminalBg(), tk::terminalFg(), borderColor, mono)
-        .arg(pt).arg(tk::space(2)).arg(tk::space(3)));
+        "QLineEdit#outputInput, QLineEdit#outputInput:focus { background: transparent; color: %1;"
+        " border: none; border-radius: 0px; margin: 0px; }"
+        "QLineEdit#outputInput { font-family: %2; font-size: %3pt; padding: 0px %4px; }")
+        .arg(tk::terminalFg(), mono).arg(pt).arg(tk::space(3)));
+
+    // Com o rodapé visível ele fecha o painel; senão é a área de páginas que
+    // arredonda o canto de baixo. O topo é sempre reto (cabeçalho em cima).
+    m_bodyBottomRadius = accepting ? 0 : innerRadius;
+    if (m_pages) {
+        m_pages->setStyleSheet(QStringLiteral(
+            "QStackedWidget#outputPages { border-top-left-radius: 0px; border-top-right-radius: 0px;"
+            " border-bottom-left-radius: %1px; border-bottom-right-radius: %1px; }")
+            .arg(m_bodyBottomRadius));
+    }
 }
 
 void OutputPanel::refreshLineNumberArea()
@@ -788,16 +1069,40 @@ void OutputPanel::applyThemeVariables(const QMap<QString, QString> &variables)
 {
     Q_UNUSED(variables);
     setViewOptions(m_options);
-    if (m_tabBar) {
-        applyTabBarStyle(m_tabBar);
-    }
-    if (m_headerExtras) {
-        m_headerExtras->setStyleSheet(QStringLiteral(
-            "QWidget#outputActionsBox { background-color: %1; border-radius: %2px; }")
-            .arg(tk::surface2()).arg(tk::radiusMd()));
-    }
+    applyHeaderRowHeight(); // reaplica o estilo das abas com a altura atual da linha
+    applyHeaderStyle();
+    applyEmptyStateStyle();
+    applyOutputSearchOverlayStyle();
     if (m_ptyTerminal) {
         m_ptyTerminal->applyThemeColors();
+    }
+    // A view KIP monta o estilo na construção: refaz as duas páginas com os
+    // tokens do tema novo, religando a mesma sessão.
+    if (m_kipView) {
+        m_bodyStack->removeWidget(m_kipView);
+        m_bodyStack->removeWidget(m_kipPlaceholder);
+        m_kipView->deleteLater();
+        m_kipPlaceholder->deleteLater();
+        createKipView();
+        m_kipView->setSession(m_kipSession);
+        updateBodyStackPage();
+    }
+    // Cartões da aba Requisição/Headers (pedido do usuário: "a aba de
+    // configuração não usa o mesmo tema... fundos de gradiente" — aqui é a
+    // contraparte no painel de saída: estes 4 widgets só recalculavam seu
+    // estilo UMA VEZ, na criação, e nunca mais acompanhavam troca de tema
+    // nem o gradiente "surface" chegando a ser publicado).
+    if (m_requestMetricsHeader) {
+        m_requestMetricsHeader->applyTheme();
+    }
+    if (m_requestUrlBar) {
+        m_requestUrlBar->setStyleSheet(requestUrlBarQss());
+    }
+    if (m_headersView) {
+        m_headersView->setStyleSheet(keyValueTableQss());
+    }
+    if (m_requestHeadersView) {
+        m_requestHeadersView->setStyleSheet(keyValueTableQss());
     }
     updateTabVisibility();
 }
@@ -826,6 +1131,10 @@ void OutputPanel::appendOutput(const QString &rawText, bool isError)
     }
     appendChunkNow(rawText, isError);
     detectJsonInText(m_outputView->toPlainText());
+    // Primeira saída: sai do estado vazio e habilita as ações do cabeçalho.
+    if (m_bodyStack && m_clearButton && !m_clearButton->isEnabled()) {
+        updateBodyStackPage();
+    }
 }
 
 void OutputPanel::appendChunkNow(const QString &rawTextIn, bool isError)
@@ -989,21 +1298,14 @@ void OutputPanel::detectJsonInText(const QString &text)
 
 void OutputPanel::setHttpResult(const engine::HttpResult &result)
 {
-    QString metrics = QStringLiteral("%1").arg(result.statusCode);
-    if (!result.reasonPhrase.isEmpty()) {
-        metrics += QStringLiteral(" %1").arg(result.reasonPhrase);
+    m_lastHttpResult = result;
+    // Métricas (status/tempo/tamanho) DENTRO da aba de Request — pedido do
+    // usuário: "ao invés de fora". Substitui o antigo m_metricsLabel solto
+    // no header do painel inteiro.
+    if (m_requestMetricsHeader) {
+        m_requestMetricsHeader->setMetrics(
+            result.statusCode, result.reasonPhrase, result.elapsedMs, result.bodySize, result.success);
     }
-    metrics += QStringLiteral("  •  %1 ms").arg(result.elapsedMs);
-    if (result.bodySize < 1024) {
-        metrics += QStringLiteral("  •  %1 B").arg(result.bodySize);
-    } else {
-        metrics += QStringLiteral("  •  %1 KB").arg(result.bodySize / 1024.0, 0, 'f', 1);
-    }
-    m_metricsLabel->setText(metrics);
-    m_metricsLabel->setProperty("kaiState",
-        result.success ? QStringLiteral("success") : QStringLiteral("error"));
-    m_metricsLabel->style()->unpolish(m_metricsLabel);
-    m_metricsLabel->style()->polish(m_metricsLabel);
 
     fillKeyValueTable(m_headersView, result.headers);
     m_hasHeaders = !result.headers.isEmpty();
@@ -1060,7 +1362,7 @@ void OutputPanel::updateTabVisibility()
     setVisible(m_requestView, m_hasRequest, utils::tr(QStringLiteral("output.tab.request")), QStringLiteral("send"));
     setVisible(m_outputContainer, m_stdoutTabEnabled, ucFirst(utils::tr(QStringLiteral("output.tab.stdout"))),
                QStringLiteral("terminal"));
-    setVisible(m_headersView, m_hasHeaders, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
+    setVisible(m_headersPage, m_hasHeaders, utils::tr(QStringLiteral("output.tab.headers")), QStringLiteral("list"));
 
     const int count = m_tabBar->count();
     const bool tabsShouldShow = m_bodyVisible && !m_interactiveMode && !m_skipped && count >= 1;
@@ -1069,32 +1371,20 @@ void OutputPanel::updateTabVisibility()
     if (m_tabsBox) {
         m_tabsBox->setVisible(tabsShouldShow);
 
-        // Se houver apenas 1 aba, remove o fundo cinza externo e zera as margens
-        if (count <= 1) {
-            m_tabsBox->setStyleSheet(QStringLiteral("QWidget#outputTabsBox { background-color: transparent; }"));
-            if (auto *layout = m_tabsBox->layout()) {
-                layout->setContentsMargins(0, 0, 0, 0);
-            }
-        } else {
-            // Se houver 2 ou mais abas, reaplica o fundo do container e o padding interno
-            m_tabsBox->setStyleSheet(QStringLiteral(
-                "QWidget#outputTabsBox { background-color: %1; border-radius: %2px; }")
-                .arg(tk::surface2()).arg(tk::radiusMd()));
-            if (auto *layout = m_tabsBox->layout()) {
-                const int boxPadding = 3;
-                layout->setContentsMargins(boxPadding, boxPadding, boxPadding, boxPadding);
-            }
-        }
+        m_tabsBox->setStyleSheet(QStringLiteral("QWidget#outputTabsBox { background: transparent; }"));
 
         m_tabsBox->updateGeometry();
         m_tabsBox->adjustSize();
     }
 
     m_tabBar->updateGeometry();
+    // Conteúdo/abas mudaram: reavalia estado vazio e ações do cabeçalho.
+    updateBodyStackPage();
 }
 
 void OutputPanel::clearAll()
 {
+    m_lastHttpResult.reset();
     m_outputView->clear();
     m_formattedView->clearLog();
     m_markdownView->clear();
@@ -1102,7 +1392,9 @@ void OutputPanel::clearAll()
     m_requestHeadersView->setRowCount(0);
     m_requestBodyView->clear();
     m_parser.resetFormat();
-    m_metricsLabel->clear();
+    if (m_requestMetricsHeader) {
+        m_requestMetricsHeader->clear();
+    }
     m_hasJson = false;
     m_hasHeaders = false;
     m_hasRequest = false;
@@ -1133,10 +1425,25 @@ void OutputPanel::setBodyVisible(bool visible)
     if (m_pages) {
         m_pages->setVisible(visible);
     }
+    // Colapsado: o cabeçalho fica só com o botão de expandir/colapsar, para
+    // o painel ocupar o mínimo de espaço.
+    setHeaderActionsVisible(visible);
+    applyHeaderStyle();
     updateTabVisibility();
-    m_inputField->setVisible(visible && m_inputField->isEnabled());
+    m_inputFooter->setVisible(visible && m_inputField->isEnabled());
     if (m_bodyStack) {
         m_bodyStack->setVisible(visible);
+    }
+    updateHeaderVisibility();
+}
+
+void OutputPanel::updateHeaderVisibility()
+{
+    // A barra de abas/ações não serve a um app KIP (a view tem o próprio cabeçalho;
+    // cancelar e "janela própria" vivem nela). Recolhido, a barra volta: é o único
+    // caminho para reabrir o painel.
+    if (m_header) {
+        m_header->setVisible(!(m_kipMode && m_bodyVisible));
     }
 }
 
@@ -1175,17 +1482,56 @@ void OutputPanel::setSkipped(bool skipped, const QString &reasonLabel)
     updateTabVisibility();
 }
 
+bool OutputPanel::hasAnyContent() const
+{
+    return (m_outputView && !m_outputView->document()->isEmpty())
+        || m_hasJson || m_hasHeaders || m_hasRequest;
+}
+
+void OutputPanel::applyEmptyStateStyle()
+{
+    if (!m_emptyPanel) {
+        return;
+    }
+    m_emptyIcon->setPixmap(LucideIcons::icon(QStringLiteral("terminal"),
+        QColor(utils::tokens::mutedFg()), 32).pixmap(32, 32));
+    m_emptyHint->setStyleSheet(QStringLiteral("color: %1;").arg(utils::tokens::mutedFg()));
+}
+
 void OutputPanel::updateBodyStackPage()
 {
     if (!m_bodyStack) {
         return;
     }
-    if (m_interactiveMode) {
+    // Página 3 = estado vazio: só se NADA rodou/foi mostrado ainda (status
+    // ocioso e sem conteúdo). Um comando que terminou sem saída segue na
+    // página normal, em branco, como antes.
+    const bool hasContent = hasAnyContent();
+    // Com a entrada (stdin) habilitada o corpo normal precisa aparecer: o
+    // campo de resposta fica nele.
+    const bool inputEnabled = m_inputField && m_inputField->isEnabled();
+    const bool showEmpty = !m_interactiveMode && !m_skipped && m_status == OutputStatus::Idle
+        && !hasContent && !inputEnabled;
+    updateHeaderVisibility();
+    if (m_kipMode) {
+        // KIP: a view (ou o cartão da janela destacada) tem prioridade sobre
+        // qualquer outra página do corpo.
+        m_bodyStack->setCurrentIndex(m_kipDetachedPlaceholder ? 5 : 4);
+    } else if (m_interactiveMode) {
         m_bodyStack->setCurrentIndex(1);
     } else if (m_skipped) {
         m_bodyStack->setCurrentIndex(2);
+    } else if (showEmpty) {
+        m_bodyStack->setCurrentIndex(3);
     } else {
         m_bodyStack->setCurrentIndex(0);
+    }
+    // Sem saída não há o que limpar, copiar ou exportar (em modo KIP o log vive
+    // na gaveta de detalhes da view, não aqui).
+    for (QToolButton *button : {m_clearButton, m_copyOutputButton, m_exportButton}) {
+        if (button) {
+            button->setEnabled(hasContent && !m_kipMode);
+        }
     }
 }
 
@@ -1219,22 +1565,19 @@ void OutputPanel::focusInteractiveTerminal()
 
 void OutputPanel::setCollapsedNarrow(bool narrow)
 {
-    if (m_headerNarrow == narrow) {
-        return;
-    }
+    // O antigo botão de copiar PID (escondido aqui em modo estreito) não
+    // existe mais (ver setProcessPid) — o PID agora só vive no tooltip do
+    // badge de status, que não ocupa largura extra, então não há mais nada
+    // pra esconder. Mantido como estado rastreado (setter público) caso uma
+    // futura constraint de largura precise dele de novo.
     m_headerNarrow = narrow;
-    m_metricsLabel->setVisible(!narrow);
-    if (narrow) {
-        m_copyPidButton->hide();
-    } else {
-        setProcessPid(m_processPid);
-    }
 }
 
 int OutputPanel::collapsedHeaderWidth() const
 {
-    const int extras = m_headerExtras ? m_headerExtras->sizeHint().width() : 0;
-    return extras + tk::space(3) * 2;
+    // Colapsado só sobra o botão de expandir/colapsar (fora da linha rolável).
+    const int trailing = m_trailingHeaderWidget ? m_trailingHeaderWidget->sizeHint().width() : 0;
+    return trailing + tk::space(1) * 2;
 }
 
 void OutputPanel::addHeaderWidget(QWidget *widget)
@@ -1254,11 +1597,113 @@ void OutputPanel::addHeaderWidget(QWidget *widget)
     } else if (m_headerExtras->layout()) {
         m_headerExtras->layout()->addWidget(widget);
     }
-    if (m_headerExtras->layout()) {
-        m_headerExtras->layout()->invalidate();
-        m_headerExtras->layout()->activate();
-        m_headerExtras->setFixedWidth(m_headerExtras->layout()->sizeHint().width());
+    refreshHeaderExtrasWidth();
+}
+
+void OutputPanel::setBarHeight(int height)
+{
+    if (height <= 0 || height == m_barHeight) {
+        return;
     }
+    m_barHeight = height;
+    m_headerHeight = height;
+    if (m_header) {
+        m_header->setFixedHeight(height);
+    }
+    if (m_inputFooter) {
+        m_inputFooter->setFixedHeight(height);
+    }
+    applyHeaderRowHeight();
+    updateTabVisibility();
+}
+
+void OutputPanel::applyHeaderRowHeight()
+{
+    if (!m_headerScroll) {
+        return;
+    }
+    // Com overflow, a faixa ganha espaço PRÓPRIO abaixo da linha de abas: o
+    // cabeçalho cresce e a linha de abas/ícones mantém a altura normal (antes ela
+    // encolhia para dar lugar à faixa). Colapsado nunca há faixa.
+    const bool overflowing = m_bodyVisible && m_headerOverflow && m_headerOverflow->overflowing();
+    const int extra = overflowing
+        ? OverflowIndicator::thickness() + kHeaderOverflowInset + kHeaderOverflowGap
+        : 0;
+    if (m_header) {
+        m_header->setFixedHeight(m_barHeight + extra);
+        if (auto *headerLayout = qobject_cast<QHBoxLayout *>(m_header->layout())) {
+            // A margem de baixo mantém tudo centralizado na linha de cima.
+            headerLayout->setContentsMargins(tk::space(1), 0, tk::space(2), extra);
+        }
+    }
+    const int rowHeight = m_barHeight;
+    m_headerScroll->setFixedHeight(rowHeight);
+    if (m_headerExtras) {
+        m_headerExtras->setFixedHeight(rowHeight - tk::space(1));
+    }
+    if (m_tabBar) {
+        applyTabBarStyle(m_tabBar, rowHeight);
+    }
+}
+
+void OutputPanel::addTrailingHeaderWidget(QWidget *widget)
+{
+    auto *headerLayout = m_header ? qobject_cast<QHBoxLayout *>(m_header->layout()) : nullptr;
+    if (!widget || !headerLayout) {
+        return;
+    }
+    // Fora da linha rolável: o botão de colapsar nunca some por rolagem.
+    widget->setParent(m_header);
+    headerLayout->addWidget(widget, 0, Qt::AlignVCenter);
+    m_trailingHeaderWidget = widget;
+}
+
+void OutputPanel::setHeaderActionsVisible(bool visible)
+{
+    // Colapsado: some a linha inteira (abas + ações + faixa de overflow) e só
+    // o botão de expandir fica no cabeçalho.
+    if (m_headerScroll) {
+        m_headerScroll->setVisible(visible);
+    }
+    if (m_headerOverflow) {
+        // Colapsado a linha de abas some: a faixa de overflow não pode voltar a
+        // aparecer sozinha (o espaço mínimo do painel "estoura" a linha oculta).
+        m_headerOverflow->setSuppressed(!visible);
+        if (!visible) {
+            m_headerOverflow->hide();
+        }
+    }
+}
+
+void OutputPanel::refreshHeaderExtrasWidth()
+{
+    if (!m_headerExtras || !m_headerExtras->layout()) {
+        return;
+    }
+    m_headerExtras->layout()->invalidate();
+    m_headerExtras->layout()->activate();
+    m_headerExtras->setFixedWidth(m_headerExtras->layout()->sizeHint().width());
+}
+
+void OutputPanel::applyHeaderStyle()
+{
+    if (!m_header) {
+        return;
+    }
+    // Linha separadora entre o cabeçalho e o conteúdo; colapsado não há conteúdo.
+    const QString separator = m_bodyVisible
+        ? QStringLiteral("border-bottom: 1px solid %1;").arg(tk::borderColor())
+        : QStringLiteral("border-bottom: none;");
+    m_header->setStyleSheet(QStringLiteral(
+        "QWidget#outputHeader { background: transparent; %1 }"
+        "QToolButton { border: none; border-radius: %2px; background: transparent;"
+        "padding: 2px;"
+        "min-width: 1px;"
+        "min-height: 0;"
+        "}"
+        "QToolButton:hover { background: %3; }"
+        "QFrame#outputHeaderSeparator { background-color: %4; border: none; }")
+        .arg(separator).arg(tk::radiusSm()).arg(tk::hoverBg()).arg(tk::borderColor()));
 }
 
 void OutputPanel::seedOutput(const QString &text)
@@ -1307,12 +1752,12 @@ void OutputPanel::exportOutputToFile()
     }
 }
 
-void OutputPanel::setupOutputSearchOverlay()
+// Estilo do overlay de busca (moldura + campo). Extraído para ser reaplicado
+// quando o usuário troca "Cantos"/tema: o QSS é local, então o raio calculado
+// na criação não acompanhava a preferência até reiniciar o app.
+void OutputPanel::applyOutputSearchOverlayStyle()
 {
-    m_outputSearchOverlay = new QWidget(m_outputContainer);
-    m_outputSearchOverlay->setObjectName(QStringLiteral("outputSearchOverlay"));
-    m_outputSearchOverlay->setAttribute(Qt::WA_StyledBackground, true);
-    {
+    if (m_outputSearchOverlay) {
         QColor bg(tk::surface2());
         bg.setAlphaF(0.92);
         m_outputSearchOverlay->setStyleSheet(QStringLiteral(
@@ -1321,6 +1766,21 @@ void OutputPanel::setupOutputSearchOverlay()
             .arg(bg.red()).arg(bg.green()).arg(bg.blue()).arg(bg.alpha())
             .arg(tk::borderColor()).arg(tk::radiusMd()));
     }
+    if (m_outputSearchField) {
+        // Altura FIXA: o raio não pode passar da metade dela (com "Arredondado"
+        // o token radiusMd é 16 e a borda sairia errada num campo de ~30px).
+        const int radius = qMin(tk::radiusMd(), m_outputSearchField->maximumHeight() / 2);
+        m_outputSearchField->setStyleSheet(QStringLiteral(
+            "QLineEdit { min-height: 0px; padding: 1px %1px; border-radius: %2px; }")
+            .arg(tk::space(2)).arg(radius));
+    }
+}
+
+void OutputPanel::setupOutputSearchOverlay()
+{
+    m_outputSearchOverlay = new QWidget(m_outputContainer);
+    m_outputSearchOverlay->setObjectName(QStringLiteral("outputSearchOverlay"));
+    m_outputSearchOverlay->setAttribute(Qt::WA_StyledBackground, true);
     auto *bar = new QHBoxLayout(m_outputSearchOverlay);
     bar->setContentsMargins(tk::space(1), tk::space(1) / 2, tk::space(1), tk::space(1) / 2);
     bar->setSpacing(tk::space(1));
@@ -1341,13 +1801,8 @@ void OutputPanel::setupOutputSearchOverlay()
     m_outputSearchField->setPlaceholderText(utils::tr(QStringLiteral("output.search.placeholder")));
     m_outputSearchField->setClearButtonEnabled(true);
     m_outputSearchField->setFixedWidth(200);
-    {
-        const int h = tk::iconButtonSize();
-        m_outputSearchField->setFixedHeight(h);
-        m_outputSearchField->setStyleSheet(QStringLiteral(
-            "QLineEdit { min-height: 0px; padding: 1px %1px; border-radius: %2px; }")
-            .arg(tk::space(2)).arg(tk::radiusMd()));
-    }
+    m_outputSearchField->setFixedHeight(tk::iconButtonSize());
+    applyOutputSearchOverlayStyle();
     m_outputSearchField->hide();
     connect(m_outputSearchField, &QLineEdit::textChanged, this, [this](const QString &needle) {
         if (m_formattedOutputEnabled) {
@@ -1509,13 +1964,25 @@ void OutputPanel::applyOutputSearchFilter(const QString &needle)
 
 void OutputPanel::goToOutputMatch(int index)
 {
+    // Contraste automático (mesmo critério de utils::tokens::buttonFg():
+    // claro sobre fundo escuro, escuro sobre fundo claro) em vez de
+    // Qt::black/Qt::white fixos — cores fixas quebravam legibilidade em
+    // temas onde o fundo tingido (warningFg claro/accent) acabava saindo
+    // do lado "errado" do contraste (pedido do usuário: remover cores
+    // fixas que não seguem o tema).
+    auto contrastFor = [](const QColor &background) {
+        return background.lightnessF() > 0.6 ? QColor(0x10, 0x10, 0x14) : QColor(Qt::white);
+    };
+    const QColor highlightBg = QColor(tk::warningFg()).lighter(160);
+    const QColor currentBg = QColor(tk::accent());
+
     QList<QTextEdit::ExtraSelection> selections;
     QTextCharFormat highlightFormat;
-    highlightFormat.setBackground(QColor(tk::warningFg()).lighter(160));
-    highlightFormat.setForeground(Qt::black);
+    highlightFormat.setBackground(highlightBg);
+    highlightFormat.setForeground(contrastFor(highlightBg));
     QTextCharFormat currentFormat;
-    currentFormat.setBackground(QColor(tk::accent()));
-    currentFormat.setForeground(Qt::white);
+    currentFormat.setBackground(currentBg);
+    currentFormat.setForeground(contrastFor(currentBg));
 
     for (int i = 0; i < m_outputMatches.size(); ++i) {
         QTextEdit::ExtraSelection sel;
@@ -1737,9 +2204,111 @@ void OutputPanel::updateOutputStackPage()
     m_outputStack->setCurrentWidget(page);
 }
 
+void OutputPanel::copyStateFrom(const OutputPanel &source)
+{
+    setViewOptions(source.m_options);
+    setCommandId(source.m_commandId);
+    setCommandName(source.m_titleLabel->text());
+    setWorkingDirectory(source.m_workingDirectory);
+    setFormattedOutputEnabled(source.m_formattedOutputEnabled);
+    setMarkdownOutputEnabled(source.m_markdownOutputEnabled);
+    // "Saída" some para HTTP (ver setStdoutTabVisible): sem copiar isto a
+    // janela mostrava só a aba Saída, no lugar de Resposta/Requisição/Headers.
+    setStdoutTabVisible(source.m_stdoutTabEnabled);
+    seedOutput(source.plainOutput());
+    if (source.m_lastHttpResult) {
+        setHttpResult(*source.m_lastHttpResult);
+    }
+    setProcessPid(source.m_processPid);
+    setSkipped(source.m_skipped, source.m_skippedReasonLabel ? source.m_skippedReasonLabel->text() : QString());
+    // KIP: a janela destacada ganha a PRÓPRIA view, ligada à mesma sessão — o
+    // estado todo vive na sessão, nada se perde ao mudar de janela (§13.4).
+    setKipSession(source.m_kipSession);
+    setStatus(source.m_status);
+}
+
 void OutputPanel::setCommandName(const QString &name)
 {
     m_titleLabel->setText(name.isEmpty() ? utils::tr(QStringLiteral("output.title")) : name);
+    if (m_kipView) {
+        m_kipView->setCommandName(name);
+    }
+}
+
+void OutputPanel::createKipView()
+{
+    // Página 4: a view KIP.
+    m_kipView = new KipView(this);
+    m_kipView->setCommandName(m_titleLabel ? m_titleLabel->text() : QString());
+    connect(m_kipView, &KipView::runAgainRequested, this, &OutputPanel::kipRunAgainRequested);
+    connect(m_kipView, &KipView::detachRequested, this, &OutputPanel::kipDetachRequested);
+    m_kipView->setDetachable(m_kipDetachable);
+    m_bodyStack->insertWidget(4, m_kipView);
+
+    // Página 5: cartão exibido enquanto a view vive na janela destacada.
+    m_kipPlaceholder = new QWidget(this);
+    auto *layout = new QVBoxLayout(m_kipPlaceholder);
+    layout->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(4));
+    layout->setSpacing(tk::space(2));
+    layout->addStretch(1);
+    auto *icon = new QLabel(m_kipPlaceholder);
+    icon->setAlignment(Qt::AlignCenter);
+    icon->setPixmap(LucideIcons::icon(QStringLiteral("external-link"), QColor(tk::mutedFg()), 32).pixmap(32, 32));
+    layout->addWidget(icon);
+    auto *title = new QLabel(utils::tr(QStringLiteral("kip.placeholder.title")), m_kipPlaceholder);
+    QFont titleFont = title->font();
+    titleFont.setBold(true);
+    titleFont.setPointSize(titleFont.pointSize() + 1);
+    title->setFont(titleFont);
+    title->setAlignment(Qt::AlignCenter);
+    layout->addWidget(title);
+    auto *text = new QLabel(utils::tr(QStringLiteral("kip.placeholder.text")), m_kipPlaceholder);
+    text->setAlignment(Qt::AlignCenter);
+    text->setWordWrap(true);
+    text->setStyleSheet(QStringLiteral("color: %1;").arg(tk::mutedFg()));
+    layout->addWidget(text);
+    auto *focus = new QPushButton(utils::tr(QStringLiteral("kip.placeholder.focus")), m_kipPlaceholder);
+    focus->setCursor(Qt::PointingHandCursor);
+    focus->setProperty("kaiRole", QStringLiteral("primary"));
+    connect(focus, &QPushButton::clicked, this, &OutputPanel::kipFocusWindowRequested);
+    layout->addWidget(focus, 0, Qt::AlignHCenter);
+    layout->addStretch(1);
+    m_bodyStack->insertWidget(5, m_kipPlaceholder);
+}
+
+void OutputPanel::setKipSession(engine::KipSession *session)
+{
+    m_kipSession = session;
+    m_kipMode = session != nullptr;
+    if (!m_kipMode) {
+        m_kipDetachedPlaceholder = false;
+    }
+    if (session && !m_kipView) {
+        createKipView();
+    }
+    if (m_kipView) {
+        m_kipView->setSession(session);
+    }
+    updateBodyStackPage();
+}
+
+engine::KipSession *OutputPanel::kipSession() const
+{
+    return m_kipSession.data();
+}
+
+void OutputPanel::setKipDetachable(bool detachable)
+{
+    m_kipDetachable = detachable;
+    if (m_kipView) {
+        m_kipView->setDetachable(detachable);
+    }
+}
+
+void OutputPanel::setKipDetachedPlaceholder(bool detached)
+{
+    m_kipDetachedPlaceholder = detached;
+    updateBodyStackPage();
 }
 
 void OutputPanel::setCommandId(const QString &id)
@@ -1780,14 +2349,16 @@ void OutputPanel::setProcessPid(qint64 pid)
 {
     m_processPid = pid;
     const bool has = pid > 0;
-    m_copyPidButton->setVisible(has);
-    m_copyPidButton->setToolTip(has
+    m_statusBadge->setToolTip(has
         ? utils::tr(QStringLiteral("output.copy_pid")).arg(pid)
         : QString());
+    m_statusBadge->setCursor(has ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
 void OutputPanel::setStatus(OutputStatus status)
 {
+    m_status = status;
+    updateBodyStackPage();
     if (status == OutputStatus::Running) {
         m_firstErrorNotifiedThisRun = false;
     }
@@ -1810,7 +2381,7 @@ void OutputPanel::setStatus(OutputStatus status)
     case OutputStatus::Skipped: dotColor = QColor(utils::tokens::warningFg()); break;
     }
     m_statusDot->setStyleSheet(QStringLiteral(
-        "background-color: %1; border-radius: 4px;").arg(dotColor.name()));
+        "background-color: %1; border-radius: %2px;").arg(dotColor.name()).arg(tk::radiusSm()));
     m_statusLabel->setText(ucFirst(label));
     m_statusBadge->setProperty("kaiState", state);
     m_statusBadge->style()->unpolish(m_statusBadge);
@@ -1856,9 +2427,11 @@ void OutputPanel::setStatus(OutputStatus status)
 void OutputPanel::setInputEnabled(bool enabled)
 {
     m_inputField->setEnabled(enabled);
-    m_inputField->setVisible(m_bodyVisible && enabled);
+    m_inputFooter->setVisible(m_bodyVisible && enabled);
+    updateBodyStackPage();
     refreshInputPlaceholder();
-    updateInputFieldStyle();
+    // Recalcula também o canto de baixo das views (depende do rodapé visível).
+    applyOptionsToOutput();
 }
 
 void OutputPanel::setInputShortcutHint(const QString &shortcutText)
@@ -1890,6 +2463,21 @@ bool OutputPanel::eventFilter(QObject *watched, QEvent *event)
     if (watched == m_outputContainer && event->type() == QEvent::Resize) {
         repositionOutputSearchOverlay();
     }
+    // Roda do mouse sobre a área livre do cabeçalho rola abas + ações na
+    // horizontal (a barra é escondida; a faixa de destaque mostra a posição).
+    if (m_headerScroll && watched == m_headerScroll->viewport() && event->type() == QEvent::Wheel) {
+        auto *we = static_cast<QWheelEvent *>(event);
+        QScrollBar *bar = m_headerScroll->horizontalScrollBar();
+        const int delta = we->angleDelta().x() != 0 ? we->angleDelta().x() : we->angleDelta().y();
+        bar->setValue(bar->value() - delta);
+        return true;
+    }
+    if (watched == m_inputField
+        && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)) {
+        m_inputFooter->setProperty("focused", event->type() == QEvent::FocusIn);
+        m_inputFooter->style()->unpolish(m_inputFooter);
+        m_inputFooter->style()->polish(m_inputFooter);
+    }
     if (watched == m_inputField && event->type() == QEvent::KeyPress) {
         auto *ke = static_cast<QKeyEvent *>(event);
         if (ke->modifiers().testFlag(Qt::ControlModifier)) {
@@ -1902,6 +2490,29 @@ bool OutputPanel::eventFilter(QObject *watched, QEvent *event)
                 return true;
             }
         }
+    }
+    // Ctrl+scroll ajusta a fonte (pedido do usuário) no viewport da Saída e
+    // do corpo da Requisição — mesmo padrão de editores de código.
+    if (event->type() == QEvent::Wheel
+        && (watched == m_outputView->viewport() || watched == m_requestBodyView->viewport())) {
+        auto *we = static_cast<QWheelEvent *>(event);
+        if (we->modifiers().testFlag(Qt::ControlModifier)) {
+            if (we->angleDelta().y() > 0) {
+                increaseFontSize();
+            } else if (we->angleDelta().y() < 0) {
+                decreaseFontSize();
+            }
+            return true;
+        }
+    }
+    // Badge de status: clique copia o PID (quando há um processo) — mesma
+    // ação do antigo botão dedicado, agora só acessível pelo badge (ver
+    // comentário em setupUi sobre a remoção do botão).
+    if (watched == m_statusBadge && event->type() == QEvent::MouseButtonRelease) {
+        if (m_processPid > 0) {
+            QGuiApplication::clipboard()->setText(QString::number(m_processPid));
+        }
+        return true;
     }
     return QWidget::eventFilter(watched, event);
 }

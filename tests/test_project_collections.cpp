@@ -353,6 +353,32 @@ folders:
         QCOMPARE(result.subFolders.first().icon, QStringLiteral("refresh-ccw"));
     }
 
+    // KIP (spec 11): kai.json/kai.yml de projeto leva "kip"/"kip_window" até o
+    // Command (o parser reusa Command::fromJson).
+    void importCarriesKipFlags()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.json")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(R"json({
+            "project_name": "KIP Demo",
+            "commands": [
+                {"name": "Deploy", "type": "shell", "command": "deploy --kip", "kip": true, "kip_window": true},
+                {"name": "Plain", "type": "shell", "command": "ls"}
+            ]
+        })json");
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY2(result.success, qPrintable(result.errorMessage));
+        QCOMPARE(result.commands.size(), 2);
+        QVERIFY(result.commands.at(0).kip);
+        QVERIFY(result.commands.at(0).kipOpenInWindow);
+        QVERIFY(!result.commands.at(1).kip);
+    }
+
     // AUDITORIA de import/export (revisão geral pedida pelo usuário): o
     // parser de kai.json de projeto lia só um subconjunto pequeno dos
     // campos de Command (o resto era descartado silenciosamente mesmo

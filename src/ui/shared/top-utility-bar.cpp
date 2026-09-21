@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 
 #include "ui/shared/lucide-icons.h"
+#include "ui/shared/window-control-buttons.h"
 #include "utils/translation-manager.h"
 
 #include "utils/asset-paths.h"
@@ -24,8 +25,6 @@
 namespace kai::ui {
 
 namespace {
-constexpr int kWinBtn = 14;
-
 QPixmap loadLogoPixmap()
 {
     const QString logoDir = utils::assetDir(QStringLiteral("logo"));
@@ -40,30 +39,24 @@ QPixmap loadLogoPixmap()
     return QPixmap();
 }
 
-enum class WinIcon { Minimize, Maximize, Restore, Close };
-
-// Ícones de controle de janela via Lucide (minus/square/copy/x),
-// recoloridos pela cor pedida — sem depender de fontes de símbolo.
-QString winIconName(WinIcon icon)
+// Cor dos ícones da barra: derivada do tema (um cinza claro cravado sumia nos
+// temas claros e não acompanhava troca de tema).
+QColor topBarIconColor()
 {
-    switch (icon) {
-    case WinIcon::Minimize: return QStringLiteral("minus");
-    case WinIcon::Maximize: return QStringLiteral("square");
-    case WinIcon::Restore:  return QStringLiteral("copy");
-    case WinIcon::Close:    return QStringLiteral("x");
-    }
-    return QString();
-}
-
-QIcon renderWinIcon(WinIcon icon, const QColor &color)
-{
-    return LucideIcons::icon(winIconName(icon), color, kWinBtn);
+    return QColor(utils::tokens::tabInactiveFg());
 }
 }
 
 TopUtilityBar::TopUtilityBar(QWidget *parent)
     : QWidget(parent)
 {
+    // Necessário pro fundo em GRADIENTE (base "primary" do tema, ver
+    // app-stylesheet.cpp) realmente pintar aqui: um QWidget "puro" (não
+    // QFrame) só honra um qlineargradient() do QSS com este atributo —
+    // cor SÓLIDA já funcionava sem ele (o Fusion tem um atalho pra isso),
+    // mas gradiente exige o pipeline de pintura completo do estilo
+    // (relatado pelo usuário: "a main window está sem nenhum gradiente").
+    setAttribute(Qt::WA_StyledBackground, true);
     setupUi();
 }
 
@@ -87,11 +80,11 @@ void TopUtilityBar::setupUi()
 
     // Cor neutra dos ícones de menu (cinza claro, consistente com o texto
     // do menu). Helper para adicionar uma ação já com ícone Lucide.
-    const QColor menuIconColor(200, 200, 210);
     constexpr int kMenuIcon = 16;
     auto addIconAction = [&](QMenu *menu, const QString &lucideName, const QString &text) -> QAction * {
         QAction *action = menu->addAction(text);
-        action->setIcon(LucideIcons::icon(lucideName, menuIconColor, kMenuIcon));
+        action->setIcon(LucideIcons::icon(lucideName, topBarIconColor(), kMenuIcon));
+        m_menuIcons.append({action, lucideName});
         return action;
     };
 
@@ -108,6 +101,8 @@ void TopUtilityBar::setupUi()
     connect(addIconAction(fileMenu, QStringLiteral("folder-output"), utils::tr(QStringLiteral("menu.file.export_config"))), &QAction::triggered,
             this, &TopUtilityBar::exportRequested);
     fileMenu->addSeparator();
+    connect(addIconAction(fileMenu, QStringLiteral("history"), utils::tr(QStringLiteral("menu.file.run_history"))), &QAction::triggered,
+            this, &TopUtilityBar::runHistoryRequested);
     connect(addIconAction(fileMenu, QStringLiteral("scroll-text"), utils::tr(QStringLiteral("menu.file.logs"))), &QAction::triggered,
             this, &TopUtilityBar::logsRequested);
     fileMenu->addSeparator();
@@ -141,14 +136,9 @@ void TopUtilityBar::setupUi()
     QAction *settingsAction = m_menuBar->addAction(utils::tr(QStringLiteral("menu.settings")));
     connect(settingsAction, &QAction::triggered, this, &TopUtilityBar::settingsRequested);
 
-    // --- Processos ---
-    QMenu *processesMenu = m_menuBar->addMenu(utils::tr(QStringLiteral("menu.processes")));
-    connect(addIconAction(processesMenu, QStringLiteral("activity"), utils::tr(QStringLiteral("menu.processes.view"))), &QAction::triggered,
-            this, &TopUtilityBar::showProcessListRequested);
-    connect(addIconAction(processesMenu, QStringLiteral("history"), utils::tr(QStringLiteral("menu.processes.history"))), &QAction::triggered,
-            this, &TopUtilityBar::runHistoryRequested);
-    connect(addIconAction(processesMenu, QStringLiteral("bell"), utils::tr(QStringLiteral("menu.processes.notifications"))), &QAction::triggered,
-            this, &TopUtilityBar::notificationHistoryRequested);
+    // (O antigo menu "Processos" saiu: os processos em execução e as
+    // notificações vivem na barra inferior. O histórico de execuções foi para
+    // o menu Arquivo.)
 
     // --- Ajuda: VOLTOU a ser dropdown (pedido do usuário: "aba de ajuda,
     // volte pra um dropdown") — ganhou um 2º item ("Tela de Boas-Vindas")
@@ -160,32 +150,13 @@ void TopUtilityBar::setupUi()
             this, &TopUtilityBar::showWelcomeRequested);
 
     // --- Botões de janela (custom title bar, estilo CopyQ/moderno) ---
-    const QColor iconColor(200, 200, 210);
-    auto makeWinButton = [this](WinIcon icon, const QColor &color, const QString &objectName,
-                                const QString &hoverBg) {
-        auto *button = new QToolButton(this);
-        button->setObjectName(objectName);
-        button->setIcon(renderWinIcon(icon, color));
-        button->setIconSize(QSize(kWinBtn, kWinBtn));
-        button->setFixedSize(30, 24);
-        button->setAutoRaise(true);
-        button->setStyleSheet(QStringLiteral(
-            "QToolButton#%1 { border: none; border-radius: 4px; padding: 0px; background: transparent; }"
-            "QToolButton#%1:hover { background: %2; }").arg(objectName, hoverBg));
-        return button;
-    };
-
-    m_minimizeButton = makeWinButton(WinIcon::Minimize, iconColor, QStringLiteral("winMinimize"),
-                                     utils::tokens::hoverBg());
+    m_minimizeButton = makeWindowControlButton(this, WindowControl::Minimize);
     connect(m_minimizeButton, &QToolButton::clicked, this, &TopUtilityBar::minimizeRequested);
 
-    m_maximizeButton = makeWinButton(WinIcon::Maximize, iconColor, QStringLiteral("winMaximize"),
-                                     utils::tokens::hoverBg());
+    m_maximizeButton = makeWindowControlButton(this, WindowControl::Maximize);
     connect(m_maximizeButton, &QToolButton::clicked, this, &TopUtilityBar::maximizeRestoreRequested);
 
-    // Botão de fechar com hover vermelho (padrão moderno).
-    m_closeButton = makeWinButton(WinIcon::Close, iconColor, QStringLiteral("winClose"),
-                                  utils::tokens::dangerBg());
+    m_closeButton = makeWindowControlButton(this, WindowControl::Close);
     connect(m_closeButton, &QToolButton::clicked, this, &TopUtilityBar::closeRequested);
 
     layout->addWidget(logoLabel);
@@ -204,7 +175,8 @@ void TopUtilityBar::setupUi()
     // fixados na MESMA altura (24px) e alinhados ao centro vertical, para
     // ficarem em uma linha de base consistente com os botões de janela.
     auto *envLabel = new QLabel(this);
-    envLabel->setPixmap(LucideIcons::icon(QStringLiteral("layers"), QColor(200, 200, 210), 16).pixmap(16, 16));
+    m_environmentIcon = envLabel;
+    envLabel->setPixmap(LucideIcons::icon(QStringLiteral("layers"), topBarIconColor(), 16).pixmap(16, 16));
     envLabel->setToolTip(utils::tr(QStringLiteral("env.selector.tooltip")));
     envLabel->setFixedSize(18, kBarItemH);
     envLabel->setAlignment(Qt::AlignCenter);
@@ -227,10 +199,6 @@ void TopUtilityBar::setupUi()
     // e, sem redeclarar o raio, o combo ficava com canto reto fixo,
     // ignorando a preferência de canto do usuário (reto/suave/arredondado —
     // relatado).
-    m_environmentSelector->setStyleSheet(QStringLiteral(
-        "QComboBox#environmentSelector { min-height: 0px; padding: 1px 8px;"
-        " border-radius: %1px; }")
-        .arg(utils::tokens::radiusMd()));
     connect(m_environmentSelector, &QComboBox::activated, this, [this](int index) {
         const QString id = m_environmentSelector->itemData(index).toString();
         if (!id.isEmpty()) {
@@ -240,16 +208,12 @@ void TopUtilityBar::setupUi()
 
     m_manageEnvironmentsButton = new QToolButton(this);
     m_manageEnvironmentsButton->setObjectName(QStringLiteral("manageEnvironments"));
-    m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), QColor(200, 200, 210), 16));
+    m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), topBarIconColor(), 16));
     m_manageEnvironmentsButton->setIconSize(QSize(16, 16));
     m_manageEnvironmentsButton->setFixedSize(kBarItemH, kBarItemH);
     m_manageEnvironmentsButton->setAutoRaise(true);
     m_manageEnvironmentsButton->setToolTip(utils::tr(QStringLiteral("env.manage.tooltip")));
-    m_manageEnvironmentsButton->setStyleSheet(QStringLiteral(
-        "QToolButton#manageEnvironments { border: none; border-radius: %1px;"
-        " background: transparent; }"
-        "QToolButton#manageEnvironments:hover { background: %2; }")
-        .arg(utils::tokens::radiusSm()).arg(utils::tokens::hoverBg()));
+    refreshStyle();
     connect(m_manageEnvironmentsButton, &QToolButton::clicked, this, &TopUtilityBar::manageEnvironmentsRequested);
 
     // Espaçamento uniforme entre os itens do grupo de environment, todos
@@ -281,14 +245,54 @@ void TopUtilityBar::setEnvironments(const QStringList &ids, const QStringList &n
     }
 }
 
+void TopUtilityBar::refreshStyle()
+{
+    refreshIcons();
+    if (m_environmentSelector) {
+        // O combo tem altura FIXA: com "Arredondado" o token radiusMd (16)
+        // passa da metade da altura, e o Qt desenha a borda errado com raio
+        // maior que isso (o combo aparecia quadrado). O teto é metade da
+        // altura, que já dá a forma de pílula.
+        const int radius = qMin(utils::tokens::radiusMd(), m_environmentSelector->maximumHeight() / 2);
+        // Fundo SÓLIDO em bg() (o campo global usa surface/input do tema).
+        m_environmentSelector->setStyleSheet(QStringLiteral(
+            "QComboBox#environmentSelector { min-height: 0px; padding: 1px 8px;"
+            " background-color: %2; border-radius: %1px; }")
+            .arg(radius)
+            .arg(utils::tokens::bg()));
+    }
+    if (m_manageEnvironmentsButton) {
+        m_manageEnvironmentsButton->setStyleSheet(QStringLiteral(
+            "QToolButton#manageEnvironments { border: none; border-radius: %1px;"
+            " background: transparent; }"
+            "QToolButton#manageEnvironments:hover { background: %2; }")
+            .arg(utils::tokens::radiusSm()).arg(utils::tokens::hoverBg()));
+    }
+}
+
 void TopUtilityBar::setMaximized(bool maximized)
 {
     m_maximized = maximized;
-    if (m_maximizeButton) {
-        const QColor iconColor(200, 200, 210);
-        m_maximizeButton->setIcon(renderWinIcon(
-            maximized ? WinIcon::Restore : WinIcon::Maximize, iconColor));
+    refreshWindowControlIcon(m_maximizeButton, WindowControl::Maximize, maximized);
+}
+
+void TopUtilityBar::refreshIcons()
+{
+    const QColor color = topBarIconColor();
+    for (const auto &entry : m_menuIcons) {
+        if (entry.first) {
+            entry.first->setIcon(LucideIcons::icon(entry.second, color, 16));
+        }
     }
+    if (m_environmentIcon) {
+        m_environmentIcon->setPixmap(LucideIcons::icon(QStringLiteral("layers"), color, 16).pixmap(16, 16));
+    }
+    if (m_manageEnvironmentsButton) {
+        m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), color, 16));
+    }
+    refreshWindowControlIcon(m_minimizeButton, WindowControl::Minimize);
+    refreshWindowControlIcon(m_closeButton, WindowControl::Close);
+    setMaximized(m_maximized);
 }
 
 void TopUtilityBar::mousePressEvent(QMouseEvent *event)

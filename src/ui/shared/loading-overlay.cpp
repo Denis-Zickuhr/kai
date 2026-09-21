@@ -86,7 +86,9 @@ void LoadingOverlay::paintEvent(QPaintEvent *)
     painter.setRenderHint(QPainter::Antialiasing);
 
     // Véu semitransparente.
-    painter.fillRect(rect(), QColor(20, 21, 28, 180));
+    QColor veil(utils::tokens::bg());
+    veil.setAlpha(180);
+    painter.fillRect(rect(), veil);
 
     // Spinner: 12 traços com opacidade decrescente, girando.
     const QPointF center(width() / 2.0, height() / 2.0 - 28.0);
@@ -96,7 +98,7 @@ void LoadingOverlay::paintEvent(QPaintEvent *)
     const int lines = 12;
     for (int i = 0; i < lines; ++i) {
         const qreal opacity = static_cast<qreal>(i + 1) / lines;
-        QColor c(139, 233, 253); // ciano do tema
+        QColor c(utils::tokens::accent());
         c.setAlphaF(opacity);
         QPen pen(c);
         pen.setWidth(3);

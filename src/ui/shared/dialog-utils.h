@@ -307,10 +307,19 @@ inline QWidget *makeSurfaceCard(QWidget *parent)
     // transparentes, então só o card pinta o fundo/borda e o recorte
     // arredondado aparece. Qualificado por #kaiSurfaceCard para não
     // cascatear aos QLineEdit/QComboBox filhos.
+    // Gradiente de tema (base "primary" — "app e saídas", pedido do
+    // usuário) quando o tema ativo a declara — este é o card mais
+    // reutilizado do app (Identificação, Execução, blocos de Environments/
+    // Folder editor etc.), então é o choke point de maior alcance pra
+    // cobrir fundos de card sem caçar cada dialog um por um. Sem gradiente
+    // no tema (ou desligado globalmente), cai no surface2 sólido de sempre.
+    const QString bgDecl = utils::tokens::hasGradient(QStringLiteral("primary"))
+        ? utils::tokens::gradientQss(QStringLiteral("background-color"), QStringLiteral("primary"))
+        : QStringLiteral("background-color: %1;").arg(utils::tokens::surface2());
     card->setStyleSheet(QStringLiteral(
-        "QWidget#kaiSurfaceCard { background-color: %1; border: 1px solid %2;"
+        "QWidget#kaiSurfaceCard { %1 border: 1px solid %2;"
         " border-radius: %3px; }")
-        .arg(utils::tokens::surface2()).arg(utils::tokens::borderColor())
+        .arg(bgDecl, utils::tokens::borderColor())
         .arg(utils::tokens::radiusLg()));
     return card;
 }
@@ -493,10 +502,23 @@ inline void stripDialogButtonIcons(QDialogButtonBox *box)
     // texto que o :hover/:default garantem (o fundo escuro "engolia" o
     // texto). setDefault(true) força a marcação sempre, garantindo que a
     // regra de estilo se aplique de verdade.
+    //
+    // autoDefault DESLIGADO nos demais (bug relatado: "o focus dos botões não
+    // produz gradiente, tipo btn de confirmar"): com autoDefault, o botão
+    // que recebe FOCO vira o :default do diálogo — dar Tab até "Cancelar"
+    // passava o gradiente de ação primária pra ele e deixava "Salvar" cinza.
+    // O primário também ganha kaiRole="primary", estado FIXO (não depende de
+    // foco) que é o que o QSS usa pro gradiente. Enter continua confirmando:
+    // o default explícito vale mesmo sem autoDefault.
+    for (QAbstractButton *button : buttons) {
+        if (auto *push = qobject_cast<QPushButton *>(button)) {
+            push->setAutoDefault(false);
+        }
+    }
     for (auto role : {QDialogButtonBox::Ok, QDialogButtonBox::Save, QDialogButtonBox::Yes}) {
         if (QPushButton *primary = box->button(role)) {
             primary->setDefault(true);
-            primary->setAutoDefault(true);
+            primary->setProperty("kaiRole", QStringLiteral("primary"));
             break;
         }
     }
@@ -600,7 +622,14 @@ inline void makeSearchableCombo(QComboBox *combo)
     completer->setCompletionMode(QCompleter::PopupCompletion);
     // ESTILIZA O POPUP para seguir o tema (bug reportado: "caixinha que foge do
     // tema"). O popup do completer é um QAbstractItemView SEPARADO que não herda
-    // o QSS de lista da aplicação; aplicamos as cores dos design tokens direto.
+    // o QSS de lista da aplicação; aplicamos as cores dos design tokens direto —
+    // MESMO critério visual (cores, raio, hover) da regra "QComboBox
+    // QAbstractItemView" em app-stylesheet.cpp::buildModernStylesheet(), pra um
+    // combo pesquisável (Pasta em Coleções/Pastas/Comandos, Coleção num
+    // parâmetro, etc.) não ficar com aparência diferente de um select comum
+    // (achado real, com foto: "o select de coleções deve ter o mesmo estilo do
+    // select normal, ainda não tem" — faltava o hover, que o select comum já
+    // tinha).
     if (QAbstractItemView *popup = completer->popup()) {
         using namespace kai::utils;
         popup->setStyleSheet(QStringLiteral(
@@ -612,10 +641,11 @@ inline void makeSearchableCombo(QComboBox *combo)
             " outline: none;"
             " padding: 2px; }"
             "QAbstractItemView::item { padding: 4px 8px; border-radius: %5px; }"
-            "QAbstractItemView::item:selected { background-color: %6; color: %2; }")
+            "QAbstractItemView::item:selected { background-color: %6; color: %2; }"
+            "QAbstractItemView::item:hover { background-color: %7; }")
             .arg(tokens::surface2(), tokens::fg(), tokens::borderColor())
             .arg(tokens::radiusMd()).arg(tokens::radiusSm())
-            .arg(tokens::selBg()));
+            .arg(tokens::selBg(), tokens::hoverBg()));
     }
     combo->setCompleter(completer);
 }

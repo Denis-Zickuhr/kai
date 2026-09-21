@@ -3,7 +3,10 @@
 #include <QWidget>
 #include <QString>
 #include <QPoint>
+#include <QPair>
+#include <QVector>
 
+class QAction;
 class QLabel;
 class QMenuBar;
 class QToolButton;
@@ -32,6 +35,11 @@ public:
     // ativo. Chamado pela MainWindow ao carregar/alterar os pacotes.
     void setEnvironments(const QStringList &ids, const QStringList &names, const QString &activeId);
 
+    // Reaplica o estilo local do seletor de environments (raio/cores dos
+    // tokens). Ele tem QSS próprio, fora do stylesheet global, então sem isto
+    // trocar "Cantos" nas Configurações não chegava nele até reiniciar.
+    void refreshStyle();
+
 signals:
     // Menu único de importação (pedido do usuário, vendo o menu Arquivo
     // "bagunçado" com 3 itens de import separados: "só dois botões...
@@ -46,14 +54,12 @@ signals:
     void newCommandRequested();
     void newCollectionRequested();
     void settingsRequested();
-    void showProcessListRequested();
     void helpRequested();
     // "Ajuda" -> "Tela de Boas-Vindas" (pedido do usuário: "traga uma
     // tela que reabre essa tela de boas vindas") — reabre o tutorial a
     // qualquer momento, mesmo com comandos já cadastrados.
     void showWelcomeRequested();
     void runHistoryRequested();
-    void notificationHistoryRequested();
 
     // Environments como pacotes selecionáveis (feedback do usuário, vibe
     // CopyQ/Insomnia): trocar o pacote ativo e abrir a tela de gestão.
@@ -85,8 +91,12 @@ protected:
 
 private:
     void setupUi();
+    // Recolore todos os ícones da barra com o tema atual.
+    void refreshIcons();
 
     QMenuBar *m_menuBar = nullptr;
+    QLabel *m_environmentIcon = nullptr;
+    QVector<QPair<QAction *, QString>> m_menuIcons;   // ação + nome do ícone Lucide
     QComboBox *m_environmentSelector = nullptr;
     QToolButton *m_manageEnvironmentsButton = nullptr;
     QToolButton *m_minimizeButton = nullptr;

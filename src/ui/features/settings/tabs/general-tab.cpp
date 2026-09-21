@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QSpinBox>
 
 namespace kai::ui {
 
@@ -50,6 +51,53 @@ GeneralTab::GeneralTab(const core::SettingsData &currentSettings, QWidget *paren
     systemLayout->addWidget(layout_helpers::makeHintBanner(systemGroup,
         utils::tr(QStringLiteral("settings.autostart.hint"))));
     layout->addWidget(systemGroup);
+
+    // ENCERRAMENTO DE PROCESSOS (pedido do usuário: "o Docker tem um sistema
+    // de gracefully stopping... o Kai mata seco"). Antes o tempo de espera
+    // entre SIGTERM e SIGKILL era um valor fixo de 2000ms no código, sem
+    // nenhum controle na UI — agora configurável em segundos.
+    auto *executionGroup = new QGroupBox(
+        utils::tr(QStringLiteral("settings.group.execution")), this);
+    auto *executionLayout = new QVBoxLayout(executionGroup);
+    executionLayout->setContentsMargins(14, 16, 14, 12);
+    executionLayout->setSpacing(4);
+
+    auto *timeoutLabel = new QLabel(
+        utils::tr(QStringLiteral("settings.graceful_stop_timeout")), executionGroup);
+    timeoutLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_gracefulStopTimeoutField = new QSpinBox(executionGroup);
+    m_gracefulStopTimeoutField->setRange(1, 300);
+    m_gracefulStopTimeoutField->setSuffix(QStringLiteral(" s"));
+    m_gracefulStopTimeoutField->setValue(currentSettings.gracefulStopTimeoutSec);
+    executionLayout->addWidget(timeoutLabel);
+    executionLayout->addWidget(m_gracefulStopTimeoutField);
+    executionLayout->addWidget(layout_helpers::makeHintBanner(executionGroup,
+        utils::tr(QStringLiteral("settings.graceful_stop_timeout.hint"))));
+    layout->addWidget(executionGroup);
+
+    // SAÍDA: opções que não são de layout (antes soltas na aba Aparência).
+    auto *outputGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.output")), this);
+    auto *outputLayout = new QVBoxLayout(outputGroup);
+    outputLayout->setContentsMargins(14, 16, 14, 12);
+    outputLayout->setSpacing(4);
+
+    auto *logSizeLabel = new QLabel(utils::tr(QStringLiteral("settings.output_max_log_size")), outputGroup);
+    logSizeLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_outputMaxLogSizeField = new QSpinBox(outputGroup);
+    m_outputMaxLogSizeField->setRange(64, 64 * 1024);
+    m_outputMaxLogSizeField->setSingleStep(256);
+    m_outputMaxLogSizeField->setSuffix(QStringLiteral(" KB"));
+    m_outputMaxLogSizeField->setValue(currentSettings.outputMaxLogSizeKb);
+    outputLayout->addWidget(logSizeLabel);
+    outputLayout->addWidget(m_outputMaxLogSizeField);
+
+    m_autoCollapseOutputField = new QCheckBox(utils::tr(QStringLiteral("settings.output.auto_collapse")), outputGroup);
+    m_autoCollapseOutputField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_autoCollapseOutputField->setChecked(currentSettings.autoCollapseOutputOnFolders);
+    m_autoCollapseOutputField->setToolTip(utils::tr(QStringLiteral("settings.output.auto_collapse.tip")));
+    outputLayout->addSpacing(8);
+    outputLayout->addWidget(m_autoCollapseOutputField);
+    layout->addWidget(outputGroup);
 
     layout->addStretch();
 }

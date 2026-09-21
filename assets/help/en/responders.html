@@ -1,0 +1,20 @@
+<h2>Auto-replies</h2>
+<p>An <b>auto-reply</b> (auto-responder) answers a prompt in a command's output <b>for you</b>: when the output matches a pattern, Kai types the response into the command's input. Use it for tools that ask <i>Continue? [y/N]</i> and have no flag to skip it. Add them in the command editor's <b>Auto-replies</b> tab.</p>
+<h3>Fields</h3>
+<table>
+<tr><td><b>Name</b></td><td>required — a responder without a name is neither saved nor activated</td></tr>
+<tr><td><b>Enabled</b></td><td>switch one off without deleting it</td></tr>
+<tr><td><b>Condition (regex)</b></td><td>a regular expression tested against the output; captured groups are available as <code>\1</code>, <code>\2</code>…</td></tr>
+<tr><td><b>Response</b></td><td>the text sent, as if you had typed it. Use <code>\1</code> to reuse a captured group and <code>{{VAR}}</code> to interpolate variables</td></tr>
+<tr><td><b>Limit triggers</b> / <b>Max triggers</b></td><td>fire at most N times per run, so a repeated prompt can't loop forever</td></tr>
+</table>
+<h3>Example</h3>
+<pre>Condition: Type the name of the database \((\w+)\) to confirm:
+Response:  \1</pre>
+<p>Every automatic answer is echoed in the output so you can see who typed it.</p>
+<h3>Good to know</h3>
+<ul>
+<li>It reads the live output, so it works with background commands too.</li>
+<li>Not available on <a href='help://kip'>KIP</a> commands (the program already talks to Kai through the protocol).</li>
+<li>In <a href='help://kai_json'>kai.json</a> they are the <code>responders</code> list.</li>
+</ul>

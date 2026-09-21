@@ -1,0 +1,23 @@
+<h2>Pastas, árvore e busca</h2>
+<h3>Pastas e comandos</h3>
+<p>Os comandos ficam dentro de <b>pastas</b>. Cada pasta de primeiro nível vira uma <b>aba</b>; subpastas ficam aninhadas. Crie pelo menu <b>Item</b>, pela barra lateral ou pelo menu de clique direito: <b>Nova Pasta</b>, <b>Novo Comando</b>, <b>Nova Coleção</b> (veja <a href='help://collections'>Coleções</a>).</p>
+<p>Uma pasta pode ter configurações próprias: nome, ícone, pasta pai, o <a href='help://terminal_targets'>perfil de execução</a> que os comandos herdam, suas próprias <a href='help://variables'>variáveis</a> e um <a href='help://cli'>caminho de CLI</a>. Um projeto importado de um <a href='help://kai_json'>kai.json</a> vira uma pasta cujo caminho fica disponível como <code>{{PROJECT_PATH}}</code>.</p>
+<h3>O menu de clique direito</h3>
+<p>Num comando: <b>Editar</b>, <b>Duplicar</b>, <b>Excluir</b>. Numa pasta: o mesmo, mais <b>Ocultar / Mostrar Pasta</b>. O mesmo menu abre pelo teclado (<b>Ins</b> por padrão). <b>Executar</b>, <b>Parar</b> (terminar), <b>Forçar parada</b> e <b>Resetar e reiniciar</b> ficam na barra lateral de ações.</p>
+<h3>Busca</h3>
+<p><b>Ctrl+F</b> mostra a barra de busca; ela filtra os comandos pelo nome com correspondência aproximada (erros de digitação e lacunas são toleradas). Aperte de novo para esconder.</p>
+<h3>Ordem, ocultar e filtrar</h3>
+<ul>
+<li><b>Ordem:</b> o editor do comando tem o campo <b>Ordem</b>. Números menores vêm primeiro; <i>automática</i> ordena pelo nome.</li>
+<li><b>Ocultar:</b> itens ocultos saem da árvore até <b>Mostrar itens ocultos</b> estar ligado. Oculte um comando pelo editor ou uma pasta pelo menu.</li>
+<li><b>Mostrar só comandos em execução:</b> um filtro rápido do que está rodando agora.</li>
+<li><b>Expandir / recolher</b> a pasta selecionada ou tudo.</li>
+</ul>
+<h3>Edição</h3>
+<ul>
+<li>Todo editor tem modo <b>Simples</b> e <b>Avançado (JSON)</b>; <b>Ctrl+E</b> alterna num editor aberto.</li>
+<li><b>Editar body (rápido)</b> na barra lateral abre só o corpo de um comando HTTP.</li>
+<li>Os ícones vêm do conjunto embutido ou de qualquer imagem que você escolher.</li>
+<li><b>Duplicar</b> copia um comando, uma pasta ou uma coleção.</li>
+</ul>
+<div class='tip'>Toda ação aqui tem um atalho de teclado que você pode mudar — veja <a href='help://shortcuts'>Atalhos de teclado</a>. <b>Configurações → Armazenamento</b> lista, duplica e exclui vários itens de uma vez.</div>

@@ -1,6 +1,6 @@
 {
   "name": "kai-liquid",
-  "schema_version": 5,
+  "schema_version": 7,
   "variables": {
     "bg": "#080b14",
     "alt_bg": "#101627",
@@ -39,7 +39,16 @@
     "notification_bg": "#1a2740",
     "notification_fg": "#eef4ff",
     "num_fg": "#5ee7ff",
-    "find_fg": "#ffd166"
+    "find_fg": "#ffd166",
+    "gradient_primary_start": "#080b14",
+    "gradient_primary_end": "#1a2740",
+    "gradient_primary_angle": "160",
+    "gradient_secondary_start": "#1a2740",
+    "gradient_secondary_end": "#25465f",
+    "gradient_secondary_angle": "135",
+    "gradient_tertiary_start": "#5ee7ff",
+    "gradient_tertiary_end": "#a78bfa",
+    "gradient_tertiary_angle": "135"
   },
   "components": {
     "main_window": "background: ${bg}; color: ${fg};",
@@ -56,7 +65,7 @@
     "tab_unselected": "border: 1px solid ${alt_bg}; border-bottom: 2px solid ${alt_bg}; padding: 0.5em; background: ${alt_bg}; color: ${muted_fg};",
     "search_bar": "background: ${surface}; color: ${fg}; border: 1px solid ${border_color}; margin: 2px;",
     "search_bar_focused": "border: 1px solid ${accent_color};",
-    "item_selected": "background: ${sel_bg}; color: ${sel_fg}; border-radius: 8px;",
+    "item_selected": "background: ${sel_bg}; color: ${sel_fg};",
     "notification": "background: ${notification_bg}; color: ${notification_fg};",
     "tooltip": "background: ${surface_2}; color: ${fg}; border: 1px solid ${border_color};"
   }

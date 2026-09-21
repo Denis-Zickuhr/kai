@@ -26,7 +26,7 @@ namespace kai::core {
 struct CliPathChildEntry {
     QString cliPath;      // o segmento em si (ex: "env")
     QString label;        // nome de exibição (Folder::name ou Command::name)
-    QString description;  // Command::description, se houver (folders não têm)
+    QString description;  // Command::description ou Folder::cliDescription, se houver
     bool isFolder = false;
     QString targetId;     // Folder::id ou Command::id
 };

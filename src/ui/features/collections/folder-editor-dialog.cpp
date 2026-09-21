@@ -5,6 +5,7 @@
 #include "ui/shared/icon-picker-widget.h"
 #include "ui/shared/collapsible-section-card.h"
 #include "ui/shared/lucide-icons.h"
+#include "ui/shared/folder-picker-widget.h"
 #include "utils/translation-manager.h"
 
 #include <QSpinBox>
@@ -155,7 +156,7 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     m_iconPicker = new IconPickerWidget(identityCard);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("command.field.icon")), m_iconPicker), 0, 1);
 
-    m_parentField = new QComboBox(identityCard);
+    m_parentField = new FolderPickerWidget(identityCard);
     capComboBoxWidth(m_parentField);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("folder.field.parent")), m_parentField), 1, 0);
 
@@ -189,17 +190,6 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     m_isProjectField->setToolTip(utils::tr(QStringLiteral("folder.is_project.tip")));
     identityGrid->addWidget(m_isProjectField, 3, 0, 1, 2);
 
-    // CLI PATH (feature CLI Paths — "usar o kai como CLI app é ruim"):
-    // segmento opcional pra endereçar esta pasta a partir da linha de
-    // comando (ex: "zephyr" em `kai zephyr env prod`). Vazio (padrão) =
-    // pasta transparente no namespace de CLI, sem efeito nenhum na GUI.
-    m_cliPathField = new QLineEdit(identityCard);
-    m_cliPathField->setObjectName(QStringLiteral("cliPathField"));
-    m_cliPathField->setPlaceholderText(utils::tr(QStringLiteral("folder.field.cli_path.placeholder")));
-    m_cliPathField->setToolTip(utils::tr(QStringLiteral("folder.field.cli_path.tip")));
-    identityGrid->addWidget(wrapWithLabel(identityCard,
-        utils::tr(QStringLiteral("folder.field.cli_path")), m_cliPathField), 4, 0, 1, 2);
-
     generalLayout->addWidget(identityCard);
     // Mesmo fix do CommandEditorDialog: sem addStretch() no fim, o card
     // infla pra preencher a altura da página em vez de ficar do tamanho do
@@ -215,25 +205,14 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
         m_nameField->setText(existingFolder->name);
         m_iconPicker->setSelectedIconName(existingFolder->icon);
         m_isProjectField->setChecked(existingFolder->isProject);
-        m_cliPathField->setText(existingFolder->cliPath);
 
         const QString targetParentId = existingFolder->parentId.value_or(QString());
-        for (int i = 0; i < m_parentField->count(); ++i) {
-            if (m_parentField->itemData(i, kParentIdRole).toString() == targetParentId) {
-                m_parentField->setCurrentIndex(i);
-                break;
-            }
-        }
+        m_parentField->setSelectedFolderId(targetParentId);
     } else if (!suggestedParentId.isEmpty()) {
         // Pré-preenchimento na criação (feedback do usuário:
         // usar a pasta/aba selecionada como pasta pai sugerida). O
         // usuário ainda pode trocar livremente antes de salvar.
-        for (int i = 0; i < m_parentField->count(); ++i) {
-            if (m_parentField->itemData(i, kParentIdRole).toString() == suggestedParentId) {
-                m_parentField->setCurrentIndex(i);
-                break;
-            }
-        }
+        m_parentField->setSelectedFolderId(suggestedParentId);
     }
 
     // Combo de perfil: depende de já sabermos se a pasta tem pai (para
@@ -285,6 +264,43 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     // usuário: card sozinho na aba deve preencher o espaço sobrando, não
     // parar do tamanho do conteúdo com fundo cru visível embaixo.
     envLayout->addWidget(m_envVarsCard);
+
+    // Aba "Interface CLI" (pedido do usuário: as opções de CLI ganham aba
+    // própria, na pasta e no comando). Caminho: segmento opcional pra
+    // endereçar esta pasta pela linha de comando (ex: "zephyr" em `kai
+    // zephyr env prod`) — vazio = pasta transparente no namespace de CLI.
+    // Descrição: texto ao lado do segmento quando o CLI lista esta pasta.
+    auto *cliLayout = addSidebarTabPage(tabsHost,
+        utils::tr(QStringLiteral("editor.tab.cli")), QStringLiteral("square-terminal"));
+    auto *cliCard = makeSurfaceCard(this);
+    auto *cliCardLayout = new QVBoxLayout(cliCard);
+    cliCardLayout->setContentsMargins(utils::tokens::space(3), utils::tokens::space(3),
+                                      utils::tokens::space(3), utils::tokens::space(3));
+    cliCardLayout->setSpacing(utils::tokens::space(3));
+    m_cliPathField = new QLineEdit(cliCard);
+    m_cliPathField->setObjectName(QStringLiteral("cliPathField"));
+    m_cliPathField->setPlaceholderText(utils::tr(QStringLiteral("folder.field.cli_path.placeholder")));
+    m_cliPathField->setToolTip(utils::tr(QStringLiteral("folder.field.cli_path.tip")));
+    cliCardLayout->addWidget(wrapWithLabel(cliCard,
+        utils::tr(QStringLiteral("folder.field.cli_path")), m_cliPathField));
+    m_cliDescriptionField = new QLineEdit(cliCard);
+    m_cliDescriptionField->setObjectName(QStringLiteral("cliDescriptionField"));
+    m_cliDescriptionField->setPlaceholderText(utils::tr(QStringLiteral("folder.field.cli_description.placeholder")));
+    m_cliDescriptionField->setToolTip(utils::tr(QStringLiteral("folder.field.cli_description.tip")));
+    cliCardLayout->addWidget(wrapWithLabel(cliCard,
+        utils::tr(QStringLiteral("folder.field.cli_description")), m_cliDescriptionField));
+    // Descrição sem caminho não aparece em lugar nenhum: fica desabilitada.
+    auto syncCliDescriptionEnabled = [this]() {
+        m_cliDescriptionField->setEnabled(!m_cliPathField->text().trimmed().isEmpty());
+    };
+    connect(m_cliPathField, &QLineEdit::textChanged, this, syncCliDescriptionEnabled);
+    if (existingFolder) {
+        m_cliPathField->setText(existingFolder->cliPath);
+        m_cliDescriptionField->setText(existingFolder->cliDescription);
+    }
+    syncCliDescriptionEnabled();
+    cliLayout->addWidget(cliCard);
+    cliLayout->addStretch();
 
     outerLayout->addWidget(body, 1);
 
@@ -352,30 +368,29 @@ void FolderEditorDialog::handleAcceptRequested()
 
 void FolderEditorDialog::populateParentCombo(const QVector<core::Folder> &allFolders, const QString &excludeId)
 {
-    m_parentField->clear();
-    m_parentField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
-    m_parentField->setItemData(0, QString(), kParentIdRole);
-
     // Uma pasta não pode ser pai de si mesma nem de nenhum de seus
     // descendentes (evita ciclo na hierarquia).
     const QSet<QString> forbiddenIds = excludeId.isEmpty()
         ? QSet<QString>()
         : (collectDescendantIds(allFolders, excludeId) << excludeId);
 
+    // Filtra as pastas permitidas (exclui forbiddenIds)
+    QVector<core::Folder> allowedFolders;
     for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
-        if (forbiddenIds.contains(folder.id)) {
-            continue;
+        if (!forbiddenIds.contains(folder.id)) {
+            allowedFolders.append(folder);
         }
-        m_parentField->addItem(folderComboLabel(allFolders, folder.id));
-        m_parentField->setItemData(m_parentField->count() - 1, folder.id, kParentIdRole);
     }
+
+    m_parentField->setFolders(allowedFolders);
+    m_parentField->enableNoneOption(utils::tr(QStringLiteral("folder.parent.none")));
     makeSearchableCombo(m_parentField); // busca no seletor de pasta-pai
 }
 
 void FolderEditorDialog::populateProfileCombo(const core::Folder *existingFolder)
 {
     const QString inherit = QString::fromLatin1(core::kInheritTerminalTarget);
-    const bool hasParent = !m_parentField->currentData(kParentIdRole).toString().isEmpty();
+    const bool hasParent = !m_parentField->selectedFolderId().isEmpty();
 
     m_profileField->clear();
     // "Herdar do pai": sempre disponível (herdar de uma pasta raiz recai no
@@ -414,7 +429,7 @@ core::Folder FolderEditorDialog::buildFromForm() const
     folder.id = m_existingId.isEmpty() ? generateFolderId(m_nameField->text()) : m_existingId;
     folder.name = m_nameField->text().trimmed();
 
-    const QString parentId = m_parentField->currentData(kParentIdRole).toString();
+    const QString parentId = m_parentField->selectedFolderId();
     folder.parentId = parentId.isEmpty() ? std::nullopt : std::make_optional(parentId);
 
     folder.isProject = m_isProjectField && m_isProjectField->isChecked();
@@ -425,6 +440,7 @@ core::Folder FolderEditorDialog::buildFromForm() const
     // Ordem: agora editável no formulário (substitui o drag&drop de filhos).
     folder.order = m_orderField ? m_orderField->value() : m_existingOrder;
     folder.cliPath = m_cliPathField ? m_cliPathField->text().trimmed() : QString();
+    folder.cliDescription = m_cliDescriptionField ? m_cliDescriptionField->text().trimmed() : QString();
 
     return folder;
 }

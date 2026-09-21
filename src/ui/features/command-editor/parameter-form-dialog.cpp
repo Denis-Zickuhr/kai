@@ -1,11 +1,13 @@
 #include "ui/features/command-editor/parameter-form-dialog.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/features/collections/collection-selector-dialog.h"
+#include "ui/shared/collection-chip-picker.h"
 #include "ui/shared/date-picker-dialog.h"
 #include "ui/shared/collapsible-section-card.h"
 #include "ui/shared/table-utils.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/inline-code-field.h"
+#include "ui/shared/parameter-field-factory.h"
 #include "core/date-param-format.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
@@ -63,50 +65,6 @@ QString optionalEnabledKey(const QString &paramName)
     return QStringLiteral("__kai_optional_enabled__%1").arg(paramName);
 }
 
-// Rótulo empilhado ACIMA do campo (Top Label) — diretriz de arquitetura
-// visual do usuário: evita o "label na esquerda empurra o campo" que
-// desalinha quando os tipos de campo mudam de altura/largura (texto vs
-// toggle vs lista checkable). Mesma ideia do wrapWithLabel de
-// command-editor-dialog.cpp, mas em peso normal (não caixa alta/muted) —
-// aqui o rótulo é o nome do parâmetro, não uma legenda de seção.
-QWidget *wrapWithLabel(QWidget *parent, const QString &labelText, QWidget *field,
-                       bool required = false)
-{
-    auto *container = new QWidget(parent);
-    container->setObjectName(QStringLiteral("paramFieldWrap"));
-    // Transparente, mas QUALIFICADO por objectName: uma regra crua
-    // ("background: transparent;" sem seletor) CASCATEIA para os filhos e
-    // deixava o campo (QLineEdit do tipo Text) SEM fundo escuro — herdava o
-    // transparent em vez do bg() do QSS global (relatado; File/Select não
-    // sofriam porque têm um container de fundo próprio). Restrito a #objectName,
-    // só o wrap fica transparente; os campos mantêm seu bg.
-    container->setStyleSheet(QStringLiteral(
-        "QWidget#paramFieldWrap { background: transparent; }"));
-    auto *layout = new QVBoxLayout(container);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(utils::tokens::space(1));
-    // Marcação de OBRIGATÓRIO (pedido do usuário — diretrizes da tela de
-    // Params: "campos obrigatórios devem ter uma pequena marcação, como um
-    // asterisco vermelho sutil, ao lado do rótulo"). Rich text só quando
-    // precisa — QLabel simples nos demais casos, sem custo extra.
-    auto *labelWidget = new QLabel(container);
-    if (required) {
-        labelWidget->setTextFormat(Qt::RichText);
-        labelWidget->setText(QStringLiteral("%1 <span style=\"color:%2;\">*</span>")
-            .arg(labelText.toHtmlEscaped(), utils::tokens::errorFg()));
-    } else {
-        labelWidget->setText(labelText);
-    }
-    QFont labelFont = labelWidget->font();
-    labelFont.setBold(true);
-    labelWidget->setFont(labelFont);
-    labelWidget->setStyleSheet(QStringLiteral("color: %1;").arg(utils::tokens::fg()));
-    layout->addWidget(labelWidget);
-    field->setParent(container);
-    layout->addWidget(field);
-    return container;
-}
-
 // Grade de 1 ou 2 colunas (diretriz do usuário): campos LONGOS (texto livre,
 // múltipla seleção, textarea, json) ocupam a linha inteira; campos COMPACTOS
 // (booleano, número, lookup de coleção) fluem automaticamente em 2 colunas,
@@ -152,13 +110,15 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
                                           const QMap<QString, QString> &lastValues,
                                           const QMap<QString, QStringList> &usageHistory,
                                           const QVector<core::Collection> &collections,
-                                          const QString &description)
+                                          const QString &description,
+                                          const QMap<QString, core::CollectionFilterState> &collectionFilters)
     : QDialog(parent)
     , m_params(params)
     , m_lastValues(lastValues)
     , m_usageHistory(usageHistory)
     , m_collections(collections)
     , m_description(description)
+    , m_collectionFilters(collectionFilters)
 {
     setWindowTitle(utils::tr(QStringLiteral("params.title")));
     setSizeGripEnabled(true);
@@ -182,8 +142,15 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
     }
     setMinimumWidth(qMin(spacious ? 860 : 800, maxW));
     adjustSize();
-    if (height() < 260) {
-        resize(width(), 260);
+    // Piso de altura mais generoso (achado real, com foto: "por default
+    // ficou com pouco espaço vertical, mal cabe na tela" — o campo de
+    // chips de coleção, com busca+lupa em linha própria + separador +
+    // área de chips, ocupa mais altura que o antigo campo readonly de uma
+    // linha só; adjustSize() sozinho, através de um QScrollArea, tende a
+    // subestimar a altura de verdade que um widget com wrap dinâmico
+    // (FlowLayout) precisa antes de ser exibido pela primeira vez).
+    if (height() < 340) {
+        resize(width(), 340);
     }
     // TETO de altura (pedido do usuário: "deixe ele menor, com scroll
     // interno") — acima disso, o QScrollArea da grade absorve o excesso em
@@ -381,17 +348,16 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
 
         switch (param.type) {
         case core::ParameterType::Text: {
-            auto *field = new QLineEdit(initialValue, this);
             // Placeholder (diretriz da tela de Params: "use texto de
             // placeholder... pra guiar o usuário quando o campo estiver
             // vazio") — a Description do parâmetro (feature CLI Paths, só
             // usada até agora no --help) já é uma dica melhor que um
             // genérico "Digite aqui..." quando o autor do comando a
             // preencheu; cai pro texto genérico quando não há.
-            field->setPlaceholderText(param.description.trimmed().isEmpty()
+            auto *field = fields::makeTextField(this, initialValue, param.description.trimmed().isEmpty()
                 ? utils::tr(QStringLiteral("params.text.placeholder"))
                 : param.description.trimmed());
-            addField(param, wrapWithLabel(this, label, field, param.required && !param.optional));
+            addField(param, fields::wrapWithLabel(this, label, field, param.required && !param.optional));
             m_fieldByParamName[param.name] = field;
             break;
         }
@@ -405,66 +371,81 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
                 const auto colIt = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
                     [&param](const core::Collection &c) { return c.id == param.collectionId; });
 
-                // "Lookup rápido" (diretriz do usuário): campo + botão de
-                // busca fundidos num único bloco (input-group-addon), com UMA
-                // borda em volta dos dois — não dois controles soltos lado a
-                // lado. O bloco desenha a borda/fundo/raio; campo e botão
-                // ficam sem borda própria (transparentes) para não duplicar.
-                auto *rowWidget = new QWidget(this);
-                rowWidget->setObjectName(QStringLiteral("lookupInputGroup"));
-                rowWidget->setStyleSheet(QStringLiteral(
-                    "QWidget#lookupInputGroup { background-color: %1; border: 1px solid %2;"
-                    " border-radius: %3px; }")
-                    .arg(utils::tokens::bg(), utils::tokens::borderColor())
-                    .arg(utils::tokens::radiusMd()));
-                auto *rowLayout = new QHBoxLayout(rowWidget);
-                rowLayout->setContentsMargins(0, 0, 0, 0);
-                rowLayout->setSpacing(0);
-                auto *display = new QLineEdit(rowWidget);
-                display->setReadOnly(true);
-                display->setPlaceholderText(utils::tr(QStringLiteral("params.lookup.no_value")));
-                display->setStyleSheet(QStringLiteral(
-                    "QLineEdit { background: transparent; color: %1; border: none;"
-                    " padding: %2px %3px; }")
-                    .arg(utils::tokens::fg())
-                    .arg(utils::tokens::space(2)).arg(utils::tokens::space(3)));
-                rowLayout->addWidget(display, 1);
-                auto *pickButton = makeIconButton(rowWidget, QStringLiteral("search"),
-                    utils::tr(QStringLiteral("params.collection.pick")), QColor(utils::tokens::accent()));
-                pickButton->setStyleSheet(QStringLiteral(
-                    "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
-                    " border-radius: 0px; }")
-                    .arg(utils::tokens::borderColor()));
-                rowLayout->addWidget(pickButton);
-
                 const QString paramName = param.name;
                 const QString collectionId = param.collectionId;
-                const QString displayField = (!param.collectionDisplayField.isEmpty())
-                    ? param.collectionDisplayField
-                    : (colIt != m_collections.constEnd() && !colIt->schema.isEmpty()
-                        ? colIt->schema.first().name : QString());
+                // Bug relatado: "ele ta renderizando o id, era pra
+                // renderizar o nome" — ver core::resolveCollectionDisplayField
+                // (um campo Key, mesmo CONFIGURADO explicitamente em
+                // collectionDisplayField, nunca é uma exibição útil; o
+                // editor de parâmetros pré-seleciona o 1º campo do schema
+                // nesse combo, que no schema padrão [Key, Value] É a Key).
+                const QString displayField = (colIt != m_collections.constEnd())
+                    ? core::resolveCollectionDisplayField(*colIt, param.collectionDisplayField)
+                    : param.collectionDisplayField;
 
-                // Pré-seleção pelo último valor (id da entrada).
+                // Campo de chips com busca embutida (feedback do usuário:
+                // "ao digitar no campo ele funciona tipo uma lista... vai
+                // criando a chip, e posso ir removendo ou adicionar multi
+                // sem nem abrir nada") — substitui o antigo campo readonly
+                // que só funcionava clicando na lupa. O botão de lupa
+                // continua disponível (pickButton()) pra quem quiser a tela
+                // de seleção dedicada completa (favoritos, filtros por
+                // campo, paginação).
+                auto *chipPicker = new CollectionChipPickerWidget(this);
+                if (colIt != m_collections.constEnd()) {
+                    chipPicker->setEntries(colIt->entries, displayField);
+                }
+
+                // Pré-seleção pelo(s) último(s) valor(es) (id(s) da entrada,
+                // separados por vírgula quando múltiplos — mesmo formato que
+                // values() grava via ids.join(',') logo abaixo). Split ANTES
+                // de comparar: bug real (reportado: "se eu executar um cmd de
+                // coleções ele não lembra o ultimo valor executado, multiplas
+                // entries") — comparar initialValue INTEIRO ("id1,id2") contra
+                // um único e.id nunca batia pra mais de uma entrada
+                // selecionada, deixando a seleção em branco ao reabrir. Mesmo
+                // padrão de split já usado no campo multi-select comum,
+                // algumas linhas abaixo.
                 if (colIt != m_collections.constEnd() && !initialValue.isEmpty()) {
-                    const auto eit = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
-                        [&initialValue](const core::CollectionEntry &e) { return e.id == initialValue; });
-                    if (eit != colIt->entries.constEnd()) {
-                        m_collectionSelectionByParam[paramName] = {initialValue};
-                        display->setText(eit->values.value(displayField));
-                        display->setCursorPosition(0); // mostra o INÍCIO do texto, não o fim
+                    const QStringList preset = initialValue.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                    QStringList ids;
+                    for (const QString &entryId : preset) {
+                        const auto eit = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
+                            [&entryId](const core::CollectionEntry &e) { return e.id == entryId; });
+                        if (eit != colIt->entries.constEnd()) {
+                            ids << eit->id;
+                        }
+                    }
+                    if (!ids.isEmpty()) {
+                        m_collectionSelectionByParam[paramName] = ids;
+                        chipPicker->setSelectedIds(ids);
                     }
                 }
 
-                connect(pickButton, &QToolButton::clicked, this,
-                    [this, paramName, collectionId, displayField, display]() {
+                connect(chipPicker, &CollectionChipPickerWidget::selectionChanged, this,
+                    [this, paramName, chipPicker]() {
+                        m_collectionSelectionByParam[paramName] = chipPicker->selectedIds();
+                    });
+                connect(chipPicker, &CollectionChipPickerWidget::selectionChanged, this,
+                    &ParameterFormDialog::refreshValidationState);
+
+                connect(chipPicker->pickButton(), &QToolButton::clicked, this,
+                    [this, paramName, collectionId, chipPicker]() {
                         const auto cit = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
                             [&collectionId](const core::Collection &c) { return c.id == collectionId; });
                         if (cit == m_collections.constEnd()) {
                             return;
                         }
                         const QStringList history = m_usageHistory.value(paramName);
-                        CollectionSelectorDialog dialog(*cit, history, /*multiSelect=*/true, this);
-                        if (dialog.exec() != QDialog::Accepted) {
+                        CollectionSelectorDialog dialog(*cit, history, /*multiSelect=*/true, this,
+                            m_collectionFilters.value(collectionId));
+                        const int result = dialog.exec();
+                        // Busca/favoritos-only persistem mesmo se o usuário
+                        // CANCELAR a escolha — é conveniência de navegação da
+                        // tela, não dado de seleção (pedido do usuário: "os
+                        // filtros de coleções devem ser salvos").
+                        m_collectionFilters[collectionId] = dialog.filterState();
+                        if (result != QDialog::Accepted) {
                             return;
                         }
                         // Persiste toggles de favorito feitos na tela de
@@ -478,19 +459,16 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
                         }
                         const QVector<core::CollectionEntry> chosen = dialog.selectedEntries();
                         QStringList ids;
-                        QStringList labels;
                         for (const core::CollectionEntry &e : chosen) {
                             ids << e.id;
-                            const QString lbl = e.values.value(displayField);
-                            labels << (lbl.isEmpty() ? e.id : lbl);
                         }
                         m_collectionSelectionByParam[paramName] = ids;
-                        display->setText(labels.join(QStringLiteral(", ")));
-                        display->setCursorPosition(0); // mostra o INÍCIO do texto
+                        chipPicker->setSelectedIds(ids);
+                        refreshValidationState();
                     });
 
-                addField(param, wrapWithLabel(this, label, rowWidget, param.required && !param.optional));
-                m_fieldByParamName[param.name] = display;
+                addField(param, fields::wrapWithLabel(this, label, chipPicker, param.required && !param.optional));
+                m_fieldByParamName[param.name] = chipPicker;
                 break;
             }
             // MULTI-SELECT de opções fixas (feedback do usuário): lista
@@ -498,455 +476,87 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
             // são juntados por vírgula em values(). Pré-marca pelos valores do
             // último uso (initialValue = "a,b,c").
             if (param.multiSelect) {
-                auto *container = new QWidget(this);
-                container->setObjectName(QStringLiteral("paramMultiSelectWrap"));
-                container->setStyleSheet(QStringLiteral(
-                    "QWidget#paramMultiSelectWrap { background: transparent; }"));
-                auto *vbox = new QVBoxLayout(container);
-                vbox->setContentsMargins(0, 0, 0, 0);
-                vbox->setSpacing(4);
-
-                // Caixa de pesquisa: filtro simples em memória sobre as opções.
-                // Lupa embutida à esquerda (ícone leading), igual à cara de um
-                // campo de busca do sistema.
-                auto *search = new QLineEdit(container);
-                search->setPlaceholderText(utils::tr(QStringLiteral("params.multi_search.placeholder")));
-                search->setClearButtonEnabled(true);
-                // Mesmo fundo escuro (bg) e raio dos demais campos.
-                search->setStyleSheet(QStringLiteral(
-                    "QLineEdit { background-color: %1; color: %2; border: 1px solid %3;"
-                    " border-radius: %4px; padding: %5px %6px; }")
-                    .arg(utils::tokens::bg(), utils::tokens::fg(), utils::tokens::borderColor())
-                    .arg(utils::tokens::radiusMd())
-                    .arg(utils::tokens::space(2)).arg(utils::tokens::space(3)));
-                search->addAction(LucideIcons::icon(QStringLiteral("search"),
-                    QColor(utils::tokens::mutedFg()), 16), QLineEdit::LeadingPosition);
-                vbox->addWidget(search);
-
-                auto *list = new QListWidget(container);
-                list->setSelectionMode(QAbstractItemView::NoSelection);
-                list->setFrameShape(QFrame::NoFrame);
-                // O viewport interno pintava um quadrado escuro POR TRÁS do
-                // frame arredondado (o "duplo fundo" relatado). Deixamos o
-                // viewport transparente; só o QListWidget desenha o fundo, com
-                // o raio do tema (preferência de borda). QUALIFICADO por
-                // objectName — não um "background: transparent;" cru: achado
-                // real, com print e MUITA investigação (comparando QSS gerado
-                // x cor renderizada, pixel a pixel): uma regra CRUA (sem
-                // seletor) aplicada via setStyleSheet() num viewport quebra a
-                // cascata de QSS para os DESCENDENTES daquele viewport —
-                // campos que deveriam pegar "QLineEdit/QSpinBox {background:
-                // bg}" da folha de estilo global passavam a herdar a cor do
-                // diálogo (surface) em vez da própria (bg), mesmo sem
-                // NENHUMA regra própria — mesmo bug do scrollArea principal
-                // logo abaixo, ver comentário lá com mais detalhe.
-                list->viewport()->setObjectName(QStringLiteral("paramMultiSelectViewport"));
-                list->viewport()->setStyleSheet(QStringLiteral(
-                    "QWidget#paramMultiSelectViewport { background: transparent; }"));
-                list->setStyleSheet(QStringLiteral(
-                    "QListWidget { background-color: %1; border: 1px solid %2;"
-                    " border-radius: %3px; padding: %4px; }"
-                    "QListWidget::item { background: transparent; }")
-                    .arg(utils::tokens::bg(), utils::tokens::borderColor())
-                    .arg(utils::tokens::radiusMd())
-                    .arg(utils::tokens::space(1)));
-                const QStringList preset = initialValue.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                QVector<fields::ChoiceOption> options;
                 for (const QString &opt : param.options) {
-                    const int sep = opt.indexOf(QLatin1Char(':'));
-                    const QString lbl = (sep > 0) ? opt.left(sep) : opt;
-                    const QString val = (sep > 0) ? opt.mid(sep + 1) : opt;
-                    auto *item = new QListWidgetItem(lbl, list);
-                    item->setData(Qt::UserRole, val);
-                    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-                    item->setCheckState(preset.contains(val) ? Qt::Checked : Qt::Unchecked);
+                    options.push_back(fields::parseParamOption(opt));
                 }
-                // Achado real, com print: "a caixinha deve ser maior por
-                // padrão, pra pelo menos poder ver 5 linhas ao mesmo tempo"
-                // — antes tinha só um teto (~40 tokens de espaço, poucas
-                // linhas cabiam); agora garante um PISO de 5 linhas e um
-                // teto de 8 (pra não engolir o diálogo inteiro quando a
-                // lista de opções é enorme).
-                list->setMinimumHeight(5 * standardRowHeight());
-                list->setMaximumHeight(8 * standardRowHeight());
-                // Clicar em QUALQUER lugar da linha alterna o check.
-                connect(list, &QListWidget::itemClicked, list, [](QListWidgetItem *it) {
-                    if (!it) return;
-                    it->setCheckState(it->checkState() == Qt::Checked
-                                          ? Qt::Unchecked : Qt::Checked);
-                });
-                // Filtro in-mem: esconde itens cujo rótulo não contém o texto
-                // (case-insensitive). Não altera o estado marcado dos ocultos —
-                // o valor final continua vindo de todos os itens marcados.
-                connect(search, &QLineEdit::textChanged, list, [list](const QString &text) {
-                    const QString needle = text.trimmed().toLower();
-                    for (int i = 0; i < list->count(); ++i) {
-                        QListWidgetItem *it = list->item(i);
-                        const bool match = needle.isEmpty()
-                            || it->text().toLower().contains(needle);
-                        it->setHidden(!match);
-                    }
-                });
-                vbox->addWidget(list);
+                const fields::ChoiceListField multi = fields::makeCheckList(
+                    this, options, initialValue.split(QLatin1Char(','), Qt::SkipEmptyParts), /*withFilter=*/true);
+                m_multiSelectFilterByParamName[param.name] = multi.filter;
 
-                // "Espaço" marca/desmarca o item com foco (diretriz da tela
-                // de Params) — QListWidget não faz isso sozinho; o
-                // eventFilter do diálogo (ver ParameterFormDialog::
-                // eventFilter) intercepta o Key_Space quando `watched` é
-                // este list. Navegação por seta já é nativa do
-                // QAbstractItemView, sem precisar de nada extra.
-                list->installEventFilter(this);
-                m_multiSelectFilterByParamName[param.name] = search;
-
-                addField(param, wrapWithLabel(this, label, container, param.required && !param.optional));
-                m_fieldByParamName[param.name] = list; // values() lê a lista
+                addField(param, fields::wrapWithLabel(this, label, multi.container, param.required && !param.optional));
+                m_fieldByParamName[param.name] = multi.list; // values() lê a lista
                 break;
             }
-            auto *field = new QComboBox(this);
             // Cada option pode ser "label:value" (rótulo exibido != valor
             // injetado) ou apenas "value" (rótulo == valor).
-            struct Opt { QString label; QString value; };
-            QVector<Opt> opts;
+            QVector<fields::ChoiceOption> options;
             for (const QString &opt : param.options) {
-                const int sep = opt.indexOf(QLatin1Char(':'));
-                opts.push_back({(sep > 0) ? opt.left(sep) : opt,
-                                (sep > 0) ? opt.mid(sep + 1) : opt});
+                options.push_back(fields::parseParamOption(opt));
             }
-
-            // Ordenação por HISTÓRICO DE USO (feedback do usuário): os
-            // valores usados mais recentemente vêm primeiro; o resto
-            // mantém a ordem original de definição. stable_sort preserva a
-            // ordem relativa dentro de cada grupo.
-            const QStringList history = m_usageHistory.value(param.name);
-            if (!history.isEmpty()) {
-                std::stable_sort(opts.begin(), opts.end(), [&history](const Opt &a, const Opt &b) {
-                    const int ia = history.indexOf(a.value);
-                    const int ib = history.indexOf(b.value);
-                    const int ra = (ia < 0) ? std::numeric_limits<int>::max() : ia;
-                    const int rb = (ib < 0) ? std::numeric_limits<int>::max() : ib;
-                    return ra < rb;
-                });
-            }
-
-            for (const Opt &o : opts) {
-                field->addItem(o.label, o.value);
-            }
-
-            // Busca avançada (feedback do usuário: listas de opções sem
-            // pesquisa): combo editável com completer que filtra por
-            // "contém" (não só prefixo), case-insensitive. O completer usa
-            // o modelo do próprio combo, então respeita a ordem por
-            // histórico. Como é editável, garantimos no values() que o
-            // valor retornado corresponde a uma opção válida.
-            field->setEditable(true);
-            field->setInsertPolicy(QComboBox::NoInsert);
-            if (auto *completer = field->completer()) {
-                completer->setCaseSensitivity(Qt::CaseInsensitive);
-                completer->setFilterMode(Qt::MatchContains);
-                completer->setCompletionMode(QCompleter::PopupCompletion);
-            }
-
-            const int defaultIndex = field->findData(initialValue);
-            if (defaultIndex >= 0) {
-                field->setCurrentIndex(defaultIndex);
-            } else {
-                field->setCurrentIndex(0);
-            }
+            auto *field = fields::makeSelectCombo(this, options, m_usageHistory.value(param.name), initialValue);
             // Marca "tocado" só numa escolha de VERDADE do usuário (ver
             // isParamFilled) — activated(), ao contrário de
             // currentIndexChanged(), nunca dispara pelo setCurrentIndex()
-            // programático logo acima, só por clique/teclado do usuário no
+            // programático da criação, só por clique/teclado do usuário no
             // próprio combo.
             connect(field, QOverload<int>::of(&QComboBox::activated), this,
                 [this, name = param.name]() { m_touchedParamNames.insert(name); });
-            addField(param, wrapWithLabel(this, label, field, param.required && !param.optional));
+            addField(param, fields::wrapWithLabel(this, label, field, param.required && !param.optional));
             m_fieldByParamName[param.name] = field;
             break;
         }
         case core::ParameterType::Bool: {
-            // Toggle switch com rótulo explícito (diretriz do usuário: troca
-            // o checkbox isolado por um "pill switch" — reaproveita o MESMO
-            // QCheckBox/kaiRole="switch" já usado no Settings, só troca a
-            // pele) em vez de uma caixinha sem contexto.
-            auto *field = new QCheckBox(utils::tr(QStringLiteral("params.bool.enable")), this);
-            field->setProperty("kaiRole", QStringLiteral("switch"));
-            field->setChecked(initialValue == QStringLiteral("true"));
-            addField(param, wrapWithLabel(this, label, field, param.required && !param.optional));
+            auto *field = fields::makeSwitchField(this, utils::tr(QStringLiteral("params.bool.enable")),
+                                                  initialValue == QStringLiteral("true"));
+            addField(param, fields::wrapWithLabel(this, label, field, param.required && !param.optional));
             m_fieldByParamName[param.name] = field;
             break;
         }
         case core::ParameterType::Number: {
-            // Parâmetro numérico: QSpinBox (inteiro) com faixa ampla. O valor
-            // inicial vem do último uso/default. Fonte monoespaçada
-            // (diretriz do usuário: "fonte monospace para leitura clara") —
-            // os botões ▲/▼ já ganham destaque via QSS global do app.
-            auto *field = new QSpinBox(this);
-            field->setRange(-1000000000, 1000000000);
-            field->setFont(utils::tokens::monoFont(field->font().pointSize()));
-            bool ok = false;
-            const int v = initialValue.toInt(&ok);
-            field->setValue(ok ? v : 0);
-            addField(param, wrapWithLabel(this, label, field, param.required && !param.optional));
+            auto *field = fields::makeSpinField(this, initialValue);
+            addField(param, fields::wrapWithLabel(this, label, field, param.required && !param.optional));
             m_fieldByParamName[param.name] = field;
             break;
         }
         case core::ParameterType::File: {
-            // "Arquivo / Expressão" (diretriz do usuário): o botão [...] vira
-            // uma EXTENSÃO do input (input-group-addon) — uma única borda em
-            // volta do conjunto, sem gap/raio destoando entre campo e botão
-            // (mesmo espírito do fix anterior no botão de procurar arquivo,
-            // agora levado a um bloco fundido de verdade).
-            auto *container = new QWidget(this);
-            container->setObjectName(QStringLiteral("fileInputGroup"));
-            container->setStyleSheet(QStringLiteral(
-                "QWidget#fileInputGroup { background-color: %1; border: 1px solid %2;"
-                " border-radius: %3px; }")
-                .arg(utils::tokens::bg(), utils::tokens::borderColor())
-                .arg(utils::tokens::radiusMd()));
-            auto *rowLayout = new QHBoxLayout(container);
-            rowLayout->setContentsMargins(0, 0, 0, 0);
-            rowLayout->setSpacing(0);
-
-            auto *field = new QLineEdit(initialValue, container);
-            field->setStyleSheet(QStringLiteral(
-                "QLineEdit { background: transparent; color: %1; border: none;"
-                " padding: %2px %3px; }")
-                .arg(utils::tokens::fg())
-                .arg(utils::tokens::space(2)).arg(utils::tokens::space(3)));
-            // Botão de ícone (mesmo padrão do "pickButton" da Coleção acima e
-            // do browseButton de parameter-editor-widget.cpp) — antes era um
-            // QToolButton cru com texto "..." e chrome padrão do SO, destoando
-            // da borda arredondada/tema do QLineEdit ao lado (bug relatado).
-            // Agora colado ao campo, com só um separador fino entre os dois.
-            // Ícone/tooltip refletem o MODO configurado (pedido do usuário:
-            // "arquivo, pastas ou ambos"). "both" usa um ícone neutro (o
-            // botão abre um menu perguntando qual dos dois, ver abaixo).
-            const QString pickMode = param.pickMode.isEmpty() ? QStringLiteral("file") : param.pickMode;
-            const QString browseIcon = pickMode == QStringLiteral("folder") ? QStringLiteral("folder")
-                : pickMode == QStringLiteral("both") ? QStringLiteral("folder-open")
-                                                      : QStringLiteral("file");
-            const QString browseTip = pickMode == QStringLiteral("folder")
-                ? utils::tr(QStringLiteral("params.folder.browse"))
-                : pickMode == QStringLiteral("both")
-                ? utils::tr(QStringLiteral("params.pick_mode.both"))
-                : utils::tr(QStringLiteral("params.file.browse"));
-            auto *browseButton = makeIconButton(container, browseIcon, browseTip, QColor(utils::tokens::accent()));
-            browseButton->setStyleSheet(QStringLiteral(
-                "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
-                " border-radius: 0px; }")
-                .arg(utils::tokens::borderColor()));
-
             // Pasta inicial configurada no parâmetro (campo "Pasta inicial" do
             // editor). Sem ela o QFileDialog abre no último diretório que o
             // processo visitou — na primeira vez, a pasta de instalação do Kai.
-            const QString startDir = param.initialDir;
-            const QString pathFormat = param.filePathFormat;
-            connect(browseButton, &QToolButton::clicked, this, [this, browseButton, field, startDir, pathFormat, pickMode]() {
-                if (pickMode == QStringLiteral("both")) {
-                    // Nenhum QFileDialog nativo deixa escolher arquivo OU
-                    // pasta ao mesmo tempo — pergunta qual dos dois antes de
-                    // abrir o diálogo de verdade.
-                    QMenu menu(this);
-                    QAction *fileAction = menu.addAction(utils::tr(QStringLiteral("params.pick_mode.choose_file")));
-                    QAction *folderAction = menu.addAction(utils::tr(QStringLiteral("params.pick_mode.choose_folder")));
-                    QAction *chosen = menu.exec(browseButton->mapToGlobal(QPoint(0, browseButton->height())));
-                    if (chosen == fileAction) {
-                        handleBrowseFileClicked(field, startDir, pathFormat, false);
-                    } else if (chosen == folderAction) {
-                        handleBrowseFileClicked(field, startDir, pathFormat, true);
-                    }
-                    return;
-                }
-                handleBrowseFileClicked(field, startDir, pathFormat, pickMode == QStringLiteral("folder"));
-            });
-
-            rowLayout->addWidget(field, 1);
-            rowLayout->addWidget(browseButton);
-
-            addField(param, wrapWithLabel(this, label, container, param.required && !param.optional));
-            m_fieldByParamName[param.name] = field;
+            const fields::PathPickField picked = fields::makePathPickField(
+                this, initialValue, param.pickMode, param.initialDir, param.filePathFormat);
+            addField(param, fields::wrapWithLabel(this, label, picked.container, param.required && !param.optional));
+            m_fieldByParamName[param.name] = picked.edit;
             break;
         }
         case core::ParameterType::Date: {
-            // Mesmo bloco visual "input-group" do File acima (campo +
-            // botão fundidos numa borda só) — o botão abre a "janelinha"
-            // (DatePickerDialog) em vez de um QFileDialog. O campo em si é
-            // SOMENTE LEITURA: o valor só muda pela janelinha, nunca
-            // digitado à mão (evita um texto que não bate com nenhum
-            // formato válido chegar no comando).
-            auto *container = new QWidget(this);
-            container->setObjectName(QStringLiteral("dateInputGroup"));
-            container->setStyleSheet(QStringLiteral(
-                "QWidget#dateInputGroup { background-color: %1; border: 1px solid %2;"
-                " border-radius: %3px; }")
-                .arg(utils::tokens::bg(), utils::tokens::borderColor())
-                .arg(utils::tokens::radiusMd()));
-            auto *rowLayout = new QHBoxLayout(container);
-            rowLayout->setContentsMargins(0, 0, 0, 0);
-            rowLayout->setSpacing(0);
-
-            auto *field = new QLineEdit(initialValue, container);
-            field->setReadOnly(true);
-            field->setPlaceholderText(utils::tr(QStringLiteral("params.date.empty")));
-            field->setStyleSheet(QStringLiteral(
-                "QLineEdit { background: transparent; color: %1; border: none;"
-                " padding: %2px %3px; }")
-                .arg(utils::tokens::fg())
-                .arg(utils::tokens::space(2)).arg(utils::tokens::space(3)));
-            auto *pickButton = makeIconButton(container, QStringLiteral("calendar"),
-                utils::tr(QStringLiteral("params.date.pick")), QColor(utils::tokens::accent()));
-            pickButton->setStyleSheet(QStringLiteral(
-                "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
-                " border-radius: 0px; }")
-                .arg(utils::tokens::borderColor()));
-
-            const core::Parameter paramCopy = param; // capturada por valor no lambda abaixo
-            connect(pickButton, &QToolButton::clicked, this, [this, field, paramCopy]() {
-                const QDateTime seedStart = field->property("kaiDateStart").toDateTime();
-                const QDateTime seedEnd = field->property("kaiDateEnd").toDateTime();
-                DatePickerDialog dialog(paramCopy.dateMode, paramCopy.dateRange, seedStart, seedEnd, this);
-                if (dialog.exec() != QDialog::Accepted) {
-                    return;
-                }
-                const QDateTime start = dialog.startValue();
-                field->setProperty("kaiDateStart", start);
-                const QString startFormatted =
-                    core::formatDateParamValue(start, paramCopy.dateFormat, paramCopy.dateFormatCustom);
-                // "kaiDateStartFormatted" é o valor LIMPO (sem o "— fim"
-                // decorativo) que values() de fato devolve como {{nome}} —
-                // ver comentário lá. field->text() pode ficar "rico"
-                // (combinando início/fim) só pra leitura visual.
-                field->setProperty("kaiDateStartFormatted", startFormatted);
-                if (paramCopy.dateRange) {
-                    const QDateTime end = dialog.endValue();
-                    field->setProperty("kaiDateEnd", end);
-                    const QString endFormatted =
-                        core::formatDateParamValue(end, paramCopy.dateFormat, paramCopy.dateFormatCustom);
-                    field->setProperty("kaiDateEndFormatted", endFormatted);
-                    field->setText(QStringLiteral("%1  —  %2").arg(startFormatted, endFormatted));
-                } else {
-                    field->setText(startFormatted);
-                }
-            });
-
-            rowLayout->addWidget(field, 1);
-            rowLayout->addWidget(pickButton);
-
-            addField(param, wrapWithLabel(this, label, container, param.required && !param.optional));
-            m_fieldByParamName[param.name] = field;
+            const QString dateFormat = param.dateFormat;
+            const QString dateFormatCustom = param.dateFormatCustom;
+            const fields::DatePickField picked = fields::makeDatePickField(
+                this, initialValue, param.dateMode, param.dateRange,
+                [dateFormat, dateFormatCustom](const QDateTime &dt) {
+                    return core::formatDateParamValue(dt, dateFormat, dateFormatCustom);
+                });
+            addField(param, fields::wrapWithLabel(this, label, picked.container, param.required && !param.optional));
+            m_fieldByParamName[param.name] = picked.edit;
             break;
         }
         case core::ParameterType::Textarea: {
-            // TEXTAREA COM EXPANSÃO (pedido explícito do usuário, e depois
-            // reforçado: "Text area campo precisa de um botão pra
-            // expandir"). Reaproveita InlineCodeField — o MESMO widget
-            // "campo compacto que cresce sozinho + botão de expandir para
-            // um editor grande" já usado pelo Shell COMMAND e pelo HTTP
-            // BODY em CommandEditorDialog — em vez da implementação de
-            // auto-grow manual que existia aqui antes (calculava altura via
-            // blockCount()/fontMetrics à mão): o app já tinha resolvido
-            // exatamente este problema uma vez, reusar evita divergência de
-            // comportamento entre os dois "campos de texto compactos" do
-            // app. word-wrap (WidgetWidth, via editor() — texto livre, não
-            // código) em vez do NoWrap padrão do widget (pensado pra
-            // comando/JSON de uma linha lógica).
-            auto *field = new InlineCodeField(this);
-            field->setEditorTitle(label);
-            field->setLineRange(3, 9); // mesmo range mínimo/máximo de antes
-            field->setPlainField(true); // fundo de campo normal (não editor de código)
-            field->editor()->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-            field->setPlaceholderText(param.description.trimmed().isEmpty()
+            // TEXTAREA COM EXPANSÃO (pedido explícito do usuário: "campo de
+            // texto com expansão" + botão pra expandir).
+            auto *field = fields::makeTextareaField(this, label, param.description.trimmed().isEmpty()
                 ? utils::tr(QStringLiteral("params.text.placeholder"))
-                : param.description.trimmed());
-            if (!initialValue.isEmpty()) {
-                field->setPlainText(initialValue);
-            }
-
-            addField(param, wrapWithLabel(this, label, field, param.required && !param.optional));
+                : param.description.trimmed(), initialValue);
+            addField(param, fields::wrapWithLabel(this, label, field, param.required && !param.optional));
             m_fieldByParamName[param.name] = field;
             break;
         }
         case core::ParameterType::Json: {
             // MINI EDITOR JSON (pedido do usuário: campo pra montar um
-            // snippet que ele referencia via {{param}} dentro do Body/
-            // Command). Também reaproveita InlineCodeField (mesmo motivo do
-            // Textarea acima), com setJsonSyntax(true) para o realce —
-            // ganha de graça o botão de expandir (2º pedido do usuário:
-            // "JSON mesmo coisa [textarea, ou seja, botão de expandir]
-            // além de ter botões de minify e etc."). O antigo
-            // FoldableJsonView (com dobra/fold) foi trocado: numa altura de
-            // 3-6 linhas o fold não tem serventia real, e ganhar expandir +
-            // formatar/minificar de graça vale mais que manter a dobra
-            // neste "mini campo" (palavra do próprio usuário).
-            auto *field = new InlineCodeField(this);
-            field->setEditorTitle(label);
-            field->setJsonSyntax(true);
-            field->setLineRange(3, 6);
-            if (!initialValue.trimmed().isEmpty()) {
-                field->setPlainText(initialValue);
-            }
-
-            // Rótulo + Formatar/Minificar na MESMA linha (mesmo padrão de
-            // "COMMAND SCRIPT"+engrenagem / "BODY"+formatar do
-            // CommandEditorDialog): os ícones operam sobre o texto do
-            // próprio field, mesma lógica de parse+reserializar do
-            // JsonEditorDialog::handleFormat/handleMinify (json.dialog.*).
-            auto *labelRow = new QHBoxLayout();
-            labelRow->setContentsMargins(0, 0, 0, 0);
-            labelRow->setSpacing(utils::tokens::space(1));
-            auto *jsonLabel = new QLabel(label, this);
-            QFont jsonLabelFont = jsonLabel->font();
-            jsonLabelFont.setBold(true);
-            jsonLabel->setFont(jsonLabelFont);
-            jsonLabel->setStyleSheet(QStringLiteral("color: %1;").arg(utils::tokens::fg()));
-            labelRow->addWidget(jsonLabel);
-            labelRow->addStretch(1);
-            auto *formatBtn = makeHeaderIconButton(this, QStringLiteral("braces"),
-                utils::tr(QStringLiteral("json.dialog.format_title")));
-            auto *minifyBtn = makeHeaderIconButton(this, QStringLiteral("shrink"),
-                utils::tr(QStringLiteral("json.dialog.minify_title")));
-            connect(formatBtn, &QToolButton::clicked, this, [this, field]() {
-                const QString raw = field->toPlainText();
-                if (raw.trimmed().isEmpty()) {
-                    return;
-                }
-                QJsonParseError e;
-                const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &e);
-                if (e.error != QJsonParseError::NoError) {
-                    QMessageBox::warning(this, utils::tr(QStringLiteral("json.dialog.format_title")),
-                        utils::tr(QStringLiteral("json.error.invalid_format")).arg(e.errorString()));
-                    return;
-                }
-                field->setPlainText(QString::fromUtf8(doc.toJson(QJsonDocument::Indented)));
-            });
-            connect(minifyBtn, &QToolButton::clicked, this, [this, field]() {
-                const QString raw = field->toPlainText();
-                if (raw.trimmed().isEmpty()) {
-                    return;
-                }
-                QJsonParseError e;
-                const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &e);
-                if (e.error != QJsonParseError::NoError) {
-                    QMessageBox::warning(this, utils::tr(QStringLiteral("json.dialog.minify_title")),
-                        utils::tr(QStringLiteral("json.error.invalid_format")).arg(e.errorString()));
-                    return;
-                }
-                field->setPlainText(QString::fromUtf8(doc.toJson(QJsonDocument::Compact)));
-            });
-            labelRow->addWidget(formatBtn);
-            labelRow->addWidget(minifyBtn);
-
-            auto *container = new QWidget(this);
-            container->setObjectName(QStringLiteral("paramJsonWrap"));
-            container->setStyleSheet(QStringLiteral(
-                "QWidget#paramJsonWrap { background: transparent; }"));
-            auto *vbox = new QVBoxLayout(container);
-            vbox->setContentsMargins(0, 0, 0, 0);
-            vbox->setSpacing(utils::tokens::space(1));
-            vbox->addLayout(labelRow);
-            vbox->addWidget(field);
-
-            addField(param, container);
-            m_fieldByParamName[param.name] = field;
+            // snippet que ele referencia via {{param}} dentro do Body/Command).
+            const fields::JsonField json = fields::makeJsonField(this, label, initialValue);
+            addField(param, json.container);
+            m_fieldByParamName[param.name] = json.field;
             break;
         }
         }
@@ -1145,71 +755,6 @@ void ParameterFormDialog::refreshValidationState()
     }
 }
 
-bool ParameterFormDialog::eventFilter(QObject *watched, QEvent *event)
-{
-    if (event->type() == QEvent::KeyPress) {
-        if (auto *list = qobject_cast<QListWidget *>(watched)) {
-            auto *keyEvent = static_cast<QKeyEvent *>(event);
-            if (keyEvent->key() == Qt::Key_Space) {
-                if (QListWidgetItem *item = list->currentItem()) {
-                    item->setCheckState(item->checkState() == Qt::Checked
-                                             ? Qt::Unchecked : Qt::Checked);
-                }
-                return true; // consome: Space não deve rolar/ativar de novo
-            }
-        }
-    }
-    return QDialog::eventFilter(watched, event);
-}
-
-void ParameterFormDialog::handleBrowseFileClicked(QLineEdit *targetField, const QString &initialDir,
-                                                  const QString &pathFormat, bool pickFolder)
-{
-    // ONDE ABRIR. Ordem de precedência:
-    //  1) a pasta do arquivo JÁ escolhido no campo (continuar de onde parou);
-    //  2) a "Pasta inicial" configurada no parâmetro, com variáveis
-    //     interpoladas ({{PROJECT_PATH}} etc.);
-    //  3) nada — aí o Qt usa o último diretório do processo (comportamento
-    //     anterior), que na primeira vez é a pasta de instalação do Kai.
-    QString startDir;
-    const QString current = targetField ? targetField->text().trimmed() : QString();
-    if (!current.isEmpty()) {
-        const QFileInfo info(current);
-        if (info.exists()) {
-            startDir = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
-        }
-    }
-    if (startDir.isEmpty() && !initialDir.trimmed().isEmpty()) {
-        // Só usa se EXISTIR: apontar para caminho inválido faz o diálogo nativo
-        // abrir em lugar imprevisível, sem avisar. (Este diálogo não tem acesso
-        // ao EnvironmentManager, então a pasta inicial é usada literalmente —
-        // variáveis como {{PROJECT_PATH}} não são resolvidas aqui.)
-        const QString resolved = initialDir.trimmed();
-        if (QFileInfo::exists(resolved)) {
-            startDir = resolved;
-        }
-    }
-
-    // Sempre o diálogo nativo do sistema operacional (feedback
-    // do usuário): QFileDialog::getOpenFileName/getExistingDirectory sem a
-    // opção QFileDialog::DontUseNativeDialog usa o backend nativo por padrão.
-    // PASTA em vez de arquivo (feedback do usuário: "às vezes o param é uma
-    // pasta") — mesmo startDir/pathFormat, só troca o seletor.
-    const QString path = pickFolder
-        ? QFileDialog::getExistingDirectory(
-              this, utils::tr(QStringLiteral("params.select_folder")), startDir)
-        : QFileDialog::getOpenFileName(
-              this, utils::tr(QStringLiteral("params.select_file")), startDir);
-    if (!path.isEmpty()) {
-        // Formato do path pedido no parâmetro (pedido do usuário: o
-        // diálogo nativo devolve no formato do SO do Kai — sob WSLg isso
-        // costuma ser um path Windows, inútil colado direto num comando
-        // bash do lado Linux; "posix"/"windows" convertem, "native" não
-        // mexe em nada).
-        targetField->setText(utils::convertFilePathFormat(path, pathFormat));
-    }
-}
-
 QMap<QString, QString> ParameterFormDialog::values() const
 {
     QMap<QString, QString> result;
@@ -1253,10 +798,10 @@ QMap<QString, QString> ParameterFormDialog::values() const
                 result[param.name] = QString();
                 break;
             }
-            const QVariant startFormatted = lineEdit->property("kaiDateStartFormatted");
+            const QVariant startFormatted = lineEdit->property(fields::kDatePropStartFormatted);
             result[param.name] = startFormatted.isValid() ? startFormatted.toString() : lineEdit->text();
             if (param.dateRange) {
-                const QVariant endFormatted = lineEdit->property("kaiDateEndFormatted");
+                const QVariant endFormatted = lineEdit->property(fields::kDatePropEndFormatted);
                 if (endFormatted.isValid()) {
                     result[QStringLiteral("%1.end").arg(param.name)] = endFormatted.toString();
                 }

@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QTemporaryDir>
 
+#include "non-fresh-config.h"
 #include "ui/main-window.h"
 #include "ui/features/output/terminal-drawer.h"
 #include "ui/features/output/pty-terminal-widget.h"
@@ -35,6 +36,20 @@ private slots:
         QMetaObject::invokeMethod(&window, "toggleVisibility");
         QTest::qWait(50);
         QVERIFY(window.isVisible());
+    }
+
+    // Bug: clicar no ícone da janela na barra de tarefas não minimizava. Com
+    // FramelessWindowHint o Qt trata os hints como "customizados" e NÃO aplica
+    // os padrões; sem WindowMinimizeButtonHint/WindowSystemMenuHint o Windows
+    // cria a janela sem WS_MINIMIZEBOX/WS_SYSMENU e ignora o SC_MINIMIZE
+    // enviado pelo clique na barra de tarefas.
+    void framelessWindowKeepsNativeMinimizeHints()
+    {
+        MainWindow window;
+        const Qt::WindowFlags flags = window.windowFlags();
+        QVERIFY(flags & Qt::FramelessWindowHint);
+        QVERIFY(flags & Qt::WindowMinimizeButtonHint);
+        QVERIFY(flags & Qt::WindowSystemMenuHint);
     }
 
     void closingWindowHidesButKeepsAppRunning()
@@ -159,7 +174,7 @@ private slots:
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
-        qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
+        useNonFreshConfig(tempDir); // config vazia = boas-vindas = Saída oculta
 
         MainWindow window;
         window.show();

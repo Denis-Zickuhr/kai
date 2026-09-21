@@ -164,6 +164,75 @@ private slots:
 #endif
     }
 
+    // Reprodução do bug "Parar não encerra, mas o Ctrl+C encerra": sob PTY com
+    // `bash -i` (job control) o comando roda em primeiro plano num grupo PRÓPRIO.
+    // Um SIGTERM/SIGKILL no grupo do shell não o alcança (e o bash interativo
+    // ignora SIGTERM); o job aqui ainda ignora SIGHUP/SIGTERM, então nem o SIGHUP
+    // do kernel ao morrer o líder o derruba. Só o Ctrl+C (SIGINT) ou o SIGKILL
+    // na SESSÃO inteira o encerram — stop() precisa fazer isso.
+    void stopKillsAForegroundJobThatIgnoresTermAndHup()
+    {
+#if defined(Q_OS_WIN)
+        QSKIP("Teste específico de sessões/grupos de processo POSIX.");
+#else
+        const QString pidPath = QStringLiteral("/tmp/kai_test_job_pid_%1").arg(QCoreApplication::applicationPid());
+        QFile::remove(pidPath);
+
+        ProcessRunner runner;
+        runner.setUsePty(true);
+        runner.setInteractiveShell(true);
+        runner.setKillTimeoutMs(1500);
+        // O `;` depois do job impede o bash de fazer exec direto: o job vira
+        // um filho em grupo próprio. `exec sleep` herda os sinais ignorados.
+        runner.start(QStringLiteral("bash -c \"trap '' HUP TERM; echo \\$\\$ > %1; exec sleep 300\"; echo fim")
+                         .arg(pidPath),
+                     QString(), {});
+        QVERIFY(runner.isRunning());
+
+        qint64 jobPid = 0;
+        for (int i = 0; i < 40 && jobPid <= 0; ++i) {
+            QTest::qWait(100);
+            QFile pidFile(pidPath);
+            if (pidFile.open(QIODevice::ReadOnly)) {
+                jobPid = pidFile.readAll().trimmed().toLongLong();
+            }
+        }
+        QVERIFY2(jobPid > 0, "o job não gravou o PID");
+        QCOMPARE(::kill(static_cast<pid_t>(jobPid), 0), 0); // vivo antes do stop
+
+        runner.stop();
+        QTest::qWait(4000);
+
+        QCOMPARE(::kill(static_cast<pid_t>(jobPid), 0), -1);
+        QFile::remove(pidPath);
+#endif
+    }
+
+    // Background parado pelo usuário: lastRunStoppedByRequest() é verdadeiro
+    // (a UI não notifica "caiu"); um exit != 0 próprio não é.
+    void lastRunStoppedByRequestDistinguishesStopFromRealFailure()
+    {
+        ProcessManager manager;
+
+        auto stopped = std::make_unique<ProcessRunner>();
+        ProcessRunner *rawStopped = stopped.get();
+        manager.track(QStringLiteral("cmd_stopped"), std::move(stopped));
+        QCoreApplication::processEvents();
+        rawStopped->start(QStringLiteral("sleep 30"), QString(), {});
+        QVERIFY(rawStopped->isRunning());
+        rawStopped->stop();
+        QTRY_VERIFY_WITH_TIMEOUT(manager.statusOf(QStringLiteral("cmd_stopped")) != ProcessStatus::Running, 10000);
+        QVERIFY(manager.lastRunStoppedByRequest(QStringLiteral("cmd_stopped")));
+
+        auto failing = std::make_unique<ProcessRunner>();
+        ProcessRunner *rawFailing = failing.get();
+        manager.track(QStringLiteral("cmd_failing"), std::move(failing));
+        QCoreApplication::processEvents();
+        rawFailing->start(QStringLiteral("exit 2"), QString(), {});
+        QTRY_VERIFY_WITH_TIMEOUT(manager.statusOf(QStringLiteral("cmd_failing")) != ProcessStatus::Running, 5000);
+        QVERIFY(!manager.lastRunStoppedByRequest(QStringLiteral("cmd_failing")));
+    }
+
     // lastRunCrashed() (notificações — feature nova): ProcessRunner já
     // distinguia QProcess::CrashExit de um exitCode != 0 comum
     // (ProcessResult::crashed), mas isso se perdia ao virar só

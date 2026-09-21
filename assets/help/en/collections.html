@@ -1,2 +1,8 @@
-<h2>Collections & Parameters</h2>
-<p><b>Parameters</b> ask for values before running (text, select, bool, file). A <b>select</b> can pull its options from a <b>Collection</b>.</p><h3>Example</h3><p>A command <code>echo {{cliente.value}}</code> with a <code>cliente</code> parameter of type select bound to the <b>Clientes</b> collection (displayed field: <code>value</code>). At run time you pick the client and Kai injects <code>{{cliente.value}}</code>, <code>{{cliente.key}}</code>, etc.</p><h3>Import data</h3><p>Collections accept CSV/JSON import; empty entries are ignored.</p>
+<h2>Collections</h2>
+<p>A <b>Collection</b> is your own table of data (customers, servers, environments — whatever you need) that a <a href='help://parameters'>select parameter</a> can use as its list of options. Create one from <b>Item → New Collection</b>; it belongs to a folder/tab.</p>
+<h3>Schema and entries</h3>
+<p>You define the fields (columns) — one is the <b>key</b>, one the <b>value</b>, plus any others — and then the entries. You can mark favourites, filter, and <b>import entries from CSV or JSON</b> (completely empty entries are ignored).</p>
+<h3>Example</h3>
+<p>A command <code>echo {{cliente.value}}</code> with a <code>cliente</code> parameter of type select bound to the <b>Clientes</b> collection (displayed field: <code>value</code>). At run time you pick the client and Kai injects <code>{{cliente.value}}</code> (the displayed field) <i>and</i> <code>{{cliente.key}}</code> plus every other field of the entry.</p>
+<h3>Versioning with a project</h3>
+<p>Collections can live inside a project's <a href='help://kai_json'>kai.json</a>; the parameter references the collection <b>by name</b>. When you <a href='help://export_import'>export</a>, the entries are left out unless you opt in — they may hold real data.</p>

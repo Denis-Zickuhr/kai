@@ -1,8 +1,11 @@
 #include <QTest>
 #include <QComboBox>
 #include <QListWidget>
+#include <QLineEdit>
+#include <QCheckBox>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QDialogButtonBox>
 
 #include "ui/features/collections/collection-selector-dialog.h"
 #include "core/models.h"
@@ -56,6 +59,114 @@ private slots:
         QVERIFY(first != nullptr);
         QVERIFY(!first->icon().isNull());          // tem a estrela embutida
         QVERIFY(first->data(Qt::UserRole + 1).isValid()); // estado de favorito
+    }
+
+    // Feature pedida pelo usuário: "os filtros de coleções devem ser
+    // salvos, inclusive se exibe ou não favoritos". O chamador (Parameter-
+    // FormDialog) reaplica o filtro salvo da última vez ANTES da primeira
+    // paginação — sem isto o usuário reabre e vê a lista inteira de novo.
+    void initialFilterIsPreappliedOnOpen()
+    {
+        CollectionFilterState saved;
+        saved.search = QStringLiteral("Nome1");
+        CollectionSelectorDialog dialog(makeCollection(3), {}, true, nullptr, saved);
+
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+        // Só "Nome1" bate na busca salva — sem reaplicar o filtro, as 3
+        // entradas apareceriam.
+        QCOMPARE(table->rowCount(), 1);
+
+        auto *search = dialog.findChild<QLineEdit *>();
+        QVERIFY(search != nullptr);
+        QCOMPARE(search->text(), QStringLiteral("Nome1"));
+    }
+
+    // filterState() é o que o chamador lê para persistir de volta — precisa
+    // refletir tanto o valor pré-carregado quanto qualquer ajuste feito
+    // pelo usuário na tela.
+    void filterStateReflectsSearchAndFavoritesToggle()
+    {
+        CollectionSelectorDialog dialog(makeCollection(3));
+        auto *search = dialog.findChild<QLineEdit *>();
+        auto *favorites = dialog.findChild<QCheckBox *>();
+        QVERIFY(search != nullptr);
+        QVERIFY(favorites != nullptr);
+
+        QTest::keyClicks(search, QStringLiteral("Nome2"));
+        favorites->setChecked(true);
+
+        const CollectionFilterState state = dialog.filterState();
+        QCOMPARE(state.search, QStringLiteral("Nome2"));
+        QVERIFY(state.favoritesOnly);
+    }
+
+    // Bug reportado: "preciso de uma melhoria pra multiselect de coleções,
+    // atualmente só consigo os da mesma pagina". A QTableWidget é
+    // reconstruída do zero a cada troca de página, o que apagava a seleção
+    // nativa dela — este teste seleciona uma entrada na página 1, troca
+    // pra página 2, seleciona outra lá, e confirma que AMBAS (não só a
+    // última) chegam em selectedEntries() ao aceitar.
+    void multiSelectPersistsAcrossPageChanges()
+    {
+        Collection col = makeCollection(30); // 2 páginas no tamanho padrão (25)
+        CollectionSelectorDialog dialog(col);
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+        QCOMPARE(table->rowCount(), 25);
+
+        table->selectRow(0);
+        const QString firstPageEntryId = table->item(0, 0)->data(Qt::UserRole).toString();
+        QVERIFY(!firstPageEntryId.isEmpty());
+
+        auto *nextButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorNextButton"));
+        QVERIFY(nextButton != nullptr);
+        emit nextButton->clicked();
+        QCOMPARE(table->rowCount(), 5); // 30 - 25 restantes na página 2
+
+        table->selectRow(0);
+        const QString secondPageEntryId = table->item(0, 0)->data(Qt::UserRole).toString();
+        QVERIFY(!secondPageEntryId.isEmpty());
+        QVERIFY(firstPageEntryId != secondPageEntryId);
+
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(buttonBox != nullptr);
+        emit buttonBox->accepted();
+
+        const QVector<CollectionEntry> selected = dialog.selectedEntries();
+        QCOMPARE(selected.size(), 2);
+        QStringList ids;
+        for (const CollectionEntry &e : selected) ids << e.id;
+        QVERIFY(ids.contains(firstPageEntryId));
+        QVERIFY(ids.contains(secondPageEntryId));
+    }
+
+    // Feature pedida pelo usuário: label de contagem + botões "selecionar
+    // tudo (filtrados)" e "limpar seleção".
+    void selectAllFilteredAndClearSelectionButtonsWork()
+    {
+        Collection col = makeCollection(30);
+        CollectionSelectorDialog dialog(col);
+        auto *table = dialog.findChild<QTableWidget *>();
+        QVERIFY(table != nullptr);
+
+        auto *selectAllButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorSelectAllButton"));
+        auto *clearButton = dialog.findChild<QToolButton *>(QStringLiteral("collectionSelectorClearSelectionButton"));
+        QVERIFY(selectAllButton != nullptr);
+        QVERIFY(clearButton != nullptr);
+
+        // "Selecionar tudo (filtrados)" pega as 30 entradas, não só as 25
+        // visíveis na página atual.
+        emit selectAllButton->clicked();
+        auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(buttonBox != nullptr);
+        emit buttonBox->accepted();
+        QCOMPARE(dialog.selectedEntries().size(), 30);
+
+        // "Limpar seleção" zera tudo de novo.
+        emit clearButton->clicked();
+        emit buttonBox->accepted();
+        QCOMPARE(dialog.selectedEntries().size(), 0);
     }
 
     void historyOrdersEntriesFirst()

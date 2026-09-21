@@ -54,7 +54,7 @@
     },
     {
       "name": "3. Validar Variáveis Extraídas (Shell)",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Variável EXTRACTED_APP_NAME: {{EXTRACTED_APP_NAME}} | EXTRACTED_REQ_ID: {{EXTRACTED_REQ_ID}}\""
     }
   ],

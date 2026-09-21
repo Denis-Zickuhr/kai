@@ -17,9 +17,14 @@ inline const QSet<QString> &reservedCliVerbs()
         QStringLiteral("run"), QStringLiteral("list"), QStringLiteral("env"),
         QStringLiteral("show"), QStringLiteral("help"), QStringLiteral("import"),
         QStringLiteral("validate"), QStringLiteral("ps"), QStringLiteral("attach"),
-        QStringLiteral("kill"), QStringLiteral("global"),
+        QStringLiteral("kill"), QStringLiteral("raise"),
+        QStringLiteral("history"), QStringLiteral("last"), QStringLiteral("init"),
+        QStringLiteral("completion"), QStringLiteral("__complete"), QStringLiteral("kip"),
         QStringLiteral("--help"), QStringLiteral("-h"),
         QStringLiteral("--global"), QStringLiteral("-g"),
+        QStringLiteral("--detached"), QStringLiteral("-d"),
+        QStringLiteral("--notify"), QStringLiteral("-n"),
+        QStringLiteral("--dry-run"), QStringLiteral("--json"),
     };
     return tokens;
 }

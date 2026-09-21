@@ -9,6 +9,10 @@
 
 namespace kai::ui {
 
+namespace {
+constexpr int kFrameInset = 2;
+}
+
 ActionGroupContainer::ActionGroupContainer(Qt::Orientation orientation, QWidget *parent)
     : QWidget(parent)
     , m_orientation(orientation)
@@ -17,12 +21,13 @@ ActionGroupContainer::ActionGroupContainer(Qt::Orientation orientation, QWidget 
     setAttribute(Qt::WA_StyledBackground, true);
 
     setSizePolicy(orientation == Qt::Horizontal
-        ? QSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed)
+        ? QSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed)
         : QSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred));
 
     if (orientation == Qt::Vertical) {
         auto *outer = new QVBoxLayout(this);
-        outer->setContentsMargins(0, 0, 0, 0);
+        // Borda (1px, desenhada pelo QSS) + 1px de respiro, como nos demais painéis.
+        outer->setContentsMargins(kFrameInset, kFrameInset, kFrameInset, kFrameInset);
         outer->setSpacing(0);
 
         m_scroll = new QScrollArea(this);
@@ -65,8 +70,11 @@ ActionGroupContainer::ActionGroupContainer(Qt::Orientation orientation, QWidget 
         setMinimumHeight(0);
     } else {
         m_layout = new QBoxLayout(QBoxLayout::LeftToRight, this);
-        m_layout->setContentsMargins(0, 0, 0, 0);
+        m_layout->setContentsMargins(utils::tokens::space(1), 0, utils::tokens::space(1), 0);
         m_layout->setSpacing(0);
+        // Mesma altura da barra do cabeçalho da Saída, para as duas linhas
+        // separadoras ficarem alinhadas.
+        setMinimumHeight(utils::tokens::controlHeight() + utils::tokens::space(2));
     }
 
     refreshStyle();
@@ -123,26 +131,80 @@ QWidget *ActionGroupContainer::createSeparator()
     return line;
 }
 
+int ActionGroupContainer::contentWidth() const
+{
+    if (m_pill) {
+        // +4px de respiro pro scrollbar vertical (ScrollBarAsNeeded), que
+        // some da largura do viewport quando os ícones não cabem na altura
+        // disponível — sem essa folga a pílula ficaria espremida bem no
+        // limite assim que a barra aparecesse.
+        return m_pill->sizeHint().width() + 4 + kFrameInset * 2;
+    }
+    return sizeHint().width();
+}
+
+int ActionGroupContainer::naturalBarHeight() const
+{
+    // Só o conteúdo (sizeHint), sem a altura mínima já aplicada — senão uma
+    // altura antiga nunca diminuiria ao trocar a densidade.
+    return sizeHint().height();
+}
+
+void ActionGroupContainer::setBarHeight(int height)
+{
+    if (m_orientation == Qt::Horizontal) {
+        setMinimumHeight(height);
+    }
+}
+
+void ActionGroupContainer::setEdgeSeparator(Qt::Edge edge)
+{
+    m_separatorEdge = edge;
+    refreshStyle();
+}
+
 void ActionGroupContainer::refreshStyle()
 {
     const QString border = utils::tokens::borderColor();
-    const QString surface = utils::tokens::surface2();
-    const QString target = m_pill
-        ? QStringLiteral("QWidget#actionGroupPill")
-        : QStringLiteral("QWidget#actionGroupContainer");
-        
+
+    if (m_pill) {
+        // Coluna lateral: mesma moldura (borda 1px + radiusMd) dos painéis
+        // principais, com os ícones soltos dentro (sem pílula nem sombra).
+        setStyleSheet(QStringLiteral(
+            "QWidget#actionGroupContainer {"
+            "  background: transparent;"
+            "  border: 1px solid %1;"
+            "  border-radius: %2px;"
+            "}"
+            "QWidget#actionGroupPill { background: transparent; }"
+            "QFrame#actionGroupSeparator {"
+            "  background-color: %1;"
+            "  border: none;"
+            "}"
+        ).arg(border).arg(utils::tokens::radiusMd()));
+        m_pill->setGraphicsEffect(nullptr);
+        return;
+    }
+
+    // Barra horizontal plana: sem fundo, sem sombra, só a linha separadora.
+    QString edgeLine;
+    if (m_separatorEdge == Qt::BottomEdge) {
+        edgeLine = QStringLiteral("border-bottom: 1px solid %1;").arg(border);
+    } else if (m_separatorEdge == Qt::TopEdge) {
+        edgeLine = QStringLiteral("border-top: 1px solid %1;").arg(border);
+    }
     setStyleSheet(QStringLiteral(
-        "%1 {"
-        "  background-color: %2;"
-        "  border-radius: %3px;"
+        "QWidget#actionGroupContainer {"
+        "  background: transparent;"
+        "  border: none;"
+        "  %1"
         "}"
         "QFrame#actionGroupSeparator {"
-        "  background-color: %4;"
+        "  background-color: %2;"
         "  border: none;"
         "}"
-    ).arg(target, surface).arg(utils::tokens::radiusMd()).arg(border));
-
-    applyElevation(m_pill ? m_pill : this, 1);
+    ).arg(edgeLine, border));
+    setGraphicsEffect(nullptr);
 }
 
 } // namespace kai::ui

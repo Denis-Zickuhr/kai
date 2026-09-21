@@ -1,0 +1,84 @@
+<h2>KIP — interfaces de aplicativo para comandos</h2>
+<p>O <b>KIP</b> (Kai Interface Protocol) permite que um comando transforme o painel de saída em um pequeno <b>aplicativo</b>: em vez de texto, o Kai mostra formulários, confirmações, listas, tabelas, barras de progresso, checklists e um cartão de resultado com botões. O programa só imprime linhas JSON; o Kai desenha a interface.</p>
+<p>Serve para assistentes (deploy, restauração, criação de projetos, onboarding), logins que exportam um token, conversão de arquivos e consultas com tabela de resultados.</p>
+
+<h3>1. Ativando</h3>
+<p>Abra o editor do comando, aba <b>KIP</b> (só comandos do tipo comando, não HTTP), e marque <b>Interface KIP</b> (ou use <code>kip: true</code> no arquivo). <b>Abrir em janela própria</b> (<code>kip_window: true</code>) mostra a view em uma janela separada. <b>Fechar a janela ao terminar</b> (<code>kip_auto_close: true</code>, com atraso opcional em segundos) fecha essa janela sozinha depois de uma execução <i>bem-sucedida</i> — feito para scripts rápidos disparados com <code>kai -gw</code>; uma falha ou um cancelamento mantém a janela aberta para você ler o erro.</p>
+<ul>
+<li>O Kai <b>nunca altera o seu comando</b>. Se a ferramenta precisa de um flag (<code>mytool deploy --kip</code>), escreva-o no comando.</li>
+<li>O formulário de parâmetros continua rodando antes, e <code>{{VAR}}</code> funciona no comando.</li>
+<li>O Kai define <code>KIP_VERSION=1</code> e <code>KIP_LOCALE</code> (<code>en</code>/<code>pt</code>) no ambiente do programa.</li>
+<li>Segundo plano, terminal interativo, saída formatada, Markdown, execução automática, agendamento, respostas automáticas e exportar do ambiente ficam desativados em comandos KIP, e um comando KIP não pode ser usado como hook.</li>
+</ul>
+
+<h3>2. Como o programa fala com o Kai</h3>
+<table>
+<tr><td><b>stdout</b></td><td>mensagens para o Kai, um objeto JSON por linha: <code>{"kip":1,"type":"..."}</code></td></tr>
+<tr><td><b>stdin</b></td><td>respostas do Kai: <code>response</code>, <code>change</code>, <code>back</code>, <code>cancel</code></td></tr>
+<tr><td><b>stderr</b></td><td>log livre, exibido em <b>Detalhes → Log</b></td></tr>
+</table>
+<p>A primeira mensagem deve ser <code>hello</code>. Se o processo terminar (ou passarem 10 segundos) antes dela, o Kai mostra <b>"Este comando não suporta KIP"</b>. Linhas do stdout que não são protocolo vão para o log.</p>
+<table>
+<tr><td><code>hello</code></td><td>handshake; dá nome ao aplicativo</td></tr>
+<tr><td><code>prompt</code></td><td>formulário com campos; espera a resposta</td></tr>
+<tr><td><code>confirm</code></td><td>sim/não (<code>danger</code> para ações destrutivas)</td></tr>
+<tr><td><code>patch</code> / <code>invalid</code></td><td>atualiza campos com o formulário aberto / recusa uma resposta com mensagens por campo</td></tr>
+<tr><td><code>message</code>, <code>markdown</code></td><td>cartão de status, texto formatado</td></tr>
+<tr><td><code>progress</code>, <code>steps</code> + <code>step</code></td><td>barra (ou indeterminada), checklist ao vivo</td></tr>
+<tr><td><code>table</code></td><td>tabela somente leitura (selecione uma célula e use Ctrl+C)</td></tr>
+<tr><td><code>notify</code></td><td>notificação do sistema</td></tr>
+<tr><td><code>set_env</code></td><td>exporta uma variável declarada</td></tr>
+<tr><td><code>chip_result</code></td><td>andamento e resultado de um <b>chip</b> (veja abaixo)</td></tr>
+<tr><td><code>done</code></td><td>tela de resultado com botões: abrir URL (http/https), mostrar no gerenciador de arquivos, copiar</td></tr>
+</table>
+
+<h3>3. Tipos de campo</h3>
+<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code> e <code>flags</code>. Os campos podem ser <code>required</code>, ter <code>default</code>, pertencer a um <code>group</code> e ser observados (<code>watch</code>): quando o usuário muda um campo observado o Kai envia <code>change</code> e o programa responde com um <code>patch</code> (é assim que uma segunda lista depende da primeira). O Kai lembra as últimas respostas de cada prompt (nunca de <code>secret</code>); desligue com <code>remember: false</code>.</p>
+
+<h3>4. Chips e listas longas</h3>
+<p><b>Chips</b> são botões pequenos sob os campos de um prompt para ações <i>efêmeras</i> — "mostrar o contexto desta branch", "sincronizar", "apagar". Clicar não responde o formulário: o Kai envia <code>chip</code> ao programa, que responde com mensagens <code>chip_result</code> (<code>running</code> e depois <code>success</code> ou <code>error</code>, com um <code>text</code> em Markdown) exibidas numa caixa sob os chips. O passo continua aberto e um erro nunca encerra a sessão.</p>
+<ul>
+<li>Um chip pode pedir confirmação antes (<code>confirm</code>, dentro da caixa) e ter visual destrutivo (<code>danger</code>).</li>
+<li><code>requires</code> mantém o chip desabilitado até os campos listados estarem preenchidos.</li>
+<li>Um chip roda por vez; feche a caixa no botão ×.</li>
+</ul>
+<p>Nos campos <code>list</code> e <code>table</code>, <code>searchable</code> força (ou esconde) a caixa de filtro e <code>page_size</code> divide os itens em páginas, com a barra "Página 2 de 5". As páginas valem para o resultado filtrado e mantêm a sua seleção.</p>
+
+<h3>5. O auxiliar <code>kai kip</code></h3>
+<p>Em scripts shell você não precisa escrever JSON à mão:</p>
+<pre>kai kip hello --title "Deploy"
+kai kip prompt --id env --title "Para onde?" \
+  --field select env "Ambiente" --options dev,staging,prod --required
+read -r resp
+[ "$(kai kip get "$resp" type)" = cancel ] &amp;&amp; exit 130
+env=$(kai kip get "$resp" values.env)
+kai kip progress 50 "Enviando..."
+kai kip done --title "Publicado" --action open_url:"Abrir":https://example.com</pre>
+<p>Ele apenas imprime mensagens e lê valores: não precisa do app aberto. <code>kai kip --help</code> lista todos os verbos e opções.</p>
+<p><b>Python e Node, sem arquivo:</b> troque a <b>Linguagem</b> do comando para Python ou Node e ligue o KIP — o texto do comando é o programa, e o Kai injeta um módulo <code>kip</code> (<code>import kip</code> no Python; o global <code>kip</code> no Node, com <code>await</code> no topo):</p>
+<pre>import kip
+v = kip.prompt([{"name": "env", "type": "select", "options": ["dev", "prod"]}],
+               id="where", title="Para onde?")
+kip.progress(50, "Publicando...")
+kip.done(title="Publicado em " + v["env"])</pre>
+<p>O <code>hello</code> é enviado por você, a saída é sem buffer, Cancelar encerra com código 130 e Voltar levanta <code>kip.Back</code>. O <code>{{VAR}}</code> não é substituído neste código; as variáveis vêm de <code>os.environ</code> / <code>process.env</code>.</p>
+
+<h3>6. Exportando variáveis</h3>
+<p>Um programa só pode definir uma variável dinâmica com <code>set_env</code> para nomes listados na aba <b>Variáveis exportáveis</b> do comando. O valor fica disponível na hora para outros comandos como <code>{{NOME}}</code>.</p>
+
+<h3>7. A view</h3>
+<ul>
+<li>Uma tela por vez, com um resumo das respostas anteriores acima (segredos aparecem como ••••).</li>
+<li><b>Voltar</b> aparece quando o programa permite; <b>Cancelar execução</b> pede ao programa que pare (e o encerra após 3 segundos).</li>
+<li>Uma confirmação destrutiva dá foco ao botão de recusa, então o Enter nunca confirma sem querer.</li>
+<li><b>Detalhes</b> (recolhido): o <b>Log</b> e o inspetor de <b>Protocolo</b> com todas as mensagens nos dois sentidos.</li>
+<li>A barra de abas do painel de saída fica oculta em comandos KIP; o ícone no canto superior direito da view abre a janela própria.</li>
+<li>Falhas, cancelamento, comando sem suporte e erros de protocolo mostram um cartão com os detalhes abertos e <b>Executar de novo</b>.</li>
+</ul>
+
+<h3>8. Configurações e manifestos para IA</h3>
+<p>Em <b>Configurações → KIP</b> ficam as preferências globais: quanto esperar a primeira mensagem do programa, a resposta a uma atualização de campo e o tempo depois de <i>Cancelar</i>; se as últimas respostas são lembradas; e se o Detalhes abre sozinho nas falhas; e o <b>Tamanho da janela própria</b> — seguir a configuração geral, janela normal, maximizada ou tela cheia (vale só para views KIP). Se um comando usa KIP é definido no editor dele (só comandos do tipo comando, não HTTP).</p>
+<p><b>Ajuda → Manifestos para IA</b> copia, com um clique, o guia para entregar a um assistente de IA escrever um programa KIP (ou um <code>kai.json</code>) para você.</p>
+
+<h3>9. No terminal</h3>
+<p><code>kai -g &lt;comando&gt;</code> executa um comando KIP no app e traz a view para a frente. Com <code>-w</code> (ou <code>kip_window</code>) a view abre em janela própria e a <b>janela principal não é mostrada</b>. No modo local (<code>kai</code> dentro de uma pasta com <code>kai.json</code>) comandos KIP são recusados: não há interface para desenhá-los.</p>

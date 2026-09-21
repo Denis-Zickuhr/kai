@@ -2,11 +2,24 @@
 
 ## 1. Window & layout
 
-- **Main window:** uses the OS's native title bar and window controls
-  (minimize/maximize/close) — see spec 09 for the complementary Top
-  Utility Bar. Kai does not use a custom frameless window; that keeps it
-  familiar and consistent with native window management on Linux and
-  Windows.
+- **Window frame — always drawn by Kai:** no window in the app uses the OS
+  title bar. The main window, the detached output window (`AppWindowFrame`)
+  and **every dialog** (`QDialog`, including `QMessageBox`/`QInputDialog`;
+  `installDialogFrames()` in `ui/shared/dialog-frame.*`) share the same look:
+  a Kai title bar (logo, title, window buttons — only Close on dialogs),
+  a contrasting 1px border plus a soft inner shadow (`DialogEdge`, an
+  overlay that ignores the mouse), corners from the user's corner preference
+  (`radiusMd`; DWM native corners on Windows 11, a region mask elsewhere),
+  drag by the title bar and resize by the edges. Dialogs are never
+  translucent: enabling `WA_TranslucentBackground` after the native window
+  exists (and on WSLg, which does not honor alpha windows) left the
+  background full of garbage pixels, so the separation from the window behind
+  comes from the inner edge, not from an outer drop shadow. Dialogs get it without per-dialog code: the filter
+  sets `FramelessWindowHint` on the first polish, and on first show adds the
+  title bar as an overlay child and grows the layout's top margin by its
+  height (works with any layout type). OS-native pickers (file/folder
+  dialogs) are the only exception — they are not Qt widgets. See spec 09 for
+  the Top Utility Bar.
 - **Resizable panes via `QSplitter`:** the command tree, the action
   sidebar, and the output panel sit inside two `QSplitter`s (a horizontal
   one between the tree and the action sidebar, nested inside a vertical
@@ -80,6 +93,41 @@
 - Collapsing the panel when it's docked to the left or right side
   collapses its **width**, anchored to the top — not its height, and never
   centered.
+- Collapsed, the header keeps **only the chevron** (tabs, actions and status
+  badge are hidden) so the command box gets the space back.
+- One tab style everywhere (`ui/shared/tab-bar-style.h`): same height (bar
+  height = control height + 2 grid steps), horizontal padding, font size and
+  accent underline for the output tabs, the root-folder tabs and every other
+  `QTabBar`. Tables inside rounded cards are inset by ~30% of the corner radius
+  so their striped rows never spill over the rounded corners.
+- The root-folder tab strip has its own background (`surface2`, full width)
+  so it contrasts with the list below (`TabStripBackground`).
+- Panel frames (`QWidget#panelCard`) are drawn by QSS. Their children are
+  inset by `panelFrameInset()` (1px border + ~30% of the corner radius + 1px),
+  which keeps the square corner of every child inside the border arc so it can
+  never paint over it; re-applied when the corner style changes. (An overlay
+  attempt, `PanelFrame`, blanked the panels and is not attached.)
+- Root-folder tab strip background: slightly darker than the default window
+  background (`bg` darkened), not a lighter surface color.
+- Welcome screen: only the welcome screen is shown — the command list, every
+  action bar (top/bottom/sides) and the output panel are hidden; closing it
+  restores them according to the user's preferences.
+- Tab overflow: when the root-folder tabs (command list) or the output header
+  (tabs + action icons) don't fit, a thin bar in the theme accent color
+  (slightly translucent) shows below the labels and icons, with how much is
+  visible and where (`OverflowIndicator`). It is a real scroll bar: drag the
+  thumb or click the track to scroll. It only exists while there is overflow;
+  in the output header the tab/icon row shrinks by the bar's height so the
+  selected tab's underline never touches it. The output header scrolls
+  horizontally (mouse wheel); the collapse chevron stays pinned outside the
+  scrolling row.
+- Look (JetBrains tool-window style): flat header — plain-text tabs with an
+  accent underline on the selected one, flat action icons on the right (no
+  boxed group), a separator line above the content.
+- The command box and the output panel sit inside the same frame
+  (`QWidget#panelCard`: 1px border + `radiusMd` token, rule in
+  `app-stylesheet.cpp`); only the border/surroundings are shared, each
+  keeps its own interior color.
 - ANSI colors are rendered in Output; printed `http(s)://` URLs are
   detected, underlined, and clickable (opens in the system's default
   browser).

@@ -1,0 +1,25 @@
+<h2>O painel de Saída</h2>
+<p>O painel mostra, ao vivo, o que o comando selecionado imprimiu. Fica embaixo por padrão; <b>Configurações → Layout</b> pode movê-lo para a esquerda ou a direita, e <b>Configurações → Geral</b> pode recolhê-lo ao selecionar uma pasta.</p>
+<h3>Abas</h3>
+<ul>
+<li><b>Saída</b> — o stdout/stderr do comando, com cores ANSI.</li>
+<li>Em comandos HTTP também <b>Resposta</b> (uma árvore JSON navegável), <b>Headers</b> e <b>Requisição</b> (exatamente o que foi enviado) — veja <a href='help://commands_http'>Comandos HTTP</a>.</li>
+<li>Comandos <a href='help://kip'>KIP</a> trocam as abas pela tela própria deles.</li>
+</ul>
+<p>O cabeçalho mostra o comando e o estado: <i>parado</i>, <i>rodando</i>, <i>concluído</i> ou <i>erro</i>.</p>
+<h3>Responder um comando em execução</h3>
+<p>O campo embaixo envia texto para a entrada do comando — para prompts de <code>read</code>, confirmações, um REPL. Clique nele ou aperte <b>Ctrl+'</b> para focar (e de novo para voltar à árvore). As <a href='help://responders'>auto-respostas</a> podem fazer isso por você.</p>
+<h3>Busca e opções de exibição</h3>
+<ul>
+<li><b>Buscar na saída</b> (lupa) procura texto no log.</li>
+<li>O menu de <b>opções de exibição</b> tem: Rolagem automática, Números de linha, Timestamps, Quebrar linhas longas (só visual), <b>Saída compacta</b> (colapsa linhas em branco repetidas e apara espaços no fim), Aumentar/Diminuir fonte, Copiar tudo, <b>Exportar para arquivo…</b> e Limpar saída.</li>
+<li>Saídas grandes são limitadas por comando: <b>Configurações → Geral → Tamanho máximo do log por comando</b>.</li>
+</ul>
+<h3>Outras formas de ver a saída</h3>
+<table>
+<tr><td><b>Terminal interativo</b></td><td>uma grade de terminal de verdade para <code>vim</code>, <code>htop</code>, <code>less</code>, um Claude Code aninhado. Ligue nas configurações avançadas do comando.</td></tr>
+<tr><td><b>Saída formatada</b></td><td>cada linha que é um registro de log JSON (nível, mensagem, timestamp) vira um cartão recolhível com selo de nível; as outras linhas ficam como texto. A busca pode filtrar por <i>nível</i>, e o Kai pode <a href='help://notifications'>notificar</a> na primeira linha ERROR.</td></tr>
+<tr><td><b>Renderizar como Markdown</b></td><td>renderiza a saída acumulada como Markdown (títulos, listas, links, código), com rolagem e busca. Tem prioridade sobre a Saída formatada.</td></tr>
+</table>
+<h3>Destacar numa janela</h3>
+<p>O botão de destacar abre o painel numa janela própria, com as mesmas abas e o mesmo tema, para manter um log longo ao lado do editor. Pelo terminal, <code>kai -gw &lt;caminho&gt;</code> roda um comando e abre a janela dele (veja <a href='help://cli'>CLI</a>).</p>

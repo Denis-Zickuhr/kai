@@ -59,7 +59,7 @@ private slots:
         cmd.id = QStringLiteral("c_1");
         cmd.folderId = QStringLiteral("f_1");
         cmd.name = QStringLiteral("Build");
-        cmd.type = CommandType::Shell;
+        cmd.type = CommandType::Command;
         cmd.command = QStringLiteral("make release");
 
         CommandJsonEditorDialog dialog(&cmd, QStringLiteral("f_1"), nullptr);

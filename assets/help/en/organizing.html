@@ -1,0 +1,23 @@
+<h2>Folders, tree &amp; search</h2>
+<h3>Folders and commands</h3>
+<p>Commands live inside <b>folders</b>. Each top-level folder becomes a <b>tab</b>; subfolders nest inside it. Create things from the <b>Item</b> menu, the side bar or the right-click menu: <b>New Folder</b>, <b>New Command</b>, <b>New Collection</b> (see <a href='help://collections'>Collections</a>).</p>
+<p>A folder can carry its own settings: name, icon, parent folder, the <a href='help://terminal_targets'>execution profile</a> its commands inherit, its own <a href='help://variables'>variables</a> and a <a href='help://cli'>CLI path</a>. A project imported from a <a href='help://kai_json'>kai.json</a> becomes a folder whose path is available as <code>{{PROJECT_PATH}}</code>.</p>
+<h3>The right-click menu</h3>
+<p>On a command: <b>Edit</b>, <b>Duplicate</b>, <b>Delete</b>. On a folder: the same, plus <b>Hide / Show Folder</b>. The same menu opens from the keyboard (<b>Ins</b> by default). <b>Run</b>, <b>Stop</b> (terminate), <b>Force stop</b> and <b>Reset and restart</b> are in the action side bar.</p>
+<h3>Search</h3>
+<p><b>Ctrl+F</b> shows the search bar; it filters commands by name with a fuzzy match (typos and gaps are fine). Press it again to hide.</p>
+<h3>Order, hiding and filtering</h3>
+<ul>
+<li><b>Order:</b> the command editor has an <b>Order</b> field. Lower numbers come first; <i>automatic</i> sorts by name.</li>
+<li><b>Hide:</b> hidden items leave the tree until <b>Show hidden items</b> is on. Hide a command from its editor or a folder from the menu.</li>
+<li><b>Show only running commands:</b> a quick filter for what is running right now.</li>
+<li><b>Expand / collapse</b> the selected folder or everything.</li>
+</ul>
+<h3>Editing</h3>
+<ul>
+<li>Every editor has a <b>Simple</b> and an <b>Advanced (JSON)</b> mode; <b>Ctrl+E</b> switches an open editor.</li>
+<li><b>Edit body (quick)</b> in the side bar opens just the body of an HTTP command.</li>
+<li>Icons come from the built-in set or any image file you pick.</li>
+<li><b>Duplicate</b> copies a command, a folder or a collection.</li>
+</ul>
+<div class='tip'>Every action here has a keyboard shortcut you can change — see <a href='help://shortcuts'>Keyboard shortcuts</a>. <b>Settings → Storage</b> lists, duplicates and deletes many items at once.</div>

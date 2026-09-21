@@ -1,8 +1,33 @@
 #pragma once
 
+#include "core/config-manager.h"
+
 #include <QStringList>
 
+#include <optional>
+
 namespace kai::cli {
+
+// Flags do CLI, sempre ANTES do caminho. Curtas combinam (-gdn):
+//   -g/--global   caminhos do app mesmo com kai.json/kai.yml na pasta
+//   -d/--detached dispara e devolve o terminal
+//   -n/--notify   notificação na bandeja quando o comando terminar
+//   -w/--window   abre a saída numa janela própria (desacoplada) do app;
+//                 só vale com comandos do app (-g)
+//   --dry-run     mostra o que seria executado (template renderizado,
+//                 diretório, alvo, hooks) sem executar
+//   --json        listagem/--dry-run em JSON, pra scripts
+// A palavra solta "global" NÃO é aceita (pedido do usuário: só por flag).
+struct CliFlags {
+    bool global = false;
+    bool detached = false;
+    bool notify = false;
+    bool window = false;
+    bool dryRun = false;
+    bool json = false;
+
+    bool any() const { return global || detached || notify || window || dryRun || json; }
+};
 
 struct LocalExecutionOutcome {
     // true = reconhecemos isto como uma tentativa de CLI Path LOCAL (havia
@@ -34,7 +59,7 @@ struct LocalExecutionOutcome {
 // chama só precisa dar `return outcome.exitCode;` na sequência, nunca
 // `app.exec()`.
 // ============================================================================
-LocalExecutionOutcome runLocalCliPath(const QStringList &args);
+LocalExecutionOutcome runLocalCliPath(const QStringList &args, const CliFlags &flags = CliFlags());
 
 // Checagem BARATA e SEM QCoreApplication nenhuma (só QDir/QFile — funciona
 // antes de qualquer app Qt existir no processo): true quando `args` parece
@@ -46,6 +71,9 @@ LocalExecutionOutcome runLocalCliPath(const QStringList &args);
 // (QCoreApplication vs QApplication) ANTES de construir qualquer uma das
 // duas, então esta checagem tem que ser separada e vir primeiro.
 bool looksLikeLocalCliPathAttempt(const QStringList &args);
+
+// Há kai.json/kai.yml/kai.yaml no diretório atual.
+bool hasLocalKaiFile();
 
 // ============================================================================
 // MODO GLOBAL de CLI Paths — pedido do usuário: "se a gente for rodar o kai
@@ -59,7 +87,7 @@ bool looksLikeLocalCliPathAttempt(const QStringList &args);
 // configurados em QUALQUER pasta do app (só os marcados com cli_path
 // aparecem — nunca por nome puro, como no `kai run`).
 // ============================================================================
-LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args);
+LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args, const CliFlags &flags = CliFlags());
 
 // Mesmo espírito de looksLikeLocalCliPathAttempt, mas pro modo GLOBAL:
 // terminal interativo de verdade (nunca intercepta o launcher/ícone) e o
@@ -67,5 +95,24 @@ LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args);
 // depende de nenhum arquivo existir — main() só chama isto DEPOIS de
 // looksLikeLocalCliPathAttempt falhar (sem kai.json/kai.yml local).
 bool looksLikeGlobalCliPathAttempt(const QStringList &args);
+
+// Consome as flags do início de `args` (args[0] = executável, preservado) e
+// devolve o resto. Para no primeiro token que não é flag.
+QStringList stripLeadingCliFlags(const QStringList &args, CliFlags &flags);
+
+// kai.exe (Windows) chamado a partir de uma pasta do WSL via interop: o cwd
+// chega como \\wsl.localhost\<distro>\... (ou \\wsl$\...). Nesse caso o
+// modo LOCAL roda o comando DENTRO dessa mesma distro — exatamente o que um
+// kai nativo do Linux rodando ali faria — em vez do cmd.exe, onde comandos
+// Linux ("docker", "./release.sh") nem existem. Devolve o alvo de terminal
+// sintético (padrão, sabor Posix) que faz essa ponte; nullopt para qualquer
+// cwd que não seja UNC do WSL. Lógica pura (testável em qualquer SO); só é
+// APLICADA no Windows.
+std::optional<core::TerminalProfile> localWslBridgeProfile(const QString &cwd);
+
+// Árvore de CLI do kai.json/kai.yml do diretório `directoryPath` (mesma
+// leitura do modo local). false se não há arquivo ou ele não pôde ser lido.
+bool loadLocalCliTree(const QString &directoryPath, QVector<core::Folder> &folders,
+                      QVector<core::Command> &commands);
 
 } // namespace kai::cli

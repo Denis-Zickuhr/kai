@@ -14,6 +14,8 @@
 #include "engine/http-runner.h"
 #include "ui/features/output/output-panel.h"
 
+namespace kai::engine { class KipSession; }
+
 namespace kai::ui {
 
 class OutputPanel;
@@ -77,6 +79,13 @@ public:
     // posição nova.
     void setDrawerPosition(DrawerPosition position);
 
+    // Altura das barras do painel (cabeçalho/rodapé), ver OutputPanel::setBarHeight.
+    void setBarHeight(int height);
+
+    // Reaplica o recuo interno da moldura (depende do raio dos cantos, que o
+    // usuário pode trocar em runtime) e as contas de colapso.
+    void refreshFrameInset();
+
     // Anexa texto bruto (stdout/stderr de um processo), interpretando
     // sequências ANSI incrementalmente.
     void appendRawText(const QString &rawText, bool isError = false);
@@ -101,7 +110,7 @@ public:
     void focusInput();
 
     // Repassa o atalho que foca o campo de input (texto já formatado, ex:
-    // "Ctrl+`") para o placeholder convidativo do OutputPanel.
+    // "Ctrl+'") para o placeholder convidativo do OutputPanel.
     void setInputShortcutHint(const QString &shortcutText);
 
     // Define o nome do comando exibido no título do cabeçalho (ex:
@@ -117,6 +126,9 @@ public:
     // destacada (bug reportado: ela espelhava o comando SELECIONADO, porque
     // só refletia o buffer do painel embutido, que segue a seleção).
     bool hasDetachedWindow() const { return m_detachedWindow != nullptr; }
+    // Fecha a janela destacada SE ela mostra este comando (auto-fechar do KIP). A view
+    // volta ao painel embutido; o processo não é tocado.
+    void closeDetachedWindowFor(const QString &commandId);
     QString detachedCommandId() const { return m_detachedCommandId; }
     // Escreve DIRETO na janela destacada, sem passar pelo painel embutido.
     void appendToDetached(const QString &rawText, bool isError = false);
@@ -184,6 +196,24 @@ public:
     // pra ela espelhar).
     void setSkipped(bool skipped, const QString &reasonLabel = QString());
 
+    // --- KIP (spec 11 §13) --------------------------------------------------
+    // Liga a sessão KIP de `commandId` às views: ao painel embutido, se ele está
+    // conectado a esse comando, e à janela destacada, se ela é a desse comando.
+    // Com a janela destacada aberta para o comando, o painel embutido mostra o
+    // cartão "Rodando na própria janela" (só UMA view interativa por sessão).
+    void bindKipSession(const QString &commandId, engine::KipSession *session);
+    // Painel embutido sai do modo KIP (outro comando selecionado, painel limpo).
+    void clearKip();
+    bool kipMode() const;
+    OutputPanel *embeddedPanel() const { return m_panel; }
+    OutputPanel *detachedPanel() const { return m_detachedPanel; }
+    bool detachedWindowActive() const;
+
+    // Abre (ou traz à frente) a janela de saída desacoplada do comando
+    // conectado agora, com as preferências de tela do usuário. É o mesmo que
+    // o botão "destacar" do cabeçalho — usado também por `kai -w`.
+    void showDetachedOutput() { detachOutput(); }
+
     // Espelhos para a janela destacada (mantida fixa no comando de origem).
     void setDetachedHttpResult(const engine::HttpResult &result);
     void setDetachedStatus(ExecutionStatus status);
@@ -227,6 +257,12 @@ signals:
     // lá (setting "notificar no primeiro ERROR da saída formatada").
     void firstErrorInFormattedOutput();
 
+    // KIP: "Run again" (do painel embutido ou da janela destacada).
+    void kipRunAgainRequested(const QString &commandId);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     // Abre (ou traz para frente) a janela destacada — que agora é OUTRA
     // instância do MESMO OutputPanel, tornando o detach idêntico à saída
@@ -242,6 +278,10 @@ private:
     void applyCollapsedConstraints();
     void applyExpandedConstraints();
     void updateToggleIcon();
+    // Tamanho/estado inicial da janela destacada conforme as preferências de
+    // janela do usuário (tamanho fixo, maximizada, tela cheia ou "lembrar").
+    void showDetachedWindowPerPreference();
+    void rememberDetachedWindowSize();
 
 
     // Painel de saída v2 embutido (abas, badge, opções de exibição).
@@ -249,6 +289,7 @@ private:
     // Painel da janela destacada: mesma classe, mesma aparência.
     OutputPanel *m_detachedPanel = nullptr;
     QWidget *m_detachedWindow = nullptr;
+    QVBoxLayout *m_detachedCardLayout = nullptr; // recuo da moldura da janela destacada
 
     QToolButton *m_toggleButton = nullptr;
     QToolButton *m_detachButton = nullptr;

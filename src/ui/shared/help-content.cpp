@@ -5,6 +5,7 @@
 #include <QFile>
 
 #include "utils/asset-paths.h"
+#include "utils/design-tokens.h"
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
 
@@ -24,30 +25,8 @@ namespace {
 constexpr const char *kLogTag = "HelpContent";
 constexpr const char *kFallbackLanguage = "en";
 
-// A ORDEM aqui é a ordem de exibição na lista lateral da ajuda.
-const QStringList &topicIds()
-{
-    static const QStringList ids = {
-        QStringLiteral("overview"),
-        QStringLiteral("commands_shell"),
-        QStringLiteral("commands_http"),
-        QStringLiteral("variables"),
-        QStringLiteral("dynamic_vars"),
-        QStringLiteral("environments"),
-        QStringLiteral("hooks"),
-        QStringLiteral("collections"),
-        QStringLiteral("terminal_targets"),
-        QStringLiteral("import_curl"),
-        QStringLiteral("import_openapi"),
-        QStringLiteral("runs"),
-        QStringLiteral("cli"),
-        QStringLiteral("processes"),
-        QStringLiteral("shortcuts"),
-        QStringLiteral("kai_json"),
-        QStringLiteral("themes"),
-    };
-    return ids;
-}
+// Chave do grupo dos tópicos que não são arquivos HTML (manifestos e versão).
+constexpr const char *kReferenceGroup = "reference";
 
 // Mesma estratégia de resolução usada pelos pacotes de tradução e pelos temas:
 // tenta relativo ao executável instalado e cai para o diretório de trabalho,
@@ -109,23 +88,74 @@ QString styled(const QString &body)
         "pre { background: rgba(127,127,127,0.15); padding: 8px; border-radius: 6px; }"
         "code { background: rgba(127,127,127,0.15); padding: 1px 4px; border-radius: 4px; }"
         "table td { padding: 3px 10px 3px 0; vertical-align: top; }"
-        ".tip { border-left: 3px solid #8be9fd; padding-left: 10px; margin: 10px 0; }"
-        "</style>%1").arg(body);
+        ".tip { border-left: 3px solid %2; padding-left: 10px; margin: 10px 0; }"
+        "</style>%1").arg(body, utils::tokens::accent());
 }
 
 } // namespace
 
+// A ORDEM aqui é a ordem de exibição na lista lateral da ajuda: do primeiro
+// contato ao uso avançado, do que se faz ao que se configura. Um tópico novo
+// precisa de assets/help/{en,pt}/<id>.html e das chaves help.topic.<id>.title
+// e .keywords nos dois pacotes (test_help_i18n confere).
+const QVector<HelpTopicGroup> &helpTopicGroups()
+{
+    static const QVector<HelpTopicGroup> groups = {
+        {QStringLiteral("start"), {QStringLiteral("overview"), QStringLiteral("organizing")}},
+        {QStringLiteral("commands"),
+         {QStringLiteral("commands_shell"), QStringLiteral("languages"), QStringLiteral("commands_http"),
+          QStringLiteral("parameters"), QStringLiteral("collections"), QStringLiteral("responders"),
+          QStringLiteral("hooks"), QStringLiteral("scheduling")}},
+        {QStringLiteral("variables"),
+         {QStringLiteral("variables"), QStringLiteral("dynamic_vars"), QStringLiteral("environments")}},
+        {QStringLiteral("interfaces"), {QStringLiteral("kip"), QStringLiteral("output")}},
+        {QStringLiteral("monitor"),
+         {QStringLiteral("processes"), QStringLiteral("runs"), QStringLiteral("notifications")}},
+        {QStringLiteral("projects"),
+         {QStringLiteral("kai_json"), QStringLiteral("import_curl"), QStringLiteral("import_openapi"),
+          QStringLiteral("export_import")}},
+        {QStringLiteral("terminal"), {QStringLiteral("cli"), QStringLiteral("terminal_targets")}},
+        {QStringLiteral("customize"),
+         {QStringLiteral("settings"), QStringLiteral("shortcuts"), QStringLiteral("themes")}},
+    };
+    return groups;
+}
+
+QStringList helpTopicIds()
+{
+    QStringList ids;
+    for (const HelpTopicGroup &group : helpTopicGroups()) {
+        ids += group.ids;
+    }
+    return ids;
+}
+
 void HelpDialog::buildTopics()
 {
     m_topics.clear();
-    for (const QString &id : topicIds()) {
-        m_topics.append({
-            id,
-            utils::tr(QStringLiteral("help.topic.") + id + QStringLiteral(".title")),
-            utils::tr(QStringLiteral("help.topic.") + id + QStringLiteral(".keywords")),
-            styled(topicBody(id)),
-        });
+    for (const HelpTopicGroup &group : helpTopicGroups()) {
+        for (const QString &id : group.ids) {
+            m_topics.append({
+                id,
+                group.key,
+                utils::tr(QStringLiteral("help.topic.") + id + QStringLiteral(".title")),
+                utils::tr(QStringLiteral("help.topic.") + id + QStringLiteral(".keywords")),
+                styled(topicBody(id)),
+            });
+        }
     }
+
+    // Tópico MANIFESTOS PARA IA: a página dele é um widget (botões de copiar), não
+    // um HTML; o texto abaixo só alimenta a busca. Fica fora de topicIds() como a versão.
+    m_topics.append({
+        QStringLiteral("ai_manifestos"),
+        QLatin1String(kReferenceGroup),
+        utils::tr(QStringLiteral("help.topic.ai_manifestos.title")),
+        utils::tr(QStringLiteral("help.topic.ai_manifestos.keywords")),
+        styled(QStringLiteral("<h2>%1</h2><p>%2</p>")
+                   .arg(utils::tr(QStringLiteral("help.topic.ai_manifestos.title")),
+                        utils::tr(QStringLiteral("help.manifestos.intro")))),
+    });
 
     // Tópico VERSÃO (pedido do usuário: aba mostrando a versão do build). É
     // tratado SEPARADAMENTE dos demais porque seu conteúdo é DINÂMICO (gerado
@@ -152,6 +182,7 @@ void HelpDialog::buildTopics()
              QString::fromLatin1(__DATE__));
     m_topics.append({
         QStringLiteral("version"),
+        QLatin1String(kReferenceGroup),
         utils::tr(QStringLiteral("help.topic.version.title")),
         utils::tr(QStringLiteral("help.topic.version.keywords")),
         styled(versionBody),

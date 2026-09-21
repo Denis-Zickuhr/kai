@@ -1,6 +1,7 @@
 #include "core/kai-file-validator.h"
 #include "core/cli-reserved-verbs.h"
 #include "core/yaml-bridge.h"
+#include "utils/cron-expression.h"
 #include "utils/translation-manager.h"
 
 #include <QJsonArray>
@@ -170,15 +171,108 @@ const QSet<QString> &commandKeys()
         QStringLiteral("hidden"), QStringLiteral("hide_on_run"), QStringLiteral("capture_env"),
         QStringLiteral("declared_env_vars"), QStringLiteral("open_last_link"),
         QStringLiteral("interactive_terminal"), QStringLiteral("formatted_output"),
-        QStringLiteral("render_markdown"),
+        QStringLiteral("render_markdown"), QStringLiteral("kip"), QStringLiteral("kip_window"),
+        QStringLiteral("kip_auto_close"), QStringLiteral("kip_auto_close_delay_sec"),
         QStringLiteral("terminal_target"), QStringLiteral("compact_output"),
         QStringLiteral("ignore_exit_code"), QStringLiteral("auto_run"),
         QStringLiteral("auto_run_delay_sec"), QStringLiteral("order"), QStringLiteral("params"),
         QStringLiteral("responders"), QStringLiteral("execution_conditions"),
         QStringLiteral("condition_combinator"), QStringLiteral("condition_skip_behavior"),
         QStringLiteral("hooks"), QStringLiteral("id"), QStringLiteral("cli_path"),
+        QStringLiteral("language"), QStringLiteral("interpreter"),
+        QStringLiteral("cron_expression"), QStringLiteral("cron_notify_on_run"),
     };
     return keys;
+}
+
+// "shell" é o nome anterior de "command" e continua válido.
+bool isCommandType(const QString &type)
+{
+    return type == QStringLiteral("command") || type == QStringLiteral("shell");
+}
+
+// Recursos que competem com a sessão KIP (spec 11 §15): com "kip": true eles
+// são ignorados em runtime — o validador avisa quem escreveu o arquivo à mão.
+void validateKipCompatibility(ValidationResult &result, const QJsonObject &obj, const QString &path,
+                              const QString &type)
+{
+    if (!obj.value(QStringLiteral("kip")).toBool(false)) {
+        if (obj.value(QStringLiteral("kip_window")).toBool(false)) {
+            addWarning(result, path, utils::tr(QStringLiteral("validate.warning.kip_window_without_kip")));
+        }
+        if (obj.value(QStringLiteral("kip_auto_close")).toBool(false)) {
+            addWarning(result, path, utils::tr(QStringLiteral("validate.warning.kip_auto_close_without_kip")));
+        }
+        return;
+    }
+    if (!type.isEmpty() && !isCommandType(type)) {
+        addWarning(result, path, utils::tr(QStringLiteral("validate.warning.kip_shell_only")));
+        return;
+    }
+    static const QStringList incompatibleFlags = {
+        QStringLiteral("interactive_terminal"), QStringLiteral("formatted_output"),
+        QStringLiteral("render_markdown"), QStringLiteral("compact_output"),
+        QStringLiteral("open_last_link"), QStringLiteral("capture_env"),
+        QStringLiteral("is_background"), QStringLiteral("auto_run"),
+    };
+    for (const QString &key : incompatibleFlags) {
+        if (obj.value(key).toBool(false)) {
+            addWarning(result, path, utils::tr(QStringLiteral("validate.warning.kip_incompatible")).arg(key));
+        }
+    }
+    if (!obj.value(QStringLiteral("cron_expression")).toString().trimmed().isEmpty()) {
+        addWarning(result, path,
+            utils::tr(QStringLiteral("validate.warning.kip_incompatible")).arg(QStringLiteral("cron_expression")));
+    }
+    if (!obj.value(QStringLiteral("responders")).toArray().isEmpty()) {
+        addWarning(result, path,
+            utils::tr(QStringLiteral("validate.warning.kip_incompatible")).arg(QStringLiteral("responders")));
+    }
+}
+
+// Um comando KIP não pode ser hook de outro (o pipeline recusa): avisa na
+// referência por nome, que é como o kai.json declara hooks.
+void validateKipHookReferences(ValidationResult &result, const QJsonArray &commands)
+{
+    QSet<QString> kipNames;
+    for (const QJsonValue &v : commands) {
+        const QJsonObject c = v.toObject();
+        if (c.value(QStringLiteral("kip")).toBool(false)
+            && isCommandType(c.value(QStringLiteral("type")).toString())) {
+            kipNames.insert(c.value(QStringLiteral("name")).toString());
+        }
+    }
+    if (kipNames.isEmpty()) {
+        return;
+    }
+    for (int i = 0; i < commands.size(); ++i) {
+        const QJsonObject hooks = commands.at(i).toObject().value(QStringLiteral("hooks")).toObject();
+        for (const QString &stage : {QStringLiteral("pre"), QStringLiteral("post"), QStringLiteral("cleanup")}) {
+            for (const QJsonValue &name : hooks.value(stage).toArray()) {
+                if (kipNames.contains(name.toString())) {
+                    addWarning(result, QStringLiteral("commands[%1].hooks.%2").arg(i).arg(stage),
+                        utils::tr(QStringLiteral("validate.warning.kip_as_hook")).arg(name.toString()));
+                }
+            }
+        }
+    }
+}
+
+// `language` e o que só faz sentido com ele (command types apenas).
+void validateLanguage(ValidationResult &result, const QJsonObject &obj, const QString &path)
+{
+    requireEnum(result, obj, path, QStringLiteral("language"),
+        {QStringLiteral("native"), QStringLiteral("python"), QStringLiteral("node")});
+    const QString language = obj.value(QStringLiteral("language")).toString(QStringLiteral("native"));
+    if (language == QStringLiteral("native")) {
+        if (!obj.value(QStringLiteral("interpreter")).toString().trimmed().isEmpty()) {
+            addWarning(result, path, utils::tr(QStringLiteral("validate.warning.interpreter_without_language")));
+        }
+        return;
+    }
+    if (obj.value(QStringLiteral("capture_env")).toBool(false)) {
+        addWarning(result, path, utils::tr(QStringLiteral("validate.warning.language_capture_env")));
+    }
 }
 
 void validateCommand(ValidationResult &result, const QJsonValue &value, const QString &path)
@@ -194,10 +288,11 @@ void validateCommand(ValidationResult &result, const QJsonValue &value, const QS
     QString type;
     requireString(result, obj, path, QStringLiteral("type"), true, &type);
     requireEnum(result, obj, path, QStringLiteral("type"),
-        {QStringLiteral("shell"), QStringLiteral("http")});
+        {QStringLiteral("command"), QStringLiteral("shell"), QStringLiteral("http")});
 
-    if (type == QStringLiteral("shell")) {
+    if (isCommandType(type)) {
         requireString(result, obj, path, QStringLiteral("command"), true);
+        validateLanguage(result, obj, path);
     } else if (type == QStringLiteral("http")) {
         const QJsonValue httpConfig = obj.value(QStringLiteral("http_config"));
         if (!httpConfig.isObject()) {
@@ -210,6 +305,17 @@ void validateCommand(ValidationResult &result, const QJsonValue &value, const QS
             requireEnum(result, httpObj, httpPath, QStringLiteral("method"),
                 {QStringLiteral("GET"), QStringLiteral("POST"), QStringLiteral("PUT"),
                  QStringLiteral("PATCH"), QStringLiteral("DELETE")});
+        }
+    }
+
+    validateKipCompatibility(result, obj, path, type);
+
+    // Um cron inválido nunca dispara: avisa em vez de falhar em silêncio.
+    const QString cron = obj.value(QStringLiteral("cron_expression")).toString().trimmed();
+    if (!cron.isEmpty()) {
+        const utils::CronExpression parsed = utils::CronExpression::parse(cron);
+        if (!parsed.valid) {
+            addWarning(result, path, utils::tr(QStringLiteral("validate.warning.invalid_cron")).arg(parsed.error));
         }
     }
 
@@ -238,7 +344,7 @@ const QSet<QString> &folderKeys()
         QStringLiteral("path"), QStringLiteral("name"), QStringLiteral("icon"),
         QStringLiteral("hidden"), QStringLiteral("is_project"), QStringLiteral("order"),
         QStringLiteral("terminal_target"), QStringLiteral("env_vars"), QStringLiteral("id"),
-        QStringLiteral("parent_id"), QStringLiteral("cli_path"),
+        QStringLiteral("parent_id"), QStringLiteral("cli_path"), QStringLiteral("cli_description"),
     };
     return keys;
 }
@@ -332,7 +438,7 @@ const QSet<QString> &topLevelKeys()
         QStringLiteral("settings"), QStringLiteral("folders"), QStringLiteral("commands"),
         QStringLiteral("collections"), QStringLiteral("terminal_profiles"),
         QStringLiteral("shortcuts"), QStringLiteral("dynamic_vars"), QStringLiteral("id"),
-        QStringLiteral("name"), QStringLiteral("cli_path"),
+        QStringLiteral("name"), QStringLiteral("cli_path"), QStringLiteral("cli_description"),
     };
     return keys;
 }
@@ -525,6 +631,7 @@ ValidationResult validateKaiFileText(const QString &text)
             for (int i = 0; i < arr.size(); ++i) {
                 validateCommand(result, arr.at(i), QStringLiteral("commands[%1]").arg(i));
             }
+            validateKipHookReferences(result, arr);
         }
     }
 

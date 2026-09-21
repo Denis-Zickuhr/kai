@@ -14,7 +14,7 @@ struct RunRecord {
     QString id;            // uuid do run
     QString commandId;     // id do comando executado
     QString commandName;   // nome no momento da execução (denormalizado)
-    QString commandType;   // "shell" | "http"
+    QString commandType;   // "command" | "http" (registros antigos: "shell")
     QDateTime startedAt;
     qint64 durationMs = 0;
     bool success = false;

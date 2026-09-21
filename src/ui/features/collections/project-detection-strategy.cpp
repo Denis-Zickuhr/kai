@@ -27,7 +27,7 @@ QVector<DetectedCommand> commandsFromScriptsObject(const QJsonObject &scripts,
         }
         core::Command cmd;
         cmd.name = it.key();
-        cmd.type = core::CommandType::Shell;
+        cmd.type = core::CommandType::Command;
         cmd.command = QStringLiteral("%1 %2").arg(runnerPrefix, it.key());
         out.append(DetectedCommand{groupName, cmd});
     }
@@ -125,21 +125,21 @@ public:
         QVector<DetectedCommand> out;
         core::Command up;
         up.name = QStringLiteral("Subir tudo (docker compose up)");
-        up.type = core::CommandType::Shell;
+        up.type = core::CommandType::Command;
         up.command = QStringLiteral("docker compose up -d");
         up.isBackground = true; // sobe serviços de longa duração, não bloqueia
         out.append(DetectedCommand{name(), up});
 
         core::Command down;
         down.name = QStringLiteral("Parar tudo (docker compose down)");
-        down.type = core::CommandType::Shell;
+        down.type = core::CommandType::Command;
         down.command = QStringLiteral("docker compose down");
         out.append(DetectedCommand{name(), down});
 
         for (const QString &service : services) {
             core::Command logs;
             logs.name = QStringLiteral("Ver logs — %1").arg(service);
-            logs.type = core::CommandType::Shell;
+            logs.type = core::CommandType::Command;
             logs.command = QStringLiteral("docker compose logs -f %1").arg(service);
             logs.interactiveTerminal = true; // stream contínuo de logs
             out.append(DetectedCommand{name(), logs});
@@ -233,7 +233,7 @@ public:
         auto add = [&](const QString &cmdName, const QString &script) {
             core::Command cmd;
             cmd.name = cmdName;
-            cmd.type = core::CommandType::Shell;
+            cmd.type = core::CommandType::Command;
             cmd.command = script;
             out.append(DetectedCommand{name(), cmd});
         };
@@ -280,7 +280,7 @@ public:
         QVector<DetectedCommand> out;
         core::Command install;
         install.name = QStringLiteral("Instalar dependências (Composer)");
-        install.type = core::CommandType::Shell;
+        install.type = core::CommandType::Command;
         install.command = QStringLiteral("composer install");
         out.append(DetectedCommand{name(), install});
 
@@ -329,7 +329,7 @@ public:
             seen.insert(target);
             core::Command cmd;
             cmd.name = target;
-            cmd.type = core::CommandType::Shell;
+            cmd.type = core::CommandType::Command;
             cmd.command = QStringLiteral("make %1").arg(target);
             out.append(DetectedCommand{name(), cmd});
         }

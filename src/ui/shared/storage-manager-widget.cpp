@@ -299,7 +299,7 @@ QVector<StorageManagerWidget::RowInfo> StorageManagerWidget::collectRows() const
             RowInfo row;
             row.id = c.id;
             row.name = c.name;
-            if (c.type == core::CommandType::Shell) {
+            if (c.type == core::CommandType::Command) {
                 row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.shell"));
                 row.typeBadgeColor = utils::tokens::accent();
             } else {

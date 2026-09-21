@@ -1514,6 +1514,7 @@ private slots:
         }
         QVERIFY2(!loggedAsError, "exit code != 0 com ignoreExitCode não deveria logar como erro");
     }
+
 };
 
 QTEST_MAIN(TestExecutionPipeline)

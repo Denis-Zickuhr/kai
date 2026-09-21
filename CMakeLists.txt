@@ -108,6 +108,8 @@ add_library(kai-core STATIC
     src/utils/theme-manager.cpp
     src/utils/translation-manager.h
     src/utils/translation-manager.cpp
+    src/utils/cron-expression.h
+    src/utils/cron-expression.cpp
 )
 
 target_include_directories(kai-core PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -125,6 +127,8 @@ add_library(kai-engine STATIC
     src/engine/execution-pipeline.cpp
     src/engine/output-responder-matcher.h
     src/engine/output-responder-matcher.cpp
+    src/engine/cron-scheduler.h
+    src/engine/cron-scheduler.cpp
 )
 
 target_include_directories(kai-engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -156,6 +160,18 @@ add_library(kai-ui STATIC
     src/ui/features/output/code-output-view.cpp
     src/ui/features/output/output-panel.h
     src/ui/features/output/output-panel.cpp
+    src/ui/features/output/aba-content.h
+    src/ui/features/output/aba-content.cpp
+    src/ui/features/output/output-metrics-header.h
+    src/ui/features/output/output-metrics-header.cpp
+    src/ui/features/output/output-stdout-content.h
+    src/ui/features/output/output-stdout-content.cpp
+    src/ui/features/output/output-json-content.h
+    src/ui/features/output/output-json-content.cpp
+    src/ui/features/output/output-http-request-content.h
+    src/ui/features/output/output-http-request-content.cpp
+    src/ui/features/output/output-http-headers-content.h
+    src/ui/features/output/output-http-headers-content.cpp
     src/ui/features/output/pty-terminal-widget.h
     src/ui/features/output/pty-terminal-widget.cpp
     src/ui/shared/inline-code-field.h
@@ -164,6 +180,12 @@ add_library(kai-ui STATIC
     src/ui/features/output/ansi-text-parser.cpp
     src/ui/shared/fuzzy-search.h
     src/ui/shared/fuzzy-search.cpp
+    src/ui/shared/flow-layout.h
+    src/ui/shared/flow-layout.cpp
+    src/ui/shared/collection-chip-picker.h
+    src/ui/shared/collection-chip-picker.cpp
+    src/ui/shared/folder-picker-widget.h
+    src/ui/shared/folder-picker-widget.cpp
     src/ui/features/environments/env-var-autocomplete.h
     src/ui/features/environments/env-var-autocomplete.cpp
     src/ui/features/output/terminal-drawer.h
@@ -205,6 +227,15 @@ add_library(kai-ui STATIC
     src/ui/features/collections/folder-delete-dialog.cpp
     src/ui/features/command-editor/command-editor-dialog.h
     src/ui/features/command-editor/command-editor-dialog.cpp
+    src/ui/features/command-editor/tabs/general-tab.cpp
+    src/ui/features/command-editor/tabs/configuration-tab.cpp
+    src/ui/features/command-editor/tabs/headers-tab.cpp
+    src/ui/features/command-editor/tabs/extractors-tab.cpp
+    src/ui/features/command-editor/tabs/declared-env-vars-tab.cpp
+    src/ui/features/command-editor/tabs/params-tab.cpp
+    src/ui/features/command-editor/tabs/responders-tab.cpp
+    src/ui/features/command-editor/tabs/conditions-tab.cpp
+    src/ui/features/command-editor/tabs/hooks-tab.cpp
     src/ui/features/command-editor/command-json-editor-dialog.h
     src/ui/features/command-editor/command-json-editor-dialog.cpp
     src/ui/shared/top-utility-bar.h

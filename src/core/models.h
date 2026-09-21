@@ -506,6 +506,24 @@ struct Command {
     // parâmetro, valor = último valor informado.
     QMap<QString, QString> lastParamValues;
 
+    // AGENDAMENTO CRON (Módulo Cron Scheduler): quando preenchido, o
+    // scheduler interpreta esta expressão e dispara o comando pela pipeline
+    // normal no horário correspondente — mesmo espírito de autoRun, mas
+    // recorrente em vez de "uma vez no boot". Vazio = sem agendamento
+    // (comportamento atual, sem mudança). Só relevante para
+    // CommandType::Shell.
+    QString cronExpression;
+
+    // NOTIFICAR EXECUÇÃO CRON: independente do agendamento em si — permite
+    // ter uma expressão cron configurada sem gerar notificação a cada
+    // disparo (default false, mesmo espírito opt-in de
+    // notifyOnBackgroundProcessSuccess). Quando true, cada disparo do
+    // scheduler gera notificação (respeitando o master switch global
+    // notificationsEnabled para o TOAST — ver seção de notificações do Cron
+    // Scheduler) com o resultado; o output do comando fica disponível por
+    // hover/expansão no histórico.
+    bool cronNotifyOnRun = false;
+
     // Histórico de uso de valores por parâmetro (feedback do usuário:
     // ordenar as opções de um Select pelas mais usadas recentemente).
     // Chave = nome do parâmetro; valor = lista de valores em ordem de uso,
@@ -690,6 +708,41 @@ struct Collection {
 
     QJsonObject toJson() const;
     static Collection fromJson(const QJsonObject &obj);
+};
+
+// Resolve qual campo desta coleção usar como TEXTO DE EXIBIÇÃO de uma
+// entrada (chip, sugestão de busca, "__label" nos comandos) — usado em
+// mais de um lugar (parameter-form-dialog.cpp, main-window.cpp), então
+// centralizado aqui pra não divergir.
+//
+// Uma escolha EXPLÍCITA (`configured` não vazio e ainda existente no
+// schema) sempre vence, mesmo que seja um campo Key — o usuário pode ter
+// um motivo de verdade pra isso (ex: a "chave" já É um texto legível tipo
+// um slug/username). O auto-fallback abaixo só entra quando NADA foi
+// configurado (ou o campo salvo não existe mais): evita Key por padrão
+// (preferindo Value, depois qualquer não-Key), já que a causa raiz do bug
+// original ("tava renderizando o id") era o EDITOR de parâmetros
+// pré-selecionar o PRIMEIRO campo do schema (Key, no schema padrão) SEM o
+// usuário perceber — corrigido na origem em parameter-editor-widget.cpp
+// (refreshDisplayFields), não aqui.
+//
+// Prioridade: 1) `configured`, se existir no schema (qualquer tipo);
+// 2) primeiro campo tipo Value; 3) primeiro campo que não seja Key;
+// 4) primeiro campo do schema, mesmo Key (pedido do usuário: "se não
+// houver campo Key, pega o primeiro campo da coleção pra exibir" — só
+// chega aqui quando NENHUM campo do schema escapa de ser Key).
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured);
+
+// Filtro de uma tela de seleção de Collection (busca + favoritos), salvo
+// POR COLEÇÃO (chave = Collection::id) em config — pedido do usuário: "os
+// filtros de coleções devem ser salvos, inclusive se exibe ou não
+// favoritos... na config mesmo, id -> config, não na coleção". Fica de
+// fora do collections.json de propósito (mesmo raciocínio de
+// dynamic-vars.json em ConfigManager: é estado de USO da UI, não dado
+// autorado da coleção).
+struct CollectionFilterState {
+    QString search;
+    bool favoritesOnly = false;
 };
 
 } // namespace kai::core

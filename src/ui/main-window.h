@@ -15,6 +15,7 @@
 #include "core/models.h"
 #include "engine/execution-pipeline.h"
 #include "engine/process-manager.h"
+#include "engine/cron-scheduler.h"
 #include "ui/features/command-editor/command-tree-widget.h"
 #include "ui/shared/expand-collapse-bar.h"
 #include "ui/shared/item-actions-bar.h"
@@ -205,7 +206,12 @@ private slots:
     void handleBackgroundProcessOutput(const QString &commandId, const QString &text, bool isError);
     void handleBackgroundProcessStatusChanged(const QString &commandId, engine::ProcessStatus status);
     void handleShowProcessListRequested();
-    void handleKillCommandRequested(const QString &commandId);
+    // `force`: false = encerramento GRACIOSO (SIGTERM -> timeout configurável
+    // -> SIGKILL, ver ProcessRunner::stop); true = encerramento IMEDIATO
+    // (SIGKILL direto, sem esperar nada, ver ProcessRunner::forceStop) —
+    // pedido do usuário: "Force" precisa ser um SIGKILL de verdade, distinto
+    // do "Parar" gracioso (antes os dois chamavam exatamente o mesmo caminho).
+    void handleKillCommandRequested(const QString &commandId, bool force = false);
     void handleResetCommandRequested(const QString &commandId);
     void handleTreeStructureChanged(const QVector<TreeNodePlacement> &placements);
     void toggleVisibility();
@@ -357,6 +363,7 @@ private:
     core::EnvironmentManager m_envManager;
     core::RunHistory m_runHistory;
     core::NotificationHistory m_notificationHistory;
+    engine::CronScheduler m_cronScheduler; // Etapa 4: agendador CRON
     QDateTime m_runStartedAt; // início da execução atual (para o histórico)
     core::CommandsData m_commandsData;
     QMap<QString, core::Command> m_commandsById;

@@ -20,12 +20,40 @@ class DraggableTreeWidget : public QTreeWidget {
 public:
     enum class ConnectorStyle { Native, None, Continuous };
 
-    explicit DraggableTreeWidget(QWidget *parent = nullptr) : QTreeWidget(parent) {}
+    explicit DraggableTreeWidget(QWidget *parent = nullptr) : QTreeWidget(parent)
+    {
+        setMouseTracking(true);
+    }
 
     void setIndicatorColor(const QColor &color) { m_indicatorColor = color; update(); }
 
     void setConnectorStyle(ConnectorStyle style) { m_connectorStyle = style; viewport()->update(); }
     void setConnectorLineColor(const QColor &color) { m_connectorLineColor = color; viewport()->update(); }
+
+    // Cores de fundo da LINHA INTEIRA (ver paintEvent): a árvore de
+    // comandos tem 2 colunas (nome/ícone e status), e todo estado nativo do
+    // Qt (normal/zebra, hover, seleção) é pintado por CÉLULA — a segunda
+    // coluna, vazia na maior parte do tempo, só entra no MESMO estado da
+    // primeira quando é seleção (SelectRows força as duas células a
+    // "selected" juntas); hover não tem equivalente — só a célula sob o
+    // cursor vira :hover — então a segunda coluna caía no fallback nativo
+    // (zebra da paleta) SÓ nela, repintando por cima do que pintássemos e
+    // reabrindo um vão (relatado como "bordinha" entre os comandos, e que
+    // voltava especificamente no hover). A solução: o QSS do item fica
+    // transparente em TODO estado (ver app-stylesheet.cpp/theme-manager.cpp,
+    // seletor "CommandTreeWidget QTreeWidget::item"), e este widget passa a
+    // ser o ÚNICO responsável pelo fundo — normal/zebra, hover e seleção —
+    // sempre cobrindo a LARGURA TOTAL do viewport (as duas colunas de uma
+    // vez), sem exceção.
+    void setRowColors(const QColor &baseColor, const QColor &stripeColor,
+                       const QColor &hoverColor, const QColor &selectedColor)
+    {
+        m_baseRowColor = baseColor;
+        m_stripeRowColor = stripeColor;
+        m_hoverRowColor = hoverColor;
+        m_selectedRowColor = selectedColor;
+        viewport()->update();
+    }
 
     void setCanAcceptChildrenPredicate(std::function<bool(QTreeWidgetItem *)> predicate)
     {
@@ -49,6 +77,7 @@ protected:
 
     void mouseMoveEvent(QMouseEvent *event) override
     {
+        updateHoveredItem(itemAt(event->pos()));
         if (!m_pressItem || !(event->buttons() & Qt::LeftButton)) {
             QTreeWidget::mouseMoveEvent(event);
             return;
@@ -61,6 +90,35 @@ protected:
             m_dragging = true;
         }
         updateIndicatorForPos(event->pos());
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        QTreeWidget::leaveEvent(event);
+        updateHoveredItem(nullptr);
+    }
+
+    // Tira o item "atual" (foco de teclado/clique) do estado
+    // State_HasFocus E o item sob o mouse do State_MouseOver ANTES do
+    // delegate/estilo nativo desenhar. Motivo: o Fusion (e temas
+    // derivados) não decide "o que desenhar no hover/foco" só a partir das
+    // propriedades CSS declaradas (background/border/outline/radius) — ele
+    // TAMBÉM desenha, por conta própria, uma cápsula/contorno arredondado
+    // de destaque sempre que o STATE do item tem State_MouseOver ou
+    // State_HasFocus, do tamanho do CONTEÚDO (ícone+texto), não da célula
+    // inteira — e nenhuma regra QSS em cima do `::item` consegue suprimir
+    // esse desenho específico (relatado repetidamente pelo usuário: cantos
+    // arredondados e largura curta reaparecendo no hover mesmo com todo o
+    // CSS já zerado). A única forma confiável de eliminar essa decoração
+    // nativa é o estilo NUNCA VER esses estados: zerando os bits aqui, o
+    // delegate/estilo sempre pinta como "item comum", e a ÚNICA coisa que
+    // marca hover/seleção/linha atual é o preenchimento manual, linha
+    // inteira, sem cantos, pintado em paintEvent (ver setRowColors).
+    void initViewItemOption(QStyleOptionViewItem *option) const override
+    {
+        QTreeWidget::initViewItemOption(option);
+        option->state &= ~QStyle::State_HasFocus;
+        option->state &= ~QStyle::State_MouseOver;
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override
@@ -90,6 +148,48 @@ protected:
 
     void paintEvent(QPaintEvent *event) override
     {
+        // Fundo de TODA linha visível pintado à mão, ANTES do conteúdo
+        // nativo (ícones, texto, indicador de status) — normal/zebra,
+        // hover e seleção, cobrindo sempre a largura TOTAL do viewport (as
+        // duas colunas de uma vez, sem vão entre elas — ver setRowColors).
+        // A prioridade visual é seleção > hover > zebra/base. `visibleRow`
+        // conta só linhas visíveis (não ocultas pelo filtro) na ordem de
+        // exibição, igual à contagem nativa do Qt para alternate-row.
+        if (m_baseRowColor.isValid() || m_stripeRowColor.isValid()
+            || m_hoverRowColor.isValid() || m_selectedRowColor.isValid()) {
+            QPainter bg(viewport());
+            QTreeWidgetItem *current = currentItem();
+            int visibleRow = 0;
+            std::function<void(QTreeWidgetItem *)> paintRow = [&](QTreeWidgetItem *item) {
+                if (item->isHidden()) {
+                    return;
+                }
+                const QRect r = visualItemRect(item);
+                if (r.isValid()) {
+                    QColor color;
+                    if (item == current) {
+                        color = m_selectedRowColor;
+                    } else if (item == m_hoveredItem) {
+                        color = m_hoverRowColor;
+                    } else {
+                        color = (visibleRow % 2 == 1) ? m_stripeRowColor : m_baseRowColor;
+                    }
+                    if (color.isValid()) {
+                        bg.fillRect(QRect(0, r.top(), viewport()->width(), r.height()), color);
+                    }
+                }
+                ++visibleRow;
+                if (item->isExpanded()) {
+                    for (int i = 0; i < item->childCount(); ++i) {
+                        paintRow(item->child(i));
+                    }
+                }
+            };
+            for (int i = 0; i < topLevelItemCount(); ++i) {
+                paintRow(topLevelItem(i));
+            }
+        }
+
         QTreeWidget::paintEvent(event);
         if (!m_hasIndicator) {
             return;
@@ -216,6 +316,15 @@ private:
         viewport()->update();
     }
 
+    void updateHoveredItem(QTreeWidgetItem *item)
+    {
+        if (item == m_hoveredItem) {
+            return;
+        }
+        m_hoveredItem = item;
+        viewport()->update();
+    }
+
     bool performMove(QTreeWidgetItem *source, QTreeWidgetItem *target, DropZone zone)
     {
         if (!source || !target || source == target) {
@@ -258,6 +367,11 @@ private:
     }
 
     QColor m_indicatorColor{189, 147, 249};
+    QTreeWidgetItem *m_hoveredItem = nullptr;
+    QColor m_baseRowColor;
+    QColor m_stripeRowColor;
+    QColor m_hoverRowColor;
+    QColor m_selectedRowColor;
     ConnectorStyle m_connectorStyle = ConnectorStyle::Native;
     QColor m_connectorLineColor{139, 233, 253}; // Alterado para um tom mais claro por padrão
     bool m_hasIndicator = false;

@@ -225,9 +225,10 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
     // leitura da lista sem molduras. Requer setAlternatingRowColors(true)
     // no QTreeWidget (feito em CommandTreeWidget::createTreeForRoot).
     qss += QStringLiteral(
-        "QTreeWidget, QListWidget, QTreeView, QListView { "
-        "alternate-background-color: %1; }\n")
-        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")));
+        "QTreeWidget, QListWidget, QTreeView, QListView, QTableWidget, QTableView { "
+        "alternate-background-color: %1; background-color: %2; }\n")
+        .arg(variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
+             variables.value(QStringLiteral("bg"), QStringLiteral("#282a36")));
 
     // Espaçamento e tipografia consolidados em um único bloco
     // ("ainda tá meio sem espaço os textos"). Regras
@@ -264,7 +265,13 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         // escuro (alt_bg), criando a separação visual do CopyQ.
         "QTabBar::tab:selected { background-color: %7; border-bottom: 2px solid %5; }\n"
         "QTabBar::tab:!selected { color: %6; }\n"
-        "QTabBar::tab:hover:!selected { background-color: %5; }\n"
+        // %2 (sel_bg), não %5 (accent_color): os ícones das abas (Projetos/
+        // Geral etc.) são recoloridos com accent_color (ver
+        // IconPickerWidget::iconForName) — um hover com fundo NA MESMA cor
+        // do ícone o deixava invisível (bug relatado: "hover na aba faz o
+        // ícone sumir"). sel_bg dá o mesmo destaque visual de hover sem
+        // colidir com a cor do ícone.
+        "QTabBar::tab:hover:!selected { background-color: %2; }\n"
         "QLabel { padding: 2px; background: transparent; border: none; }\n"
         "QComboBox { min-height: 24px; padding: 6px 10px; }\n"
         "QCheckBox { spacing: 8px; padding: 3px; }\n"

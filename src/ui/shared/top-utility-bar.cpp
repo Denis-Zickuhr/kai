@@ -64,6 +64,13 @@ QIcon renderWinIcon(WinIcon icon, const QColor &color)
 TopUtilityBar::TopUtilityBar(QWidget *parent)
     : QWidget(parent)
 {
+    // Necessário pro fundo em GRADIENTE (base "primary" do tema, ver
+    // app-stylesheet.cpp) realmente pintar aqui: um QWidget "puro" (não
+    // QFrame) só honra um qlineargradient() do QSS com este atributo —
+    // cor SÓLIDA já funcionava sem ele (o Fusion tem um atalho pra isso),
+    // mas gradiente exige o pipeline de pintura completo do estilo
+    // (relatado pelo usuário: "a main window está sem nenhum gradiente").
+    setAttribute(Qt::WA_StyledBackground, true);
     setupUi();
 }
 

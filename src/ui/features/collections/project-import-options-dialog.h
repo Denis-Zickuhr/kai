@@ -12,6 +12,8 @@ class QCheckBox;
 
 namespace kai::ui {
 
+class FolderPickerWidget;
+
 // Diálogo mostrado em "Arquivo → Importar Projeto" logo depois de escolher a
 // pasta no seletor nativo, ANTES de ler o kai.json (pedido do usuário: rodar
 // o Kai sob WSL/WSLg, o seletor nativo de pasta às vezes devolve um path
@@ -79,7 +81,7 @@ private:
     QLineEdit *m_directoryField = nullptr;
     QLineEdit *m_projectPathField = nullptr;
     QComboBox *m_formatField = nullptr;
-    QComboBox *m_parentFolderField = nullptr;
+    FolderPickerWidget *m_parentFolderField = nullptr;
     QCheckBox *m_detectGenericField = nullptr;
 };
 

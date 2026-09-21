@@ -34,6 +34,10 @@ public:
     // delegado ao próprio ProcessRunner).
     void stop(const QString &commandId);
 
+    // Encerramento IMEDIATO (botão "Forçar parada"): SIGKILL direto, sem
+    // esperar terminate — delegado a ProcessRunner::forceStop().
+    void forceStop(const QString &commandId);
+
     // Encerra E ESQUECE o processo: para o runner e REMOVE a entrada do
     // rastreamento. Diferente de stop(), que mantém a entrada (com status
     // Success/Error) para consulta posterior. Usado quando a sessão é

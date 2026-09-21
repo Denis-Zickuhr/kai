@@ -123,6 +123,18 @@ QWidget *ActionGroupContainer::createSeparator()
     return line;
 }
 
+int ActionGroupContainer::contentWidth() const
+{
+    if (m_pill) {
+        // +4px de respiro pro scrollbar vertical (ScrollBarAsNeeded), que
+        // some da largura do viewport quando os ícones não cabem na altura
+        // disponível — sem essa folga a pílula ficaria espremida bem no
+        // limite assim que a barra aparecesse.
+        return m_pill->sizeHint().width() + 4;
+    }
+    return sizeHint().width();
+}
+
 void ActionGroupContainer::refreshStyle()
 {
     const QString border = utils::tokens::borderColor();

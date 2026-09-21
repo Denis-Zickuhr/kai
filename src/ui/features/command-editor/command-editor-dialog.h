@@ -21,6 +21,7 @@ class QVBoxLayout;
 namespace kai::ui {
 
 class JsonSyntaxHighlighter;
+class FolderPickerWidget;
 
 class KeyValueEditorWidget;
 class ParameterEditorWidget;
@@ -106,15 +107,49 @@ private:
     // PROGRAMÁTICAS (carregar um comando HTTP existente, importar cURL).
     void setExecutionMode(bool isHttp);
     void populateFolderCombo(const QVector<core::Folder> &allFolders, const QString &selectedFolderId);
+
+    // --- Construção das abas do sidebar, uma por arquivo em tabs/ (pedido
+    // do usuário: "CADA aba dela deveria estar separada na própria pasta
+    // de tabs DELA") — cada método chama addNavPage() internamente e monta
+    // sua própria página; setupUi() só orquestra a ORDEM e o que sobra
+    // (autocomplete de {{var}}, população de um comando existente, botões
+    // de rodapé), que toca campos de VÁRIAS abas ao mesmo tempo e por isso
+    // continua aqui, não em nenhuma aba específica.
+    void buildGeneralTab();
     QWidget *buildShellTab();
     QWidget *buildHttpTab();
     // Aba 2 "Configuração" (pedido do usuário: era um popup "Configurações
     // Avançadas", virou aba do sidebar) — constrói CLI Path (sempre
-    // visível) + working dir/detalhamento/flags (Shell-only, agrupados em
-    // m_shellConfigContainer, escondido em HTTP por setExecutionMode).
-    void buildConfigurationTab(QVBoxLayout *pageLayout);
+    // visível) + working dir/detalhamento/seções por função (Shell-only,
+    // todas em m_shellConfigContainer, escondido em HTTP por
+    // setExecutionMode). As seções por função (Execução/Integração/
+    // Agendamento) já tiveram abas PRÓPRIAS num experimento anterior
+    // ("separar por funções em mais abas") — voltaram todas pra cá, como
+    // CollapsibleSectionCard dentro da mesma aba (pedido do usuário:
+    // "ficou abas demais... quebrar em menos abas de config", "essa aba
+    // não tem nexo se chamar agendamento... melhor tudo virar configuração
+    // numa aba mesmo").
+    void buildConfigurationTab();
+    void buildHeadersTab();
+    void buildExtractorsTab();
+    void buildDeclaredEnvVarsTab();
+    void buildParamsTab();
+    void buildRespondersTab();
+    void buildConditionsTab();
+    void buildHooksTab();
     void populateEnvExtractorsEditor(const QVector<core::EnvExtractor> &extractors);
     QVector<core::EnvExtractor> readEnvExtractors() const;
+
+    // Cria uma página nova no sidebar de abas (wrapper fino sobre
+    // addSidebarTabPage/dialog-utils.h usando m_sideNav/m_sidePages) —
+    // membro (em vez da lambda local de antes) para ser chamável de
+    // qualquer arquivo tabs/*.cpp.
+    QVBoxLayout *addNavPage(const QString &title, const QString &iconName);
+    // Atualiza o rótulo do item de nav com "(N)" quando a aba tem N>0
+    // itens (Headers/Extractors/Variáveis/Parâmetros/Auto-respostas/
+    // Condições/Hooks) — mesmo motivo do addNavPage acima: virou membro
+    // pra ser reaproveitado pelos arquivos tabs/*.cpp.
+    void bindNavItemCount(int navRow, const QString &baseTitle, int count);
 
     QString m_folderId;
     QString m_existingId;
@@ -142,7 +177,7 @@ private:
     // Campos comuns.
     QLineEdit *m_nameField = nullptr;
     QLineEdit *m_cliPathField = nullptr;
-    QComboBox *m_folderField = nullptr;
+    FolderPickerWidget *m_folderField = nullptr;
     IconPickerWidget *m_iconPicker = nullptr;
     QSpinBox *m_orderField = nullptr;
     HooksEditorWidget *m_hooksEditor = nullptr;
@@ -174,6 +209,10 @@ private:
     OutputRespondersEditorWidget *m_respondersEditor = nullptr;
     QCheckBox *m_autoRunField = nullptr;
     QSpinBox *m_autoRunDelayField = nullptr;
+    // CRON Scheduler (Etapa 5).
+    QLineEdit *m_cronExpressionField = nullptr;
+    QLabel *m_cronExpressionHintLabel = nullptr;
+    QCheckBox *m_cronNotifyOnRunField = nullptr;
     // Params originais do comando (preservados para reaplicar em
     // setAvailableCollections sem perder o collectionId escolhido, já que
     // setParameters roda no construtor antes das coleções chegarem).

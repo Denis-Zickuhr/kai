@@ -1,6 +1,6 @@
 {
   "name": "light",
-  "schema_version": 5,
+  "schema_version": 7,
   "variables": {
     "bg": "#f5f5f7",
     "alt_bg": "#ffffff",
@@ -19,7 +19,16 @@
     "notification_bg": "#eceaf3",
     "notification_fg": "#1c1c1e",
     "num_fg": "#0b6a6a",
-    "find_fg": "#8a6d00"
+    "find_fg": "#8a6d00",
+    "gradient_primary_start": "#f5f5f7",
+    "gradient_primary_end": "#ffffff",
+    "gradient_primary_angle": "160",
+    "gradient_secondary_start": "#ffffff",
+    "gradient_secondary_end": "#eadffc",
+    "gradient_secondary_angle": "135",
+    "gradient_tertiary_start": "#7c3aed",
+    "gradient_tertiary_end": "#fb7185",
+    "gradient_tertiary_angle": "135"
   },
   "components": {
     "main_window": "background: ${bg}; color: ${fg};",
@@ -36,7 +45,7 @@
     "tab_unselected": "border: 1px solid ${bg}; border-bottom: 2px solid ${bg - #111111}; padding: 0.5em; background: ${bg - #080808}; color: ${fg + #555555};",
     "search_bar": "background: ${edit_bg}; color: ${edit_fg}; border: 1px solid ${sel_bg}; margin: 2px;",
     "search_bar_focused": "border: 1px solid ${accent_color};",
-    "item_selected": "background: ${sel_bg}; color: ${sel_fg}; border-radius: 2px;",
+    "item_selected": "background: ${sel_bg}; color: ${sel_fg};",
     "notification": "background: ${notification_bg}; color: ${notification_fg};",
     "tooltip": "background: ${alt_bg}; color: ${fg}; border: 1px solid ${sel_bg};"
   }

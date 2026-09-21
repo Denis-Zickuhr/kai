@@ -182,6 +182,17 @@ MainWindow::MainWindow(QWidget *parent)
     // tinha NENHUM listener (achado silencioso) — vira notificação opcional.
     connect(&m_configManager, &core::ConfigManager::configRecovered, this, &MainWindow::handleConfigRecovered);
 
+    // CRON Scheduler (Etapa 4): dispara comandos agendados no horário correto.
+    // Usa o mesmo handler que autorun e cliques manuais (handleCommandActivated).
+    connect(&m_cronScheduler, &engine::CronScheduler::commandDue, this, [this](const QString &commandId) {
+        if (!m_commandsById.contains(commandId)) {
+            return; // comando removido
+        }
+        utils::Logger::info(kLogTag,
+            QStringLiteral("CRON: disparando '%1'.").arg(commandId));
+        handleCommandActivated(commandId);
+    });
+
     // Garante encerramento seguro de processos em background ao fechar o
     // app ("processos zumbis").
     // Fechamento do app: ativa o modo de encerramento RÁPIDO antes do
@@ -226,6 +237,13 @@ void MainWindow::setupUi()
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("rootContainer"));
+    // Necessário pro fundo em GRADIENTE (base "primary" do tema, ver
+    // app-stylesheet.cpp) realmente pintar aqui: um QWidget "puro" (não
+    // QFrame) só honra um qlineargradient() do QSS com este atributo — cor
+    // SÓLIDA já funcionava sem ele (o Fusion tem um atalho pra isso), mas
+    // gradiente exige o pipeline de pintura completo do estilo (relatado
+    // pelo usuário: "a main window está sem nenhum gradiente").
+    central->setAttribute(Qt::WA_StyledBackground, true);
     // Mouse tracking para o resize por borda funcionar (o cursor muda ao
     // se aproximar das bordas mesmo sem botão pressionado). O container
     // deixa uma pequena margem nas bordas (kResizeMargin) onde os eventos
@@ -308,8 +326,10 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
     connect(m_commandTree, &CommandTreeWidget::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
     connect(m_commandTree, &CommandTreeWidget::playRequested, this, &MainWindow::handleCommandActivated);
-    connect(m_commandTree, &CommandTreeWidget::killRequested, this, &MainWindow::handleKillCommandRequested);
-    connect(m_commandTree, &CommandTreeWidget::forceStopRequested, this, &MainWindow::handleKillCommandRequested);
+    connect(m_commandTree, &CommandTreeWidget::killRequested, this,
+            [this](const QString &commandId) { handleKillCommandRequested(commandId, false); });
+    connect(m_commandTree, &CommandTreeWidget::forceStopRequested, this,
+            [this](const QString &commandId) { handleKillCommandRequested(commandId, true); });
     connect(m_commandTree, &CommandTreeWidget::resetRequested, this, &MainWindow::handleResetCommandRequested);
     connect(m_commandTree, &CommandTreeWidget::structureChanged, this, &MainWindow::handleTreeStructureChanged);
 
@@ -520,6 +540,22 @@ void MainWindow::setupUi()
     m_horizontalSplitter->setStretchFactor(0, 0);
     m_horizontalSplitter->setStretchFactor(1, 1);
     m_horizontalSplitter->setStretchFactor(2, 0);
+    // Arrastar a divisória da BARRA DE AÇÕES (esquerda/direita) é inútil —
+    // ela só hospeda botões de ícone, não há conteúdo que se beneficie de
+    // mais/menos espaço (pedido do usuário: desabilitar esse resize).
+    // Desabilita só os DOIS handles adjacentes a ela (índices 1 e 2, entre
+    // leftActionsContainer|treeContainer e treeContainer|sideActionsContainer)
+    // — o handle(0) nem existe (primeiro widget do splitter). Com o handle
+    // travado e o stretch factor 0 (acima, já não crescia com a janela), o
+    // Qt passa a dimensionar a barra sempre pelo próprio sizeHint (os
+    // botões), garantindo por padrão espaço suficiente pra renderizar os
+    // itens sem depender de arraste algum.
+    if (QSplitterHandle *leftHandle = m_horizontalSplitter->handle(1)) {
+        leftHandle->setEnabled(false);
+    }
+    if (QSplitterHandle *sideHandle = m_horizontalSplitter->handle(2)) {
+        sideHandle->setEnabled(false);
+    }
 
     // Wrapper que agrupa a busca + a área de navegação (árvore/actions),
     // construído UMA vez aqui — applyOutputPosition() decide depois em
@@ -1120,6 +1156,21 @@ void MainWindow::applyActionGroupPlacement()
     if (m_sideActionsContainer) {
         m_sideActionsContainer->setGroups(sideGroups);
     }
+
+    // Largura da coluna de ícones (pedido do usuário: o handle de resize
+    // dela foi desabilitado — ver setupUi/m_horizontalSplitter — então
+    // NADA MAIS ajusta essa largura depois da distribuição inicial do
+    // QSplitter, que roda ainda com os containers vazios/escondidos e por
+    // isso reserva pouco ou nenhum espaço). Aplicamos aqui, toda vez que os
+    // grupos mudam, o tamanho "natural" de cada coluna (ActionGroupContainer
+    // ::contentWidth(), 0 se estiver oculta) e o resto pra árvore — sem
+    // isso os ícones ficavam espremidos/cortados por padrão (bug relatado
+    // com print).
+    if (m_horizontalSplitter && m_leftActionsContainer && m_sideActionsContainer) {
+        const int leftW = m_leftActionsContainer->isHidden() ? 0 : m_leftActionsContainer->contentWidth();
+        const int sideW = m_sideActionsContainer->isHidden() ? 0 : m_sideActionsContainer->contentWidth();
+        m_horizontalSplitter->setSizes({leftW, 10000, sideW});
+    }
 }
 
 void MainWindow::applyOutputPosition()
@@ -1159,17 +1210,24 @@ void MainWindow::applyOutputPosition()
 
     if (pos == QStringLiteral("left")) {
         // Saída à esquerda, área principal (busca+árvore/actions) à direita.
+        // STRETCH INVERTIDO (pedido do usuário): ao redimensionar a JANELA
+        // (não o arraste manual do divisor — stretchFactor só afeta esse
+        // caso), quem deve absorver a diferença é a SAÍDA (factor 1), não
+        // a área principal — antes era o contrário, e a Saída parecia
+        // "grudada" no mesmo tamanho enquanto só a janela/área principal
+        // mudava.
         newSplitter->addWidget(m_terminalDrawer);
         newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->setStretchFactor(0, 0);
-        newSplitter->setStretchFactor(1, 1);
-        newSplitter->setSizes({4000, 8000});
-    } else if (pos == QStringLiteral("right")) {
-        // Área principal à esquerda, Saída à direita.
-        newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->addWidget(m_terminalDrawer);
         newSplitter->setStretchFactor(0, 1);
         newSplitter->setStretchFactor(1, 0);
+        newSplitter->setSizes({4000, 8000});
+    } else if (pos == QStringLiteral("right")) {
+        // Área principal à esquerda, Saída à direita. Mesmo racional acima:
+        // a Saída (agora índice 1) é quem absorve o resize da janela.
+        newSplitter->addWidget(m_mainAreaWrapper);
+        newSplitter->addWidget(m_terminalDrawer);
+        newSplitter->setStretchFactor(0, 0);
+        newSplitter->setStretchFactor(1, 1);
         newSplitter->setSizes({8000, 4000});
     } else {
         // "bottom" (padrão/histórico) — estrutura e proporção
@@ -1288,7 +1346,7 @@ void MainWindow::triggerForceStopSelected()
 {
     const QString id = m_commandTree->currentSelectionId();
     if (!id.isEmpty() && !m_commandTree->currentSelectionIsFolder()) {
-        handleKillCommandRequested(id); // ProcessManager::stop já faz terminate->timeout->kill
+        handleKillCommandRequested(id, /*force=*/true);
     }
 }
 
@@ -1482,6 +1540,8 @@ void MainWindow::loadConfig()
 {
     m_commandsData = m_configManager.loadCommands();
     m_collections = m_configManager.loadCollections();
+    // Reschedule CRON timers após carregar comandos
+    m_cronScheduler.reschedule(m_commandsData.commands);
 
     const core::SettingsData settings = m_configManager.loadSettings();
     // As variáveis globais agora vêm do environment (pacote) ATIVO — o
@@ -1808,6 +1868,11 @@ void MainWindow::applyAppearanceSettings()
     fx.animations = st.fxAnimations;
     fx.cornerStyle = st.uiCornerStyle;
     utils::tokens::setEffects(fx);
+    // Master switch de gradientes (pedido do usuário: "uma opção que
+    // desabilita os gradientes") — hasGradient() de QUALQUER slot passa a
+    // retornar false enquanto desligado, mesmo que o tema ativo declare as
+    // variáveis; ver design-tokens.h.
+    utils::tokens::setGradientsEnabled(st.gradientsEnabled);
 
     // Re-aplica a folha (os tokens mudaram) e o backdrop da janela.
     if (m_themeManager && m_themeManager->hasTheme()) {
@@ -1817,6 +1882,20 @@ void MainWindow::applyAppearanceSettings()
     }
     applyWindowBackdrop(this);
     applyElevation(m_terminalDrawer, 1);
+
+    // Cards do output panel e do diálogo de processos só recalculam o QSS
+    // (incluindo gradiente) dentro de applyThemeVariables() — não pegam o
+    // setStyleSheet() genérico acima. Sem isto, desligar "Gradientes" (ou
+    // qualquer outra config de aparência) aqui não tirava o gradiente
+    // desses widgets até o próximo live-reload de tema de verdade (bug
+    // relatado: "o modo gradiente mesmo desabilitando não sai, precisa
+    // reiniciar?").
+    if (m_themeManager && m_themeManager->hasTheme()) {
+        m_terminalDrawer->applyThemeVariables(m_themeManager->currentTheme().variables);
+        if (m_processListDialog) {
+            m_processListDialog->applyThemeVariables(m_themeManager->currentTheme().variables);
+        }
+    }
 
     // Os containers de posicionamento (upper/bottom/left/side) têm seu
     // próprio QSS (fundo/borda discretos), fora do stylesheet global acima
@@ -2196,11 +2275,29 @@ void MainWindow::promptParamsAndRun(const core::Command &command)
         "promptParamsAndRun: comando '%1' (id=%2) tem %3 parâmetro(s).")
         .arg(command.name, command.id).arg(command.params.size()));
     if (!command.params.isEmpty()) {
+        // Só carrega/relê o arquivo de filtros se este comando tem PELO
+        // MENOS UM parâmetro ligado a coleção — evita I/O de disco à toa
+        // (load + save no mesmo objeto, sem mudança nenhuma) em todo
+        // comando parametrizado, mesmo os que nunca usam coleção.
+        const bool hasCollectionParam = std::any_of(command.params.constBegin(), command.params.constEnd(),
+            [](const core::Parameter &p) { return !p.collectionId.isEmpty(); });
+
         // Comando parametrizado: coleta os valores via
         // formulário antes de disparar o pipeline. Pré-preenche com os
         // últimos valores informados (feedback do usuário).
-        ParameterFormDialog dialog(command.params, this, command.lastParamValues, command.paramUsageHistory, m_collections, command.description);
-        if (dialog.exec() != QDialog::Accepted) {
+        ParameterFormDialog dialog(command.params, this, command.lastParamValues, command.paramUsageHistory,
+            m_collections, command.description,
+            hasCollectionParam ? m_configManager.loadCollectionFilters() : QMap<QString, core::CollectionFilterState>{});
+        const int dialogResult = dialog.exec();
+        // Busca/favoritos-only da(s) coleção(ões) usada(s) persistem mesmo
+        // se o usuário CANCELAR o formulário inteiro — é estado de
+        // navegação da tela de seleção, independente de ter confirmado a
+        // execução (pedido do usuário: "os filtros de coleções devem ser
+        // salvos").
+        if (hasCollectionParam) {
+            m_configManager.saveCollectionFilters(dialog.updatedCollectionFilters());
+        }
+        if (dialogResult != QDialog::Accepted) {
             utils::Logger::info(kLogTag, QStringLiteral("Execução de '%1' cancelada pelo usuário.").arg(command.name));
             return;
         }
@@ -2382,9 +2479,10 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
         // Replicado por campo (não só uma chave "param__label" solta) pra
         // bater exatamente com o padrão de nomenclatura já usado pelo
         // usuário no dia a dia ("param.campo__sufixo").
-        const QString displayField = !param.collectionDisplayField.isEmpty()
-            ? param.collectionDisplayField
-            : (!colIt->schema.isEmpty() ? colIt->schema.first().name : QString());
+        // Ver core::resolveCollectionDisplayField (bug corrigido: campo Key
+        // configurado/pré-selecionado por padrão no editor de parâmetros
+        // não é uma exibição útil — mesma lógica usada no chip picker).
+        const QString displayField = core::resolveCollectionDisplayField(*colIt, param.collectionDisplayField);
         const QString firstLabel = displayField.isEmpty() ? QString() : first.values.value(displayField);
         QStringList allLabels;
         if (!displayField.isEmpty()) {
@@ -2481,11 +2579,15 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // Alvos de terminal configuráveis (feedback do usuário): passa
     // a lista atual das configurações para o pipeline aplicar o template
     // do alvo escolhido pelo comando (ex: WSL bridge).
-    m_pipeline->setTerminalProfiles(m_configManager.loadSettings().terminalProfiles);
+    const core::SettingsData currentSettings = m_configManager.loadSettings();
+    m_pipeline->setTerminalProfiles(currentSettings.terminalProfiles);
     // Hierarquia de pastas para a RESOLUÇÃO do perfil herdado (@parent):
     // um comando/subpasta que herda sobe pela cadeia até achar um perfil
     // concreto (ver ExecutionPipeline::effectiveTerminalProfileName).
     m_pipeline->setFolders(m_commandsData.folders);
+    // Tempo de espera entre SIGTERM e SIGKILL ao clicar em "Parar" (pedido
+    // do usuário: configurável, como o graceful stop do Docker).
+    m_pipeline->setGracefulStopTimeoutMs(currentSettings.gracefulStopTimeoutSec * 1000);
     m_pipeline->run(command, m_commandsById, m_envManager);
     // Refresca o indicador de "rodando" no próximo ciclo do event loop,
     // quando o ProcessRunner já foi criado/iniciado (corrige o ícone que
@@ -2994,7 +3096,7 @@ void MainWindow::handleShowProcessListRequested()
     m_processListDialog->activateWindow();
 }
 
-void MainWindow::handleKillCommandRequested(const QString &commandId)
+void MainWindow::handleKillCommandRequested(const QString &commandId, bool force)
 {
     // CLEANUP HOOKS: NÃO são disparados aqui de propósito.
     // Antes eram, e havia dois problemas: (a) rodavam ANTES de o processo
@@ -3004,10 +3106,16 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     // Agora existe uma fonte única: o término real do processo (abort/finished),
     // que por definição acontece DEPOIS da morte. Ver runCleanupHooks().
 
-    // Controle visual inline de SIGKILL: encerra imediatamente o
-    // processo em background associado a este comando. ProcessManager::stop
-    // já implementa terminate -> timeout -> kill de forma segura.
-    m_processManager->stop(commandId);
+    // `force` decide o caminho: GRACIOSO (SIGTERM -> espera o tempo
+    // configurado em Configurações -> Geral -> SIGKILL) ou IMEDIATO (SIGKILL
+    // direto, sem esperar nada). Antes "Parar" e "Forçar parada" chamavam
+    // exatamente o mesmo caminho gracioso — "Forçar" não forçava nada (bug
+    // real reportado pelo usuário).
+    if (force) {
+        m_processManager->forceStop(commandId);
+    } else {
+        m_processManager->stop(commandId);
+    }
 
     // Encerra o comando de EXECUÇÃO ÚNICA ativo no pipeline (bug reportado:
     // "encerramento parece não funcionar, fica rodando"). Para o runner
@@ -3018,7 +3126,11 @@ void MainWindow::handleKillCommandRequested(const QString &commandId)
     // Para o runner DESTE comando (registry) — antes parava o "ativo", que
     // podia ser o processo de OUTRO TTY (matava o comando errado).
     if (engine::ProcessRunner *runner = m_pipeline->runnerFor(commandId)) {
-        runner->stop();
+        if (force) {
+            runner->forceStop();
+        } else {
+            runner->stop();
+        }
     }
     m_pipelineRunningIds.remove(commandId);
     if (commandId == m_activePipelineCommandId) {
@@ -4706,7 +4818,8 @@ void MainWindow::handleSettingsRequested()
         || newSettings.fxTranslucency != currentSettings.fxTranslucency
         || newSettings.fxBlur != currentSettings.fxBlur
         || newSettings.fxAnimations != currentSettings.fxAnimations
-        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss) {
+        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss
+        || newSettings.gradientsEnabled != currentSettings.gradientsEnabled) {
         applyAppearanceSettings();
     }
 

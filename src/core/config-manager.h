@@ -17,6 +17,9 @@ struct CommandsData {
     QVector<Command> commands;
 };
 
+// CollectionFilterState declarado em core/models.h (compartilhado com a UI
+// sem puxar esta classe inteira pros headers de ui/).
+
 // Alvo de terminal configurável (feedback do usuário: escolher em
 // qual terminal executar comandos shell, ex: rodar nativamente no WSL a
 // partir do app no Windows). `commandTemplate` envolve o comando final;
@@ -132,6 +135,12 @@ struct SettingsData {
     bool fxTranslucency = false;   // fundo translúcido
     bool fxBlur = false;           // "material líquido": Mica/Acrylic no Win11
     bool fxAnimations = false;     // fade/slide em painéis e diálogos
+    // Gradientes de tema (pedido do usuário: "config de gradientes" pra
+    // janela/header/sidebar/badges, com opção de desligar) — LIGADO por
+    // padrão, ao contrário dos fx_* acima: aqui o "efeito" é definido pelo
+    // TEMA em si (cada tema já declara os pares de cor), não algo que
+    // precise opt-in explícito para não surpreender.
+    bool gradientsEnabled = true;
 
     // --- JANELA (pedido do usuário: tamanho default configurável) ---
     // Modo de abertura: "size" usa windowWidth/windowHeight, "maximized" abre
@@ -268,6 +277,19 @@ struct SettingsData {
     // ultrapassar), agora configurável; default 1024 (1MB).
     int outputMaxLogSizeKb = 1024;
 
+    // TEMPO DE ENCERRAMENTO GRACIOSO (pedido do usuário: "o Docker tem um
+    // sistema de gracefully stopping... o Kai mata seco, pede pra parar e
+    // já mata"). Ao clicar em "Parar" (não "Forçar parada"), o Kai manda
+    // SIGTERM e aguarda ESTE tempo (em segundos) antes de escalar pra
+    // SIGKILL — era um valor fixo de 2000ms embutido no código, não
+    // configurável. "Forçar parada" continua sendo SIGKILL IMEDIATO,
+    // ignorando este valor por completo (ver ProcessRunner::forceStop).
+    // Default 5s: tempo curto o bastante pra não travar a UI por muito
+    // tempo, mas maior que os 2s fixos de antes, que eram curtos demais pra
+    // a maioria dos processos com cleanup próprio (ex: servidores que
+    // fecham conexões, containers).
+    int gracefulStopTimeoutSec = 5;
+
     // Iniciar o Kai automaticamente com o sistema (autoboot/autostart).
     // Configurável pelo usuário via SettingsDialog. Quando ligado, o Kai
     // registra-se no mecanismo nativo de autostart do SO (Linux: um
@@ -343,6 +365,14 @@ public:
     // (nunca falha o boot do app por causa disto).
     QMap<QString, QMap<QString, QString>> loadPersistedDynamicVars();
     bool savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
+
+    // Arquivo separado dos filtros de tela de seleção de coleções (busca +
+    // favoritos), por Collection::id — ver CollectionFilterState acima.
+    QString collectionFiltersFilePath() const;
+    // collectionId -> filtro. Arquivo ausente/corrompido -> mapa vazio
+    // (nunca falha o boot do app; a tela de seleção cai nos defaults).
+    QMap<QString, CollectionFilterState> loadCollectionFilters();
+    bool saveCollectionFilters(const QMap<QString, CollectionFilterState> &data);
 
     // Carrega commands.json. Em caso de corrupção, faz backup do arquivo
     // inválido, restaura um estado vazio seguro e emite configRecovered().

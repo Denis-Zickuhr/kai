@@ -60,6 +60,16 @@ public:
     // na verdade o processo filho sobrevivendo órfão após o bash morrer.
     void stop();
 
+    // Encerramento IMEDIATO (botão "Forçar parada" — pedido do usuário:
+    // "tem o botão de force, que é um sigkill"): manda SIGKILL (ou
+    // TerminateProcess/taskkill /F /T no Windows) direto pro grupo/árvore de
+    // processos, SEM enviar SIGTERM nem esperar `m_killTimeoutMs`. Diferente
+    // de stop(), que sempre dá a chance de encerramento gracioso primeiro —
+    // até a versão anterior deste método, forceStop() e stop() eram a MESMA
+    // chamada (bug real: o botão "Forçar" não forçava nada, só repetia o
+    // stop() gracioso).
+    void forceStop();
+
     // Escreve dados no stdin do processo em execução (interação
     // real com o Terminal Drawer, não apenas leitura de output). Um '\n' é
     // acrescentado automaticamente se `text` não terminar com um. Não-op
@@ -153,6 +163,14 @@ private:
     // ConPTY não puder ser criado (chamador cai para cmd /c via QProcess).
     bool startWithConPty(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
     void cleanupConPty();
+    // Encerra a árvore de processos INTEIRA do comando via Job Object
+    // (ver m_jobHandle) — TerminateJobObject mata processo+filhos+netos de
+    // uma vez, atômico, sem depender de nenhum processo externo. Se o Job
+    // Object não pôde ser criado/atribuído no start (m_jobHandle nulo —
+    // raro, mas cai aqui como REDE DE SEGURANÇA), usa o `taskkill /T /F`
+    // externo de antes como fallback. `pid` só é usado nesse fallback (log
+    // + linha de comando do taskkill).
+    void terminateProcessTree(qint64 pid);
 
     std::unique_ptr<QProcess> m_process;
     int m_killTimeoutMs = 2000;
@@ -181,6 +199,18 @@ private:
     void *m_conOutRead = nullptr;     // HANDLE — lemos a saída daqui
     void *m_conProcess = nullptr;     // HANDLE do processo filho
     void *m_conThread = nullptr;      // HANDLE da thread do processo filho
+    // HANDLE do Job Object que contém o processo filho (e toda a árvore
+    // gerada por ele). Criado no start (ConPTY: antes do ResumeThread, pra
+    // não deixar o processo rodar nem um instante sem estar no job — fecha
+    // a janela de corrida por completo; QProcess: logo após o start).
+    // TerminateJobObject mata a árvore inteira de uma vez, sem precisar
+    // spawnar um `taskkill` externo — era esse padrão (CreateProcessW cru
+    // + taskkill /F escondido) que o Windows Defender lia como assinatura
+    // de dropper/RAT e matava o Kai (bug reportado pelo usuário: "o
+    // windows defender endoidou e matou meu kai"). Nulo se a criação/
+    // atribuição do job falhar, caso em que terminateProcessTree() cai
+    // pro taskkill como rede de segurança.
+    void *m_jobHandle = nullptr;
     QThread *m_conReader = nullptr;   // thread que lê o pipe de saída
     // Flag de ABORT da thread leitora: o dtor sinaliza e a thread sai no
     // próximo ciclo, permitindo um join CONFIÁVEL antes de destruir o objeto

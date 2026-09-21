@@ -16,6 +16,7 @@ namespace kai::ui {
 class KeyValueEditorWidget;
 class IconPickerWidget;
 class CollapsibleSectionCard;
+class FolderPickerWidget;
 
 // Diálogo de criação/edição de Folder, com suporte a hierarquia via
 // parent_id (subpastas) e edição de env_vars (resumo da spec seção 1:
@@ -67,7 +68,7 @@ private:
     core::Folder buildFromForm() const;
 
     QLineEdit *m_nameField = nullptr;
-    QComboBox *m_parentField = nullptr;
+    FolderPickerWidget *m_parentField = nullptr;
     QComboBox *m_profileField = nullptr;
     QSpinBox *m_orderField = nullptr;
     // Marca esta pasta como fronteira de ESCOPO das variáveis DINÂMICAS

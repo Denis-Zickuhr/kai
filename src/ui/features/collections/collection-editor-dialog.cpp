@@ -8,6 +8,7 @@
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/fuzzy-search.h"
 #include "ui/shared/loading-overlay.h"
+#include "ui/shared/folder-picker-widget.h"
 
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -103,21 +104,15 @@ void CollectionEditorDialog::setupUi()
     identityRow->addWidget(m_nameField, 1);
 
     identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.folder")), this));
-    m_folderCombo = new QComboBox(this);
+    m_folderCombo = new FolderPickerWidget(this);
     capComboBoxWidth(m_folderCombo);
-    m_folderCombo->addItem(utils::tr(QStringLiteral("collection.folder.root")), QString());
-    // MESMO padrão dos outros seletores de pasta (feedback do usuário:
-    // "seletor de pastas das coleções ficou sem features atualizadas") —
-    // indentação + path completo como hint, ordem de árvore (pai antes
-    // dos próprios filhos, o que também deixa a busca melhor: filtrar
-    // "Projetos" traz a pasta ANTES de seus filhos, não depois).
-    for (const core::Folder &f : foldersInTreeOrder(m_folders)) {
-        m_folderCombo->addItem(folderComboLabel(m_folders, f.id), f.id);
-    }
-    {
-        const int idx = m_folderCombo->findData(m_collection.folderId);
-        m_folderCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-    }
+    // Configura com todas as pastas em ordem de árvore
+    auto foldersInOrder = foldersInTreeOrder(m_folders);
+    m_folderCombo->setFolders(foldersInOrder);
+    // Habilita opção "Root" (sem pasta)
+    m_folderCombo->enableNoneOption(utils::tr(QStringLiteral("collection.folder.root")));
+    // Seleciona a pasta correta
+    m_folderCombo->setSelectedFolderId(m_collection.folderId);
     makeSearchableCombo(m_folderCombo); // busca no seletor de pastas
     identityRow->addWidget(m_folderCombo);
 
@@ -316,7 +311,7 @@ void CollectionEditorDialog::setupUi()
             m_collection.name = m_nameField->text().trimmed();
         }
         if (m_folderCombo) {
-            m_collection.folderId = m_folderCombo->currentData().toString();
+            m_collection.folderId = m_folderCombo->selectedFolderId();
         }
         if (m_orderField) {
             m_collection.order = m_orderField->value();
@@ -346,7 +341,7 @@ void CollectionEditorDialog::setupUi()
             m_collection.name = m_nameField->text().trimmed();
         }
         if (m_folderCombo) {
-            m_collection.folderId = m_folderCombo->currentData().toString();
+            m_collection.folderId = m_folderCombo->selectedFolderId();
         }
         if (m_orderField) {
             m_collection.order = m_orderField->value();

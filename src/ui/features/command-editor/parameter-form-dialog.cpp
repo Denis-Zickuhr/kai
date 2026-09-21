@@ -1,6 +1,7 @@
 #include "ui/features/command-editor/parameter-form-dialog.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/features/collections/collection-selector-dialog.h"
+#include "ui/shared/collection-chip-picker.h"
 #include "ui/shared/date-picker-dialog.h"
 #include "ui/shared/collapsible-section-card.h"
 #include "ui/shared/table-utils.h"
@@ -152,13 +153,15 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
                                           const QMap<QString, QString> &lastValues,
                                           const QMap<QString, QStringList> &usageHistory,
                                           const QVector<core::Collection> &collections,
-                                          const QString &description)
+                                          const QString &description,
+                                          const QMap<QString, core::CollectionFilterState> &collectionFilters)
     : QDialog(parent)
     , m_params(params)
     , m_lastValues(lastValues)
     , m_usageHistory(usageHistory)
     , m_collections(collections)
     , m_description(description)
+    , m_collectionFilters(collectionFilters)
 {
     setWindowTitle(utils::tr(QStringLiteral("params.title")));
     setSizeGripEnabled(true);
@@ -182,8 +185,15 @@ ParameterFormDialog::ParameterFormDialog(const QVector<core::Parameter> &params,
     }
     setMinimumWidth(qMin(spacious ? 860 : 800, maxW));
     adjustSize();
-    if (height() < 260) {
-        resize(width(), 260);
+    // Piso de altura mais generoso (achado real, com foto: "por default
+    // ficou com pouco espaço vertical, mal cabe na tela" — o campo de
+    // chips de coleção, com busca+lupa em linha própria + separador +
+    // área de chips, ocupa mais altura que o antigo campo readonly de uma
+    // linha só; adjustSize() sozinho, através de um QScrollArea, tende a
+    // subestimar a altura de verdade que um widget com wrap dinâmico
+    // (FlowLayout) precisa antes de ser exibido pela primeira vez).
+    if (height() < 340) {
+        resize(width(), 340);
     }
     // TETO de altura (pedido do usuário: "deixe ele menor, com scroll
     // interno") — acima disso, o QScrollArea da grade absorve o excesso em
@@ -405,66 +415,81 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
                 const auto colIt = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
                     [&param](const core::Collection &c) { return c.id == param.collectionId; });
 
-                // "Lookup rápido" (diretriz do usuário): campo + botão de
-                // busca fundidos num único bloco (input-group-addon), com UMA
-                // borda em volta dos dois — não dois controles soltos lado a
-                // lado. O bloco desenha a borda/fundo/raio; campo e botão
-                // ficam sem borda própria (transparentes) para não duplicar.
-                auto *rowWidget = new QWidget(this);
-                rowWidget->setObjectName(QStringLiteral("lookupInputGroup"));
-                rowWidget->setStyleSheet(QStringLiteral(
-                    "QWidget#lookupInputGroup { background-color: %1; border: 1px solid %2;"
-                    " border-radius: %3px; }")
-                    .arg(utils::tokens::bg(), utils::tokens::borderColor())
-                    .arg(utils::tokens::radiusMd()));
-                auto *rowLayout = new QHBoxLayout(rowWidget);
-                rowLayout->setContentsMargins(0, 0, 0, 0);
-                rowLayout->setSpacing(0);
-                auto *display = new QLineEdit(rowWidget);
-                display->setReadOnly(true);
-                display->setPlaceholderText(utils::tr(QStringLiteral("params.lookup.no_value")));
-                display->setStyleSheet(QStringLiteral(
-                    "QLineEdit { background: transparent; color: %1; border: none;"
-                    " padding: %2px %3px; }")
-                    .arg(utils::tokens::fg())
-                    .arg(utils::tokens::space(2)).arg(utils::tokens::space(3)));
-                rowLayout->addWidget(display, 1);
-                auto *pickButton = makeIconButton(rowWidget, QStringLiteral("search"),
-                    utils::tr(QStringLiteral("params.collection.pick")), QColor(utils::tokens::accent()));
-                pickButton->setStyleSheet(QStringLiteral(
-                    "QToolButton { background: transparent; border: none; border-left: 1px solid %1;"
-                    " border-radius: 0px; }")
-                    .arg(utils::tokens::borderColor()));
-                rowLayout->addWidget(pickButton);
-
                 const QString paramName = param.name;
                 const QString collectionId = param.collectionId;
-                const QString displayField = (!param.collectionDisplayField.isEmpty())
-                    ? param.collectionDisplayField
-                    : (colIt != m_collections.constEnd() && !colIt->schema.isEmpty()
-                        ? colIt->schema.first().name : QString());
+                // Bug relatado: "ele ta renderizando o id, era pra
+                // renderizar o nome" — ver core::resolveCollectionDisplayField
+                // (um campo Key, mesmo CONFIGURADO explicitamente em
+                // collectionDisplayField, nunca é uma exibição útil; o
+                // editor de parâmetros pré-seleciona o 1º campo do schema
+                // nesse combo, que no schema padrão [Key, Value] É a Key).
+                const QString displayField = (colIt != m_collections.constEnd())
+                    ? core::resolveCollectionDisplayField(*colIt, param.collectionDisplayField)
+                    : param.collectionDisplayField;
 
-                // Pré-seleção pelo último valor (id da entrada).
+                // Campo de chips com busca embutida (feedback do usuário:
+                // "ao digitar no campo ele funciona tipo uma lista... vai
+                // criando a chip, e posso ir removendo ou adicionar multi
+                // sem nem abrir nada") — substitui o antigo campo readonly
+                // que só funcionava clicando na lupa. O botão de lupa
+                // continua disponível (pickButton()) pra quem quiser a tela
+                // de seleção dedicada completa (favoritos, filtros por
+                // campo, paginação).
+                auto *chipPicker = new CollectionChipPickerWidget(this);
+                if (colIt != m_collections.constEnd()) {
+                    chipPicker->setEntries(colIt->entries, displayField);
+                }
+
+                // Pré-seleção pelo(s) último(s) valor(es) (id(s) da entrada,
+                // separados por vírgula quando múltiplos — mesmo formato que
+                // values() grava via ids.join(',') logo abaixo). Split ANTES
+                // de comparar: bug real (reportado: "se eu executar um cmd de
+                // coleções ele não lembra o ultimo valor executado, multiplas
+                // entries") — comparar initialValue INTEIRO ("id1,id2") contra
+                // um único e.id nunca batia pra mais de uma entrada
+                // selecionada, deixando a seleção em branco ao reabrir. Mesmo
+                // padrão de split já usado no campo multi-select comum,
+                // algumas linhas abaixo.
                 if (colIt != m_collections.constEnd() && !initialValue.isEmpty()) {
-                    const auto eit = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
-                        [&initialValue](const core::CollectionEntry &e) { return e.id == initialValue; });
-                    if (eit != colIt->entries.constEnd()) {
-                        m_collectionSelectionByParam[paramName] = {initialValue};
-                        display->setText(eit->values.value(displayField));
-                        display->setCursorPosition(0); // mostra o INÍCIO do texto, não o fim
+                    const QStringList preset = initialValue.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                    QStringList ids;
+                    for (const QString &entryId : preset) {
+                        const auto eit = std::find_if(colIt->entries.constBegin(), colIt->entries.constEnd(),
+                            [&entryId](const core::CollectionEntry &e) { return e.id == entryId; });
+                        if (eit != colIt->entries.constEnd()) {
+                            ids << eit->id;
+                        }
+                    }
+                    if (!ids.isEmpty()) {
+                        m_collectionSelectionByParam[paramName] = ids;
+                        chipPicker->setSelectedIds(ids);
                     }
                 }
 
-                connect(pickButton, &QToolButton::clicked, this,
-                    [this, paramName, collectionId, displayField, display]() {
+                connect(chipPicker, &CollectionChipPickerWidget::selectionChanged, this,
+                    [this, paramName, chipPicker]() {
+                        m_collectionSelectionByParam[paramName] = chipPicker->selectedIds();
+                    });
+                connect(chipPicker, &CollectionChipPickerWidget::selectionChanged, this,
+                    &ParameterFormDialog::refreshValidationState);
+
+                connect(chipPicker->pickButton(), &QToolButton::clicked, this,
+                    [this, paramName, collectionId, chipPicker]() {
                         const auto cit = std::find_if(m_collections.constBegin(), m_collections.constEnd(),
                             [&collectionId](const core::Collection &c) { return c.id == collectionId; });
                         if (cit == m_collections.constEnd()) {
                             return;
                         }
                         const QStringList history = m_usageHistory.value(paramName);
-                        CollectionSelectorDialog dialog(*cit, history, /*multiSelect=*/true, this);
-                        if (dialog.exec() != QDialog::Accepted) {
+                        CollectionSelectorDialog dialog(*cit, history, /*multiSelect=*/true, this,
+                            m_collectionFilters.value(collectionId));
+                        const int result = dialog.exec();
+                        // Busca/favoritos-only persistem mesmo se o usuário
+                        // CANCELAR a escolha — é conveniência de navegação da
+                        // tela, não dado de seleção (pedido do usuário: "os
+                        // filtros de coleções devem ser salvos").
+                        m_collectionFilters[collectionId] = dialog.filterState();
+                        if (result != QDialog::Accepted) {
                             return;
                         }
                         // Persiste toggles de favorito feitos na tela de
@@ -478,19 +503,16 @@ void ParameterFormDialog::setupUi(const QVector<core::Parameter> &params)
                         }
                         const QVector<core::CollectionEntry> chosen = dialog.selectedEntries();
                         QStringList ids;
-                        QStringList labels;
                         for (const core::CollectionEntry &e : chosen) {
                             ids << e.id;
-                            const QString lbl = e.values.value(displayField);
-                            labels << (lbl.isEmpty() ? e.id : lbl);
                         }
                         m_collectionSelectionByParam[paramName] = ids;
-                        display->setText(labels.join(QStringLiteral(", ")));
-                        display->setCursorPosition(0); // mostra o INÍCIO do texto
+                        chipPicker->setSelectedIds(ids);
+                        refreshValidationState();
                     });
 
-                addField(param, wrapWithLabel(this, label, rowWidget, param.required && !param.optional));
-                m_fieldByParamName[param.name] = display;
+                addField(param, wrapWithLabel(this, label, chipPicker, param.required && !param.optional));
+                m_fieldByParamName[param.name] = chipPicker;
                 break;
             }
             // MULTI-SELECT de opções fixas (feedback do usuário): lista

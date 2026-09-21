@@ -67,6 +67,22 @@ void applyRunningIndicator(QTreeWidgetItem *item, bool isRunning)
         item->setText(kStatusColumn, QString());
     }
 }
+
+// Fundo do item SEMPRE transparente, em TODO estado (normal, hover,
+// seleção, foco) — aplicado como stylesheet LOCAL de cada árvore (não via
+// app-stylesheet.cpp/theme-manager.cpp), porque um stylesheet local de
+// WIDGET tem prioridade garantida sobre qualquer stylesheet herdado do
+// QApplication/tema, sem depender de especificidade de seletor CSS (fonte
+// de bugs anteriores: a regra "CommandTreeWidget QTreeWidget::item" em
+// app-stylesheet.cpp nem sempre vencia a cascata do tema ativo). Com o
+// fundo do item sempre "apagado" aqui, o DraggableTreeWidget é o único
+// responsável por pintar normal/zebra/hover/seleção — sempre linha
+// inteira, sem cantos (ver paintEvent/setRowColors).
+const QString kTreeItemTransparentQss = QStringLiteral(
+    "QTreeWidget::item, QTreeWidget::item:hover, QTreeWidget::item:selected,"
+    " QTreeWidget::item:selected:active, QTreeWidget::item:selected:!active,"
+    " QTreeWidget::item:focus {"
+    " background-color: transparent; border: none; outline: none; border-radius: 0px; }");
 }
 
 CommandTreeWidget::CommandTreeWidget(QWidget *parent)
@@ -532,15 +548,34 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
                                      + utils::tokens::space(4));
     }
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
-    // Zebra sutil estilo CopyQ (a cor de alternância vem do QSS via
-    // alternate-background-color) e sem frame/moldura em volta da árvore.
-    tree->setAlternatingRowColors(true);
+    // SELEÇÃO POR LINHA INTEIRA, não por célula (pedido do usuário: "as
+    // bordas são entre as células" — árvore tem 2 colunas: nome/ícone e o
+    // indicador de status. O padrão do Qt é SelectItems, que marca só a
+    // CÉLULA clicada como selecionada; a segunda coluna (status), mesmo
+    // vazia na maior parte do tempo, ficava sem o fundo de seleção/hover
+    // pintado — abrindo um vão sem cor entre as duas células da mesma
+    // linha, que parecia uma "borda" entre comandos. SelectRows marca as
+    // duas colunas do item como selecionadas juntas, unificando o fundo.
+    tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // Zebra sutil estilo CopyQ: a cor de alternância é pintada pelo
+    // próprio DraggableTreeWidget (ver setRowColors abaixo), não mais via
+    // QSS alternate-background-color — então NÃO chamamos
+    // setAlternatingRowColors aqui (o fallback nativo do Qt para esse modo
+    // é exatamente o que abria o vão entre as duas colunas da linha no
+    // hover — ver comentário em setRowColors).
     tree->setFrameShape(QFrame::NoFrame);
     tree->setRootIsDecorated(true);
     tree->setConnectorStyle(static_cast<DraggableTreeWidget::ConnectorStyle>(m_treeConnectorStyle));
     if (m_treeConnectorLineColor.isValid()) {
         tree->setConnectorLineColor(m_treeConnectorLineColor);
     }
+    // Fundo (normal/zebra, hover e seleção) pintado pelo próprio widget,
+    // cobrindo a linha inteira (ver DraggableTreeWidget::setRowColors) — o
+    // QSS correspondente (app-stylesheet.cpp/theme-manager.cpp) deixa o
+    // item transparente em todo estado só para esta árvore, então as cores
+    // precisam vir daqui.
+    tree->setRowColors(QColor(utils::tokens::bg()), QColor(utils::tokens::treeStripeBg()),
+                        QColor(utils::tokens::hoverBg()), QColor(utils::tokens::selBg()));
 
     // Drag & drop de itens FILHOS (comandos, coleções, subpastas dentro de
     // uma pasta): tinha sido DESLIGADO ("o comportamento de drag dos
@@ -1666,18 +1701,29 @@ void CommandTreeWidget::applyBackgroundStyle()
             pal.setColor(QPalette::Base, Qt::transparent);
             vp->setPalette(pal);
             tree->setAlternatingRowColors(false);
-            tree->setStyleSheet(QStringLiteral(
-                "QTreeWidget { background: transparent; }"
-                "QTreeWidget::item { background: transparent; }"));
+            tree->setStyleSheet(QStringLiteral("QTreeWidget { background: transparent; }\n")
+                + kTreeItemTransparentQss);
             vp->removeEventFilter(this);
             vp->installEventFilter(this);
             vp->update();
         } else {
-            // Restaura o comportamento padrão do tema.
+            // Restaura o comportamento padrão do tema. NUNCA liga
+            // setAlternatingRowColors aqui: essa função é chamada de novo a
+            // cada rebuildTabs, e religar a zebra NATIVA do Qt reabre
+            // exatamente o bug que setRowColors resolve — o fallback nativo
+            // pinta a listra por CÉLULA e não alcança a segunda coluna
+            // (status), mostrando uma bordinha só nas linhas claras/zebradas
+            // (relatado pelo usuário). A listra é 100% responsabilidade do
+            // DraggableTreeWidget (ver paintEvent/setRowColors).
             vp->removeEventFilter(this);
             vp->setPalette(QPalette());
-            tree->setAlternatingRowColors(true);
-            tree->setStyleSheet(QString());
+            // NUNCA limpa pra QString() aqui: precisa manter
+            // kTreeItemTransparentQss (stylesheet LOCAL, prioridade
+            // garantida sobre o tema) — limpar reabria a bordinha
+            // arredondada de hover/foco, já que sem ela a árvore volta a
+            // depender só da cascata do tema (relatado como ainda
+            // presente mesmo com as regras do tema já zeradas).
+            tree->setStyleSheet(kTreeItemTransparentQss);
             vp->update();
         }
     }

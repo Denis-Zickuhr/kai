@@ -3,6 +3,8 @@
 #include <QJsonArray>
 #include <QUuid>
 
+#include <algorithm>
+
 namespace kai::core {
 
 QString parameterTypeToString(ParameterType type)
@@ -356,6 +358,8 @@ QJsonObject Command::toJson() const
     if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
     if (autoRun) obj["auto_run"] = true;
     if (autoRunDelaySec != 0) obj["auto_run_delay_sec"] = autoRunDelaySec;
+    if (!cronExpression.isEmpty()) obj["cron_expression"] = cronExpression;
+    if (cronNotifyOnRun) obj["cron_notify_on_run"] = true;
     if (order != -1) obj["order"] = order;
 
     if (httpConfig.has_value()) {
@@ -437,6 +441,8 @@ Command Command::fromJson(const QJsonObject &obj)
     c.terminalTarget = obj.value("terminal_target").toString();
     c.autoRun = obj.value("auto_run").toBool(false);
     c.autoRunDelaySec = obj.value("auto_run_delay_sec").toInt(0);
+    c.cronExpression = obj.value("cron_expression").toString();
+    c.cronNotifyOnRun = obj.value("cron_notify_on_run").toBool(false);
     c.order = obj.value("order").toInt(-1);
 
     if (obj.contains("http_config") && obj.value("http_config").isObject()) {
@@ -680,6 +686,40 @@ Collection Collection::fromJson(const QJsonObject &obj)
     }
     // tag_colors legado é ignorado (feature de tags removida).
     return c;
+}
+
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured)
+{
+    // ESCOLHA EXPLÍCITA sempre vence, mesmo se for um campo Key — o
+    // usuário questionou exatamente esse caso ("o campo no param como
+    // exibido é key, mas ele tá exibindo o valor... tá certo?" — não
+    // estava: ignorar uma escolha deliberada era o bug errado a corrigir).
+    // O auto-fallback abaixo (que evita Key) só existe pra quando NADA foi
+    // configurado — o problema real era o EDITOR pré-selecionar Key
+    // silenciosamente sem o usuário escolher nada (corrigido em
+    // parameter-editor-widget.cpp: refreshDisplayFields), não este
+    // resolver ignorar uma escolha de verdade.
+    if (!configured.isEmpty()) {
+        const bool exists = std::any_of(collection.schema.constBegin(), collection.schema.constEnd(),
+            [&configured](const CollectionField &f) { return f.name == configured; });
+        if (exists) {
+            return configured;
+        }
+        // `configured` não existe mais no schema (campo removido/renomeado
+        // depois de salvo) — cai pro auto-fallback abaixo, igual a "nada
+        // configurado".
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type == CollectionFieldType::Value) {
+            return f.name;
+        }
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type != CollectionFieldType::Key) {
+            return f.name;
+        }
+    }
+    return collection.schema.isEmpty() ? QString() : collection.schema.first().name;
 }
 
 } // namespace kai::core

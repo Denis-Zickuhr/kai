@@ -40,6 +40,7 @@ public:
     QCheckBox *fxTranslucencyField() const { return m_fxTranslucencyField; }
     QCheckBox *fxBlurField() const { return m_fxBlurField; }
     QCheckBox *fxAnimationsField() const { return m_fxAnimationsField; }
+    QCheckBox *gradientsEnabledField() const { return m_gradientsEnabledField; }
     QCheckBox *autoHideField() const { return m_autoHideField; }
     QCheckBox *startVisibleField() const { return m_startVisibleField; }
 
@@ -69,6 +70,7 @@ private:
     QCheckBox *m_fxTranslucencyField = nullptr;
     QCheckBox *m_fxBlurField = nullptr;
     QCheckBox *m_fxAnimationsField = nullptr;
+    QCheckBox *m_gradientsEnabledField = nullptr;
     QCheckBox *m_autoHideField = nullptr;
     QCheckBox *m_startVisibleField = nullptr;
 };

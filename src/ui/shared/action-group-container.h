@@ -36,6 +36,16 @@ public:
     // troca de "Estilo de cantos" (ver MainWindow::applyAppearanceSettings).
     void refreshStyle();
 
+    // Largura "natural" do conteúdo (a pílula de ícones), não a do próprio
+    // container. Na orientação Vertical, sizeHint() do QWidget não serve —
+    // o widget expõe um QScrollArea (necessário pra não impor altura
+    // mínima ao terminal), e QScrollArea::sizeHint() é um valor genérico,
+    // independente do conteúdo real da pílula lá dentro. Usado pelo
+    // MainWindow para dar à coluna de ícones (que não é mais
+    // redimensionável por arraste) uma largura correta por padrão — ver
+    // MainWindow::applyActionGroupPlacement().
+    int contentWidth() const;
+
 private:
     QWidget *createSeparator();
 

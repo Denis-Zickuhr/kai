@@ -5,6 +5,7 @@
 #include "ui/shared/icon-picker-widget.h"
 #include "ui/shared/collapsible-section-card.h"
 #include "ui/shared/lucide-icons.h"
+#include "ui/shared/folder-picker-widget.h"
 #include "utils/translation-manager.h"
 
 #include <QSpinBox>
@@ -155,7 +156,7 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     m_iconPicker = new IconPickerWidget(identityCard);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("command.field.icon")), m_iconPicker), 0, 1);
 
-    m_parentField = new QComboBox(identityCard);
+    m_parentField = new FolderPickerWidget(identityCard);
     capComboBoxWidth(m_parentField);
     identityGrid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("folder.field.parent")), m_parentField), 1, 0);
 
@@ -218,22 +219,12 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
         m_cliPathField->setText(existingFolder->cliPath);
 
         const QString targetParentId = existingFolder->parentId.value_or(QString());
-        for (int i = 0; i < m_parentField->count(); ++i) {
-            if (m_parentField->itemData(i, kParentIdRole).toString() == targetParentId) {
-                m_parentField->setCurrentIndex(i);
-                break;
-            }
-        }
+        m_parentField->setSelectedFolderId(targetParentId);
     } else if (!suggestedParentId.isEmpty()) {
         // Pré-preenchimento na criação (feedback do usuário:
         // usar a pasta/aba selecionada como pasta pai sugerida). O
         // usuário ainda pode trocar livremente antes de salvar.
-        for (int i = 0; i < m_parentField->count(); ++i) {
-            if (m_parentField->itemData(i, kParentIdRole).toString() == suggestedParentId) {
-                m_parentField->setCurrentIndex(i);
-                break;
-            }
-        }
+        m_parentField->setSelectedFolderId(suggestedParentId);
     }
 
     // Combo de perfil: depende de já sabermos se a pasta tem pai (para
@@ -352,30 +343,29 @@ void FolderEditorDialog::handleAcceptRequested()
 
 void FolderEditorDialog::populateParentCombo(const QVector<core::Folder> &allFolders, const QString &excludeId)
 {
-    m_parentField->clear();
-    m_parentField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
-    m_parentField->setItemData(0, QString(), kParentIdRole);
-
     // Uma pasta não pode ser pai de si mesma nem de nenhum de seus
     // descendentes (evita ciclo na hierarquia).
     const QSet<QString> forbiddenIds = excludeId.isEmpty()
         ? QSet<QString>()
         : (collectDescendantIds(allFolders, excludeId) << excludeId);
 
+    // Filtra as pastas permitidas (exclui forbiddenIds)
+    QVector<core::Folder> allowedFolders;
     for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
-        if (forbiddenIds.contains(folder.id)) {
-            continue;
+        if (!forbiddenIds.contains(folder.id)) {
+            allowedFolders.append(folder);
         }
-        m_parentField->addItem(folderComboLabel(allFolders, folder.id));
-        m_parentField->setItemData(m_parentField->count() - 1, folder.id, kParentIdRole);
     }
+
+    m_parentField->setFolders(allowedFolders);
+    m_parentField->enableNoneOption(utils::tr(QStringLiteral("folder.parent.none")));
     makeSearchableCombo(m_parentField); // busca no seletor de pasta-pai
 }
 
 void FolderEditorDialog::populateProfileCombo(const core::Folder *existingFolder)
 {
     const QString inherit = QString::fromLatin1(core::kInheritTerminalTarget);
-    const bool hasParent = !m_parentField->currentData(kParentIdRole).toString().isEmpty();
+    const bool hasParent = !m_parentField->selectedFolderId().isEmpty();
 
     m_profileField->clear();
     // "Herdar do pai": sempre disponível (herdar de uma pasta raiz recai no
@@ -414,7 +404,7 @@ core::Folder FolderEditorDialog::buildFromForm() const
     folder.id = m_existingId.isEmpty() ? generateFolderId(m_nameField->text()) : m_existingId;
     folder.name = m_nameField->text().trimmed();
 
-    const QString parentId = m_parentField->currentData(kParentIdRole).toString();
+    const QString parentId = m_parentField->selectedFolderId();
     folder.parentId = parentId.isEmpty() ? std::nullopt : std::make_optional(parentId);
 
     folder.isProject = m_isProjectField && m_isProjectField->isChecked();

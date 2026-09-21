@@ -170,13 +170,18 @@ void killProcessGroup(qint64 pid, int signal)
     }
 }
 #else
-// Encerra a ÁRVORE de processos inteira no Windows (bug real reportado:
-// matar só o cmd.exe deixava o bridge wsl.exe e a árvore no WSL órfãos —
-// "encerrar não funciona"). taskkill /T mata o processo E todos os filhos
-// (a árvore inteira, incluindo wsl.exe e o que ele gerou); /F força.
-// Executado de forma destacada (CREATE_NO_WINDOW) para não abrir console.
-// Retorna sem bloquear a GUI. Falha silenciosa se o PID já morreu.
-void killProcessTree(qint64 pid)
+// Encerra a ÁRVORE de processos inteira no Windows via `taskkill /T /F`,
+// spawnado de forma destacada (CREATE_NO_WINDOW). Era o mecanismo PRINCIPAL
+// (bug real reportado: matar só o cmd.exe deixava o bridge wsl.exe e a
+// árvore no WSL órfãos), mas esse padrão exato — processo pai criando via
+// CreateProcessW cru um processo filho oculto que roda taskkill /F — é uma
+// assinatura comportamental clássica de dropper/RAT, e o Windows Defender
+// chegou a matar o Kai por causa disso (bug reportado pelo usuário: "o
+// windows defender endoidou e matou meu kai"). Agora é só REDE DE SEGURANÇA:
+// só roda se o Job Object (ver createJobForProcess/terminateProcessTree, o
+// caminho principal) não pôde ser criado/atribuído no start. Falha
+// silenciosa se o PID já morreu.
+void killProcessTreeViaTaskkill(qint64 pid)
 {
     if (pid <= 0) {
         return;
@@ -195,6 +200,33 @@ void killProcessTree(qint64 pid)
         ::CloseHandle(pi.hProcess);
         ::CloseHandle(pi.hThread);
     }
+}
+
+// Cria um Job Object com JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (mata a árvore
+// inteira assim que o handle do job é fechado ou TerminateJobObject é
+// chamado) e atribui `processHandle` a ele. Este é o mecanismo NATIVO do
+// Windows para gerenciar árvores de processos — substitui o padrão
+// CreateProcessW+taskkill externo, que o Defender confundia com um
+// dropper/RAT. Retorna nullptr (e fecha o job) se qualquer etapa falhar;
+// o chamador cai para killProcessTreeViaTaskkill nesse caso.
+HANDLE createJobForProcess(HANDLE processHandle)
+{
+    HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+    if (!job) {
+        return nullptr;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+    ZeroMemory(&info, sizeof(info));
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+        ::CloseHandle(job);
+        return nullptr;
+    }
+    if (!::AssignProcessToJobObject(job, processHandle)) {
+        ::CloseHandle(job);
+        return nullptr;
+    }
+    return job;
 }
 #endif
 }
@@ -261,7 +293,7 @@ ProcessRunner::~ProcessRunner()
 #if defined(Q_OS_WIN)
     if (m_conProcess) {
         const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
-        killProcessTree(conPid); // mata cmd/wsl/filhos, não só o processo direto
+        terminateProcessTree(conPid); // mata cmd/wsl/filhos, não só o processo direto
         ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1);
         ::WaitForSingleObject(static_cast<HANDLE>(m_conProcess), 1000);
         if (m_conReader) {
@@ -317,7 +349,7 @@ ProcessRunner::~ProcessRunner()
         // só o processo direto — senão o wsl.exe e a árvore no WSL ficam
         // órfãos (bug reportado: "encerrar não funciona").
         const qint64 winPid = m_process->processId();
-        killProcessTree(winPid);
+        terminateProcessTree(winPid);
         if (!m_process->waitForFinished(m_killTimeoutMs)) {
             m_process->kill();
             m_process->waitForFinished(1000);
@@ -325,6 +357,21 @@ ProcessRunner::~ProcessRunner()
 #endif
     }
 }
+
+#if defined(Q_OS_WIN)
+void ProcessRunner::terminateProcessTree(qint64 pid)
+{
+    if (m_jobHandle) {
+        ::TerminateJobObject(static_cast<HANDLE>(m_jobHandle), 1);
+        ::CloseHandle(static_cast<HANDLE>(m_jobHandle));
+        m_jobHandle = nullptr;
+        return;
+    }
+    // Job Object não pôde ser criado/atribuído no start (raro) — rede de
+    // segurança via o `taskkill` externo de antes.
+    killProcessTreeViaTaskkill(pid);
+}
+#endif
 
 void ProcessRunner::setFastShutdown(bool enabled) { g_fastShutdown = enabled; }
 bool ProcessRunner::fastShutdown() { return g_fastShutdown; }
@@ -509,6 +556,20 @@ void ProcessRunner::start(const QString &command, const QString &workingDir, con
     m_process->start();
 
     if (m_process->waitForStarted(2000) || m_process->state() != QProcess::NotRunning) {
+#if defined(Q_OS_WIN)
+        // Fallback raro (ConPTY é o caminho principal no Windows, ver
+        // startWithConPty): job object aqui também, pelo mesmo motivo —
+        // encerrar a árvore sem depender de um `taskkill` externo. QProcess
+        // não oferece CREATE_SUSPENDED, então há uma janela de corrida
+        // pequena (processo já rodando antes do AssignProcessToJobObject);
+        // aceitável pois este caminho raramente é usado.
+        HANDLE procHandle = ::OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA,
+                                           FALSE, static_cast<DWORD>(m_process->processId()));
+        if (procHandle) {
+            m_jobHandle = createJobForProcess(procHandle);
+            ::CloseHandle(procHandle);
+        }
+#endif
         emit started();
     }
 }
@@ -848,9 +909,15 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
+    // CREATE_SUSPENDED: o processo nasce parado, sem executar nenhuma
+    // instrução, até o ResumeThread mais abaixo — feito de propósito para
+    // criar o Job Object e atribuir o processo a ele ANTES de deixá-lo
+    // rodar. Sem isso haveria uma janela de corrida em que o processo
+    // (e qualquer filho que ele gere rapidamente) já estaria fora do job
+    // se terminássemos logo em seguida.
     const BOOL ok = ::CreateProcessW(
         nullptr, mutableCmd.data(), nullptr, nullptr, FALSE,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
         envBlock.data(),
         wcwd.c_str(),
         &si.StartupInfo, &pi);
@@ -871,6 +938,21 @@ bool ProcessRunner::startWithConPty(const QString &command, const QString &worki
     m_conOutRead = outRead;
     m_conProcess = pi.hProcess;
     m_conThread = pi.hThread;
+
+    // Job Object ANTES de liberar a thread (ver comentário do
+    // CREATE_SUSPENDED acima e de m_jobHandle no header) — mecanismo
+    // principal de encerramento de árvore, substitui o antigo
+    // CreateProcessW+taskkill externo que o Defender confundia com um
+    // dropper/RAT. Se falhar (raro), terminateProcessTree() cai pro
+    // taskkill como rede de segurança; o processo segue normalmente de
+    // qualquer forma.
+    m_jobHandle = createJobForProcess(pi.hProcess);
+    if (!m_jobHandle) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Job Object não pôde ser criado/atribuído (err=%1); fallback taskkill no encerramento.")
+                .arg(::GetLastError()));
+    }
+    ::ResumeThread(pi.hThread);
 
     utils::Logger::info(kLogTag,
         QStringLiteral("Comando iniciado sob ConPTY (pid=%1): %2").arg((qulonglong)pi.dwProcessId).arg(command));
@@ -976,6 +1058,9 @@ void ProcessRunner::cleanupConPty()
     if (m_conOutRead) { ::CloseHandle(m_conOutRead); m_conOutRead = nullptr; }
     if (m_conProcess) { ::CloseHandle(m_conProcess); m_conProcess = nullptr; }
     if (m_conThread)  { ::CloseHandle(m_conThread);  m_conThread = nullptr; }
+    // Processo já saiu sozinho (não passou por terminateProcessTree, que já
+    // fecharia isto) — fecha o job aqui pra não vazar o handle.
+    if (m_jobHandle)  { ::CloseHandle(static_cast<HANDLE>(m_jobHandle)); m_jobHandle = nullptr; }
 #endif
 }
 
@@ -997,15 +1082,15 @@ void ProcessRunner::stop()
     if (m_conProcess) {
         const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
         utils::Logger::info(kLogTag,
-            QStringLiteral("Encerrando árvore de processos (ConPTY, pid=%1) via taskkill /T /F.").arg(conPid));
-        killProcessTree(conPid);
+            QStringLiteral("Encerrando árvore de processos (ConPTY, pid=%1) via Job Object.").arg(conPid));
+        terminateProcessTree(conPid);
         ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1); // reforço
         Q_UNUSED(pid);
         return;
     }
     utils::Logger::info(kLogTag,
-        QStringLiteral("Encerrando árvore de processos (pid=%1) via taskkill /T /F.").arg(pid));
-    killProcessTree(pid);
+        QStringLiteral("Encerrando árvore de processos (pid=%1) via Job Object.").arg(pid));
+    terminateProcessTree(pid);
     // Reforço via QProcess caso o taskkill não pegue (ex: pid inválido).
     QTimer::singleShot(m_killTimeoutMs, this, [this]() {
         if (isRunning()) {
@@ -1026,6 +1111,53 @@ void ProcessRunner::stop()
             killProcessGroup(pid, SIGKILL);
         }
     });
+#endif
+}
+
+void ProcessRunner::forceStop()
+{
+    if (!isRunning()) {
+        return;
+    }
+
+    m_stopRequested = true;
+    // Mesma prioridade do stop() gracioso: mata o lado remoto (WSL) primeiro.
+    fireRemoteKill();
+
+#if defined(Q_OS_WIN)
+    if (m_conProcess) {
+        const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Forçando encerramento imediato (ConPTY, pid=%1) via Job Object.").arg(conPid));
+        terminateProcessTree(conPid);
+        ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1);
+        return;
+    }
+    const qint64 pid = processId();
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Forçando encerramento imediato (pid=%1) via Job Object.").arg(pid));
+    terminateProcessTree(pid);
+    if (isRunning()) {
+        m_process->kill();
+    }
+#else
+    if (m_ptyMasterFd >= 0 && m_ptyChildPid > 0) {
+        // Modo PTY (Unix): SIGKILL direto no grupo, sem SIGTERM nem espera.
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Forçando encerramento imediato (SIGKILL) do grupo de processos (PTY)."));
+        killProcessGroup(m_ptyChildPid, SIGKILL);
+        int status = 0;
+        ::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, 0);
+        cleanupPty();
+        return;
+    }
+    const qint64 pid = processId();
+    utils::Logger::info(kLogTag,
+        QStringLiteral("Forçando encerramento imediato (SIGKILL) do grupo de processos."));
+    killProcessGroup(pid, SIGKILL);
+    if (isRunning()) {
+        m_process->waitForFinished(500);
+    }
 #endif
 }
 
@@ -1220,6 +1352,14 @@ void ProcessRunner::handleFinished(int exitCode, QProcess::ExitStatus exitStatus
 
     utils::Logger::info(kLogTag,
         QStringLiteral("Processo finalizado. exitCode=%1 crashed=%2").arg(exitCode).arg(result.crashed));
+
+#if defined(Q_OS_WIN)
+    // Processo (caminho QProcess/cmd.exe) já saiu sozinho — fecha o job
+    // aqui pra não vazar o handle (o caminho ConPTY equivalente é
+    // cleanupConPty(); terminateProcessTree() já fecha quando é ELE quem
+    // mata o processo).
+    if (m_jobHandle) { ::CloseHandle(static_cast<HANDLE>(m_jobHandle)); m_jobHandle = nullptr; }
+#endif
 
     // Drena qualquer saída remanescente nos buffers ANTES de emitir
     // finished. Bug real corrigido (descoberto por teste, T9): quando um

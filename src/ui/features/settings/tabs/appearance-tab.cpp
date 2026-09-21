@@ -345,6 +345,15 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
     m_fxAnimationsField->setChecked(currentSettings.fxAnimations);
     fxLayout->addWidget(m_fxAnimationsField);
 
+    // Gradientes de tema (pedido do usuário): cada tema já define os pares
+    // de cor pra janela/header/sidebar/badges — este switch é só o
+    // interruptor mestre pra quem prefere um visual mais chapado/sólido.
+    m_gradientsEnabledField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.gradients")), fxGroup);
+    m_gradientsEnabledField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_gradientsEnabledField->setChecked(currentSettings.gradientsEnabled);
+    m_gradientsEnabledField->setToolTip(utils::tr(QStringLiteral("settings.fx.gradients.hint")));
+    fxLayout->addWidget(m_gradientsEnabledField);
+
     layout->addWidget(fxGroup);
     layout->addStretch();
 }

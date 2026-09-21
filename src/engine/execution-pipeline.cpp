@@ -144,6 +144,11 @@ void ExecutionPipeline::setHookTimeoutMs(int ms)
     m_hookTimeoutMs = ms;
 }
 
+void ExecutionPipeline::setGracefulStopTimeoutMs(int ms)
+{
+    m_gracefulStopTimeoutMs = ms;
+}
+
 void ExecutionPipeline::setTerminalProfiles(const QVector<core::TerminalProfile> &targets)
 {
     m_terminalProfiles = targets;
@@ -780,6 +785,7 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     }
     auto runner = std::make_unique<ProcessRunner>();
     ProcessRunner *rawRunner = runner.get();
+    rawRunner->setKillTimeoutMs(m_gracefulStopTimeoutMs);
     m_runners.insert_or_assign(command.id, std::move(runner));
     m_activeRunnerCommandId = command.id; // dono do runner atual (compat)
 

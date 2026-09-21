@@ -36,11 +36,17 @@ public:
     // opções são reordenadas com os valores mais usados no topo e o combo
     // ganha busca (editable + completer). Após aceitar, updatedUsageHistory()
     // devolve o histórico atualizado para o chamador persistir.
+    // `collectionFilters` (opcional): busca + favoritos salvos por
+    // Collection::id (ver core::CollectionFilterState), reaplicados ao
+    // abrir a tela de seleção dedicada de cada param ligado a uma coleção.
+    // Após aceitar, updatedCollectionFilters() devolve o mapa atualizado
+    // para o chamador persistir via ConfigManager::saveCollectionFilters.
     explicit ParameterFormDialog(const QVector<core::Parameter> &params, QWidget *parent = nullptr,
                                   const QMap<QString, QString> &lastValues = {},
                                   const QMap<QString, QStringList> &usageHistory = {},
                                   const QVector<core::Collection> &collections = {},
-                                  const QString &description = {});
+                                  const QString &description = {},
+                                  const QMap<QString, core::CollectionFilterState> &collectionFilters = {});
 
     // Retorna o mapa nome_da_variável -> valor preenchido, pronto para ser
     // aplicado como "Parâmetros do Formulário" no EnvironmentManager
@@ -56,6 +62,12 @@ public:
     // tela de seleção). O chamador persiste se collectionsChanged() for true.
     QVector<core::Collection> updatedCollections() const { return m_collections; }
     bool collectionsChanged() const { return m_collectionsChanged; }
+
+    // Busca + favoritos-only atualizados de cada coleção cujo seletor foi
+    // aberto nesta sessão (coleções nunca abertas mantêm o valor recebido
+    // no construtor) — o chamador persiste via
+    // ConfigManager::saveCollectionFilters.
+    QMap<QString, core::CollectionFilterState> updatedCollectionFilters() const { return m_collectionFilters; }
 
     // Diretrizes da tela de Params (pedido do usuário): true só quando todo
     // parâmetro OBRIGATÓRIO (!optional) tem um valor não-vazio no momento —
@@ -101,6 +113,7 @@ private:
     // na tela de seleção dedicada, por nome de parâmetro (suporta multi).
     QMap<QString, QStringList> m_collectionSelectionByParam;
     bool m_collectionsChanged = false;
+    QMap<QString, core::CollectionFilterState> m_collectionFilters;
     // Parâmetros OPCIONAIS (Parameter::optional): a checkbox "Informar
     // <label>?" de cada um, pra lembrar se estava marcada da última vez
     // (pedido do usuário: "o sistema deve lembrar da opção selecionada se

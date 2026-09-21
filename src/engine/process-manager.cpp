@@ -77,6 +77,17 @@ void ProcessManager::stop(const QString &commandId)
     it->second.runner->stop();
 }
 
+void ProcessManager::forceStop(const QString &commandId)
+{
+    auto it = m_processes.find(commandId);
+    if (it == m_processes.end()) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Tentativa de forçar parada de processo não rastreado: '%1'.").arg(commandId));
+        return;
+    }
+    it->second.runner->forceStop();
+}
+
 void ProcessManager::remove(const QString &commandId)
 {
     auto it = m_processes.find(commandId);

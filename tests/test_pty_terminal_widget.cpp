@@ -278,6 +278,34 @@ private slots:
         QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(cw * 8 + cw / 2, y));
         QVERIFY(!widget.hasSelection());
     }
+
+    // Bug relatado: "se eu der um ctrl v no term avançado ele copia
+    // errado o valor" — colar texto com quebra de linha CRLF ("\r\n",
+    // como vem do clipboard do Windows/Notepad/navegador, mesmo rodando
+    // fora do Windows) sem normalizar mandava um "\r" cru JUNTO do "\n"
+    // pro terminal; "\r" é um caractere de controle de verdade ("volta o
+    // cursor pro início da linha"), interpretado na hora — o texto colado
+    // saía com pedaços sobrescritos/embaralhados. rawInputBytes() é o que
+    // de fato sai pro PTY (ver outputCallbackTrampoline): os bytes brutos
+    // de cada quebra de linha colada precisam virar um ÚNICO "\r".
+    void pastingClipboardTextNormalizesCrlfLineEndings()
+    {
+        PtyTerminalWidget widget;
+        widget.resize(400, 300);
+        widget.setAcceptingInput(true);
+        QGuiApplication::clipboard()->setText(QStringLiteral("linha1\r\nlinha2"));
+
+        QSignalSpy spy(&widget, &PtyTerminalWidget::rawInputBytes);
+        QTest::keyClick(&widget, Qt::Key_V, Qt::ControlModifier);
+
+        QByteArray sent;
+        for (const QList<QVariant> &args : spy) {
+            sent += args.at(0).toByteArray();
+        }
+        QVERIFY2(!sent.contains("\r\n"), "CRLF cru vazou pro PTY (deveria virar um só '\\r')");
+        QVERIFY2(!sent.contains('\n'), "'\\n' cru vazou pro PTY (deveria ter virado '\\r')");
+        QVERIFY(sent.contains('\r'));
+    }
 };
 
 QTEST_MAIN(TestPtyTerminalWidget)

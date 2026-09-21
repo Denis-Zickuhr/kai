@@ -55,6 +55,13 @@ public:
     // Timeout aplicado a cada hook individualmente (default 30s).
     void setHookTimeoutMs(int ms);
 
+    // Tempo de espera entre SIGTERM e SIGKILL ao clicar em "Parar" (não
+    // "Forçar parada" — ver ProcessRunner::forceStop, que ignora isto de
+    // propósito). Configurável em Configurações -> Geral
+    // (SettingsData::gracefulStopTimeoutSec); aplicado a cada ProcessRunner
+    // no momento em que ele é criado (ver runSingleCommand).
+    void setGracefulStopTimeoutMs(int ms);
+
     // Dispara os hooks de CLEANUP do comando informado. Roda em TODOS os
     // términos: sucesso, falha, crash, Stop/Force-stop manual e Reset.
     // Fire-and-forget: cada cleanup é independente, não altera o resultado do
@@ -218,6 +225,9 @@ private:
     // OUTRAS execuções em paralelo (ver comentário em abort()).
     QSet<QString> m_currentChainCommandIds;
     int m_hookTimeoutMs = 30000;
+    // Default 2000ms = comportamento histórico antes de virar configurável
+    // (ProcessRunner::m_killTimeoutMs também nasce com este mesmo default).
+    int m_gracefulStopTimeoutMs = 2000;
     QVector<core::TerminalProfile> m_terminalProfiles;
     QVector<core::Folder> m_folders;
 

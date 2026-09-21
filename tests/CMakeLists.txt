@@ -11,11 +11,13 @@ endfunction()
 
 kai_add_test(test_environment_manager test_environment_manager.cpp)
 kai_add_test(test_config_manager test_config_manager.cpp)
+kai_add_test(test_models test_models.cpp)
 kai_add_test(test_autostart_manager test_autostart_manager.cpp)
 kai_add_test(test_drag_reorder test_drag_reorder.cpp)
 kai_add_test(test_collection_model test_collection_model.cpp)
 kai_add_test(test_collection_editor test_collection_editor.cpp)
 kai_add_test(test_collection_selector test_collection_selector.cpp)
+kai_add_test(test_collection_chip_picker test_collection_chip_picker.cpp)
 kai_add_test(test_json_viewer test_json_viewer.cpp)
 kai_add_test(test_links test_links.cpp)
 kai_add_test(test_elapsed_timer test_elapsed_timer.cpp)
@@ -27,6 +29,7 @@ kai_add_test(test_project_collections test_project_collections.cpp)
 kai_add_test(test_process_runner test_process_runner.cpp)
 kai_add_test(test_execution_pipeline test_execution_pipeline.cpp)
 kai_add_test(test_output_responder test_output_responder.cpp)
+kai_add_test(test_output_tabs test_output_tabs.cpp)
 kai_add_test(test_ansi_text_parser test_ansi_text_parser.cpp)
 kai_add_test(test_fuzzy_search test_fuzzy_search.cpp)
 kai_add_test(test_theme_manager test_theme_manager.cpp)
@@ -49,6 +52,16 @@ kai_add_test(test_usability_adjustments test_usability_adjustments.cpp)
 kai_add_test(test_ux_revamp test_ux_revamp.cpp)
 kai_add_test(test_shortcut_system test_shortcut_system.cpp)
 kai_add_test(test_window_visibility test_window_visibility.cpp)
+# Força a plataforma Qt "offscreen": os testes deste arquivo assumem
+# explicitamente esse ambiente (ver comentário "offscreen: nunca registra"
+# em shouldStartVisibleIsTrueByDefaultRegardlessOfHotkey) — sem isto, rodar
+# com um DISPLAY X11 real disponível (ex: dev container com Xvfb/WSLg)
+# deixa o QHotkey registrar de verdade, contradizendo a suposição do teste
+# de forma dependente do que mais estiver segurando aquele atalho global no
+# display no momento (bug real: falha "flaky" que na verdade é
+# determinística pelo estado do grab X11 compartilhado, não aleatória).
+set_tests_properties(test_window_visibility PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 kai_add_test(test_command_modes test_command_modes.cpp)
 kai_add_test(test_translation_manager test_translation_manager.cpp)
 kai_add_test(test_welcome_screen test_welcome_screen.cpp)
@@ -76,3 +89,5 @@ kai_add_test(test_date_param_format test_date_param_format.cpp)
 kai_add_test(test_cli_path_resolver test_cli_path_resolver.cpp)
 kai_add_test(test_cli_param_binder test_cli_param_binder.cpp)
 kai_add_test(test_cli_local_executor test_cli_local_executor.cpp)
+kai_add_test(test_cron_expression test_cron_expression.cpp)
+kai_add_test(test_cron_scheduler test_cron_scheduler.cpp)

@@ -124,6 +124,16 @@ QString hoverBg()
     });
 }
 
+QString treeStripeBg()
+{
+    // Listra de zebra SUTIL das árvores/listas (estilo CopyQ): mesmo desvio
+    // mínimo já usado em app-stylesheet.cpp, exposto aqui como token para
+    // ser reaproveitado por quem pinta a linha manualmente (ex:
+    // DraggableTreeWidget, que assume o fundo da linha inteira para não
+    // deixar vão entre colunas no hover — ver command-tree-widget.cpp).
+    return hex(mix(QColor(bg()), QColor(fg()), isDarkTheme() ? 0.035 : 0.028));
+}
+
 QString surface()
 {
     // 0.08 (era 0.05): bug visual real reportado com print ("antes pedi
@@ -211,37 +221,64 @@ QString dangerBg()
     return derived(QStringLiteral("danger_bg"), [] { return QStringLiteral("#e81123"); });
 }
 
-// --- Gradiente dinâmico opcional (painel inicial) ---
-bool hasGradient()
+// --- Gradientes dinâmicos opcionais, em 3 bases (primary/secondary/
+// tertiary) — ver comentário completo no .h ---
+namespace {
+bool g_gradientsEnabled = true;
+
+// "primary" -> "gradient_primary_start"; "" (vazio, não usado pelas 3
+// bases atuais, só por chamadas legadas em teste) -> "gradient_start".
+QString gradientKey(const QString &slot, const QString &suffix)
 {
-    return !g_vars.value(QStringLiteral("gradient_start")).isEmpty()
-        && !g_vars.value(QStringLiteral("gradient_end")).isEmpty();
+    return slot.isEmpty()
+        ? (QStringLiteral("gradient_") + suffix)
+        : (QStringLiteral("gradient_") + slot + QStringLiteral("_") + suffix);
+}
+} // namespace
+
+void setGradientsEnabled(bool enabled)
+{
+    g_gradientsEnabled = enabled;
 }
 
-QString gradientStart()
+bool gradientsEnabled()
 {
-    return value(QStringLiteral("gradient_start"), accent());
+    return g_gradientsEnabled;
 }
 
-QString gradientEnd()
+bool hasGradient(const QString &slot)
 {
-    return value(QStringLiteral("gradient_end"), surface2());
+    if (!g_gradientsEnabled) {
+        return false;
+    }
+    return !g_vars.value(gradientKey(slot, QStringLiteral("start"))).isEmpty()
+        && !g_vars.value(gradientKey(slot, QStringLiteral("end"))).isEmpty();
 }
 
-int gradientAngle()
+QString gradientStart(const QString &slot)
 {
-    return intToken(QStringLiteral("gradient_angle"), 135);
+    return value(gradientKey(slot, QStringLiteral("start")), accent());
 }
 
-QString gradientQss(const QString &property)
+QString gradientEnd(const QString &slot)
 {
-    if (!hasGradient()) {
+    return value(gradientKey(slot, QStringLiteral("end")), surface2());
+}
+
+int gradientAngle(const QString &slot)
+{
+    return intToken(gradientKey(slot, QStringLiteral("angle")), 135);
+}
+
+QString gradientQss(const QString &property, const QString &slot)
+{
+    if (!hasGradient(slot)) {
         return QString();
     }
     // Converte o ângulo (0°=esquerda->direita, 90°=cima->baixo, sentido
     // horário, convenção CSS) num par de pontos x1/y1/x2/y2 normalizados
     // [0,1] que o QSS do Qt usa (não entende "deg" diretamente).
-    const qreal rad = qDegreesToRadians(static_cast<qreal>(gradientAngle()));
+    const qreal rad = qDegreesToRadians(static_cast<qreal>(gradientAngle(slot)));
     const qreal dx = qSin(rad);
     const qreal dy = -qCos(rad);
     const qreal x1 = 0.5 - dx * 0.5, y1 = 0.5 - dy * 0.5;
@@ -250,7 +287,7 @@ QString gradientQss(const QString &property)
                           "stop:0 %6, stop:1 %7);")
         .arg(property)
         .arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3).arg(x2, 0, 'f', 3).arg(y2, 0, 'f', 3)
-        .arg(gradientStart(), gradientEnd());
+        .arg(gradientStart(slot), gradientEnd(slot));
 }
 
 // --- Métricas: o estilo de canto escolhido no Settings escala os raios ---

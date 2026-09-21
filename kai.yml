@@ -151,12 +151,13 @@ commands:
     folder: Release
     type: shell
     icon: eye
-    command: gh release view v1.0.1 --json tagName,assets
+    command: gh release view "$(git describe --tags --abbrev=0)" --json tagName,assets
     working_dir: "{{PROJECT_PATH}}"
 
-  - name: Publicar artefatos na release (substitui os atuais)
+  - name: Rodar release.sh (bump + build + tag + push + publish)
     folder: Release
     type: shell
-    icon: upload
-    command: gh release upload v1.0.1 dist/kai-1.0.1-linux-x86_64.AppImage dist/kai-1.0.1-setup.exe dist/kai-1.0.1-windows-x86_64.zip --clobber
+    icon: rocket
+    command: ./packaging/release.sh
     working_dir: "{{PROJECT_PATH}}"
+    is_background: true

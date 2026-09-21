@@ -291,6 +291,44 @@ private:
         QVERIFY(loaded.fxBlur);
         QVERIFY(loaded.fxAnimations);
     }
+
+    // Feature pedida pelo usuário: "os filtros de coleções devem ser
+    // salvos, inclusive se exibe ou não favoritos... salvar na config
+    // mesmo, id -> config, não na coleção". Arquivo separado
+    // (collection-filters.json), igual dynamic-vars.json.
+    void collectionFiltersRoundTripByCollectionId()
+    {
+        ConfigManager manager;
+
+        QMap<QString, CollectionFilterState> data;
+        CollectionFilterState a;
+        a.search = QStringLiteral("alice");
+        a.favoritesOnly = true;
+        data[QStringLiteral("col1")] = a;
+        CollectionFilterState b;
+        b.search = QStringLiteral("");
+        b.favoritesOnly = false;
+        data[QStringLiteral("col2")] = b;
+        QVERIFY(manager.saveCollectionFilters(data));
+
+        // Não deve tocar em collections.json (dado autorado da coleção) —
+        // fica em arquivo separado.
+        QVERIFY(!QFile::exists(manager.collectionsFilePath()));
+
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QCOMPARE(loaded.size(), 2);
+        QCOMPARE(loaded.value(QStringLiteral("col1")).search, QStringLiteral("alice"));
+        QVERIFY(loaded.value(QStringLiteral("col1")).favoritesOnly);
+        QCOMPARE(loaded.value(QStringLiteral("col2")).search, QString());
+        QVERIFY(!loaded.value(QStringLiteral("col2")).favoritesOnly);
+    }
+
+    void loadingMissingCollectionFiltersFileReturnsEmptyMapWithoutCrash()
+    {
+        ConfigManager manager;
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QVERIFY(loaded.isEmpty());
+    }
 };
 
 QTEST_MAIN(TestConfigManager)

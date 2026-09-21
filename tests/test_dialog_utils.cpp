@@ -3,6 +3,9 @@
 #include <QWidget>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QComboBox>
+#include <QCompleter>
+#include <QAbstractItemView>
 
 #include "ui/shared/dialog-utils.h"
 
@@ -74,6 +77,28 @@ private slots:
     void nullDialogIsNoOp()
     {
         centerOnParent(nullptr);
+    }
+
+    // Bug relatado: "o select de coleções deve ter o mesmo estilo do
+    // select normal, ainda não tem" — o popup do QCompleter de um combo
+    // pesquisável (Pasta em Coleções/Pastas/Comandos, Coleção num
+    // parâmetro, etc.) tinha seu próprio QSS mantido À PARTE do resto do
+    // app, e tinha ficado pra trás: faltava o estado ":hover" que a regra
+    // "QComboBox QAbstractItemView" de buildModernStylesheet() (o select
+    // comum) já tinha, deixando os dois com aparência diferente.
+    void makeSearchableComboPopupHasHoverStateLikeRegularComboPopup()
+    {
+        QComboBox combo;
+        combo.addItem(QStringLiteral("a"));
+        combo.addItem(QStringLiteral("b"));
+        makeSearchableCombo(&combo);
+
+        QCompleter *completer = combo.completer();
+        QVERIFY(completer != nullptr);
+        QAbstractItemView *popup = completer->popup();
+        QVERIFY(popup != nullptr);
+        QVERIFY2(popup->styleSheet().contains(QStringLiteral("item:hover")),
+                 "popup do combo pesquisável não tem regra de hover, igual ao select comum");
     }
 };
 

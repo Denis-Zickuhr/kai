@@ -17,6 +17,7 @@
 #include "ui/features/command-editor/parameter-form-dialog.h"
 #include "ui/shared/inline-code-field.h"
 #include "ui/shared/collapsible-section-card.h"
+#include "ui/shared/collection-chip-picker.h"
 #include "core/models.h"
 
 using namespace kai::ui;
@@ -482,6 +483,85 @@ private slots:
         QVERIFY(updated.contains(QStringLiteral("dev")));
         QVERIFY(updated.contains(QStringLiteral("prod")));
         QCOMPARE(updated.count(), 2);
+    }
+
+    // Bug reportado: "se eu executar um cmd de coleções ele não lembra o
+    // ultimo valor executado (multiplas entries)". A pré-seleção de um
+    // parâmetro ligado a uma coleção comparava o initialValue INTEIRO
+    // (CSV, ex: "id1,id2") contra o id de UMA entrada só — nunca batia
+    // quando mais de um valor tinha sido escolhido da última vez, então
+    // m_collectionSelectionByParam ficava vazio e values() devolvia "".
+    void collectionParamRemembersMultipleLastSelectedValues()
+    {
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.schema = {CollectionField{QStringLiteral("name"), QStringLiteral("Nome"),
+            CollectionFieldType::Text, true, false}};
+        CollectionEntry e1;
+        e1.id = QStringLiteral("id1");
+        e1.values[QStringLiteral("name")] = QStringLiteral("Alice");
+        CollectionEntry e2;
+        e2.id = QStringLiteral("id2");
+        e2.values[QStringLiteral("name")] = QStringLiteral("Bob");
+        col.entries = {e1, e2};
+
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("usuario");
+        p.type = ParameterType::Select;
+        p.collectionId = col.id;
+        p.collectionDisplayField = QStringLiteral("name");
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("usuario")] = QStringLiteral("id1,id2");
+
+        ParameterFormDialog dialog(params, nullptr, initial, {}, {col});
+        const QMap<QString, QString> values = dialog.values();
+        // As DUAS entradas salvas da última execução devem ser lembradas,
+        // não só a primeira (ou nenhuma).
+        QCOMPARE(values.value(QStringLiteral("usuario")), QStringLiteral("id1,id2"));
+    }
+
+    // Bug relatado: "ele ta renderizando o id, era pra renderizar o nome".
+    // Sem collectionDisplayField explícito, numa coleção com o schema
+    // PADRÃO [Key, Value] (Collection::defaultSchema), a chip devia
+    // mostrar o campo Value (texto amigável), não cair cegamente no
+    // PRIMEIRO campo do schema (que é o Key, um identificador).
+    void collectionChipShowsValueFieldNotKeyFieldWhenNoDisplayFieldConfigured()
+    {
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.schema = Collection::defaultSchema(); // [Key, Value], nessa ordem
+        CollectionEntry e1;
+        e1.id = QStringLiteral("id1");
+        e1.values[QStringLiteral("key")] = QStringLiteral("ep_1"); // parece um id
+        e1.values[QStringLiteral("value")] = QStringLiteral("Alice Employee");
+        col.entries = {e1};
+
+        QVector<Parameter> params;
+        Parameter p;
+        p.name = QStringLiteral("usuario");
+        p.type = ParameterType::Select;
+        p.collectionId = col.id;
+        // collectionDisplayField DELIBERADAMENTE não configurado.
+        params << p;
+
+        QMap<QString, QString> initial;
+        initial[QStringLiteral("usuario")] = QStringLiteral("id1");
+
+        ParameterFormDialog dialog(params, nullptr, initial, {}, {col});
+        auto *picker = dialog.findChild<CollectionChipPickerWidget *>();
+        QVERIFY(picker != nullptr);
+        const QList<QLabel *> labels = picker->findChildren<QLabel *>();
+        QVERIFY2(!labels.isEmpty(), "nenhuma chip renderizada");
+        bool foundValueText = false;
+        for (QLabel *lbl : labels) {
+            if (lbl->text() == QStringLiteral("Alice Employee")) { foundValueText = true; break; }
+            QVERIFY2(lbl->text() != QStringLiteral("ep_1"),
+                     "chip mostrou o campo Key (parece um id) em vez do Value");
+        }
+        QVERIFY2(foundValueText, "chip não mostrou o campo Value esperado");
     }
 
     // Feature pedida pelo usuário: "possibilidade de criar grupo de dados,

@@ -25,6 +25,7 @@ constexpr const char *kCommandsFileName = "commands.json";
 constexpr const char *kSettingsFileName = "settings.json";
 constexpr const char *kCollectionsFileName = "collections.json";
 constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
+constexpr const char *kCollectionFiltersFileName = "collection-filters.json";
 
 QString shellFlavorToString(ShellFlavor s)
 {
@@ -130,6 +131,40 @@ bool ConfigManager::savePersistedDynamicVars(const QMap<QString, QMap<QString, Q
         root[jsonKey] = scopeObj;
     }
     return writeJsonAtomic(dynamicVarsFilePath(), QJsonDocument(root));
+}
+
+QString ConfigManager::collectionFiltersFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kCollectionFiltersFileName));
+}
+
+QMap<QString, CollectionFilterState> ConfigManager::loadCollectionFilters()
+{
+    QMap<QString, CollectionFilterState> result;
+    if (!QFile::exists(collectionFiltersFilePath())) {
+        return result; // primeira execução / nada persistido ainda — normal.
+    }
+    const QJsonObject root = readJsonWithRecovery(collectionFiltersFilePath());
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+        const QJsonObject obj = it.value().toObject();
+        CollectionFilterState state;
+        state.search = obj.value(QStringLiteral("search")).toString();
+        state.favoritesOnly = obj.value(QStringLiteral("favoritesOnly")).toBool();
+        result[it.key()] = state;
+    }
+    return result;
+}
+
+bool ConfigManager::saveCollectionFilters(const QMap<QString, CollectionFilterState> &data)
+{
+    QJsonObject root;
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        QJsonObject obj;
+        obj[QStringLiteral("search")] = it.value().search;
+        obj[QStringLiteral("favoritesOnly")] = it.value().favoritesOnly;
+        root[it.key()] = obj;
+    }
+    return writeJsonAtomic(collectionFiltersFilePath(), QJsonDocument(root));
 }
 
 QString ConfigManager::backupCorruptedFile(const QString &filePath)
@@ -330,6 +365,9 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("fx_animations")) {
         data.fxAnimations = root.value("fx_animations").toBool();
     }
+    if (root.contains("gradients_enabled")) {
+        data.gradientsEnabled = root.value("gradients_enabled").toBool();
+    }
     if (root.contains("auto_hide_on_focus_loss")) {
         data.autoHideOnFocusLoss = root.value("auto_hide_on_focus_loss").toBool();
     }
@@ -477,6 +515,7 @@ SettingsData ConfigManager::loadSettings()
     data.outputCompact     = root.value("output_compact").toBool(data.outputCompact);
     data.outputFontSize    = root.value("output_font_size").toInt(data.outputFontSize);
     data.outputMaxLogSizeKb = root.value("output_max_log_size_kb").toInt(data.outputMaxLogSizeKb);
+    data.gracefulStopTimeoutSec = root.value("graceful_stop_timeout_sec").toInt(data.gracefulStopTimeoutSec);
     if (root.contains("autostart")) {
         data.autostart = root.value("autostart").toBool(false);
     }
@@ -668,6 +707,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["fx_translucency"] = data.fxTranslucency;
     root["fx_blur"] = data.fxBlur;
     root["fx_animations"] = data.fxAnimations;
+    root["gradients_enabled"] = data.gradientsEnabled;
     root["auto_hide_on_focus_loss"] = data.autoHideOnFocusLoss;
     root["window_mode"] = data.windowMode;
     root["window_width"] = data.windowWidth;
@@ -729,6 +769,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["output_compact"] = data.outputCompact;
     root["output_font_size"] = data.outputFontSize;
     root["output_max_log_size_kb"] = data.outputMaxLogSizeKb;
+    root["graceful_stop_timeout_sec"] = data.gracefulStopTimeoutSec;
     root["autostart"] = data.autostart;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
@@ -838,6 +879,7 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.fxTranslucency = result.settings.fxTranslucency;
         currentSettings.fxBlur = result.settings.fxBlur;
         currentSettings.fxAnimations = result.settings.fxAnimations;
+        currentSettings.gradientsEnabled = result.settings.gradientsEnabled;
         currentSettings.autoHideOnFocusLoss = result.settings.autoHideOnFocusLoss;
         currentSettings.windowMode = result.settings.windowMode;
         currentSettings.windowWidth = result.settings.windowWidth;
@@ -855,6 +897,7 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.outputCompact = result.settings.outputCompact;
         currentSettings.outputFontSize = result.settings.outputFontSize;
         currentSettings.outputMaxLogSizeKb = result.settings.outputMaxLogSizeKb;
+        currentSettings.gracefulStopTimeoutSec = result.settings.gracefulStopTimeoutSec;
         // global_env_vars é legado (pré-Environments) — mesclado (não
         // sobrescrito) para não apagar chaves locais que o pacote importado
         // não conhecia.
@@ -1110,6 +1153,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["fx_translucency"] = settings.fxTranslucency;
     settingsObj["fx_blur"] = settings.fxBlur;
     settingsObj["fx_animations"] = settings.fxAnimations;
+    settingsObj["gradients_enabled"] = settings.gradientsEnabled;
     settingsObj["auto_hide_on_focus_loss"] = settings.autoHideOnFocusLoss;
     settingsObj["window_mode"] = settings.windowMode;
     settingsObj["window_width"] = settings.windowWidth;
@@ -1133,6 +1177,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["output_compact"] = settings.outputCompact;
     settingsObj["output_font_size"] = settings.outputFontSize;
     settingsObj["output_max_log_size_kb"] = settings.outputMaxLogSizeKb;
+    settingsObj["graceful_stop_timeout_sec"] = settings.gracefulStopTimeoutSec;
     settingsObj["autostart"] = settings.autostart;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
@@ -1743,6 +1788,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.fxTranslucency = s.value("fx_translucency").toBool(result.settings.fxTranslucency);
         result.settings.fxBlur = s.value("fx_blur").toBool(result.settings.fxBlur);
         result.settings.fxAnimations = s.value("fx_animations").toBool(result.settings.fxAnimations);
+        result.settings.gradientsEnabled = s.value("gradients_enabled").toBool(result.settings.gradientsEnabled);
         result.settings.autoHideOnFocusLoss = s.value("auto_hide_on_focus_loss").toBool(result.settings.autoHideOnFocusLoss);
         result.settings.windowMode = s.value("window_mode").toString(result.settings.windowMode);
         result.settings.windowWidth = s.value("window_width").toInt(result.settings.windowWidth);
@@ -1787,6 +1833,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.outputCompact = s.value("output_compact").toBool(result.settings.outputCompact);
         result.settings.outputFontSize = s.value("output_font_size").toInt(result.settings.outputFontSize);
         result.settings.outputMaxLogSizeKb = s.value("output_max_log_size_kb").toInt(result.settings.outputMaxLogSizeKb);
+        result.settings.gracefulStopTimeoutSec = s.value("graceful_stop_timeout_sec").toInt(result.settings.gracefulStopTimeoutSec);
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {

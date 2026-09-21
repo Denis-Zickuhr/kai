@@ -18,6 +18,7 @@
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QShortcut;
 class QTabBar;
 class QTabWidget;
 class QTextBrowser;
@@ -223,6 +224,15 @@ protected:
 private:
     void setupUi();
     void rebuildOptionsMenu();
+    // Compartilhados pelo item de menu, pelo QShortcut (Ctrl+=/Ctrl+-) e
+    // pelo Ctrl+scroll (ver eventFilter) — um só lugar decide o cálculo do
+    // novo tamanho e dispara a persistência via viewOptionsChanged.
+    void increaseFontSize();
+    void decreaseFontSize();
+    // Copia a saída (texto cru) inteira pro clipboard — usado pelo botão
+    // dedicado na caixinha de ações do cabeçalho (antes um item do menu de
+    // opções, ver rebuildOptionsMenu).
+    void copyAllOutput();
     // Salva o texto cru acumulado num arquivo escolhido pelo usuário (ver
     // rebuildOptionsMenu — item "Extrair para arquivo").
     void exportOutputToFile();
@@ -287,16 +297,30 @@ private:
     QWidget *m_statusBadge = nullptr;
     QLabel *m_statusDot = nullptr;
     QLabel *m_statusLabel = nullptr;
-    QLabel *m_metricsLabel = nullptr; // status HTTP • tempo • tamanho
-    QToolButton *m_copyPidButton = nullptr; // copia o PID do processo pro clipboard
+    // m_metricsLabel removido: métricas HTTP migraram pra dentro da aba de
+    // Request (ver m_requestMetricsHeader).
+    // m_copyPidButton removido: o PID agora só vive no tooltip/clique do
+    // próprio m_statusBadge (ver setProcessPid).
     qint64 m_processPid = 0;
     QLabel *m_promptLabel = nullptr;
     QToolButton *m_optionsButton = nullptr;
     QToolButton *m_clearButton = nullptr; // atalho de "limpar saída" no cabeçalho (ver rebuildOptionsMenu)
+    QToolButton *m_copyOutputButton = nullptr; // copia a saída inteira pro clipboard
     QToolButton *m_exportButton = nullptr; // "Extrair para arquivo", ao lado da lixeira
+    QShortcut *m_increaseFontShortcut = nullptr; // Ctrl+=
+    QShortcut *m_decreaseFontShortcut = nullptr; // Ctrl+-
     QWidget *m_header = nullptr;
     QLabel *m_requestMethodBadge = nullptr;
     QLabel *m_requestUrlLabel = nullptr;
+    // Métricas HTTP (status/tempo/tamanho) — dentro da aba de Request desde
+    // a padronização de abas (antes soltas no header, ver m_metricsLabel,
+    // mantido só como fallback de compat com telas estreitas).
+    class OutputMetricsHeader *m_requestMetricsHeader = nullptr;
+    // Barra "verbo + URL" da aba Requisição — guardada pra reaplicar seu
+    // estilo (gradiente/cor de superfície) no live reload de tema (ver
+    // applyThemeVariables()); sem isso ficava presa nas cores calculadas na
+    // criação do widget, "chumbada" (relatado pelo usuário).
+    QWidget *m_requestUrlBar = nullptr;
     int m_headerHeight = 0;
     int m_barHeight = 0; // altura fixa única da barra (abas + ícones alinhados)
     QWidget *m_headerExtras = nullptr;
@@ -370,6 +394,7 @@ private:
     int m_outputCurrentMatchIndex = -1;
     JsonViewerWidget *m_jsonView = nullptr;
     QTableWidget *m_headersView = nullptr;
+    QWidget *m_headersPage = nullptr; // wrapper com margem em volta de m_headersView (identidade da página/aba)
     // Aba "Requisição" (feedback do usuário: "a aba de saída é meio inútil
     // pra requests http, podemos ver o que foi enviado?") — mostra
     // método+URL, headers e corpo REALMENTE enviados (já interpolados),

@@ -289,12 +289,14 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.fxTranslucency = m_appearanceTab->fxTranslucencyField()->isChecked();
     settings.fxBlur = m_appearanceTab->fxBlurField()->isChecked();
     settings.fxAnimations = m_appearanceTab->fxAnimationsField()->isChecked();
+    settings.gradientsEnabled = m_appearanceTab->gradientsEnabledField()->isChecked();
     // Modos de criação/edição de comando: seção removida da UI (obsoleta).
     // Preserva os valores existentes para não alterar o settings.json.
     settings.commandCreationMode = m_originalSettings.commandCreationMode;
     settings.commandEditMode = m_originalSettings.commandEditMode;
     settings.language = m_generalTab->languageField()->currentData().toString();
     settings.autostart = m_generalTab->autostartField()->isChecked();
+    settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
     // Campos NÃO editados neste diálogo são preservados do estado original
     // (feedback do usuário: as env globais foram para os Environments; não
     // podemos zerá-las nem os pacotes ao salvar as Configurações).

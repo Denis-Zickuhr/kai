@@ -44,6 +44,7 @@ QString buttonColor();   // botões primários (opcional "button_color", fallbac
 QString buttonFg();      // texto do botão primário (opcional "button_fg", auto por brilho)
 QString borderColor();   // borda sutil (derivado de bg/selBg)
 QString hoverBg();       // hover de item/botão
+QString treeStripeBg();  // listra de zebra sutil de árvores/listas
 
 // Superfícies em camadas (elevação por cor, estilo Material 3)
 QString surface();       // painel sobre o fundo
@@ -56,19 +57,44 @@ QString codeBg();
 QString codeFg();
 QString codeBorder();
 
-// Gradiente dinâmico opcional do tema (painel inicial/dashboard). Um tema
-// declara "gradient_start"/"gradient_end" (+ "gradient_angle" opcional, em
-// graus, padrão 135) para habilitar; sem essas variáveis, hasGradient()
-// retorna false e o chamador deve cair num background sólido (surface()).
-bool hasGradient();
-QString gradientStart();
-QString gradientEnd();
-int gradientAngle();
-// QSS pronto (ex: "background: qlineargradient(...);") usando `property`
-// como nome da propriedade CSS ("background-color" por padrão). Retorna
-// string vazia quando o tema não define gradiente — o chamador decide o
-// fallback.
-QString gradientQss(const QString &property = QStringLiteral("background-color"));
+// Gradientes dinâmicos opcionais do tema, em 3 BASES reutilizáveis (pedido
+// do usuário: "quero gradientes diferentes, para que o tema possa decidir
+// se usa ou não em tal lugar" — cada base cobre VÁRIAS áreas da UI de uma
+// vez, em vez de um slot por widget isolado):
+//   - "primary": chrome do app inteiro — janela (#rootContainer),
+//     diálogos, TopUtilityBar, árvore de comandos — E as superfícies da
+//     Saída (cartões da aba Requisição/Headers) e os cards reutilizáveis
+//     (makeSurfaceCard, CollapsibleSectionCard). "App e saídas".
+//   - "secondary": caixinhas de texto — QLineEdit/QComboBox/
+//     QPlainTextEdit/QTextEdit.
+//   - "tertiary": botões e entalhes — QPushButton[kaiRole="primary"],
+//     botão :default de diálogos, botão "+Adicionar" dos cards
+//     colapsáveis, logo da Welcome Screen.
+// Um tema declara uma base com "gradient_<base>_start"/"..._end" (+
+// "..._angle" opcional, em graus, padrão 135); sem essas duas variáveis
+// PARA AQUELA BASE, hasGradient(base) retorna false e o chamador deve cair
+// num background sólido (surface()/bg()/accent()/etc conforme o caso) —
+// cada base entra ou não, tema a tema, independente das outras duas.
+// `slot` (nome do parâmetro, preservado por compat) é o nome da base.
+bool hasGradient(const QString &slot = QString());
+QString gradientStart(const QString &slot = QString());
+QString gradientEnd(const QString &slot = QString());
+int gradientAngle(const QString &slot = QString());
+// QSS pronto (ex: "background-color: qlineargradient(...);") usando
+// `property` como nome da propriedade CSS ("background-color" por
+// padrão). Retorna string vazia quando o tema não define gradiente PARA
+// ESTE SLOT (ou quando gradientes estão desligados globalmente, ver
+// setGradientsEnabled) — o chamador decide o fallback.
+QString gradientQss(const QString &property = QStringLiteral("background-color"),
+                    const QString &slot = QString());
+
+// Liga/desliga TODOS os gradientes globalmente (Configurações -> Aparência
+// -> "Gradientes", pedido do usuário: "uma opção que desabilita os
+// gradientes"). Refletido em SettingsData::gradientsEnabled; hasGradient()
+// (qualquer slot) retorna false enquanto desligado, mesmo que o tema ativo
+// declare as variáveis — os chamadores não precisam checar os dois.
+void setGradientsEnabled(bool enabled);
+bool gradientsEnabled();
 
 // Semânticas de estado
 QString successFg();

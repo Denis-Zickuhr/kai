@@ -1,6 +1,7 @@
 #include "ui/features/collections/export-dialog.h"
 
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/folder-picker-widget.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 

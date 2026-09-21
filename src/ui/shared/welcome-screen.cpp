@@ -238,10 +238,11 @@ WelcomeScreen::WelcomeScreen(QWidget *parent)
         logoWidget = new QLabel(QStringLiteral("K"), centerCol);
         logoWidget->setFixedSize(56, 56);
         logoWidget->setAlignment(Qt::AlignCenter);
-        // Fundo em gradiente quando o tema ativo declara um (ex: Dracula
-        // roxo->rosa); cai no accent sólido em temas sem gradiente definido.
-        const QString logoBg = utils::tokens::hasGradient()
-            ? utils::tokens::gradientQss(QStringLiteral("background"))
+        // Fundo em gradiente quando o tema ativo declara a base "tertiary"
+        // (botões e entalhes — ex: Dracula roxo->rosa); cai no accent
+        // sólido em temas sem gradiente definido pra essa base.
+        const QString logoBg = utils::tokens::hasGradient(QStringLiteral("tertiary"))
+            ? utils::tokens::gradientQss(QStringLiteral("background"), QStringLiteral("tertiary"))
             : QStringLiteral("background-color: %1;").arg(utils::tokens::accent());
         logoWidget->setStyleSheet(QStringLiteral(
             "%1 color: white; border-radius: %2px; font-size: %3pt; font-weight: 700;")
@@ -436,9 +437,9 @@ QWidget *WelcomeScreen::buildProTipCard()
     // stop entra com a MESMA opacidade baixa do tint sólido anterior, só a
     // direção/cores vêm do tema; sem gradiente, cai no tint plano de accent.
     QString proTipBg;
-    if (utils::tokens::hasGradient()) {
-        QColor start(utils::tokens::gradientStart());
-        QColor end(utils::tokens::gradientEnd());
+    if (utils::tokens::hasGradient(QStringLiteral("tertiary"))) {
+        QColor start(utils::tokens::gradientStart(QStringLiteral("tertiary")));
+        QColor end(utils::tokens::gradientEnd(QStringLiteral("tertiary")));
         start.setAlphaF(0.10);
         end.setAlphaF(0.10);
         proTipBg = QStringLiteral(

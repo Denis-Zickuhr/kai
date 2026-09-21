@@ -16,10 +16,11 @@ namespace kai::ui {
 // decidido pelo MainWindow conforme a preferência de posicionamento de
 // cada grupo no Settings — ver MainWindow::applyActionGroupPlacement().
 //
-// "Ilha flutuante" em formato de pílula (mesma receita de cor da caixinha
-// de ações do painel de Saída — surface2 + radiusMd, sem borda), abraçando
-// só o conteúdo do grupo: nunca esticada para preencher a barra/coluna
-// inteira (ver refreshStyle() e o QSizePolicy do construtor).
+// Visual: as barras HORIZONTAIS (dentro da moldura da caixa de comandos) são
+// planas, como o cabeçalho da Saída — sem "ilha", só os ícones e uma linha
+// separadora (ver setEdgeSeparator). As colunas VERTICAIS (fora dela) têm a
+// própria moldura (borda 1px + radiusMd, igual aos painéis principais), com
+// os ícones soltos dentro (ver refreshStyle()).
 class ActionGroupContainer : public QWidget {
     Q_OBJECT
 
@@ -36,10 +37,32 @@ public:
     // troca de "Estilo de cantos" (ver MainWindow::applyAppearanceSettings).
     void refreshStyle();
 
+    // Só orientação horizontal: linha de 1px na borda dada (Bottom para a
+    // barra acima da árvore, Top para a de baixo), separando a barra do
+    // conteúdo como no cabeçalho da Saída. 0 = sem linha.
+    void setEdgeSeparator(Qt::Edge edge);
+
+    // Só orientação horizontal. Altura que o CONTEÚDO dos grupos pede e o ajuste
+    // da altura da barra: o MainWindow usa as duas para a Saída ter
+    // cabeçalho/rodapé da MESMA altura.
+    int naturalBarHeight() const;
+    void setBarHeight(int height);
+
+    // Largura "natural" do conteúdo (a pílula de ícones), não a do próprio
+    // container. Na orientação Vertical, sizeHint() do QWidget não serve —
+    // o widget expõe um QScrollArea (necessário pra não impor altura
+    // mínima ao terminal), e QScrollArea::sizeHint() é um valor genérico,
+    // independente do conteúdo real da pílula lá dentro. Usado pelo
+    // MainWindow para dar à coluna de ícones (que não é mais
+    // redimensionável por arraste) uma largura correta por padrão — ver
+    // MainWindow::applyActionGroupPlacement().
+    int contentWidth() const;
+
 private:
     QWidget *createSeparator();
 
     Qt::Orientation m_orientation;
+    Qt::Edge m_separatorEdge{};
     QBoxLayout *m_layout{nullptr};
     QVector<QWidget *> m_separators;
     // Quando VERTICAL (sidebar), o conteúdo vive dentro de um QScrollArea

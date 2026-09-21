@@ -17,8 +17,12 @@ private slots:
     void roundTripsListOfObjects();
     void preservesAccentedCharacters();
     void handlesEmptyContainersAndScalarTypes();
+    void parsesFlowSequencesAndMappings();
+    void braceTemplatesStayPlainStrings();
+    void hashInsideQuotesIsNotAComment();
     void looksLikeJsonDetectsFormat();
     void yamlOutputIsHumanReadableBlockStyle();
+    void roundTripsKipLastValuesWithSlashKeysAndMixedValues();
 };
 
 void TestYamlBridge::roundTripsSimpleObject()
@@ -120,5 +124,74 @@ void TestYamlBridge::yamlOutputIsHumanReadableBlockStyle()
     QVERIFY(yaml.contains(QStringLiteral(": true")));
 }
 
+// kip_last_values (spec 11 §7.2): chaves "promptId/campo" e valores de qualquer
+// tipo JSON (string, número, array, objeto, null) precisam sobreviver ao
+// ciclo exportar para YAML -> reimportar.
+void TestYamlBridge::roundTripsKipLastValuesWithSlashKeysAndMixedValues()
+{
+    const QString json = QStringLiteral(R"({"commands":[{"name":"Deploy","kip":true,"kip_window":true,
+        "kip_last_values":{
+            "env/target":"prod",
+            "env/tags":["a","b c","d: e"],
+            "opts/flags":{"force":true,"dry":false},
+            "when/range":{"start":"2024-01-02T03:04:05","end":"2024-01-03T03:04:05"},
+            "n/count":3.5,
+            "n/empty":null,
+            "t/rows":[]
+        }}]})");
+    bool ok = false;
+    QString err;
+    const QString yaml = jsonTextToYamlText(json);
+    const QString back = yamlTextToJsonText(yaml, &ok, &err);
+    QVERIFY2(ok, qPrintable(err));
+    QCOMPARE(QJsonDocument::fromJson(back.toUtf8()).object(), QJsonDocument::fromJson(json.toUtf8()).object());
+}
+
 QTEST_MAIN(TestYamlBridge)
 #include "test_yaml_bridge.moc"
+
+// Bug real: `options: ["API:api", "web"]` (lista em estilo fluxo) chegava
+// VAZIO — o select ficava sem opções e o autocomplete/ajuda do CLI também.
+void TestYamlBridge::parsesFlowSequencesAndMappings()
+{
+    const QString yaml = QStringLiteral(
+        "options: [\"API:api\", web, 'o''k', 3]\n"
+        "nested: [[1, 2], {a: x, \"b c\": [y, z]}]\n"
+        "map: {name: kai, tags: [cli, \"a, b\"]}\n"
+        "empty: []\n");
+    bool ok = false;
+    QString err;
+    const QJsonObject o = QJsonDocument::fromJson(yamlTextToJsonText(yaml, &ok, &err).toUtf8()).object();
+    QVERIFY2(ok, qPrintable(err));
+    QCOMPARE(o.value("options").toArray(),
+             (QJsonArray{QStringLiteral("API:api"), QStringLiteral("web"), QStringLiteral("o'k"), 3}));
+    QCOMPARE(o.value("nested").toArray().at(0).toArray(), (QJsonArray{1, 2}));
+    QCOMPARE(o.value("nested").toArray().at(1).toObject().value("b c").toArray(),
+             (QJsonArray{QStringLiteral("y"), QStringLiteral("z")}));
+    QCOMPARE(o.value("map").toObject().value("tags").toArray(),
+             (QJsonArray{QStringLiteral("cli"), QStringLiteral("a, b")}));
+    QCOMPARE(o.value("empty").toArray(), QJsonArray());
+}
+
+// Templates do Kai sem aspas ({{VAR}}) começam com "{" e terminam com "}",
+// mas não são mapas — continuam texto.
+void TestYamlBridge::braceTemplatesStayPlainStrings()
+{
+    bool ok = false;
+    QString err;
+    const QJsonObject o = QJsonDocument::fromJson(
+        yamlTextToJsonText(QStringLiteral("dir: {{PROJECT_PATH}}\n"), &ok, &err).toUtf8()).object();
+    QVERIFY2(ok, qPrintable(err));
+    QCOMPARE(o.value("dir").toString(), QStringLiteral("{{PROJECT_PATH}}"));
+}
+
+void TestYamlBridge::hashInsideQuotesIsNotAComment()
+{
+    bool ok = false;
+    QString err;
+    const QJsonObject o = QJsonDocument::fromJson(yamlTextToJsonText(
+        QStringLiteral("a: 'echo \"# titulo\"'  # comentario\nb: \"x # y\"\n"), &ok, &err).toUtf8()).object();
+    QVERIFY2(ok, qPrintable(err));
+    QCOMPARE(o.value("a").toString(), QStringLiteral("echo \"# titulo\""));
+    QCOMPARE(o.value("b").toString(), QStringLiteral("x # y"));
+}

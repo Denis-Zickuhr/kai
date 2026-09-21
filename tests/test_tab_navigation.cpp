@@ -227,14 +227,14 @@ private slots:
         c1.id = QStringLiteral("c_1");
         c1.folderId = root.id;
         c1.name = QStringLiteral("Primeiro");
-        c1.type = CommandType::Shell;
+        c1.type = CommandType::Command;
         c1.command = QStringLiteral("echo 1");
 
         Command c2;
         c2.id = QStringLiteral("c_2");
         c2.folderId = root.id;
         c2.name = QStringLiteral("Segundo");
-        c2.type = CommandType::Shell;
+        c2.type = CommandType::Command;
         c2.command = QStringLiteral("echo 2");
 
         CommandTreeWidget widget;

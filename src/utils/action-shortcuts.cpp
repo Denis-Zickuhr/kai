@@ -31,7 +31,7 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
         {QStringLiteral("action.context_menu"), QStringLiteral("settings.shortcut.context_menu"),
          QStringLiteral("settings.shortcut.context_menu.desc"), {QStringLiteral("Ins")}, ShortcutScope::TreeWidget},
         {QStringLiteral("action.focus_output"), QStringLiteral("settings.shortcut.focus_output"),
-         QStringLiteral("settings.shortcut.focus_output.desc"), {QStringLiteral("Ctrl+`")}, ShortcutScope::Window},
+         QStringLiteral("settings.shortcut.focus_output.desc"), {QStringLiteral("Ctrl+'")}, ShortcutScope::Window},
         {QStringLiteral("action.toggle_edit_mode"), QStringLiteral("settings.shortcut.toggle_edit_mode"),
          QStringLiteral("settings.shortcut.toggle_edit_mode.desc"), {QStringLiteral("Ctrl+E")}, ShortcutScope::Window},
         // Pedido do usuário: "quero um novo atalho, funcionara na janela
@@ -73,6 +73,8 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
          QStringLiteral("settings.shortcut.hide_selected.desc"), {}, ShortcutScope::Window},
         {QStringLiteral("action.show_hidden"), QStringLiteral("settings.shortcut.show_hidden"),
          QStringLiteral("settings.shortcut.show_hidden.desc"), {}, ShortcutScope::Window},
+        {QStringLiteral("action.show_running_only"), QStringLiteral("settings.shortcut.show_running_only"),
+         QStringLiteral("settings.shortcut.show_running_only.desc"), {}, ShortcutScope::Window},
     };
     return specs;
 }

@@ -228,6 +228,39 @@ private slots:
                  "o template PowerShell legado não foi migrado (ainda tem $l[2..])");
     }
 
+    // Atalho padrão de "Focar saída" trocou de Ctrl+` para Ctrl+' (a crase é
+    // tecla morta no ABNT2). Quem salvou as Configurações com o padrão antigo
+    // é migrado UMA vez; depois disso, escolher Ctrl+` de propósito fica.
+    void focusOutputShortcutMigratesFromBacktickOnce()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+`"]}, "focus_output_shortcut": "Ctrl+`"})");
+        file.close();
+
+        SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.shortcuts.value(QStringLiteral("action.focus_output")), QStringList{QStringLiteral("Ctrl+'")});
+        QCOMPARE(loaded.focusOutputShortcut, QStringLiteral("Ctrl+'"));
+
+        loaded.shortcuts[QStringLiteral("action.focus_output")] = {QStringLiteral("Ctrl+`")};
+        QVERIFY(manager.saveSettings(loaded));
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+`")});
+    }
+
+    // Outro atalho qualquer escolhido pelo usuário nunca é tocado.
+    void focusOutputShortcutMigrationKeepsCustomChoice()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+Shift+O"]}})");
+        file.close();
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+Shift+O")});
+    }
+
     // Notificações (feature nova): os 6 toggles devem sobreviver ao ciclo
     // salvar->carregar, e o default de uma instalação nova (sem
     // settings.json prévio) precisa ser o opt-in seguro (master switch
@@ -262,12 +295,70 @@ private slots:
         QVERIFY(loaded.notifyEvenWhenFocused);
     }
 
+    void interpreterSettingsRoundTripAndDefaultWhenAbsent()
+    {
+        ConfigManager manager;
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.interpreters.python, QStringLiteral("python3"));
+        QCOMPARE(defaults.interpreters.node, QStringLiteral("node"));
+
+        SettingsData s = defaults;
+        s.interpreters.python = QStringLiteral("uv run python");
+        s.interpreters.node = QStringLiteral("/opt/node/bin/node");
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = ConfigManager().loadSettings();
+        QCOMPARE(loaded.interpreters.python, QStringLiteral("uv run python"));
+        QCOMPARE(loaded.interpreters.node, QStringLiteral("/opt/node/bin/node"));
+    }
+
 private:
     std::unique_ptr<QTemporaryDir> m_tempDir;
+
+private slots:
 
     // Repaginação visual: densidade, estilo de canto e flags de efeito devem
     // sobreviver ao ciclo salvar->carregar (senão a preferência do usuário se
     // perde no próximo boot).
+    void kipSettingsRoundTripAndAreClamped()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
+        ConfigManager manager;
+        // Padrões quando o arquivo não tem o objeto "kip".
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.kip.handshakeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.changeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.cancelGraceSec, 3);
+        QVERIFY(defaults.kip.rememberAnswers);
+        QVERIFY(defaults.kip.expandDetailsOnFailure);
+        QCOMPARE(defaults.kip.detachedWindowMode, QStringLiteral("preference")); // segue a preferência geral
+
+        SettingsData s = defaults;
+        s.kip.detachedWindowMode = QStringLiteral("fullscreen");
+        s.kip.handshakeTimeoutSec = 30;
+        s.kip.changeTimeoutSec = 4;
+        s.kip.cancelGraceSec = 9;
+        s.kip.rememberAnswers = false;
+        s.kip.expandDetailsOnFailure = false;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.kip, s.kip);
+
+        // Valores absurdos (arquivo editado à mão) viram valores dentro dos limites.
+        s.kip.handshakeTimeoutSec = 100000;
+        s.kip.cancelGraceSec = -5;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData clamped = manager.loadSettings();
+        QCOMPARE(clamped.kip.handshakeTimeoutSec, KipSettings::kMaxTimeoutSec);
+        QCOMPARE(clamped.kip.cancelGraceSec, KipSettings::kMinGraceSec);
+
+        // Um modo desconhecido (arquivo editado à mão) volta a seguir a preferência geral.
+        s.kip.detachedWindowMode = QStringLiteral("sideways");
+        QVERIFY(manager.saveSettings(s));
+        QCOMPARE(manager.loadSettings().kip.detachedWindowMode, QStringLiteral("preference"));
+    }
+
     void appearanceSettingsRoundTrip()
     {
         ConfigManager manager;
@@ -290,6 +381,44 @@ private:
         QVERIFY(loaded.fxTranslucency);
         QVERIFY(loaded.fxBlur);
         QVERIFY(loaded.fxAnimations);
+    }
+
+    // Feature pedida pelo usuário: "os filtros de coleções devem ser
+    // salvos, inclusive se exibe ou não favoritos... salvar na config
+    // mesmo, id -> config, não na coleção". Arquivo separado
+    // (collection-filters.json), igual dynamic-vars.json.
+    void collectionFiltersRoundTripByCollectionId()
+    {
+        ConfigManager manager;
+
+        QMap<QString, CollectionFilterState> data;
+        CollectionFilterState a;
+        a.search = QStringLiteral("alice");
+        a.favoritesOnly = true;
+        data[QStringLiteral("col1")] = a;
+        CollectionFilterState b;
+        b.search = QStringLiteral("");
+        b.favoritesOnly = false;
+        data[QStringLiteral("col2")] = b;
+        QVERIFY(manager.saveCollectionFilters(data));
+
+        // Não deve tocar em collections.json (dado autorado da coleção) —
+        // fica em arquivo separado.
+        QVERIFY(!QFile::exists(manager.collectionsFilePath()));
+
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QCOMPARE(loaded.size(), 2);
+        QCOMPARE(loaded.value(QStringLiteral("col1")).search, QStringLiteral("alice"));
+        QVERIFY(loaded.value(QStringLiteral("col1")).favoritesOnly);
+        QCOMPARE(loaded.value(QStringLiteral("col2")).search, QString());
+        QVERIFY(!loaded.value(QStringLiteral("col2")).favoritesOnly);
+    }
+
+    void loadingMissingCollectionFiltersFileReturnsEmptyMapWithoutCrash()
+    {
+        ConfigManager manager;
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QVERIFY(loaded.isEmpty());
     }
 };
 

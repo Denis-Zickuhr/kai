@@ -24,6 +24,12 @@ class WelcomeScreen : public QWidget {
 public:
     explicit WelcomeScreen(QWidget *parent = nullptr);
 
+    // Refaz a tela inteira com os tokens ATUAIS (cores, accent, cantos). Todo o
+    // estilo é montado uma vez na construção — antes de o tema ser publicado
+    // (accent de fallback, o roxo do Dracula) e sem nunca mais acompanhar uma
+    // troca de tema —, então o MainWindow chama isto a cada (re)carga de tema.
+    void applyTheme();
+
 signals:
     // Botão "+ Nova Pasta" do passo 1 — dispara o MESMO fluxo do botão
     // da toolbar (MainWindow::handleNewFolderRequested).
@@ -36,8 +42,11 @@ signals:
     void closeRequested();
 
 private:
+    void buildContent(QWidget *root);
     QWidget *buildShortcutsCard();
     QWidget *buildProTipCard();
+
+    QWidget *m_root = nullptr;   // conteúdo atual (descartado e refeito em applyTheme)
 };
 
 } // namespace kai::ui

@@ -46,6 +46,7 @@ QVector<NotificationRecord> NotificationHistory::readAll() const
         r.body = o.value("body").toString();
         r.createdAt = QDateTime::fromString(o.value("created_at").toString(), Qt::ISODate);
         r.read = o.value("read").toBool();
+        r.commandId = o.value("command_id").toString();
         records.append(r);
     }
     return records;
@@ -62,6 +63,9 @@ bool NotificationHistory::writeAll(const QVector<NotificationRecord> &records) c
         o["body"] = r.body;
         o["created_at"] = r.createdAt.toString(Qt::ISODate);
         o["read"] = r.read;
+        if (!r.commandId.isEmpty()) {
+            o["command_id"] = r.commandId;
+        }
         arr.append(o);
     }
     const QString path = filePath();
@@ -95,21 +99,41 @@ void NotificationHistory::append(const NotificationRecord &record)
         records.removeLast();
     }
     writeAll(records);
+    emit unreadCountChanged(countUnread(records));
 }
 
 void NotificationHistory::markRead(const QString &id)
 {
+    setRead(id, true);
+}
+
+void NotificationHistory::setRead(const QString &id, bool read)
+{
     QVector<NotificationRecord> records = readAll();
     bool changed = false;
     for (NotificationRecord &r : records) {
-        if (r.id == id && !r.read) {
-            r.read = true;
+        if (r.id == id && r.read != read) {
+            r.read = read;
             changed = true;
             break;
         }
     }
     if (changed) {
         writeAll(records);
+        emit unreadCountChanged(countUnread(records));
+    }
+}
+
+void NotificationHistory::remove(const QString &id)
+{
+    QVector<NotificationRecord> records = readAll();
+    for (int i = 0; i < records.size(); ++i) {
+        if (records.at(i).id == id) {
+            records.removeAt(i);
+            writeAll(records);
+            emit unreadCountChanged(countUnread(records));
+            return;
+        }
     }
 }
 
@@ -125,23 +149,30 @@ void NotificationHistory::markAllRead()
     }
     if (changed) {
         writeAll(records);
+        emit unreadCountChanged(countUnread(records));
     }
 }
 
 void NotificationHistory::clear()
 {
     writeAll({});
+    emit unreadCountChanged(0);
 }
 
-int NotificationHistory::unreadCount() const
+int NotificationHistory::countUnread(const QVector<NotificationRecord> &records)
 {
     int n = 0;
-    for (const NotificationRecord &r : readAll()) {
+    for (const NotificationRecord &r : records) {
         if (!r.read) {
             ++n;
         }
     }
     return n;
+}
+
+int NotificationHistory::unreadCount() const
+{
+    return countUnread(readAll());
 }
 
 } // namespace kai::core

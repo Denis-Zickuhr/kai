@@ -1,4 +1,5 @@
 #include "engine/execution-pipeline.h"
+#include "engine/command-language.h"
 #include "engine/output-responder-matcher.h"
 
 #include <QDir>
@@ -12,6 +13,7 @@
 
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
+#include "core/kip-settings.h"
 #include "utils/path-format.h"
 
 namespace kai::engine {
@@ -144,6 +146,52 @@ void ExecutionPipeline::setHookTimeoutMs(int ms)
     m_hookTimeoutMs = ms;
 }
 
+void ExecutionPipeline::setGracefulStopTimeoutMs(int ms)
+{
+    m_gracefulStopTimeoutMs = ms;
+}
+
+void ExecutionPipeline::setInheritTerminal(bool enabled)
+{
+    m_inheritTerminal = enabled;
+}
+
+// No Windows a linha vai por `cmd.exe /c`, que corta em 8191 caracteres: o comando
+// (e, num alvo WSL, o base64 de cima dele) sumiria pela metade, sem erro nenhum.
+// Avisa na saída ANTES de rodar, dizendo o que fazer.
+void ExecutionPipeline::warnIfCommandLineTooLong(const QString &commandId, const QString &finalCommand)
+{
+#if defined(Q_OS_WIN)
+    if (exceedsWindowsCommandLine(finalCommand)) {
+        emit logMessage(commandId,
+            utils::tr(QStringLiteral("execution_pipeline.line_too_long")).arg(finalCommand.size()) + QStringLiteral("\n"),
+            true);
+    }
+#else
+    Q_UNUSED(commandId);
+    Q_UNUSED(finalCommand);
+#endif
+}
+
+void ExecutionPipeline::setInterpreters(const core::InterpreterSettings &interpreters)
+{
+    m_interpreters = interpreters;
+}
+
+QString ExecutionPipeline::commandLineFor(const core::Command &command, const core::EnvironmentManager &env) const
+{
+    if (command.language == core::CommandLanguage::Native) {
+        return env.interpolate(command.command);
+    }
+    bool nativeWindowsHost = false;
+#if defined(Q_OS_WIN)
+    nativeWindowsHost = effectiveTerminalProfileName(command).isEmpty();
+#endif
+    return buildInterpreterCommandLine(
+        command.language, m_interpreters.resolve(command.language, command.interpreter, nativeWindowsHost),
+        command.command, command.kip);
+}
+
 void ExecutionPipeline::setTerminalProfiles(const QVector<core::TerminalProfile> &targets)
 {
     m_terminalProfiles = targets;
@@ -242,23 +290,110 @@ void ExecutionPipeline::ingestCapturedEnv(const QString &rawOutput, const QStrin
         // VAZIA em vez de ficar de fora (pedido explícito: "se não ficam
         // vazias, até pra ajudar em debug" — o inspetor de variáveis deixa
         // óbvio que aquele nome era esperado mas nunca veio).
-        const QString value = foundValues.value(name);
-        // ESCOPO por variável declarada (mesma semântica de
-        // EnvExtractor::scope — ver comentário lá): "global" força Global
-        // independente do projeto atual; "project" usa o escopo capturado
-        // no INÍCIO da execução (ver comentário no header/chamador — bug
-        // real: trocar de projeto enquanto o comando ainda rodava jogava a
-        // variável no projeto ERRADO).
-        const QString targetScope = declared.scope == QStringLiteral("global") ? QString() : scopeKey;
-        m_envManager->setDynamicVarInScope(targetScope, name, value);
-        if (declared.persist) {
-            emit dynamicVarPersistRequested(targetScope, name, value);
-        }
+        exportDeclaredVar(declared, scopeKey, foundValues.value(name));
         ++captured;
     }
 
     utils::Logger::info(kLogTag,
         QStringLiteral("Captura de env do hook: %1 variável(is) declarada(s) processada(s).").arg(captured));
+}
+
+void ExecutionPipeline::exportDeclaredVar(const core::DeclaredEnvVar &declared, const QString &scopeKey,
+                                          const QString &value)
+{
+    // ESCOPO por variável declarada (mesma semântica de EnvExtractor::scope —
+    // ver comentário lá): "global" força Global independente do projeto atual;
+    // "project" usa o escopo capturado no INÍCIO da execução (ver comentário no
+    // header/chamador — bug real: trocar de projeto enquanto o comando ainda
+    // rodava jogava a variável no projeto ERRADO).
+    const QString name = declared.name.trimmed();
+    const QString targetScope = declared.scope == QStringLiteral("global") ? QString() : scopeKey;
+    m_envManager->setDynamicVarInScope(targetScope, name, value);
+    if (declared.persist) {
+        emit dynamicVarPersistRequested(targetScope, name, value);
+    }
+}
+
+QMap<QString, QString> ExecutionPipeline::processEnvFor(const core::Command &command) const
+{
+    QMap<QString, QString> env = languageEnvDefaults(command.language);
+    if (command.kip) {
+        env.insert(QStringLiteral("KIP_VERSION"), QString::number(core::kKipProtocolVersion));
+        env.insert(QStringLiteral("KIP_LOCALE"), utils::TranslationManager::instance().currentLanguage());
+    }
+    const QMap<QString, QString> resolved = m_envManager->resolvedEnv();
+    for (auto it = resolved.constBegin(); it != resolved.constEnd(); ++it) {
+        env.insert(it.key(), it.value()); // o env do usuário sobrepõe os padrões do KIP
+    }
+    return env;
+}
+
+KipSession *ExecutionPipeline::kipSessionFor(const QString &commandId) const
+{
+    return m_kipSessions.value(commandId).data();
+}
+
+KipSession *ExecutionPipeline::createKipSession(const core::Command &command, ProcessRunner *runner,
+                                                const QString &captureScopeKey)
+{
+    // Re-execução: a sessão antiga (já terminada, ou sendo encerrada junto do
+    // runner antigo) sai de cena. deleteLater: a view ainda pode estar no meio
+    // de um sinal dela.
+    if (KipSession *old = m_kipSessions.value(command.id).data()) {
+        old->disconnect(this);
+        old->deleteLater();
+    }
+    auto *session = new KipSession(runner, this);
+    // Preferências globais (Configurações → KIP).
+    const core::KipSettings &prefs = core::kipSettings();
+    session->setHandshakeTimeoutMs(prefs.handshakeTimeoutSec * 1000);
+    session->setPatchTimeoutMs(prefs.changeTimeoutSec * 1000);
+    session->setCancelGraceMs(prefs.cancelGraceSec * 1000);
+    session->setDeclaredEnvVars(command.declaredEnvVars);
+    session->setRememberedValues(prefs.rememberAnswers ? command.kipLastValues : QJsonObject());
+    session->setIgnoreExitCode(command.ignoreExitCode);
+    session->setWslDistro(wslDistroFor(command));
+    m_kipSessions.insert(command.id, session);
+
+    const QString id = command.id;
+    // `set_env` só chega aqui para nomes declarados (a sessão filtra); o escopo
+    // é o capturado no início da execução, nunca relido depois.
+    connect(session, &KipSession::setEnvRequested, this,
+        [this, declared = command.declaredEnvVars, captureScopeKey](const QString &name, const QString &value) {
+            for (const core::DeclaredEnvVar &d : declared) {
+                if (d.name.trimmed() == name) {
+                    exportDeclaredVar(d, captureScopeKey, value);
+                    return;
+                }
+            }
+        });
+    connect(session, &KipSession::logLine, this,
+        [this, id](const QString &text, bool isError) { emit logMessage(id, text, isError); });
+    connect(session, &KipSession::notifyRequested, this,
+        [this, id](const QString &title, const QString &text, core::KipLevel level) {
+            emit kipNotifyRequested(id, title, text, level);
+        });
+    connect(session, &KipSession::answersRemembered, this, [this, id](const QJsonObject &remembered) {
+        if (core::kipSettings().rememberAnswers) {
+            emit kipAnswersRemembered(id, remembered);
+        }
+    });
+    emit kipSessionStarted(id, session);
+    return session;
+}
+
+QString ExecutionPipeline::wslDistroFor(const core::Command &command) const
+{
+    const QString name = effectiveTerminalProfileName(command);
+    if (name.isEmpty()) {
+        return QString();
+    }
+    for (const core::TerminalProfile &t : m_terminalProfiles) {
+        if (t.name == name) {
+            return utils::wslDistroFromTemplate(t.commandTemplate, utils::defaultWslDistro());
+        }
+    }
+    return QString();
 }
 
 QString ExecutionPipeline::effectiveTerminalProfileName(const core::Command &command) const
@@ -446,7 +581,7 @@ QString ExecutionPipeline::applyTerminalProfile(const core::Command &command,
                 remotePrefixPosix += QStringLiteral("echo $$ > '/tmp/kai-%1.pid' 2>/dev/null\n").arg(remoteRunId);
             }
 
-            const QMap<QString, QString> resolvedEnv = m_envManager->resolvedEnv();
+            const QMap<QString, QString> resolvedEnv = processEnvFor(command);
             const QString effectiveCommand = buildTargetedCommand(
                 flavor, resolvedEnv, interpolatedCommand, interpolatedWorkingDir, remotePrefixPosix);
 
@@ -573,6 +708,7 @@ void ExecutionPipeline::run(const core::Command &command,
     // Snapshot dos ids desta cadeia (usado por abort() para não encerrar
     // runners de OUTRAS execuções em paralelo — ver comentário em abort()).
     m_currentChainCommandIds.clear();
+    m_stoppedByRequestIds.clear();
     m_currentChainCommandIds.insert(command.id);
     for (const QString &hookId : command.hooks.pre) {
         m_currentChainCommandIds.insert(hookId);
@@ -607,6 +743,7 @@ void ExecutionPipeline::run(const core::Command &command,
                 if (m_allCommands) {
                     runCleanupHooks(m_mainCommand, *m_allCommands);
                 }
+                result.mainCommandId = m_mainCommand.id;
                 emit pipelineFinished(result);
             });
         });
@@ -629,6 +766,13 @@ void ExecutionPipeline::runQueue(QStringList queue, PipelineStage stage, std::fu
     }
 
     const core::Command hookCommand = it.value();
+    if (hookCommand.kip && hookCommand.type == core::CommandType::Command) {
+        // KIP é uma sessão interativa com view própria: não faz sentido como
+        // hook (spec 11 §15).
+        abort(stage, commandId, utils::tr(QStringLiteral("kip.error.hook_refused"))
+            .arg(hookCommand.name.isEmpty() ? commandId : hookCommand.name));
+        return;
+    }
 
     runSingleCommand(hookCommand, [this, queue, stage, onAllSucceeded, commandId](bool success, const QString &errorMessage) mutable {
         if (!success) {
@@ -764,6 +908,12 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     }
 
     // Shell.
+    // KIP precisa do app (view própria, stdin/stdout do protocolo): no modo CLI
+    // local (terminal herdado) não há onde renderizar — recusa (spec 11 §15).
+    if (command.kip && m_inheritTerminal) {
+        onDone(false, utils::tr(QStringLiteral("kip.error.needs_app")));
+        return;
+    }
     // REGISTRY por commandId: se este MESMO comando já tem um runner vivo,
     // encerra-o antes (re-execução do mesmo comando). Runners de OUTROS
     // comandos são preservados — antes um slot único fazia o 2º comando
@@ -780,12 +930,19 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     }
     auto runner = std::make_unique<ProcessRunner>();
     ProcessRunner *rawRunner = runner.get();
+    rawRunner->setKillTimeoutMs(m_gracefulStopTimeoutMs);
     m_runners.insert_or_assign(command.id, std::move(runner));
     m_activeRunnerCommandId = command.id; // dono do runner atual (compat)
 
     // Captura de ambiente (T9): só faz sentido em hook shell NÃO-background
     // (o processo precisa terminar para lermos o ambiente resultante).
-    const bool captureEnv = command.captureEnv && !command.isBackground;
+    // Com KIP, stdin/stdout são o canal do protocolo: nada de captura de env
+    // (o `set_env` cobre o caso), de responders nem de modo background (§15).
+    const bool isKip = command.kip;
+    const bool isBackground = command.isBackground && !isKip;
+    // Python/Node não têm `export`: o ambiente que o dump leria nunca muda.
+    const bool captureEnv = command.captureEnv && !command.isBackground && !isKip
+        && command.language == core::CommandLanguage::Native;
     m_captureEnvActive = captureEnv;
     m_captureBuffer.clear();
     // Escopo de variáveis dinâmicas CAPTURADO agora (síncrono, início da
@@ -801,6 +958,10 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // linhas de `env` de forma limpa.
     if (captureEnv) {
         rawRunner->setUsePty(false);
+    } else if (m_inheritTerminal) {
+        // Modo CLI local: o comando usa o terminal de quem chamou direto
+        // (ver setInheritTerminal no header).
+        rawRunner->setInheritTerminal(true);
     }
 
     // TTY controlável POR ALVO DE TERMINAL (feedback do usuário: uns
@@ -814,6 +975,9 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // Sem alvo de terminal, mantém o padrão (ConPTY/forkpty), que dá o
     // comportamento de terminal para comandos locais.
     const QString effTarget = effectiveTerminalProfileName(command);
+    // Com alvo, o `cd` pro working_dir vai DENTRO do comando (ver
+    // applyTerminalProfile) — o lançador não deve dar pushd no cwd do kai.
+    rawRunner->setCommandHandlesWorkingDir(!effTarget.isEmpty());
     QString remoteRunId; // id do arquivo de PID remoto (kill do lado WSL)
     // Sabor efetivo desta execução, usado por wrapForEnvCapture (abaixo) pra
     // gerar a sintaxe certa de dump de ambiente. SEM alvo de terminal, o
@@ -873,48 +1037,57 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // saída e responde prompts automaticamente via stdin (feedback do
     // usuário). Só cria se o comando tem responders (custo zero caso contrário).
     std::shared_ptr<OutputResponderMatcher> matcher;
-    if (!command.responders.isEmpty()) {
+    if (!command.responders.isEmpty() && !isKip) {
         // m_envManager habilita {{VAR}} na resposta (feedback do usuário:
         // "interpolação de responsores automáticos... atualmente não
         // suportam interpolação de envs").
         matcher = std::make_shared<OutputResponderMatcher>(command.responders, m_envManager);
     }
 
-    connect(rawRunner, &ProcessRunner::outputReady, this,
-            [this, id = command.id, captureEnv, matcher, rawRunner](const QString &text, bool isError) {
-        if (captureEnv) {
-            // Acumula tudo para extrair o ambiente ao final, e mostra no
-            // terminal apenas a parte ANTES do sentinela (o dump de `env`
-            // fica oculto para não poluir a saída).
-            m_captureBuffer += text;
-            const QString sentinel = QString::fromLatin1(kEnvSentinel);
-            const int pos = m_captureBuffer.indexOf(sentinel);
-            if (pos < 0) {
-                emit logMessage(id, text, isError);
-            } else {
-                // Emite só o que faltava antes do sentinela (uma única vez).
-                const int alreadyShown = m_captureBuffer.length() - text.length();
-                if (alreadyShown < pos) {
-                    emit logMessage(id, m_captureBuffer.mid(alreadyShown, pos - alreadyShown), isError);
+    // A sessão se conecta ao runner ANTES do pipeline (a ordem das conexões
+    // importa: no `finished`, o resultado dela já precisa estar calculado
+    // quando o lambda do pipeline rodar — o Qt chama os slots na ordem em que
+    // foram conectados). Num comando KIP a saída crua NÃO vai para o log:
+    // a sessão reassembla as linhas e só repassa o que é log de verdade.
+    KipSession *kipSession = isKip ? createKipSession(command, rawRunner, captureScopeKey) : nullptr;
+
+    if (!isKip) {
+        connect(rawRunner, &ProcessRunner::outputReady, this,
+                [this, id = command.id, captureEnv, matcher, rawRunner](const QString &text, bool isError) {
+            if (captureEnv) {
+                // Acumula tudo para extrair o ambiente ao final, e mostra no
+                // terminal apenas a parte ANTES do sentinela (o dump de `env`
+                // fica oculto para não poluir a saída).
+                m_captureBuffer += text;
+                const QString sentinel = QString::fromLatin1(kEnvSentinel);
+                const int pos = m_captureBuffer.indexOf(sentinel);
+                if (pos < 0) {
+                    emit logMessage(id, text, isError);
+                } else {
+                    // Emite só o que faltava antes do sentinela (uma única vez).
+                    const int alreadyShown = m_captureBuffer.length() - text.length();
+                    if (alreadyShown < pos) {
+                        emit logMessage(id, m_captureBuffer.mid(alreadyShown, pos - alreadyShown), isError);
+                    }
+                }
+                return;
+            }
+            emit logMessage(id, text, isError);
+
+            // Auto-responsores: casa a saída e responde no stdin. Ecoa a
+            // resposta no log para o usuário ver quem respondeu.
+            if (matcher && rawRunner->isRunning()) {
+                const auto replies = matcher->feed(text);
+                for (const auto &reply : replies) {
+                    emit logMessage(id,
+                        utils::tr(QStringLiteral("execution_pipeline.auto_reply")).arg(reply.text) + QStringLiteral("\n"), false);
+                    rawRunner->writeToStdin(reply.text);
                 }
             }
-            return;
-        }
-        emit logMessage(id, text, isError);
+        });
+    }
 
-        // Auto-responsores: casa a saída e responde no stdin. Ecoa a
-        // resposta no log para o usuário ver quem respondeu.
-        if (matcher && rawRunner->isRunning()) {
-            const auto replies = matcher->feed(text);
-            for (const auto &reply : replies) {
-                emit logMessage(id,
-                    utils::tr(QStringLiteral("execution_pipeline.auto_reply")).arg(reply.text) + QStringLiteral("\n"), false);
-                rawRunner->writeToStdin(reply.text);
-            }
-        }
-    });
-
-    if (command.isBackground) {
+    if (isBackground) {
         // processos background mantêm-se vivos e o pipeline
         // não espera o término deles — considera sucesso imediato ao
         // iniciar, permitindo que hooks subsequentes/o restante do
@@ -941,15 +1114,19 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
                 !success);
         });
 
-        rawRunner->start(applyTerminalProfile(command, m_envManager->interpolate(command.command), m_envManager->interpolate(command.workingDir), remoteRunId),
+        const QString backgroundLine = applyTerminalProfile(
+            command, commandLineFor(command, *m_envManager), m_envManager->interpolate(command.workingDir), remoteRunId);
+        warnIfCommandLineTooLong(command.id, backgroundLine);
+        rawRunner->start(backgroundLine,
                          effTarget.isEmpty() ? m_envManager->interpolate(command.workingDir) : QString(),
-                         m_envManager->resolvedEnv());
+                         processEnvFor(command));
         return;
     }
 
     connect(rawRunner, &ProcessRunner::finished, this,
         [this, onDone, captureEnv, captureScopeKey, declaredEnvVars = command.declaredEnvVars,
-         id = command.id, ignoreExitCode = command.ignoreExitCode](const ProcessResult &result) {
+         id = command.id, ignoreExitCode = command.ignoreExitCode,
+         kip = QPointer<KipSession>(kipSession)](const ProcessResult &result) {
         if (captureEnv) {
             ingestCapturedEnv(m_captureBuffer, captureScopeKey, declaredEnvVars);
             m_captureBuffer.clear();
@@ -966,11 +1143,26 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
         }, Qt::QueuedConnection);
         // IGNORAR CÓDIGO DE SAÍDA: ver comentário do branch isBackground
         // acima — mesma regra aqui pro caminho de execução única.
+        if (kip && kip->outcome().finished) {
+            // Comando KIP: quem decide o resultado é a sessão (Unsupported,
+            // saída esperando resposta, cancelamento... — ver KipSession).
+            const KipOutcome &outcome = kip->outcome();
+            m_lastExitCodes.insert(id, outcome.success ? 0 : outcome.exitCode);
+            if (!outcome.success && outcome.stoppedByRequest) {
+                m_stoppedByRequestIds.insert(id);
+            }
+            onDone(outcome.success, outcome.success ? QString() : outcome.errorMessage);
+            return;
+        }
         const bool success = ignoreExitCode ? !result.crashed : (result.exitCode == 0 && !result.crashed);
+        m_lastExitCodes.insert(id, success ? 0 : result.exitCode);
+        if (!success && result.stoppedByRequest) {
+            m_stoppedByRequestIds.insert(id);
+        }
         onDone(success, success ? QString() : result.errorMessage);
     });
 
-    const QString interpolatedCommand = m_envManager->interpolate(command.command);
+    const QString interpolatedCommand = commandLineFor(command, *m_envManager);
     const QString interpolatedWorkingDir = m_envManager->interpolate(command.workingDir);
 
     // ORDEM IMPORTA (bug real encontrado testando o próprio fix de sintaxe
@@ -994,9 +1186,14 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
     // pois o caminho pode ser Windows/WSL inválido no lado do lançador
     // (cmd.exe/wsl.exe), causando FailedToStart (bug reportado:
     // "comando/shell não encontrado" ao subir a API via WSL).
-    rawRunner->start(finalCommand,
-                     effTarget.isEmpty() ? interpolatedWorkingDir : QString(),
-                     m_envManager->resolvedEnv());
+    const QString startWorkingDir = effTarget.isEmpty() ? interpolatedWorkingDir : QString();
+    warnIfCommandLineTooLong(command.id, finalCommand);
+    if (kipSession) {
+        // Arma o relógio do handshake e força o modo pipe (sem PTY) — ver KipSession::start.
+        kipSession->start(finalCommand, startWorkingDir, processEnvFor(command));
+        return;
+    }
+    rawRunner->start(finalCommand, startWorkingDir, processEnvFor(command));
 }
 
 
@@ -1026,7 +1223,13 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
             continue;
         }
         const core::Command &hook = it.value();
-        if (hook.type != core::CommandType::Shell) {
+        if (hook.kip && hook.type == core::CommandType::Command) {
+            emit logMessage(command.id,
+                utils::tr(QStringLiteral("kip.error.hook_refused")).arg(hook.name.isEmpty() ? hookId : hook.name)
+                    + QStringLiteral("\n"), true);
+            continue;
+        }
+        if (hook.type != core::CommandType::Command) {
             utils::Logger::warning(kLogTag,
                 QStringLiteral("Hook de cleanup '%1' não é shell; ignorando.").arg(hookId));
             continue;
@@ -1049,7 +1252,7 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
         const QString effTarget = effectiveTerminalProfileName(hook);
         const QString interpolatedHookWorkingDir = m_envManager->interpolate(hook.workingDir);
         const QString script = applyTerminalProfile(
-            hook, m_envManager->interpolate(hook.command),
+            hook, commandLineFor(hook, *m_envManager),
             interpolatedHookWorkingDir, QString());
 
         emit logMessage(command.id,
@@ -1073,19 +1276,19 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
             // o ProcessRunner já corrigido, porque este é um QProcess
             // TOTALMENTE separado. Mesma resolução: diretório seguro de
             // partida + pushd embutido pra navegação real.
-            const QString effectiveWorkingDir = interpolatedHookWorkingDir.isEmpty()
-                ? QDir::currentPath() : interpolatedHookWorkingDir;
-            if (isWindowsUncPath(effectiveWorkingDir)) {
-                detached.setWorkingDirectory(windowsSafeNonUncStartDir());
-                detached.setNativeArguments(QStringLiteral("/c ")
-                    + wrapWindowsCommandForUncWorkingDir(script, effectiveWorkingDir));
-            } else {
-                detached.setWorkingDirectory(effectiveWorkingDir);
-                detached.setNativeArguments(QStringLiteral("/c ") + script);
-            }
+            // Com alvo de terminal o `cd` já está dentro do script (mesma
+            // regra do comando principal — ver planWindowsLaunchDirs).
+            const WindowsLaunchDirs launchDirs = planWindowsLaunchDirs(
+                effTarget.isEmpty() ? interpolatedHookWorkingDir : QString(),
+                QDir::currentPath(), !effTarget.isEmpty(), windowsSafeNonUncStartDir());
+            detached.setWorkingDirectory(launchDirs.nativeCwd);
+            detached.setNativeArguments(QStringLiteral("/c ")
+                + wrapWindowsCommandForUncWorkingDir(script, launchDirs.pushdDir));
+            isolateDetachedProcess(detached);
             started = detached.startDetached();
         }
 #else
+        Q_UNUSED(effTarget);
         started = QProcess::startDetached(QStringLiteral("/bin/bash"),
                                           {QStringLiteral("-lc"), script});
 #endif
@@ -1095,7 +1298,6 @@ void ExecutionPipeline::runCleanupHooks(const core::Command &command,
             emit logMessage(command.id,
                 utils::tr(QStringLiteral("execution_pipeline.cleanup.start_failed")).arg(hookId) + QStringLiteral("\n"), true);
         }
-        Q_UNUSED(effTarget);
     }
 }
 
@@ -1138,7 +1340,17 @@ void ExecutionPipeline::abort(PipelineStage stage, const QString &commandId, con
     result.success = false;
     result.failedStage = stage;
     result.failedCommandId = commandId;
+    result.stoppedByRequest = m_stoppedByRequestIds.contains(commandId);
     result.errorMessage = errorMessage;
+    // Código real do passo que falhou (shell); sem código (HTTP, falha ao
+    // iniciar, condição): 1.
+    const int failedCode = m_lastExitCodes.value(commandId, 1);
+    result.exitCode = failedCode > 0 ? failedCode : 1;
+    // Comando que só saiu com código != 0 não traz texto de erro — sem isto
+    // a linha ficava "Pipeline abortado: " vazia.
+    if (result.errorMessage.trimmed().isEmpty() && m_lastExitCodes.contains(commandId)) {
+        result.errorMessage = utils::tr(QStringLiteral("execution_pipeline.process_ended")).arg(result.exitCode);
+    }
 
     const QString stageName = stage == PipelineStage::PreHooks ? QStringLiteral("PreHooks") :
                                stage == PipelineStage::MainCommand ? QStringLiteral("MainCommand") :
@@ -1146,14 +1358,15 @@ void ExecutionPipeline::abort(PipelineStage stage, const QString &commandId, con
 
     utils::Logger::error(kLogTag,
         QStringLiteral("Pipeline abortado no estágio '%1' pelo comando '%2': %3")
-            .arg(stageName, commandId, errorMessage));
+            .arg(stageName, commandId, result.errorMessage));
 
-    emit logMessage(commandId, utils::tr(QStringLiteral("execution_pipeline.aborted")).arg(errorMessage) + QStringLiteral("\n"), true);
+    emit logMessage(commandId, utils::tr(QStringLiteral("execution_pipeline.aborted")).arg(result.errorMessage) + QStringLiteral("\n"), true);
     // CLEANUP também no caminho de FALHA/CRASH/abort — é justamente quando mais
     // importa desmontar o que ficou de pé.
     if (m_allCommands) {
         runCleanupHooks(m_mainCommand, *m_allCommands);
     }
+    result.mainCommandId = m_mainCommand.id;
     emit pipelineFinished(result);
 }
 

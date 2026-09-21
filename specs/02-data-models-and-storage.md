@@ -40,7 +40,7 @@ a special category or tab.
       "id": "c_shell_simple",
       "folder_id": "f_proj_ecommerce",
       "name": "Build Release",
-      "type": "shell",
+      "type": "command",
       "icon": "build",
       "command": "cargo build --release",
       "working_dir": "{{PROJECT_PATH}}",
@@ -49,10 +49,20 @@ a special category or tab.
       "hooks": { "pre": [], "post": [], "cleanup": [] }
     },
     {
+      "id": "c_python_report",
+      "folder_id": "f_proj_ecommerce",
+      "name": "Report (Python)",
+      "type": "command",
+      "language": "python",
+      "interpreter": "uv run python",
+      "command": "import os\nprint(os.environ['PORT'])",
+      "working_dir": "{{PROJECT_PATH}}"
+    },
+    {
       "id": "c_shell_param",
       "folder_id": "f_proj_ecommerce",
       "name": "Run Migration",
-      "type": "shell",
+      "type": "command",
       "command": "db-cli migrate --env {{ENV_TARGET}} --drop-first={{DROP_DB}} --config {{CONFIG_FILE}}",
       "working_dir": "{{PROJECT_PATH}}",
       "params": [
@@ -66,7 +76,7 @@ a special category or tab.
       "id": "c_shell_bg",
       "folder_id": "f_proj_ecommerce",
       "name": "Start Dev Server",
-      "type": "shell",
+      "type": "command",
       "command": "npm run dev",
       "working_dir": "{{PROJECT_PATH}}",
       "is_background": true,
@@ -107,7 +117,7 @@ a special category or tab.
 `compact_output`, `ignore_exit_code`, `auto_run`/`auto_run_delay_sec`,
 `responders` (auto-responders), and `execution_conditions`/
 `condition_combinator`/`condition_skip_behavior` — see the [`kai.json`
-manifesto](../docs/manifesto/kai-json-manifesto.md) for the full field
+manifesto](../assets/manifesto/kai-json-manifesto.md) for the full field
 list and semantics.
 
 ## 3. Importable project spec (`kai.json`)
@@ -119,8 +129,8 @@ Located at the root of a user's repository:
   "icon": "shopping-cart",
   "env_vars": { "PORT": "8080", "NODE_ENV": "development" },
   "commands": [
-    { "name": "Dev Server", "type": "shell", "command": "npm run dev", "is_background": true },
-    { "name": "Run Tests", "type": "shell", "command": "npm test" }
+    { "name": "Dev Server", "type": "command", "command": "npm run dev", "is_background": true },
+    { "name": "Run Tests", "type": "command", "command": "npm test" }
   ]
 }
 ```
@@ -187,7 +197,7 @@ off is still possible via the tray icon or `kai show` (CLI/IPC).
 
 ### 4.3. Run history (`runs.json`)
 
-Every command run (Shell or HTTP) is recorded in `runs.json` (same config
+Every command run (Command or HTTP) is recorded in `runs.json` (same config
 directory), with `command_id`/`command_name`/`command_type`,
 `started_at` (ISO), `duration_ms`, `success` and `output` (accumulated
 output, truncated). Keeps at most 200 records, most recent first; output

@@ -39,12 +39,12 @@ void QuickBodyEditorDialog::setupUi(const QString &commandName, const QString &i
     headerLayout->addStretch();
 
     auto *formatButton = new QPushButton(utils::tr(QStringLiteral("body.format")), this);
-    formatButton->setIcon(LucideIcons::icon(QStringLiteral("align-left"), QColor(139, 233, 253), 16));
+    formatButton->setIcon(LucideIcons::icon(QStringLiteral("braces"), QColor(utils::tokens::mutedFg()), 16));
     connect(formatButton, &QPushButton::clicked, this, &QuickBodyEditorDialog::handleFormatJsonRequested);
     headerLayout->addWidget(formatButton);
 
     auto *minifyButton = new QPushButton(utils::tr(QStringLiteral("body.minify")), this);
-    minifyButton->setIcon(LucideIcons::icon(QStringLiteral("minimize-2"), QColor(139, 233, 253), 16));
+    minifyButton->setIcon(LucideIcons::icon(QStringLiteral("minimize-2"), QColor(utils::tokens::mutedFg()), 16));
     connect(minifyButton, &QPushButton::clicked, this, &QuickBodyEditorDialog::handleMinifyRequested);
     headerLayout->addWidget(minifyButton);
 

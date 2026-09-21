@@ -16,8 +16,12 @@
 #include <QIcon>
 #include <QFrame>
 #include <QAbstractItemModel>
+#include <QApplication>
+#include <QHelpEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QStyledItemDelegate>
+#include <QToolTip>
 #include <QPalette>
 #include <QEvent>
 #include <QMovie>
@@ -27,6 +31,9 @@
 #include "ui/shared/icon-picker-widget.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/draggable-tree-widget.h"
+#include "ui/shared/overflow-indicator.h"
+#include "ui/shared/tab-bar-style.h"
+#include "ui/shared/tab-strip-background.h"
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
 
@@ -58,7 +65,7 @@ void applyRunningIndicator(QTreeWidgetItem *item, bool isRunning)
 {
     if (isRunning) {
         item->setIcon(kStatusColumn,
-            LucideIcons::icon(QStringLiteral("circle-play"), QColor(80, 250, 123), kRunningIndicatorSize));
+            LucideIcons::icon(QStringLiteral("circle-play"), QColor(utils::tokens::successFg()), kRunningIndicatorSize));
         item->setToolTip(kStatusColumn, utils::tr(QStringLiteral("tree.status.running_tooltip")));
     } else {
         item->setIcon(kStatusColumn, QIcon());
@@ -67,12 +74,35 @@ void applyRunningIndicator(QTreeWidgetItem *item, bool isRunning)
         item->setText(kStatusColumn, QString());
     }
 }
+
+// Fundo do item SEMPRE transparente, em TODO estado (normal, hover,
+// seleção, foco) — aplicado como stylesheet LOCAL de cada árvore (não via
+// app-stylesheet.cpp/theme-manager.cpp), porque um stylesheet local de
+// WIDGET tem prioridade garantida sobre qualquer stylesheet herdado do
+// QApplication/tema, sem depender de especificidade de seletor CSS (fonte
+// de bugs anteriores: a regra "CommandTreeWidget QTreeWidget::item" em
+// app-stylesheet.cpp nem sempre vencia a cascata do tema ativo). Com o
+// fundo do item sempre "apagado" aqui, o DraggableTreeWidget é o único
+// responsável por pintar normal/zebra/hover/seleção — sempre linha
+// inteira, sem cantos (ver paintEvent/setRowColors).
+const QString kTreeItemTransparentQss = QStringLiteral(
+    "QTreeWidget::item, QTreeWidget::item:hover, QTreeWidget::item:selected,"
+    " QTreeWidget::item:selected:active, QTreeWidget::item:selected:!active,"
+    " QTreeWidget::item:focus {"
+    " background-color: transparent; border: none; outline: none; border-radius: 0px; }");
 }
 
 CommandTreeWidget::CommandTreeWidget(QWidget *parent)
     : QWidget(parent)
 {
     setupUi();
+}
+
+void CommandTreeWidget::setTabBarHeight(int height)
+{
+    if (m_tabWidget) {
+        m_tabWidget->tabBar()->setStyleSheet(flatTabBarQss(height));
+    }
 }
 
 void CommandTreeWidget::setupUi()
@@ -89,6 +119,20 @@ void CommandTreeWidget::setupUi()
     m_tabWidget->setUsesScrollButtons(true);
     m_tabWidget->setElideMode(Qt::ElideRight);
     m_tabWidget->tabBar()->setExpanding(false);
+    // Barra de rolagem (arrastável) na cor de destaque logo ABAIXO da barra de
+    // abas, quando as abas das pastas raiz não cabem: mostra quanto está visível
+    // e onde, e não conflita com o sublinhado da aba selecionada.
+    QTabBar *rootTabBar = m_tabWidget->tabBar();
+    auto *tabOverflow = new OverflowIndicator(m_tabWidget, OverflowIndicator::forTabBar(rootTabBar),
+                                              OverflowIndicator::scrollToForTabBar(rootTabBar));
+    tabOverflow->setAnchor(rootTabBar);
+    tabOverflow->setBottomInset(1); // 1px de respiro abaixo da barra
+
+    // Mesmo estilo/altura/recuo das abas da Saída (padronização das abas).
+    setTabBarHeight(standardTabBarHeight());
+
+    // Faixa de abas com fundo de outra cor (contraste com a lista abaixo).
+    new TabStripBackground(m_tabWidget, m_tabWidget->tabBar());
     // Navegação por seta como prioridade (feedback do usuário: up/down
     // devem focar/navegar os comandos): ao trocar de aba, move o foco
     // para a árvore da aba ativa e seleciona o primeiro item, para que
@@ -219,8 +263,14 @@ void CommandTreeWidget::setRunningCommandIds(const QSet<QString> &runningCommand
         it = runningCommandIds.contains(it.key()) ? std::next(it) : m_runStartedAt.erase(it);
     }
 
+    const bool runningSetChanged = m_runningCommandIds != runningCommandIds;
     m_runningCommandIds = runningCommandIds;
     refreshCommandVisuals();
+    // Com "só em execução" ligado, quem começa/termina de rodar entra/sai da
+    // lista na hora.
+    if (m_showRunningOnly && runningSetChanged) {
+        setFilterQuery(m_currentFilter);
+    }
 
     // Tique de 1s só existe enquanto HÁ algo rodando (sem timer ocioso).
     if (!m_runStartedAt.isEmpty()) {
@@ -532,15 +582,34 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
                                      + utils::tokens::space(4));
     }
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
-    // Zebra sutil estilo CopyQ (a cor de alternância vem do QSS via
-    // alternate-background-color) e sem frame/moldura em volta da árvore.
-    tree->setAlternatingRowColors(true);
+    // SELEÇÃO POR LINHA INTEIRA, não por célula (pedido do usuário: "as
+    // bordas são entre as células" — árvore tem 2 colunas: nome/ícone e o
+    // indicador de status. O padrão do Qt é SelectItems, que marca só a
+    // CÉLULA clicada como selecionada; a segunda coluna (status), mesmo
+    // vazia na maior parte do tempo, ficava sem o fundo de seleção/hover
+    // pintado — abrindo um vão sem cor entre as duas células da mesma
+    // linha, que parecia uma "borda" entre comandos. SelectRows marca as
+    // duas colunas do item como selecionadas juntas, unificando o fundo.
+    tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // Zebra sutil estilo CopyQ: a cor de alternância é pintada pelo
+    // próprio DraggableTreeWidget (ver setRowColors abaixo), não mais via
+    // QSS alternate-background-color — então NÃO chamamos
+    // setAlternatingRowColors aqui (o fallback nativo do Qt para esse modo
+    // é exatamente o que abria o vão entre as duas colunas da linha no
+    // hover — ver comentário em setRowColors).
     tree->setFrameShape(QFrame::NoFrame);
     tree->setRootIsDecorated(true);
     tree->setConnectorStyle(static_cast<DraggableTreeWidget::ConnectorStyle>(m_treeConnectorStyle));
     if (m_treeConnectorLineColor.isValid()) {
         tree->setConnectorLineColor(m_treeConnectorLineColor);
     }
+    // Fundo (normal/zebra, hover e seleção) pintado pelo próprio widget,
+    // cobrindo a linha inteira (ver DraggableTreeWidget::setRowColors) — o
+    // QSS correspondente (app-stylesheet.cpp/theme-manager.cpp) deixa o
+    // item transparente em todo estado só para esta árvore, então as cores
+    // precisam vir daqui.
+    tree->setRowColors(QColor(utils::tokens::bg()), QColor(utils::tokens::treeStripeBg()),
+                        QColor(utils::tokens::hoverBg()), QColor(utils::tokens::selBg()));
 
     // Drag & drop de itens FILHOS (comandos, coleções, subpastas dentro de
     // uma pasta): tinha sido DESLIGADO ("o comportamento de drag dos
@@ -870,6 +939,60 @@ void CommandTreeWidget::setFilterQuery(const QString &query)
     for (QTreeWidget *tree : m_treesByRootId) {
         applyFilterToTree(tree, query);
     }
+    updateRunningOnlyHint();
+}
+
+void CommandTreeWidget::setShowRunningOnly(bool runningOnly)
+{
+    if (m_showRunningOnly == runningOnly) {
+        return;
+    }
+    m_showRunningOnly = runningOnly;
+    setFilterQuery(m_currentFilter);
+}
+
+void CommandTreeWidget::updateRunningOnlyHint()
+{
+    if (!m_tabWidget) {
+        return;
+    }
+    // Dica "nenhum em execução" quando o filtro está ligado e a aba atual
+    // ficou sem nenhum item visível (senão é uma caixa vazia sem explicação).
+    bool nothingVisible = false;
+    if (m_showRunningOnly) {
+        nothingVisible = true;
+        if (auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget())) {
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                if (!tree->topLevelItem(i)->isHidden()) {
+                    nothingVisible = false;
+                    break;
+                }
+            }
+        }
+    }
+    if (!nothingVisible) {
+        if (m_runningOnlyHint) {
+            m_runningOnlyHint->hide();
+        }
+        return;
+    }
+    if (!m_runningOnlyHint) {
+        m_runningOnlyHint = new QLabel(utils::tr(QStringLiteral("tree.running_only_empty")), m_tabWidget);
+        m_runningOnlyHint->setAlignment(Qt::AlignCenter);
+        m_runningOnlyHint->setWordWrap(true);
+        m_runningOnlyHint->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        m_runningOnlyHint->setStyleSheet(QStringLiteral("color: %1; background: transparent;")
+                                             .arg(utils::tokens::mutedFg()));
+        m_tabWidget->installEventFilter(this);
+        connect(m_tabWidget, &QTabWidget::currentChanged, this, [this]() { updateRunningOnlyHint(); });
+    }
+    const QTabBar *tabBar = m_tabWidget->tabBar();
+    const int top = tabBar->geometry().bottom() + 1;
+    m_runningOnlyHint->setGeometry(utils::tokens::space(4), top,
+                                   qMax(0, m_tabWidget->width() - 2 * utils::tokens::space(4)),
+                                   qMax(0, m_tabWidget->height() - top));
+    m_runningOnlyHint->show();
+    m_runningOnlyHint->raise();
 }
 
 void CommandTreeWidget::setShowHidden(bool show)
@@ -893,23 +1016,31 @@ void CommandTreeWidget::applyFilterToTree(QTreeWidget *tree, const QString &quer
 
 bool CommandTreeWidget::applyFilterToItem(QTreeWidgetItem *item, const QString &query)
 {
-    if (query.isEmpty()) {
-        item->setHidden(false);
-        for (int i = 0; i < item->childCount(); ++i) {
-            applyFilterToItem(item->child(i), query);
-        }
-        return true;
-    }
-
-    const bool selfMatches = FuzzyMatcher::score(query, item->text(0)) >= 0;
+    const bool wasHidden = item->isHidden();
     bool childMatches = false;
     for (int i = 0; i < item->childCount(); ++i) {
         childMatches = applyFilterToItem(item->child(i), query) || childMatches;
     }
 
-    const bool visible = selfMatches || childMatches;
+    // Busca fuzzy (vazia = tudo casa).
+    const bool selfMatches = query.isEmpty() || FuzzyMatcher::score(query, item->text(0)) >= 0;
+
+    bool visible;
+    if (m_showRunningOnly) {
+        // Só comandos rodando agora (que casam com a busca) e as pastas que os
+        // contêm; coleções e pastas sem nenhum em execução somem.
+        const bool selfRunning = item->data(0, kIsCommandRole).toBool()
+            && m_runningCommandIds.contains(item->data(0, kCommandIdRole).toString());
+        visible = (selfRunning && selfMatches) || childMatches;
+    } else {
+        visible = selfMatches || childMatches;
+    }
     item->setHidden(!visible);
-    if (visible && childMatches) {
+
+    // Expande o caminho até o que casou: sempre para a busca (como antes); para
+    // "só em execução", só quando o item acabou de aparecer — senão refazer o
+    // filtro a cada mudança de execução reabriria pastas que o usuário fechou.
+    if (visible && childMatches && (!query.isEmpty() || (m_showRunningOnly && wasHidden))) {
         item->setExpanded(true);
     }
     return visible;
@@ -1666,18 +1797,29 @@ void CommandTreeWidget::applyBackgroundStyle()
             pal.setColor(QPalette::Base, Qt::transparent);
             vp->setPalette(pal);
             tree->setAlternatingRowColors(false);
-            tree->setStyleSheet(QStringLiteral(
-                "QTreeWidget { background: transparent; }"
-                "QTreeWidget::item { background: transparent; }"));
+            tree->setStyleSheet(QStringLiteral("QTreeWidget { background: transparent; }\n")
+                + kTreeItemTransparentQss);
             vp->removeEventFilter(this);
             vp->installEventFilter(this);
             vp->update();
         } else {
-            // Restaura o comportamento padrão do tema.
+            // Restaura o comportamento padrão do tema. NUNCA liga
+            // setAlternatingRowColors aqui: essa função é chamada de novo a
+            // cada rebuildTabs, e religar a zebra NATIVA do Qt reabre
+            // exatamente o bug que setRowColors resolve — o fallback nativo
+            // pinta a listra por CÉLULA e não alcança a segunda coluna
+            // (status), mostrando uma bordinha só nas linhas claras/zebradas
+            // (relatado pelo usuário). A listra é 100% responsabilidade do
+            // DraggableTreeWidget (ver paintEvent/setRowColors).
             vp->removeEventFilter(this);
             vp->setPalette(QPalette());
-            tree->setAlternatingRowColors(true);
-            tree->setStyleSheet(QString());
+            // NUNCA limpa pra QString() aqui: precisa manter
+            // kTreeItemTransparentQss (stylesheet LOCAL, prioridade
+            // garantida sobre o tema) — limpar reabria a bordinha
+            // arredondada de hover/foco, já que sem ela a árvore volta a
+            // depender só da cascata do tema (relatado como ainda
+            // presente mesmo com as regras do tema já zeradas).
+            tree->setStyleSheet(kTreeItemTransparentQss);
             vp->update();
         }
     }
@@ -1690,6 +1832,11 @@ void CommandTreeWidget::applyBackgroundStyle()
 
 bool CommandTreeWidget::eventFilter(QObject *watched, QEvent *event)
 {
+    // Redimensionou a aba: reposiciona a dica do filtro "só em execução".
+    if (watched == m_tabWidget && event->type() == QEvent::Resize) {
+        updateRunningOnlyHint();
+        return false;
+    }
     const QPixmap frame = m_backgroundMovie ? m_backgroundMovie->currentPixmap()
                                             : m_backgroundImage;
     if (event->type() == QEvent::Paint && !frame.isNull()) {

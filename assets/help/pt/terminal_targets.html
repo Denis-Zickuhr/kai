@@ -1,6 +1,6 @@
 <h2>Alvos de terminal & WSL</h2>
-<p>Um comando Shell pode rodar através de um <b>alvo de terminal</b> — um template que envolve o comando. Caso clássico: rodar no <b>WSL</b> a partir do Kai no Windows.</p>
-<h3>Alvo WSL padrão (Configurações → Alvos de Terminal)</h3>
+<p>Um comando Shell pode rodar através de um <b>alvo de terminal</b> — um template que envolve o comando. Caso clássico: rodar no <b>WSL</b> a partir do Kai no Windows. Defina-os em <b>Configurações → Perfis de Execução</b>; cada comando escolhe um no campo <b>Perfil</b>, e uma pasta pode definir o perfil que os comandos dela herdam.</p>
+<h3>Alvo WSL padrão (Configurações → Perfis de Execução)</h3>
 <pre>wsl.exe -- bash -lic 'eval "$(echo "$1" | base64 -d)"' kai {{command_b64}}</pre>
 <p>Placeholders: <code>{{command}}</code> (com escape seguro de aspas) e <code>{{command_b64}}</code> — injeção à prova de crash via base64, usada pelo alvo padrão acima.</p>
 <div class='tip'><code>-lic</code>, não só <code>-lc</code>: um shell de login sozinho não lê o <code>~/.bashrc</code> (o <code>.bashrc</code> padrão do Ubuntu sai cedo em shells não-interativos). Adicionar <code>-i</code> faz seus aliases e funções carregarem de verdade.</div>

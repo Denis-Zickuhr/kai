@@ -7,7 +7,7 @@
   "commands": [
     {
       "name": "1. Pesquisa na Web (Navegador Padrão)",
-      "type": "shell",
+      "type": "command",
       "command": "URL=\"{{DEFAULT_SEARCH_ENGINE}}{{TERMO_BUSCA}}\"; xdg-open \"$URL\" 2>/dev/null || open \"$URL\" 2>/dev/null || start \"\" \"$URL\"",
       "is_background": true,
       "params": [
@@ -21,7 +21,7 @@
     },
     {
       "name": "2. Abrir Documentação da API do Projeto",
-      "type": "shell",
+      "type": "command",
       "command": "URL=\"https://{{endpoint.domain}}/docs/v1\"; xdg-open \"$URL\" 2>/dev/null || open \"$URL\" 2>/dev/null || start \"\" \"$URL\"",
       "is_background": true,
       "params": [
@@ -36,7 +36,7 @@
     },
     {
       "name": "3. Web App Mode (Chromium / Chrome)",
-      "type": "shell",
+      "type": "command",
       "command": "chromium --app=\"{{URL_APP}}\" --window-size=1200,800 2>/dev/null || google-chrome --app=\"{{URL_APP}}\" --window-size=1200,800 2>/dev/null || msedge --app=\"{{URL_APP}}\" --window-size=1200,800",
       "is_background": true,
       "params": [

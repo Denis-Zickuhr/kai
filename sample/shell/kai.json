@@ -9,22 +9,22 @@
   "commands": [
     {
       "name": "1. Hello World (Env Vars)",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Executando {{APP_NAME}} no ambiente: {{ENVIRONMENT}}\""
     },
     {
       "name": "2. Loop com Progresso (Saída em Tempo Real)",
-      "type": "shell",
+      "type": "command",
       "command": "for i in 1 2 3 4 5; do echo \"[Kai] Processando passo $i de 5...\"; sleep 1; done"
     },
     {
       "name": "3. Leitura Interativa (STDIN / PTY Test)",
-      "type": "shell",
+      "type": "command",
       "command": "printf 'Digite seu nome: ' && read NOME && echo \"Olá, $NOME!\" && printf 'Confirmar operação? (s/n): ' && read CONF && echo \"Resposta: $CONF\""
     },
     {
       "name": "4. Todos os Tipos de Parâmetros",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Texto={{TEXTO}} | Env={{AMBIENTE_SEL}} | Forçar={{FORCAR}} | Arquivo={{ARQUIVO}}\"",
       "params": [
         {
@@ -56,29 +56,29 @@
     },
     {
       "name": "5. Variáveis Dinâmicas & Faker",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"UUID={{$uuid}} | Timestamp={{$timestamp}} | ISO={{$isoTimestamp}} | Random={{$randomInt}}\""
     },
     {
       "name": "6. Secret Var (Mascarada)",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Token de acesso (mascarado na UI): {{SECRET_TOKEN}}\""
     },
     {
       "name": "7. Working Directory Customizado",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Diretório de execução atual: $(pwd)\"",
       "working_dir": "{{PROJECT_PATH}}"
     },
     {
       "name": "8. Processo em Background (Daemon)",
-      "type": "shell",
+      "type": "command",
       "command": "for i in $(seq 1 60); do echo \"[Background Job] Tick $i...\"; sleep 2; done",
       "is_background": true
     },
     {
       "name": "9. Saudar Cliente (Puxando de Coleção)",
-      "type": "shell",
+      "type": "command",
       "command": "echo \"Enviando notificação para {{cliente.nome}} <{{cliente.email}}> (Plano: {{cliente.plano}})\"",
       "params": [
         {

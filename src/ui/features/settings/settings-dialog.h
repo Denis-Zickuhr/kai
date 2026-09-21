@@ -14,9 +14,12 @@ namespace kai::ui {
 class StorageManagerWidget;
 class GeneralTab;
 class AppearanceTab;
+class LayoutTab;
 class ShortcutsTab;
 class TerminalsTab;
 class NotificationsTab;
+class KipTab;
+class LanguagesTab;
 
 // Diálogo de Configurações Globais: gestão do atalho
 // global, seleção de tema ativo, atalhos de todas as ações do app
@@ -26,7 +29,7 @@ class NotificationsTab;
 // digitação manual sujeita a erro. Persistência é feita explicitamente
 // pelo chamador via ConfigManager::saveSettings, usando buildSettings().
 //
-// Cada aba (Geral, Aparência, Atalhos, Terminais, Notificações) é uma
+// Cada aba (Geral, Aparência, Layout, Atalhos, Terminais, Notificações) é uma
 // classe própria em features/settings/tabs/ — este diálogo é só o shell
 // que monta a navegação (QStackedWidget) e agrega os valores de cada aba
 // em buildSettings(). A aba Armazenamento reaproveita StorageManagerWidget
@@ -84,10 +87,13 @@ private:
 
     GeneralTab *m_generalTab = nullptr;
     AppearanceTab *m_appearanceTab = nullptr;
+    LayoutTab *m_layoutTab = nullptr;
     ShortcutsTab *m_shortcutsTab = nullptr;
     TerminalsTab *m_terminalsTab = nullptr;
     StorageManagerWidget *m_storageManager = nullptr;
     NotificationsTab *m_notificationsTab = nullptr;
+    KipTab *m_kipTab = nullptr;
+    LanguagesTab *m_languagesTab = nullptr;
 
     // Preserva os campos que o diálogo NÃO edita (environments,
     // activeEnvironmentId, globalEnvVars legado, terminalCollapsed) para

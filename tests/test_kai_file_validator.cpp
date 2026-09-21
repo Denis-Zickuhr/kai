@@ -27,6 +27,81 @@ private slots:
         QCOMPARE(result.warningCount(), 0);
     }
 
+    // "command" é o tipo; "shell" (o nome anterior) segue válido.
+    void commandTypeAndTheLegacyShellAreBothAccepted()
+    {
+        for (const char *type : {"command", "shell"}) {
+            const QString json = QStringLiteral(R"({"commands": [ {"name": "X", "type": "%1", "command": "echo hi"} ]})")
+                                     .arg(QLatin1String(type));
+            const ValidationResult result = validateKaiFileText(json);
+            QVERIFY2(!result.hasErrors(), type);
+            QCOMPARE(result.warningCount(), 0);
+        }
+        // Um command sem texto continua sendo erro, como o shell era.
+        QVERIFY(validateKaiFileText(QStringLiteral(R"({"commands": [ {"name": "X", "type": "command"} ]})")).hasErrors());
+    }
+
+    void languageAndInterpreterAreValidated()
+    {
+        const auto validate = [](const QString &extra) {
+            return validateKaiFileText(
+                QStringLiteral(R"JSON({"commands": [ {"name": "X", "type": "command", "command": "print(1)", %1} ]})JSON").arg(extra));
+        };
+        for (const char *language : {"native", "python", "node"}) {
+            const ValidationResult ok = validate(QStringLiteral(R"("language": "%1")").arg(QLatin1String(language)));
+            QVERIFY2(!ok.hasErrors(), language);
+            QCOMPARE(ok.warningCount(), 0);
+        }
+        // Linguagem desconhecida é erro (typo "pyhton" não pode virar shell em silêncio).
+        QVERIFY(validate(QStringLiteral(R"("language": "pyhton")")).hasErrors());
+
+        // `interpreter` só vale com python/node.
+        QCOMPARE(validate(QStringLiteral(R"("interpreter": "uv run python")")).warningCount(), 1);
+        QCOMPARE(validate(QStringLiteral(R"("language": "python", "interpreter": "uv run python")")).warningCount(), 0);
+
+        // `capture_env` não faz nada em python/node.
+        QCOMPARE(validate(QStringLiteral(R"("language": "node", "capture_env": true)")).warningCount(), 1);
+        QCOMPARE(validate(QStringLiteral(R"("capture_env": true)")).warningCount(), 0);
+    }
+
+    // cron_expression/cron_notify_on_run são chaves de verdade do comando: não podem
+    // virar "chave desconhecida", e um cron inválido nunca dispara — o validador avisa.
+    void cronKeysAreKnownAndAnInvalidExpressionIsFlagged()
+    {
+        const auto validate = [](const QString &extra) {
+            return validateKaiFileText(
+                QStringLiteral(R"JSON({"commands": [ {"name": "X", "type": "command", "command": "echo hi", %1} ]})JSON").arg(extra));
+        };
+        for (const char *cron : {"0 9 * * 1-5", "*/15 * * * *", "30 2 1 * *", "0 8 * * mon,fri"}) {
+            const ValidationResult ok = validate(QStringLiteral(R"("cron_expression": "%1", "cron_notify_on_run": true)").arg(QLatin1String(cron)));
+            QVERIFY2(!ok.hasErrors() && ok.warningCount() == 0, cron);
+        }
+        const ValidationResult bad = validate(QStringLiteral(R"("cron_expression": "every day")"));
+        QVERIFY(!bad.hasErrors());
+        QCOMPARE(bad.warningCount(), 1);
+        QVERIFY(validate(QStringLiteral(R"("cron_expression": "99 * * * *")")).warningCount() == 1);
+    }
+
+    void kipAutoCloseIsKnownAndWarnsWithoutKip()
+    {
+        const auto validate = [](const QString &extra) {
+            return validateKaiFileText(
+                QStringLiteral(R"JSON({"commands": [ {"name": "X", "type": "command", "command": "echo hi", %1} ]})JSON").arg(extra));
+        };
+        const ValidationResult ok = validate(QStringLiteral(R"("kip": true, "kip_window": true, "kip_auto_close": true, "kip_auto_close_delay_sec": 0)"));
+        QVERIFY(!ok.hasErrors());
+        QCOMPARE(ok.warningCount(), 0);
+        QCOMPARE(validate(QStringLiteral(R"("kip_auto_close": true)")).warningCount(), 1);
+    }
+
+    void kipIsAcceptedOnACodeLanguageCommand()
+    {
+        const ValidationResult result = validateKaiFileText(QStringLiteral(
+            R"({"commands": [ {"name": "X", "type": "command", "language": "python", "kip": true, "command": "import kip"} ]})"));
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
+
     void validYamlEquivalentHasNoIssues()
     {
         const QString yaml = QStringLiteral(
@@ -299,6 +374,93 @@ private slots:
             ]} ]
         })");
         const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
+    // ---- KIP (spec 11 §15) ----
+    void kipCommandAloneHasNoWarnings()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "Deploy", "type": "shell", "command": "deploy --kip", "kip": true, "kip_window": true,
+                           "declared_env_vars": [{"name": "TOKEN"}]} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 0);
+    }
+
+    void kipWithIncompatibleFeaturesWarnsOncePerFeature()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "Deploy", "type": "shell", "command": "deploy --kip", "kip": true,
+                           "interactive_terminal": true, "formatted_output": true, "render_markdown": true,
+                           "compact_output": true, "open_last_link": true, "capture_env": true,
+                           "is_background": true, "auto_run": true, "cron_expression": "* * * * *",
+                           "responders": [{"pattern": "x", "response": "y"}]} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        // 10 recursos incompatíveis; "cron_expression" também não é chave
+        // conhecida do manifesto (+1 aviso de chave desconhecida, antigo).
+        int kipWarnings = 0;
+        for (const ValidationIssue &issue : result.issues) {
+            if (issue.message.contains(QStringLiteral("kip"))) {
+                ++kipWarnings;
+            }
+        }
+        QCOMPARE(kipWarnings, 10);
+    }
+
+    void kipFeaturesOffDoNotWarnWithoutKip()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "Htop", "type": "shell", "command": "htop", "interactive_terminal": true,
+                           "is_background": true} ]
+        })");
+        QCOMPARE(validateKaiFileText(json).warningCount(), 0);
+    }
+
+    void kipOnHttpCommandWarns()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "Ping", "type": "http", "kip": true, "http_config": {"url": "x.y", "method": "GET"}} ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 1);
+    }
+
+    void kipWindowWithoutKipWarns()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [ {"name": "X", "type": "shell", "command": "x", "kip_window": true} ]
+        })");
+        QCOMPARE(validateKaiFileText(json).warningCount(), 1);
+    }
+
+    void kipCommandUsedAsHookWarns()
+    {
+        const QString json = QStringLiteral(R"({
+            "commands": [
+                {"name": "Wizard", "type": "shell", "command": "wiz --kip", "kip": true},
+                {"name": "Build", "type": "shell", "command": "make", "hooks": {"pre": ["Wizard"], "cleanup": ["Wizard"]}}
+            ]
+        })");
+        const ValidationResult result = validateKaiFileText(json);
+        QVERIFY(!result.hasErrors());
+        QCOMPARE(result.warningCount(), 2);
+    }
+
+    void kipYamlManifestIsAccepted()
+    {
+        const QString yaml = QStringLiteral(
+            "commands:\n"
+            "  - name: \"Deploy\"\n"
+            "    type: \"shell\"\n"
+            "    command: \"deploy --kip\"\n"
+            "    kip: true\n"
+            "    kip_window: true\n");
+        const ValidationResult result = validateKaiFileText(yaml);
         QVERIFY(!result.hasErrors());
         QCOMPARE(result.warningCount(), 0);
     }

@@ -8,6 +8,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include <optional>
+
 namespace kai::core {
 
 namespace {
@@ -186,6 +188,78 @@ int countIndent(const QString &line)
 // Interpreta um escalar YAML simples: string entre aspas duplas (usa
 // QJsonDocument pra desfazer o escape, o caminho inverso de quotedScalar),
 // aspas simples, ou literal (número/bool/null/string sem aspas).
+QJsonValue parseScalar(const QString &raw);
+bool splitKeyValue(const QString &content, QString *key, QString *value);
+
+// Divide o conteúdo de uma coleção em estilo fluxo nas vírgulas do NÍVEL DE
+// CIMA (fora de aspas e de [] / {} aninhados).
+QStringList splitFlowItems(const QString &inner)
+{
+    QStringList items;
+    QString current;
+    int depth = 0;
+    QChar quote;
+    for (int i = 0; i < inner.size(); ++i) {
+        const QChar c = inner.at(i);
+        if (!quote.isNull()) {
+            current += c;
+            if (c == QLatin1Char('\\') && quote == QLatin1Char('"') && i + 1 < inner.size()) {
+                current += inner.at(++i);
+            } else if (c == quote) {
+                quote = QChar();
+            }
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+            quote = c;
+        } else if (c == QLatin1Char('[') || c == QLatin1Char('{')) {
+            ++depth;
+        } else if (c == QLatin1Char(']') || c == QLatin1Char('}')) {
+            --depth;
+        } else if (c == QLatin1Char(',') && depth == 0) {
+            items << current.trimmed();
+            current.clear();
+            continue;
+        }
+        current += c;
+    }
+    if (!current.trimmed().isEmpty()) {
+        items << current.trimmed();
+    }
+    return items;
+}
+
+// Sequência [a, "b", 'c'] e mapa {k: v, "k2": [1, 2]} em uma linha (bug
+// real: `options: ["API:api", "web"]` chegava VAZIO, e o select ficava sem
+// opções). nullopt se não é uma coleção em fluxo bem formada.
+std::optional<QJsonValue> parseFlowCollection(const QString &s)
+{
+    if (s.size() < 2) {
+        return std::nullopt;
+    }
+    const QString inner = s.mid(1, s.size() - 2).trimmed();
+    if (s.front() == QLatin1Char('[') && s.back() == QLatin1Char(']')) {
+        QJsonArray arr;
+        for (const QString &item : splitFlowItems(inner)) {
+            arr.append(parseScalar(item));
+        }
+        return QJsonValue(arr);
+    }
+    if (s.front() == QLatin1Char('{') && s.back() == QLatin1Char('}')) {
+        QJsonObject obj;
+        for (const QString &item : splitFlowItems(inner)) {
+            QString key;
+            QString value;
+            if (!splitKeyValue(item, &key, &value)) {
+                return std::nullopt;
+            }
+            obj.insert(key, parseScalar(value));
+        }
+        return QJsonValue(obj);
+    }
+    return std::nullopt;
+}
+
 QJsonValue parseScalar(const QString &raw)
 {
     const QString s = raw.trimmed();
@@ -214,11 +288,8 @@ QJsonValue parseScalar(const QString &raw)
     if (s.startsWith(QLatin1Char('\'')) && s.endsWith(QLatin1Char('\'')) && s.size() >= 2) {
         return QJsonValue(s.mid(1, s.size() - 2).replace(QStringLiteral("''"), QStringLiteral("'")));
     }
-    if (s == QStringLiteral("{}")) {
-        return QJsonValue(QJsonObject());
-    }
-    if (s == QStringLiteral("[]")) {
-        return QJsonValue(QJsonArray());
+    if (const std::optional<QJsonValue> flow = parseFlowCollection(s)) {
+        return *flow;
     }
     bool okInt = false;
     const qint64 asInt = s.toLongLong(&okInt);
@@ -279,23 +350,24 @@ bool splitKeyValue(const QString &content, QString *key, QString *value)
 
 QString stripComment(const QString &rawLine)
 {
-    // Remove comentário "# ..." fora de aspas — suficiente pro nosso próprio
-    // formato gerado (não há '#' dentro de strings de config do Kai, mas
-    // ainda assim respeita aspas duplas por segurança).
-    bool inQuotes = false;
+    // Remove comentário "# ..." fora de aspas — duplas (com escape \") ou
+    // simples ('' é a aspa escapada, que fecha e reabre sem efeito aqui).
+    // Bug real: `command: 'echo "# titulo"'` num kai.yml escrito à mão
+    // perdia tudo a partir do "#".
+    QChar quote;
     bool escaped = false;
     for (int i = 0; i < rawLine.size(); ++i) {
         const QChar c = rawLine.at(i);
-        if (inQuotes) {
+        if (!quote.isNull()) {
             if (escaped) {
                 escaped = false;
-            } else if (c == QLatin1Char('\\')) {
+            } else if (quote == QLatin1Char('"') && c == QLatin1Char('\\')) {
                 escaped = true;
-            } else if (c == QLatin1Char('"')) {
-                inQuotes = false;
+            } else if (c == quote) {
+                quote = QChar();
             }
-        } else if (c == QLatin1Char('"')) {
-            inQuotes = true;
+        } else if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+            quote = c;
         } else if (c == QLatin1Char('#') && (i == 0 || rawLine.at(i - 1).isSpace())) {
             return rawLine.left(i);
         }

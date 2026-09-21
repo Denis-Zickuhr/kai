@@ -1,6 +1,6 @@
 {
   "name": "dracula",
-  "schema_version": 5,
+  "schema_version": 7,
   "variables": {
     "bg": "#282a36",
     "alt_bg": "#21222c",
@@ -20,9 +20,15 @@
     "notification_fg": "#f8f8f2",
     "num_fg": "#a4ffff",
     "find_fg": "#ffffa5",
-    "gradient_start": "#bd93f9",
-    "gradient_end": "#ff79c6",
-    "gradient_angle": "135"
+    "gradient_primary_start": "#282a36",
+    "gradient_primary_end": "#21222c",
+    "gradient_primary_angle": "160",
+    "gradient_secondary_start": "#21222c",
+    "gradient_secondary_end": "#3a344d",
+    "gradient_secondary_angle": "135",
+    "gradient_tertiary_start": "#bd93f9",
+    "gradient_tertiary_end": "#ff79c6",
+    "gradient_tertiary_angle": "135"
   },
   "components": {
     "main_window": "background: ${bg}; color: ${fg};",
@@ -39,7 +45,7 @@
     "tab_unselected": "border: 1px solid ${bg}; border-bottom: 2px solid ${bg - #222222}; padding: 0.5em; background: ${bg - #222222}; color: ${fg - #333333};",
     "search_bar": "background: ${edit_bg}; color: ${edit_fg}; border: 1px solid ${alt_bg}; margin: 2px;",
     "search_bar_focused": "border: 1px solid ${sel_bg};",
-    "item_selected": "background: ${sel_bg}; color: ${sel_fg}; border-radius: 2px;",
+    "item_selected": "background: ${sel_bg}; color: ${sel_fg};",
     "notification": "background: ${notification_bg}; color: ${notification_fg};",
     "tooltip": "background: ${alt_bg}; color: ${fg}; border: 1px solid ${sel_bg};"
   }

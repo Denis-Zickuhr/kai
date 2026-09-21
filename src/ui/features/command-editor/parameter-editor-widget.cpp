@@ -435,7 +435,19 @@ public:
             if (it != m_collections.constEnd()) {
                 for (const core::CollectionField &f : it->schema) m_displayCombo->addItem(f.name);
             }
-            if (!current.isEmpty()) m_displayCombo->setCurrentText(current);
+            if (!current.isEmpty()) {
+                m_displayCombo->setCurrentText(current);
+            } else if (it != m_collections.constEnd()) {
+                // Bug real corrigido ("tava renderizando o id"): sem
+                // seleção prévia, o QComboBox nasce no índice 0 — que no
+                // schema padrão [Key, Value] É a Key (um identificador,
+                // nunca uma boa exibição). Pré-seleciona o mesmo campo
+                // "amigável" que o form de execução escolheria sozinho
+                // (ver core::resolveCollectionDisplayField), então o
+                // usuário já vê o campo certo sem precisar mexer neste
+                // combo manualmente.
+                m_displayCombo->setCurrentText(core::resolveCollectionDisplayField(*it, QString()));
+            }
         };
         refreshDisplayFields();
         if (!param.collectionDisplayField.isEmpty()) {

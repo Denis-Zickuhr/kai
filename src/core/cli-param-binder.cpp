@@ -110,6 +110,19 @@ QString validateAndResolveValue(const Parameter &param, const QString &value, Cl
 
 } // namespace
 
+QStringList selectOptionValues(const Parameter &param)
+{
+    QStringList values;
+    if (!param.collectionId.isEmpty()) {
+        return values;
+    }
+    for (const QString &opt : param.options) {
+        const int sep = opt.indexOf(QLatin1Char(':'));
+        values << ((sep > 0) ? opt.mid(sep + 1) : opt);
+    }
+    return values;
+}
+
 CliParamBindingResult bindCliParams(const QVector<Parameter> &params, const QStringList &args)
 {
     CliParamBindingResult result;

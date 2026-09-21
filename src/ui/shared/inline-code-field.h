@@ -58,7 +58,8 @@ private:
     QPlainTextEdit *m_edit = nullptr;
     QToolButton *m_expandButton = nullptr;
     QString m_editorTitle;
-    int m_editPadding = 0;   // padding do QSS, usado no cálculo da altura
+    int m_editPadding = 0;   // padding vertical do QSS, usado no cálculo da altura
+    int m_editPaddingX = 0;  // padding horizontal do QSS
     int m_minLines = 2;
     int m_maxLines = 6;
     bool m_jsonSyntax = false;

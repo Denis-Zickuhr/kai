@@ -1,6 +1,7 @@
 #include "ui/features/collections/project-import-options-dialog.h"
 
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/folder-picker-widget.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 #include "utils/path-format.h"
@@ -45,12 +46,11 @@ ProjectImportOptionsDialog::ProjectImportOptionsDialog(const QString &initialDir
     // mudar a pasta") — mesmo seletor pesquisável já usado no editor de
     // Comando/Coleção, populado com as pastas que já existem. Default =
     // raiz (índice 0, comportamento antigo).
-    m_parentFolderField = new QComboBox(this);
+    m_parentFolderField = new FolderPickerWidget(this);
     capComboBoxWidth(m_parentFolderField);
-    m_parentFolderField->addItem(utils::tr(QStringLiteral("folder.parent.none")), QString());
-    for (const core::Folder &folder : foldersInTreeOrder(allFolders)) {
-        m_parentFolderField->addItem(folderComboLabel(allFolders, folder.id), folder.id);
-    }
+    auto foldersInOrder = foldersInTreeOrder(allFolders);
+    m_parentFolderField->setFolders(foldersInOrder);
+    m_parentFolderField->enableNoneOption(utils::tr(QStringLiteral("folder.parent.none")));
     makeSearchableCombo(m_parentFolderField);
     outer->addWidget(layout_helpers::wrapWithLabel(this,
         utils::tr(QStringLiteral("project_import_options.parent_folder_label")), m_parentFolderField));
@@ -128,7 +128,7 @@ bool ProjectImportOptionsDialog::detectGenericDefinitions() const
 
 QString ProjectImportOptionsDialog::parentFolderId() const
 {
-    return m_parentFolderField->currentData().toString();
+    return m_parentFolderField->selectedFolderId();
 }
 
 } // namespace kai::ui

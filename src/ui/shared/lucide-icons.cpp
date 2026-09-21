@@ -100,6 +100,18 @@ QIcon LucideIcons::icon(const QString &name, const QColor &color, int size)
     painter.end();
 
     QIcon icon(pixmap);
+    // Desabilitado: o mesmo ícone bem mais apagado. Sem isto o Qt gera um
+    // cinza próprio que quase não se distingue do estado normal, e botões sem
+    // ação possível (Parar sem nada rodando, por exemplo) pareciam ativos.
+    QPixmap dimmed(pixmap.size());
+    dimmed.fill(Qt::transparent);
+    dimmed.setDevicePixelRatio(dpr);
+    {
+        QPainter dimPainter(&dimmed);
+        dimPainter.setOpacity(0.32);
+        dimPainter.drawPixmap(0, 0, pixmap);
+    }
+    icon.addPixmap(dimmed, QIcon::Disabled);
     cache.insert(cacheKey, icon);
     return icon;
 }

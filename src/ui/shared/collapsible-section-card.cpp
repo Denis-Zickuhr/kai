@@ -15,6 +15,8 @@
 #include <QEasingCurve>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QLinearGradient>
+#include <qmath.h>
 
 namespace kai::ui {
 namespace tk = utils::tokens;
@@ -248,7 +250,7 @@ void CollapsibleSectionCard::setActionButtonText(const QString &text)
             "QPushButton { background-color: %1; color: %2; border: none; border-radius: %3px;"
             " padding: %4px %5px; font-weight: 600; }"
             "QPushButton:hover { background-color: %6; }")
-            .arg(tk::accent()).arg(tk::bg()).arg(tk::radiusMd())
+            .arg(tk::accent(), tk::bg()).arg(tk::radiusMd())
             .arg(tk::space(1)).arg(tk::space(3)).arg(QColor(tk::accent()).lighter(115).name()));
         m_actionButton->setIcon(LucideIcons::icon(QStringLiteral("plus"), QColor(tk::bg()), 14));
         connect(m_actionButton, &QPushButton::clicked, this, &CollapsibleSectionCard::actionTriggered);
@@ -345,7 +347,26 @@ void CollapsibleSectionCard::paintEvent(QPaintEvent *event)
     QPen pen(QColor(tk::borderColor()));
     pen.setWidthF(1.0);
     p.setPen(pen);
-    p.setBrush(QColor(tk::surface2()));
+    // Gradiente de tema (base "primary" — "app e saídas", pedido do
+    // usuário) quando declarada — este é o corpo do card colapsável
+    // (Parâmetros, Auto-respostas, Condições, Hooks, seções de Execução/
+    // Agendamento etc.), o container mais repetido da UI. Pintado à mão
+    // (não QSS) porque este widget já usa paintEvent por um bug de
+    // checkbox documentado acima; mesma matemática de ângulo->pontos que
+    // gradientQss() usa em QSS, só que via QLinearGradient com
+    // ObjectBoundingMode (coordenadas 0..1 relativas ao próprio retângulo,
+    // equivalente ao x1/y1/x2/y2 do QSS).
+    if (tk::hasGradient(QStringLiteral("primary"))) {
+        const qreal rad = qDegreesToRadians(static_cast<qreal>(tk::gradientAngle(QStringLiteral("primary"))));
+        const qreal dx = qSin(rad), dy = -qCos(rad);
+        QLinearGradient grad(0.5 - dx * 0.5, 0.5 - dy * 0.5, 0.5 + dx * 0.5, 0.5 + dy * 0.5);
+        grad.setCoordinateMode(QGradient::ObjectBoundingMode);
+        grad.setColorAt(0, QColor(tk::gradientStart(QStringLiteral("primary"))));
+        grad.setColorAt(1, QColor(tk::gradientEnd(QStringLiteral("primary"))));
+        p.setBrush(grad);
+    } else {
+        p.setBrush(QColor(tk::surface2()));
+    }
     // Meio pixel pra dentro (borda de 1px certinha, sem cortar nas bordas
     // do widget — mesmo truque usado no indicador de drop das árvores/
     // tabelas arrastáveis).

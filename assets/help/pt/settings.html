@@ -1,0 +1,15 @@
+<h2>Configurações</h2>
+<p>Menu <b>Configurações</b>. As mudanças valem ao apertar <b>OK</b> (a página <b>Armazenamento</b> é a exceção: as ações dela são imediatas).</p>
+<table>
+<tr><td><b>Geral</b></td><td><b>idioma</b> da interface (inglês/português; reinicie para traduzir a janela principal inteira), <b>iniciar o Kai com o sistema</b>, o <b>tempo limite de parada gentil</b> (quanto o Parar espera depois de pedir ao processo que saia antes de forçar), recolher a Saída ao selecionar pastas, <b>tamanho máximo do log</b> por comando.</td></tr>
+<tr><td><b>Aparência</b></td><td>o <a href='help://themes'>tema</a> ativo e <i>Importar tema…</i>; comportamento da janela — ocultar ao perder o foco, iniciar visível, abrir com tamanho fixo / lembrar o último tamanho / maximizada / tela cheia; efeitos visuais (sombras, janela translúcida, vidro líquido com blur, animações, gradientes do tema — todos desligados por padrão, ligue conforme o seu ambiente).</td></tr>
+<tr><td><b>Layout</b></td><td><b>densidade</b> (confortável/compacta), <b>cantos</b> (retos, suaves, arredondados — toda janela e diálogo segue), linhas de conexão da árvore, uma imagem de fundo para a lista de comandos e sua opacidade, onde cada grupo de botões de ação fica (topo, embaixo, esquerda, direita ou oculto) e a <b>posição da Saída</b>.</td></tr>
+<tr><td><b>Atalhos</b></td><td>o atalho global de mostrar/ocultar e uma tabela pesquisável de todas as ações — veja <a href='help://shortcuts'>Atalhos de teclado</a>. <i>Restaurar Padrões</i> reseta.</td></tr>
+<tr><td><b>Perfis de Execução</b></td><td>os alvos pelos quais um comando pode rodar (WSL, containers…) — veja <a href='help://terminal_targets'>Terminais e WSL</a>.</td></tr>
+<tr><td><b>Linguagens</b></td><td>os interpretadores de Python e Node — veja <a href='help://languages'>Python e Node</a>.</td></tr>
+<tr><td><b>Armazenamento</b></td><td>todo comando, pasta e coleção numa tabela filtrável, com <b>duplicar</b> e <b>excluir</b> em lote. Excluir uma pasta sobe o conteúdo um nível em vez de apagá-lo. Vale na hora.</td></tr>
+<tr><td><b>Notificações</b></td><td>a chave geral e uma chave por evento — veja <a href='help://notifications'>Notificações e logs</a>.</td></tr>
+<tr><td><b>KIP</b></td><td>tempos de espera (primeira mensagem, atualizações de campo, depois do Cancelar), lembrar as últimas respostas (e um botão para esquecer todas) abrir o Detalhes na falha e o tamanho da janela própria do KIP (seguir a configuração geral, normal, maximizada ou tela cheia) — veja <a href='help://kip'>KIP</a>.</td></tr>
+</table>
+<h3>Onde as coisas ficam</h3>
+<p>Configurações, comandos, coleções, histórico e notificações são arquivos JSON na pasta de configuração do usuário (<code>~/.config/kai/</code> no Linux, <code>%APPDATA%\Kai\</code> no Windows). Um arquivo corrompido é restaurado de um backup automático e o Kai avisa. Os temas ficam em <code>themes/</code> ali.</p>

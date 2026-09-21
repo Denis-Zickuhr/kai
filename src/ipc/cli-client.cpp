@@ -1,6 +1,7 @@
 #include "ipc/cli-client.h"
 #include "ipc/ipc-server.h"
 #include "core/kai-file-validator.h"
+#include "utils/console-context.h"
 #include "utils/translation-manager.h"
 
 #include <QLocalSocket>
@@ -11,11 +12,6 @@
 #include <QFile>
 #include <QSet>
 
-#ifdef Q_OS_WIN
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace kai::ipc {
 
@@ -32,69 +28,39 @@ QTextStream &err()
     return s;
 }
 
-// true só quando a saída padrão é um TERMINAL interativo de verdade (não um
-// clique no ícone/launcher, nem um pipe/redirect) — é o que diferencia
-// "rodei `kai` solto no terminal" de "abri o app normalmente" (pedido do
-// usuário: "ao rodar via terminal, só chamando KAI... abra o help
-// automático... atualmente tem comando pra isso?" — não tinha; sem esta
-// checagem, teria que ser um verbo explícito, ou teria quebrado abrir o
-// app pelo launcher/ícone, que também invoca o binário sem argumentos mas
-// SEM tty nenhum atrás).
-//
-// BUG REAL encontrado depois (relatado: "subi o ctn e não abriu o app"):
-// isatty(stdout) sozinho não basta — o loop de dev (docker/watch.sh via
-// entr) relança `./bin/kai` sem argumento nenhum DENTRO de um pty de
-// verdade (o próprio terminal onde `docker exec` foi chamado), então essa
-// relançada automática também caía no "discover" e fechava na hora, em
-// vez de abrir a GUI. KAI_FORCE_GUI é a válvula de escape explícita —
-// setada por watch.sh — pra dizer "isto aqui é sempre abertura de GUI,
-// mesmo tendo um tty atrás".
-bool stdoutIsInteractiveTerminal()
-{
-    if (qEnvironmentVariableIsSet("KAI_FORCE_GUI")) {
-        return false;
-    }
-#ifdef Q_OS_WIN
-    // kai.exe é WIN32 subsystem (sem console próprio) — main.cpp SEMPRE
-    // tenta AttachConsole(ATTACH_PARENT_PROCESS) antes de chegar aqui (ver
-    // attachParentConsoleForCli, chamado incondicionalmente, inclusive na
-    // invocação SOLTA — pedido do usuário: "se eu rodar o kai do Windows a
-    // partir do WSL, via interop, não quero que abra a GUI", que exige
-    // detectar um console de verdade atrás mesmo sem argumento nenhum).
-    // Quando NÃO existe console pai (duplo-clique/atalho), AttachConsole
-    // falha e stdout nunca chega a ser anexado — nesse estado
-    // _fileno(stdout) devolve o sentinela -2 da MSVC CRT ("arquivo não
-    // associado a um stream C aberto"). Chamar _isatty com um fd negativo é
-    // território de comportamento não-confiável da CRT (pode devolver
-    // não-zero em vez de 0 dependendo da versão/build) — checar o fd ANTES
-    // evita a ambiguidade: sem console anexado (tentativa já feita e
-    // falhou), nunca é "interativo". Com console anexado de verdade
-    // (console real, OU o que o WSL cria pro processo Windows via
-    // interop), o fd é válido e _isatty decide certo.
-    const int fd = _fileno(stdout);
-    if (fd < 0) {
-        return false;
-    }
-    return _isatty(fd) != 0;
-#else
-    return isatty(fileno(stdout)) != 0;
-#endif
-}
-
 void printUsage()
 {
     out() << kai::utils::tr(QStringLiteral("cli.usage.banner")) << "\n"
+          << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.label")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.section.paths")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_discover")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_run")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_help")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_global")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_detached")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_window")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_flags")) << "\n"
+          << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.section.instance")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.run")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.list")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.env_list")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.env_use")) << "\n"
-          << kai::utils::tr(QStringLiteral("cli.usage.import")) << "\n"
-          << kai::utils::tr(QStringLiteral("cli.usage.validate")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.ps")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.attach")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.history")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.last")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.kill")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.import")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.raise")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.show")) << "\n"
+          << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.section.standalone")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.validate")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.init")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.completion")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.kip")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.help")) << "\n";
     out().flush();
 }
@@ -170,7 +136,7 @@ bool isKnownVerb(const QString &verb)
 bool shouldHandleAsCli(const QStringList &args)
 {
     if (args.size() < 2) {
-        return stdoutIsInteractiveTerminal();
+        return kai::utils::stdoutIsInteractiveTerminal();
     }
     return isKnownVerb(args.at(1));
 }
@@ -184,7 +150,7 @@ CliOutcome runCliIfRequested(const QStringList &args)
         // interativo de verdade atrás — senão é o launcher/ícone abrindo o
         // app normalmente, e isto teria que continuar abrindo a GUI (ver
         // stdoutIsInteractiveTerminal).
-        if (!stdoutIsInteractiveTerminal()) {
+        if (!kai::utils::stdoutIsInteractiveTerminal()) {
             return {false, 0};
         }
         printUsage();
@@ -224,17 +190,21 @@ CliOutcome runCliIfRequested(const QStringList &args)
     if (verb == QStringLiteral("ps")) {
         QJsonObject req;
         req["cmd"] = QStringLiteral("ps");
-        return {true, dispatch(req, true)};
-    }
-    if (verb == QStringLiteral("attach")) {
-        if (args.size() < 3) {
-            err() << kai::utils::tr(QStringLiteral("cli.error.usage.attach")) << "\n"; err().flush();
-            return {true, 2};
+        if (args.contains(QStringLiteral("--json"))) {
+            // Estruturado (id, name, pid, status) — pra scripts/jq.
+            bool connected = false;
+            const QJsonObject reply = sendRequest(req, connected);
+            if (!connected) {
+                err() << kai::utils::tr(QStringLiteral("cli.error.not_running")) << "\n";
+                err().flush();
+                return {true, 2};
+            }
+            out() << QString::fromUtf8(QJsonDocument(reply.value(QStringLiteral("items")).toArray())
+                                           .toJson(QJsonDocument::Indented));
+            out().flush();
+            return {true, 0};
         }
-        QJsonObject req;
-        req["cmd"] = QStringLiteral("attach");
-        req["arg"] = args.at(2);
-        return {true, dispatch(req, false)};
+        return {true, dispatch(req, true)};
     }
     if (verb == QStringLiteral("kill")) {
         if (args.size() < 3) {
@@ -267,28 +237,6 @@ CliOutcome runCliIfRequested(const QStringList &args)
         err() << kai::utils::tr(QStringLiteral("cli.error.usage.env")) << "\n";
         err().flush();
         return {true, 2};
-    }
-    if (verb == QStringLiteral("import")) {
-        if (args.size() < 3) {
-            err() << kai::utils::tr(QStringLiteral("cli.error.usage.import")) << "\n";
-            err().flush();
-            return {true, 2};
-        }
-        const QString filePath = args.at(2);
-        QFile file(filePath);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            err() << kai::utils::tr(QStringLiteral("cli.error.open_file")) << filePath << "\n";
-            err().flush();
-            return {true, 1};
-        }
-
-        const QString jsonContent = QString::fromUtf8(file.readAll());
-        file.close();
-
-        QJsonObject req;
-        req["cmd"] = QStringLiteral("import");
-        req["json"] = jsonContent;
-        return {true, dispatch(req, false)};
     }
     if (verb == QStringLiteral("validate")) {
         // Ao contrário dos outros verbos, NÃO precisa de uma instância do

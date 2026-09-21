@@ -17,6 +17,20 @@ config.
   parameter types (text, select, bool, file), dynamic variables (`$uuid`,
   `$timestamp`...), a masked secret variable, a custom `working_dir`, a
   background process, and a Collection (`Customers`).
+- **`sample/languages`** — "Kai Languages Demo": commands in Python and Node
+  (the text is code, no `python3 -c` quoting), `{{VAR}}` vs. environment
+  variables, a parameter read through `os.environ`, a free stdin, top-level
+  `await` in Node and a per-command interpreter. Needs `python3`/`node`.
+  Command 7 uses the injected **`kai` module** from Node; command 8 is
+  **`showcase.py`**, a long interactive Python program (menu you keep returning
+  to, a 4-step wizard with Back/dependent fields/chips/retry, environment and
+  process tools, notifications, run-another-command) that uses both the `kip`
+  and `kai` modules — see the docstring at the top of the file.
+- **`sample/kip`** — "Kai KIP Demos": programs that speak the Kai Interface
+  Protocol in plain bash (no helper): wizard, confirm, cascading fields, checklist,
+  table, login with `set-env`, a hand-written raw-JSON example and a
+  "command doesn't support KIP" case, plus a Python and a Node wizard written
+  directly in the command with Kai's injected `kip` module. See its own README.
 
 ## Usage
 

@@ -8,7 +8,7 @@
 <p>A dev server that also started a tunnel via a pre-hook can tear it down on cleanup:</p>
 <pre>{
   "name": "Dev Server",
-  "type": "shell",
+  "type": "command",
   "command": "npm run dev",
   "is_background": true,
   "hooks": { "pre": ["Start tunnel"], "post": [], "cleanup": ["Stop tunnel"] }
@@ -19,7 +19,7 @@
 <p>A command or hook can also carry an <b>execution condition</b> — a guard deciding whether it actually runs, based on comparing interpolated values. Runs only if the token is missing or expired:</p>
 <pre>{
   "name": "Login",
-  "type": "shell",
+  "type": "command",
   "command": "gh auth login",
   "execution_conditions": [
     { "name": "Token missing", "left": "{{TOKEN}}", "op": "not_exists" },

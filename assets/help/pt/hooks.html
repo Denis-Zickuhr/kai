@@ -8,7 +8,7 @@
 <p>Um dev server que também subiu um túnel via pre-hook pode derrubá-lo no cleanup:</p>
 <pre>{
   "name": "Dev Server",
-  "type": "shell",
+  "type": "command",
   "command": "npm run dev",
   "is_background": true,
   "hooks": { "pre": ["Subir túnel"], "post": [], "cleanup": ["Parar túnel"] }
@@ -19,7 +19,7 @@
 <p>Um comando ou hook também pode ter uma <b>condição de execução</b> — uma guarda que decide se ele roda de verdade, baseada em comparar valores interpolados. Roda só se o token estiver ausente ou expirado:</p>
 <pre>{
   "name": "Login",
-  "type": "shell",
+  "type": "command",
   "command": "gh auth login",
   "execution_conditions": [
     { "name": "Token ausente", "left": "{{TOKEN}}", "op": "not_exists" },

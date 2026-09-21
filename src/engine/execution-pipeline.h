@@ -5,6 +5,8 @@
 #include <QMap>
 #include <QStringList>
 #include <QSet>
+#include <QHash>
+#include <QPointer>
 #include <map>
 #include <functional>
 #include <memory>
@@ -12,8 +14,10 @@
 #include "core/environment-manager.h"
 #include "core/models.h"
 #include "core/config-manager.h"
+#include "core/interpreter-settings.h"
 #include "engine/process-runner.h"
 #include "engine/http-runner.h"
+#include "engine/kip-session.h"
 
 class TestExecutionPipeline; // ver friend em ExecutionPipeline (tests/test_execution_pipeline.cpp)
 
@@ -32,6 +36,18 @@ struct PipelineResult {
     PipelineStage failedStage = PipelineStage::MainCommand;
     QString failedCommandId;
     QString errorMessage;
+    // Comando PRINCIPAL desta execução (failedCommandId pode ser um hook) —
+    // permite a quem escuta saber QUAL execução terminou quando há mais de
+    // uma (ex: sessão de `kai -g` delegada ao app via IPC).
+    QString mainCommandId;
+    // A falha foi só um encerramento PEDIDO do comando (Parar, `kai kill`,
+    // reset, re-execução): não é erro de verdade — quem notifica/marca como
+    // falho deve ignorar.
+    bool stoppedByRequest = false;
+    // Código de saída pra quem chama (CLI): 0 em sucesso; o código REAL do
+    // passo shell que falhou (ex: 2, 127, 130 no Ctrl+C) ou 1 quando não há
+    // um (HTTP, falha ao iniciar).
+    int exitCode = 0;
 };
 
 // Orquestra a sequência Pre-Hooks -> Comando Principal -> Post-Hooks
@@ -55,6 +71,13 @@ public:
     // Timeout aplicado a cada hook individualmente (default 30s).
     void setHookTimeoutMs(int ms);
 
+    // Tempo de espera entre SIGTERM e SIGKILL ao clicar em "Parar" (não
+    // "Forçar parada" — ver ProcessRunner::forceStop, que ignora isto de
+    // propósito). Configurável em Configurações -> Geral
+    // (SettingsData::gracefulStopTimeoutSec); aplicado a cada ProcessRunner
+    // no momento em que ele é criado (ver runSingleCommand).
+    void setGracefulStopTimeoutMs(int ms);
+
     // Dispara os hooks de CLEANUP do comando informado. Roda em TODOS os
     // términos: sucesso, falha, crash, Stop/Force-stop manual e Reset.
     // Fire-and-forget: cada cleanup é independente, não altera o resultado do
@@ -69,6 +92,26 @@ public:
     // seu template (placeholder {{command}}). Alvo não encontrado ou vazio
     // = execução local direta (comportamento anterior).
     void setTerminalProfiles(const QVector<core::TerminalProfile> &targets);
+
+    // Interpretadores globais de Python/Node (Configurações → Linguagens).
+    void setInterpreters(const core::InterpreterSettings &interpreters);
+
+    // A linha de shell que de fato executa o comando, antes do alvo de
+    // terminal: Native = o texto com {{VAR}} interpolado; Python/Node = a
+    // chamada ao interpretador com o código embutido (SEM interpolar — o
+    // código pode ter chaves legítimas; variáveis e parâmetros chegam pelo
+    // ambiente do processo). Também usada pelo --dry-run.
+    QString commandLineFor(const core::Command &command, const core::EnvironmentManager &env) const;
+
+    // Modo CLI local (`kai <path>` numa pasta com kai.json/kai.yml): os
+    // passos shell usam stdin/stdout/stderr do PRÓPRIO processo kai em vez de
+    // um PTY capturado — interativo de verdade (read/prompts, cores, Ctrl+C).
+    // Bug real: "Fazer bump de versão? [y/N]" do release.sh nunca recebia o
+    // que era digitado, porque ninguém repassava o teclado ao PTY. Como a
+    // saída não passa mais pelo Kai, auto-responsores/open_last_link/
+    // compact_output não se aplicam a esses passos; hooks com capture_env
+    // continuam capturados (precisam ler o ambiente resultante).
+    void setInheritTerminal(bool enabled);
 
     // Hierarquia de pastas (id -> Folder), usada para RESOLVER o perfil de
     // terminal herdado: um comando com terminalTarget == "@parent" (ou vazio,
@@ -102,6 +145,11 @@ public:
     // Ids dos comandos com runner de processo VIVO neste pipeline.
     QStringList runningCommandIds() const;
 
+    // Sessão KIP da última execução de um comando `kip` (nullptr se nunca
+    // rodou). Sobrevive ao fim do processo — a view mostra o estado final até
+    // o comando rodar de novo (aí a sessão antiga é descartada).
+    KipSession *kipSessionFor(const QString &commandId) const;
+
     // Id do comando cujo runner foi o último disparado (compat).
     QString activeCommandId() const { return m_activeRunnerCommandId; }
 
@@ -119,6 +167,8 @@ public:
     // PADRÃO (isDefault); senão, o único alvo válido; senão vazio (local).
     // Público para permitir teste unitário direto da resolução, sem executar.
     QString effectiveTerminalProfileName(const core::Command &command) const;
+    // Distro WSL em que o alvo de terminal do comando executa (vazio = não é WSL).
+    QString wslDistroFor(const core::Command &command) const;
 
 signals:
     void logMessage(const QString &commandId, const QString &text, bool isError);
@@ -137,6 +187,13 @@ signals:
     // Repassa HttpRunner::dynamicVarPersistRequested — o MainWindow (dono
     // do ConfigManager) grava em dynamic-vars.json. Ver EnvExtractor::persist.
     void dynamicVarPersistRequested(const QString &scopeKey, const QString &name, const QString &value);
+    // Uma sessão KIP nasceu para `commandId` (a UI conecta a view a ela).
+    void kipSessionStarted(const QString &commandId, kai::engine::KipSession *session);
+    // O programa KIP pediu uma notificação do SO (`notify`).
+    void kipNotifyRequested(const QString &commandId, const QString &title, const QString &text,
+                            kai::core::KipLevel level);
+    // Respostas de prompts KIP aceitas, a persistir em Command::kipLastValues.
+    void kipAnswersRemembered(const QString &commandId, const QJsonObject &remembered);
     void stageStarted(const QString &commandId, PipelineStage stage);
     void pipelineFinished(const PipelineResult &result);
 
@@ -150,6 +207,8 @@ signals:
     void backgroundProcessStarted(const QString &commandId, ProcessRunner *runner);
 
 private:
+    // Avisa (só no Windows) quando a linha final passa do que o cmd.exe aguenta.
+    void warnIfCommandLineTooLong(const QString &commandId, const QString &finalCommand);
     void runQueue(QStringList queue, PipelineStage stage, std::function<void()> onAllSucceeded);
     void runSingleCommand(const core::Command &command, std::function<void(bool success, const QString &errorMessage)> onDone);
     void abort(PipelineStage stage, const QString &commandId, const QString &errorMessage);
@@ -184,6 +243,15 @@ private:
     // documentada em EnvironmentManager::setDynamicVarInScope.
     void ingestCapturedEnv(const QString &rawOutput, const QString &scopeKey,
                             const QVector<core::DeclaredEnvVar> &declaredVars);
+    // Grava UMA variável declarada no escopo certo (e pede a persistência, se a
+    // declaração pede). Caminho comum do "Exportar variáveis" (ingestCapturedEnv)
+    // e do `set_env` do KIP.
+    void exportDeclaredVar(const core::DeclaredEnvVar &declared, const QString &scopeKey, const QString &value);
+    // Ambiente do processo: o resolvido pelo EnvironmentManager e, para um
+    // comando KIP, KIP_VERSION/KIP_LOCALE por baixo (o env do usuário vence).
+    QMap<QString, QString> processEnvFor(const core::Command &command) const;
+    KipSession *createKipSession(const core::Command &command, ProcessRunner *runner,
+                                 const QString &captureScopeKey);
     // Aplica o template do alvo de terminal ao comando interpolado, se o
     // comando definir um terminalTarget existente. Caso contrário retorna
     // o comando inalterado. Quando há terminalTarget E workingDir, injeta
@@ -217,8 +285,17 @@ private:
     // só encerrar runners que pertencem a ESTA cadeia — nunca comandos de
     // OUTRAS execuções em paralelo (ver comentário em abort()).
     QSet<QString> m_currentChainCommandIds;
+    // Comandos desta cadeia cujo término foi um stop pedido (ver
+    // PipelineResult::stoppedByRequest); consumido em abort().
+    QSet<QString> m_stoppedByRequestIds;
     int m_hookTimeoutMs = 30000;
+    // Default 2000ms = comportamento histórico antes de virar configurável
+    // (ProcessRunner::m_killTimeoutMs também nasce com este mesmo default).
+    int m_gracefulStopTimeoutMs = 2000;
     QVector<core::TerminalProfile> m_terminalProfiles;
+    core::InterpreterSettings m_interpreters;
+    bool m_inheritTerminal = false;
+    QMap<QString, int> m_lastExitCodes; // último código por comando (ver PipelineResult::exitCode)
     QVector<core::Folder> m_folders;
 
     // Estado de captura de ambiente do hook em execução (T9): buffer do
@@ -236,6 +313,8 @@ private:
     // por activeProcessRunner() para compat.
     QString m_activeRunnerCommandId;
     std::unique_ptr<HttpRunner> m_activeHttpRunner;
+    // Sessão KIP mais recente por comando (a dona é este objeto, via parent).
+    QHash<QString, QPointer<KipSession>> m_kipSessions;
 };
 
 } // namespace kai::engine

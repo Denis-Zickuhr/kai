@@ -362,20 +362,38 @@ struct Hooks {
     static Hooks fromJson(const QJsonObject &obj);
 };
 
+// "Command" é o tipo que roda um programa local (antes chamado "Shell"): a
+// LINGUAGEM (CommandLanguage abaixo) decide se o texto é uma linha de shell,
+// código Python ou código Node. No JSON o tipo é "command"; "shell" continua
+// sendo aceito na leitura (arquivos e configs anteriores à renomeação).
 enum class CommandType {
-    Shell,
+    Command,
     Http
 };
 
 QString commandTypeToString(CommandType type);
 CommandType commandTypeFromString(const QString &value);
 
+// Linguagem do texto de um Command. Native = linha/script do shell do alvo
+// (o comportamento de sempre); Python/Node = o texto é CÓDIGO, que o Kai
+// entrega ao interpretador sem passar por aspas de shell nem por {{VAR}}
+// (variáveis e parâmetros chegam pelo ambiente: os.environ / process.env).
+enum class CommandLanguage {
+    Native,
+    Python,
+    Node
+};
+
+// Chave JSON: "native" | "python" | "node". Valor desconhecido = Native.
+QString commandLanguageToString(CommandLanguage language);
+CommandLanguage commandLanguageFromString(const QString &value);
+
 // Comando executável: shell ou requisição HTTP.
 struct Command {
     QString id;
     QString folderId;
     QString name;
-    CommandType type = CommandType::Shell;
+    CommandType type = CommandType::Command;
 
     // DETALHAMENTO (feedback do usuário): texto opcional multi-linha que
     // descreve o comando. Quando preenchido, aparece como um hint no topo do
@@ -396,8 +414,14 @@ struct Command {
     // resolvido por IconPickerWidget::iconForName. Vazio = sem ícone.
     QString icon;
 
-    // Campos específicos de Shell.
+    // Campos específicos de Command (antes "Shell").
     QString command;
+    // Linguagem de `command` e interpretador opcional deste comando. Vazio =
+    // o interpretador global (Configurações → Linguagens). Só vale com
+    // language != Native; é uma linha de shell (pode ter argumentos, ex:
+    // "uv run python"), então caminhos com espaço precisam vir entre aspas.
+    CommandLanguage language = CommandLanguage::Native;
+    QString interpreter;
     QString workingDir;
     bool isBackground = false;
     // SAÍDA COMPACTA: colapsa linhas em branco repetidas e apara espaços à
@@ -486,6 +510,30 @@ struct Command {
     // vierem marcados por engano).
     bool renderMarkdown = false;
 
+    // KIP — Kai Interface Protocol (specs/11-kip-protocol.md): o comando roda
+    // como uma SESSÃO KIP — o programa fala JSON Lines pelo stdout/stdin e o
+    // Kai renderiza cada passo com componentes nativos, em vez de mostrar
+    // texto de terminal. O Kai NUNCA reescreve a string do comando (quem
+    // escreve `--kip` é o autor); a flag só diz "rode isto como sessão KIP".
+    // Só Shell. Incompatível com interactiveTerminal/formattedOutput/
+    // renderMarkdown/compactOutput/openLastLink, responders, captureEnv,
+    // isBackground, cron e autoRun (ver kai-file-validator e o editor).
+    bool kip = false;
+    // A view KIP abre numa janela própria (a mesma da saída destacada,
+    // `kai -gw`) em vez do painel de saída embutido.
+    bool kipOpenInWindow = false;
+    // FECHAR A JANELA AO TERMINAR: com a view KIP na janela própria (`kip_window`
+    // ou `kai -gw`), fecha essa janela sozinha depois que a sessão termina COM
+    // SUCESSO — útil em scripts rápidos disparados pela CLI. Falha ou cancelamento
+    // deixam a janela aberta (é onde está o erro). O atraso (segundos, 0 = na hora)
+    // deixa ler o cartão de resultado antes de fechar.
+    bool kipAutoCloseWindow = false;
+    int kipAutoCloseDelaySec = 2;
+    // Últimas respostas dadas aos prompts KIP, pra pré-preencher a próxima
+    // execução (mesmo espírito de lastParamValues). Chave
+    // "<promptId>/<fieldName>" -> valor JSON (string, número, array, objeto).
+    QJsonObject kipLastValues;
+
     // Alvo de terminal onde o comando shell é executado (feedback
     // do usuário: escolher em qual terminal rodar, ex: WSL bridge no
     // Windows). Vazio = terminal local padrão (bash -c). Caso contrário,
@@ -505,6 +553,24 @@ struct Command {
     // pré-preencher no formulário na próxima execução). Chave = nome do
     // parâmetro, valor = último valor informado.
     QMap<QString, QString> lastParamValues;
+
+    // AGENDAMENTO CRON (Módulo Cron Scheduler): quando preenchido, o
+    // scheduler interpreta esta expressão e dispara o comando pela pipeline
+    // normal no horário correspondente — mesmo espírito de autoRun, mas
+    // recorrente em vez de "uma vez no boot". Vazio = sem agendamento
+    // (comportamento atual, sem mudança). Só relevante para
+    // CommandType::Command.
+    QString cronExpression;
+
+    // NOTIFICAR EXECUÇÃO CRON: independente do agendamento em si — permite
+    // ter uma expressão cron configurada sem gerar notificação a cada
+    // disparo (default false, mesmo espírito opt-in de
+    // notifyOnBackgroundProcessSuccess). Quando true, cada disparo do
+    // scheduler gera notificação (respeitando o master switch global
+    // notificationsEnabled para o TOAST — ver seção de notificações do Cron
+    // Scheduler) com o resultado; o output do comando fica disponível por
+    // hover/expansão no histórico.
+    bool cronNotifyOnRun = false;
 
     // Histórico de uso de valores por parâmetro (feedback do usuário:
     // ordenar as opções de um Select pelas mais usadas recentemente).
@@ -589,6 +655,9 @@ struct Folder {
     // os IRMÃOS DE FATO no namespace de CLI já colapsado — kai-file-
     // validator.cpp cobre essa checagem.
     QString cliPath;
+    // Texto opcional mostrado ao lado do segmento quando o CLI lista esta
+    // pasta (`kai`, `kai <pasta>`). Só faz sentido com cliPath preenchido.
+    QString cliDescription;
 
     QJsonObject toJson() const;
     static Folder fromJson(const QJsonObject &obj);
@@ -690,6 +759,41 @@ struct Collection {
 
     QJsonObject toJson() const;
     static Collection fromJson(const QJsonObject &obj);
+};
+
+// Resolve qual campo desta coleção usar como TEXTO DE EXIBIÇÃO de uma
+// entrada (chip, sugestão de busca, "__label" nos comandos) — usado em
+// mais de um lugar (parameter-form-dialog.cpp, main-window.cpp), então
+// centralizado aqui pra não divergir.
+//
+// Uma escolha EXPLÍCITA (`configured` não vazio e ainda existente no
+// schema) sempre vence, mesmo que seja um campo Key — o usuário pode ter
+// um motivo de verdade pra isso (ex: a "chave" já É um texto legível tipo
+// um slug/username). O auto-fallback abaixo só entra quando NADA foi
+// configurado (ou o campo salvo não existe mais): evita Key por padrão
+// (preferindo Value, depois qualquer não-Key), já que a causa raiz do bug
+// original ("tava renderizando o id") era o EDITOR de parâmetros
+// pré-selecionar o PRIMEIRO campo do schema (Key, no schema padrão) SEM o
+// usuário perceber — corrigido na origem em parameter-editor-widget.cpp
+// (refreshDisplayFields), não aqui.
+//
+// Prioridade: 1) `configured`, se existir no schema (qualquer tipo);
+// 2) primeiro campo tipo Value; 3) primeiro campo que não seja Key;
+// 4) primeiro campo do schema, mesmo Key (pedido do usuário: "se não
+// houver campo Key, pega o primeiro campo da coleção pra exibir" — só
+// chega aqui quando NENHUM campo do schema escapa de ser Key).
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured);
+
+// Filtro de uma tela de seleção de Collection (busca + favoritos), salvo
+// POR COLEÇÃO (chave = Collection::id) em config — pedido do usuário: "os
+// filtros de coleções devem ser salvos, inclusive se exibe ou não
+// favoritos... na config mesmo, id -> config, não na coleção". Fica de
+// fora do collections.json de propósito (mesmo raciocínio de
+// dynamic-vars.json em ConfigManager: é estado de USO da UI, não dado
+// autorado da coleção).
+struct CollectionFilterState {
+    QString search;
+    bool favoritesOnly = false;
 };
 
 } // namespace kai::core

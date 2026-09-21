@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QWidget>
 #include <QPushButton>
 #include <QBoxLayout>
@@ -34,6 +35,8 @@ public:
     void setSelectedHidden(bool hidden);
     // Reflete se "mostrar ocultos" está ativo (botão em estado "pressed").
     void setShowingHidden(bool showing);
+    // Reflete se o filtro "só comandos em execução" está ativo.
+    void setShowingRunningOnly(bool runningOnly);
 
 signals:
     void expandSelectedRequested();
@@ -44,6 +47,10 @@ signals:
     void toggleHiddenSelectedRequested();
     // Alterna a exibição global dos itens ocultos.
     void toggleShowHiddenRequested();
+    // Alterna o filtro "exibir apenas comandos em execução".
+    void toggleRunningOnlyRequested();
+    // Easter egg: cinco cliques em sequência rápida no olho (mostrar ocultos).
+    void eyeEasterEggTriggered();
 
 private:
     void setupUi();
@@ -57,6 +64,12 @@ private:
     QPushButton *m_btnCollapseAll{nullptr};
     QPushButton *m_btnToggleHidden{nullptr};
     QPushButton *m_btnToggleShowHidden{nullptr};
+    QPushButton *m_btnToggleRunningOnly{nullptr};
+
+    // Cliques seguidos no olho: cada um precisa vir logo depois do anterior.
+    QElapsedTimer m_eyeLastClick;
+    int m_eyeClicks = 0;
+    void registerEyeClick();
 
     bool m_selectedHidden{false};
 

@@ -71,6 +71,7 @@ QVector<CliPathChildEntry> CliPathResolver::childrenOfScope(const QString &scope
         CliPathChildEntry entry;
         entry.cliPath = f.cliPath;
         entry.label = f.name;
+        entry.description = f.cliDescription;
         entry.isFolder = true;
         entry.targetId = f.id;
         result << entry;

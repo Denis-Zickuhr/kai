@@ -1,0 +1,25 @@
+<h2>The Output panel</h2>
+<p>The panel shows what the selected command printed, live. It sits at the bottom by default; <b>Settings → Layout</b> can move it left or right, and <b>Settings → General</b> can collapse it when you select a folder.</p>
+<h3>Tabs</h3>
+<ul>
+<li><b>Output</b> — the command's stdout/stderr, with ANSI colors.</li>
+<li>For HTTP commands also <b>Response</b> (a navigable JSON tree), <b>Headers</b> and <b>Request</b> (exactly what was sent) — see <a href='help://commands_http'>HTTP Commands</a>.</li>
+<li><a href='help://kip'>KIP</a> commands replace the tabs with their own screen.</li>
+</ul>
+<p>The header shows the command and its state: <i>idle</i>, <i>running</i>, <i>done</i> or <i>error</i>.</p>
+<h3>Answering a running command</h3>
+<p>The field at the bottom sends text to the command's input — for <code>read</code> prompts, confirmations, a REPL. Click it or press <b>Ctrl+'</b> to focus it (and again to go back to the tree). <a href='help://responders'>Auto-replies</a> can do it for you.</p>
+<h3>Search and display options</h3>
+<ul>
+<li><b>Search in output</b> (magnifier) finds text in the log.</li>
+<li>The <b>display options</b> menu has: Auto-scroll, Line numbers, Timestamps, Wrap long lines (visual only), <b>Compact output</b> (collapses repeated blank lines and trims trailing spaces), Increase/Decrease font, Copy all, <b>Export to file…</b> and Clear output.</li>
+<li>Large outputs are capped per command: <b>Settings → General → Max log size per command</b>.</li>
+</ul>
+<h3>Other ways to see the output</h3>
+<table>
+<tr><td><b>Interactive terminal</b></td><td>a real terminal grid for <code>vim</code>, <code>htop</code>, <code>less</code>, a nested Claude Code. Turn it on in the command's advanced settings.</td></tr>
+<tr><td><b>Formatted output</b></td><td>each line that is a JSON log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by <i>level</i>, and Kai can <a href='help://notifications'>notify</a> on the first ERROR line.</td></tr>
+<tr><td><b>Render as Markdown</b></td><td>renders the accumulated output as Markdown (headings, lists, links, code), with scrolling and search. Takes priority over Formatted output.</td></tr>
+</table>
+<h3>Detach into a window</h3>
+<p>The pop-out button opens the panel in its own window with the same tabs and theme, so you can keep a long log beside your editor. From the terminal, <code>kai -gw &lt;path&gt;</code> runs a command and opens its window (see <a href='help://cli'>CLI</a>).</p>

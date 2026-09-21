@@ -31,6 +31,7 @@ void ProcessManager::track(const QString &commandId, std::unique_ptr<ProcessRunn
                 it->second.status = (result.exitCode == 0 && !result.crashed) ? ProcessStatus::Success
                                                                                 : ProcessStatus::Error;
                 it->second.lastCrashed = result.crashed;
+                it->second.lastStoppedByRequest = result.stoppedByRequest;
                 const ProcessStatus newStatus = it->second.status;
                 utils::Logger::info(kLogTag,
                     QStringLiteral("Processo '%1' finalizado com status %2.")
@@ -77,6 +78,17 @@ void ProcessManager::stop(const QString &commandId)
     it->second.runner->stop();
 }
 
+void ProcessManager::forceStop(const QString &commandId)
+{
+    auto it = m_processes.find(commandId);
+    if (it == m_processes.end()) {
+        utils::Logger::warning(kLogTag,
+            QStringLiteral("Tentativa de forçar parada de processo não rastreado: '%1'.").arg(commandId));
+        return;
+    }
+    it->second.runner->forceStop();
+}
+
 void ProcessManager::remove(const QString &commandId)
 {
     auto it = m_processes.find(commandId);
@@ -109,6 +121,12 @@ ProcessStatus ProcessManager::statusOf(const QString &commandId) const
 {
     const auto it = m_processes.find(commandId);
     return it != m_processes.end() ? it->second.status : ProcessStatus::Error;
+}
+
+bool ProcessManager::lastRunStoppedByRequest(const QString &commandId) const
+{
+    const auto it = m_processes.find(commandId);
+    return it != m_processes.end() && it->second.lastStoppedByRequest;
 }
 
 bool ProcessManager::lastRunCrashed(const QString &commandId) const

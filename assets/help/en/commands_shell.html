@@ -1,22 +1,31 @@
-<h2>Shell Commands</h2>
-<p>A <b>Shell</b> command runs a line (or script) in your shell.</p>
+<h2>Commands</h2>
+<p>A <b>Command</b> runs a program on your machine. The text is a line (or script) for your shell — <b>Native</b>, the default — or <b>code</b> in Python or Node (see <a href='help://languages'>Python &amp; Node</a>). HTTP requests have their own type: <a href='help://commands_http'>HTTP Commands</a>.</p>
 <h3>How to create</h3>
-<p>Menu <b>Item → New command</b>, <b>Shell</b> tab. Fill in the command and, optionally, the <b>working directory</b>.</p>
+<p>Menu <b>Item → New Command</b> (or <b>Ctrl+N</b>), <b>Command</b> tab. Fill in the command and, optionally, the <b>working directory</b>.</p>
 <pre>npm run dev</pre>
+<h3>Working directory</h3>
+<p>Empty uses the default of where the command runs. <code>{{PROJECT_PATH}}</code> is the root of an imported project: <code>{{PROJECT_PATH}}/api</code>.</p>
 <h3>Variables</h3>
 <p>Use <code>{{VAR}}</code> to interpolate variables from the active environment:</p>
 <pre>echo "Starting on port {{PORT}} ({{NODE_ENV}})"</pre>
+<p>Precedence: <code>Global &lt; Folder/Project &lt; Dynamic &lt; Parameters</code>. See <a href='help://variables'>Variables</a>, and <a href='help://parameters'>Parameters</a> to ask for values before running. (In Python/Node code <code>{{VAR}}</code> is <i>not</i> replaced: variables are environment variables.)</p>
 <h3>Background</h3>
-<p>Check <b>Run in background</b> for long-running processes (e.g. a dev server). Kai keeps the process alive and shows its status; stop it whenever you want.</p>
+<p>Check <b>Run in background</b> for long-running processes (e.g. a dev server). Kai keeps the process alive and shows its status; stop it whenever you want (SIGTERM, then SIGKILL after the grace period, applied to the whole process group). See <a href='help://processes'>Processes</a>.</p>
 <div class='tip'>Interactive commands using <code>read</code> accept input directly in the output panel's input field.</div>
 <h3>Interactive terminal (advanced settings)</h3>
-<p>For full-screen apps that draw with a cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, a nested Claude Code — turn on <b>Interactive terminal (TUI)</b>. The output becomes a real terminal grid instead of a plain-text log, so redraws, colors and keyboard input all behave like a real terminal:</p>
+<p>For full-screen apps that draw with a cursor — <code>vim</code>, <code>htop</code>, <code>less</code>, a nested Claude Code — turn on <b>Interactive terminal (TUI)</b>. The output becomes a real terminal grid instead of a plain-text log:</p>
 <pre>htop</pre>
 <h3>Ignore exit code (advanced settings)</h3>
-<p>Some tools return a non-zero exit code even when they worked fine — the classic case is <code>explorer.exe</code> called from WSL to open a folder in Windows. Turn on <b>Ignore exit code</b> and Kai always treats the command as a success; a real process crash (signal/segfault) is still reported normally:</p>
+<p>Some tools return a non-zero exit code even when they worked fine — the classic case is <code>explorer.exe</code> called from WSL. Turn on <b>Ignore exit code</b> and Kai always treats the command as a success; a real crash (signal/segfault) is still reported:</p>
 <pre>explorer.exe .</pre>
-<h3>Hide Kai while running (advanced settings)</h3>
-<p>For a command that opens another app or window and Kai would just be in the way — e.g. a code editor:</p>
-<pre>code .</pre>
+<h3>Other options (advanced settings)</h3>
+<ul>
+<li><b>Hide Kai while running</b> — for a command that opens another window, e.g. <code>code .</code>.</li>
+<li><b>Open last printed link when finished</b> — opens the last <code>http(s)</code> URL the command printed (a dev server, a tunnel).</li>
+<li><b>Formatted output</b> and <b>Render as Markdown</b> — see <a href='help://output'>The Output panel</a>.</li>
+<li><b>Export variables</b> — after a native command runs, the names you list under <b>Exportable variables</b> are captured as dynamic variables (a login that exports a token, for instance). Only declared names are ever read.</li>
+<li><b>Run on a schedule / when Kai starts</b> — see <a href='help://scheduling'>Schedules &amp; auto-run</a>.</li>
+<li><b>Auto-replies</b> — see <a href='help://responders'>Auto-replies</a>.</li>
+</ul>
 <h3>Terminal targets (WSL, containers, ...)</h3>
-<p>Pick a target under <b>Terminal Target</b> to run the command through a wrapper — see <a href='help://terminal_targets'>Terminal Targets & WSL</a>.</p>
+<p>Pick a <b>Profile</b> to run the command through a wrapper — see <a href='help://terminal_targets'>Terminals &amp; WSL</a>.</p>

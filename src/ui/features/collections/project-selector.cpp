@@ -173,6 +173,9 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     folder.cliPath = root.contains(QStringLiteral("cli_path"))
         ? root.value(QStringLiteral("cli_path")).toString()
         : projectMetaFolder.value(QStringLiteral("cli_path")).toString();
+    folder.cliDescription = root.contains(QStringLiteral("cli_description"))
+        ? root.value(QStringLiteral("cli_description")).toString()
+        : projectMetaFolder.value(QStringLiteral("cli_description")).toString();
     // Todo projeto IMPORTADO já é, por definição, um "projeto" — vira
     // fronteira de escopo de variáveis DINÂMICAS de cara, sem precisar
     // marcar manualmente (ver EnvironmentManager::setDynamicVarScope).
@@ -241,6 +244,7 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
                 // seria via Export/Import Configuration completo (com id),
                 // nunca num kai.json/kai.yml de projeto escrito à mão.
                 sub.cliPath = folderResolver.explicitMetadataFor(path).value(QStringLiteral("cli_path")).toString();
+                sub.cliDescription = folderResolver.explicitMetadataFor(path).value(QStringLiteral("cli_description")).toString();
                 sub.parentId = parentId;
                 sub.isProject = false;
                 sub.order = subFolderOrder++;

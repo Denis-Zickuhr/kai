@@ -107,6 +107,20 @@ private slots:
         QCOMPARE(resolver.rootChildren().size(), 1);
     }
 
+    // Descrição de CLI da pasta (campo novo) chega na listagem do terminal.
+    void folderCliDescriptionShowsUpInTheListing()
+    {
+        QVector<Folder> folders;
+        QVector<Command> commands;
+        buildZaphyrTree(folders, commands);
+        folders[1].cliDescription = QStringLiteral("Integração Zephyr");
+        CliPathResolver resolver(folders, commands);
+
+        const QVector<CliPathChildEntry> root = resolver.rootChildren();
+        QCOMPARE(root.size(), 1);
+        QCOMPARE(root.first().description, QStringLiteral("Integração Zephyr"));
+    }
+
     // 1º token não bate com nada: NotFound, mas ainda devolve os filhos
     // válidos daquele escopo (raiz) pra sugerir opções.
     void unknownFirstTokenIsNotFoundWithSuggestions()

@@ -1,12 +1,18 @@
 #include "ui/features/output/terminal-drawer.h"
 
+#include "ui/shared/app-window-frame.h"
+#include "core/kip-settings.h"
 #include "ui/shared/lucide-icons.h"
+#include "ui/shared/panel-metrics.h"
 #include "ui/features/output/output-panel.h"
 #include "utils/design-tokens.h"
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
 
+#include <QEvent>
+#include <QGuiApplication>
 #include <QPointer>
+#include <QScreen>
 #include <QShortcut>
 #include <QSplitter>
 #include <QTimer>
@@ -28,6 +34,14 @@ constexpr int kDefaultExpandedWidth = 360;
 // Largura mínima do painel (também aplicada por MainWindow::applyOutputPosition
 // ao trocar de posição) — repetida aqui como piso ao restaurar de um colapso.
 constexpr int kMinPanelWidth = 220;
+// Espaço que a moldura ("panelCard": 1px de borda desenhada pelo QSS, mais o
+// mesmo 1px de respiro para o conteúdo não vazar sobre a borda) toma de CADA
+// lado. Entra nas contas de altura/largura do colapso.
+// (Recuo DINÂMICO: depende do raio dos cantos, ver panelFrameInset.)
+int frameExtra()
+{
+    return panelFrameInset() * 2;
+}
 
 OutputStatus toOutputStatus(ExecutionStatus status)
 {
@@ -55,8 +69,14 @@ OutputStatus toOutputStatus(ExecutionStatus status)
 TerminalDrawer::TerminalDrawer(QWidget *parent)
     : QWidget(parent)
 {
+    // Mesma moldura (borda + raio dos tokens) da caixa de comandos — a regra
+    // de "panelCard" vive em app-stylesheet.cpp.
+    setObjectName(QStringLiteral("panelCard"));
+    setAttribute(Qt::WA_StyledBackground, true);
+
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
+    const int inset = panelFrameInset();
+    root->setContentsMargins(inset, inset, inset, inset);
     root->setSpacing(0);
 
     m_panel = new OutputPanel(this);
@@ -71,12 +91,15 @@ TerminalDrawer::TerminalDrawer(QWidget *parent)
     m_detachButton->setToolTip(utils::tr(QStringLiteral("terminal_drawer.detach.tooltip")));
     m_panel->addHeaderWidget(m_detachButton);
     connect(m_detachButton, &QToolButton::clicked, this, &TerminalDrawer::detachOutput);
+    connect(m_panel, &OutputPanel::kipDetachRequested, this, &TerminalDrawer::detachOutput);
 
     m_toggleButton = new QToolButton(this);
+    m_toggleButton->setObjectName(QStringLiteral("terminalDrawerToggle"));
     m_toggleButton->setAutoRaise(true);
     m_toggleButton->setCursor(Qt::PointingHandCursor);
     m_toggleButton->setToolTip(utils::tr(QStringLiteral("terminal_drawer.toggle.tooltip")));
-    m_panel->addHeaderWidget(m_toggleButton);
+    // Último item da fileira e o único que sobra com o painel colapsado.
+    m_panel->addTrailingHeaderWidget(m_toggleButton);
     connect(m_toggleButton, &QToolButton::clicked, this, &TerminalDrawer::toggleExpanded);
 
     connect(m_panel, &OutputPanel::commandEntered, this, &TerminalDrawer::commandEntered);
@@ -85,6 +108,14 @@ TerminalDrawer::TerminalDrawer(QWidget *parent)
     connect(m_panel, &OutputPanel::rawTerminalInput, this, &TerminalDrawer::rawTerminalInput);
     connect(m_panel, &OutputPanel::terminalSizeChanged, this, &TerminalDrawer::terminalSizeChanged);
     connect(m_panel, &OutputPanel::firstErrorInFormattedOutput, this, &TerminalDrawer::firstErrorInFormattedOutput);
+    connect(m_panel, &OutputPanel::kipRunAgainRequested, this,
+            [this]() { emit kipRunAgainRequested(m_currentCommandId); });
+    connect(m_panel, &OutputPanel::kipFocusWindowRequested, this, [this]() {
+        if (m_detachedWindow) {
+            m_detachedWindow->raise();
+            m_detachedWindow->activateWindow();
+        }
+    });
     // As opções de exibição escolhidas no painel embutido valem também para a
     // janela destacada, para as duas serem realmente idênticas.
     connect(m_panel, &OutputPanel::viewOptionsChanged, this,
@@ -121,6 +152,27 @@ void TerminalDrawer::setDrawerPosition(DrawerPosition position)
         applyCollapsedConstraints();
     }
     updateToggleIcon();
+}
+
+void TerminalDrawer::refreshFrameInset()
+{
+    if (auto *root = layout()) {
+        const int inset = panelFrameInset();
+        root->setContentsMargins(inset, inset, inset, inset);
+    }
+    // O colapso trava largura/altura na do cabeçalho mais a moldura: refaz.
+    if (!m_expanded) {
+        applyCollapsedConstraints();
+    }
+}
+
+void TerminalDrawer::setBarHeight(int height)
+{
+    m_panel->setBarHeight(height);
+    // O colapso "embaixo" trava a altura na do cabeçalho: reaplica com a nova.
+    if (!m_expanded) {
+        applyCollapsedConstraints();
+    }
 }
 
 void TerminalDrawer::setExpanded(bool expanded)
@@ -169,7 +221,9 @@ void TerminalDrawer::applyCollapsedConstraints()
         m_panel->setCollapsedNarrow(true);
         setMinimumHeight(0);
         setMaximumHeight(QWIDGETSIZE_MAX);
-        const int collapsedWidth = qMax(m_panel->collapsedHeaderWidth(), 96);
+        // Colapsado só sobra o chevron: coluna estreita, para dar o máximo de
+        // espaço à caixa de comandos.
+        const int collapsedWidth = m_panel->collapsedHeaderWidth() + frameExtra();
         if (width() > collapsedWidth + 20) {
             m_lastExpandedWidth = width(); // lembra para restaurar depois
         }
@@ -200,7 +254,7 @@ void TerminalDrawer::applyCollapsedConstraints()
     // vive dentro de um QSplitter, que continuaria distribuindo altura para
     // ele e esticando o cabeçalho. Ao colapsar, limitamos a altura à do
     // cabeçalho.
-    const int headerH = m_panel->headerHeight();
+    const int headerH = m_panel->headerHeight() + frameExtra();
     if (height() > headerH + 20) {
         m_lastExpandedHeight = height(); // lembra para restaurar depois
     }
@@ -269,7 +323,7 @@ void TerminalDrawer::applyExpandedConstraints()
     // (regressão reportada: "a saída não aparece mais, não consigo mais
     // responder os scripts"). Por isso, ao expandir, redistribuímos os
     // tamanhos do splitter explicitamente.
-    const int headerH = m_panel->headerHeight();
+    const int headerH = m_panel->headerHeight() + frameExtra();
     if (splitter) {
         const int idx = splitter->indexOf(this);
         QList<int> sizes = splitter->sizes();
@@ -495,13 +549,21 @@ void TerminalDrawer::applyThemeVariables(const QMap<QString, QString> &variables
     // estilo/gutter da Saída a partir deles.
     m_panel->applyThemeVariables(variables);
     if (m_detachedPanel) {
+        // A janela destacada tem stylesheet próprio (cópia do da principal):
+        // refaz a cópia, senão ela ficava presa ao tema do momento do detach.
+        m_detachedWindow->setStyleSheet(window()->styleSheet());
+        if (auto *frame = qobject_cast<AppWindowFrame *>(m_detachedWindow)) {
+            frame->refreshAppearance();
+        }
+        if (m_detachedCardLayout) {
+            const int inset = panelFrameInset();
+            m_detachedCardLayout->setContentsMargins(inset, inset, inset, inset);
+        }
         m_detachedPanel->applyThemeVariables(variables);
     }
     m_detachButton->setIcon(LucideIcons::icon(QStringLiteral("external-link"),
                                               QColor(tk::mutedFg()), 15));
-    m_toggleButton->setIcon(LucideIcons::icon(
-        m_expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up"),
-        QColor(tk::mutedFg()), 15));
+    updateToggleIcon();
 }
 
 // ---------------------------------------------------------------- detach
@@ -515,27 +577,48 @@ void TerminalDrawer::detachOutput()
 
     m_detachedCommandId = m_currentCommandId;
 
-    m_detachedWindow = new QWidget(nullptr);
+    // Janela própria do app (sem a decoração do sistema, barra de título e cantos
+    // iguais aos da janela principal); o contêiner raiz pinta o fundo do tema.
+    auto *frame = new AppWindowFrame(nullptr);
+    m_detachedWindow = frame;
     m_detachedWindow->setAttribute(Qt::WA_DeleteOnClose);
     m_detachedWindow->setWindowTitle(utils::tr(QStringLiteral("terminal_drawer.detached.title")));
-    m_detachedWindow->resize(900, 560);
-    m_detachedWindow->setStyleSheet(styleSheet().isEmpty() ? window()->styleSheet() : styleSheet());
+    m_detachedWindow->setStyleSheet(window()->styleSheet());
+    m_detachedWindow->installEventFilter(this);
 
-    auto *layout = new QVBoxLayout(m_detachedWindow);
-    layout->setContentsMargins(0, 0, 0, 0);
+    auto *layout = new QVBoxLayout(frame->contentWidget());
+    layout->setContentsMargins(16, 4, 16, 16);
     layout->setSpacing(0);
 
+    // Mesma moldura (borda + raio das preferências de canto) da Saída embutida.
+    auto *card = new QWidget(frame->contentWidget());
+    card->setObjectName(QStringLiteral("panelCard"));
+    card->setAttribute(Qt::WA_StyledBackground, true);
+    m_detachedCardLayout = new QVBoxLayout(card);
+    const int inset = panelFrameInset();
+    m_detachedCardLayout->setContentsMargins(inset, inset, inset, inset);
+    m_detachedCardLayout->setSpacing(0);
+    layout->addWidget(card, 1);
+
     // IDÊNTICA à saída embutida: mesma classe, mesmas abas, mesmo cabeçalho,
-    // mesmas opções de exibição. É apenas uma forma de expandir e acompanhar.
-    m_detachedPanel = new OutputPanel(m_detachedWindow);
-    m_detachedPanel->setViewOptions(m_panel->viewOptions());
+    // mesmas opções de exibição. Nasce com o estado do painel embutido (abas
+    // da resposta HTTP, nome, status...) e depois acompanha só o comando de
+    // origem.
+    m_detachedPanel = new OutputPanel(card);
+    m_detachedPanel->setBarHeight(m_panel->barHeight());
+    m_detachedPanel->copyStateFrom(*m_panel);
     m_detachedPanel->setCommandId(m_detachedCommandId);
-    m_detachedPanel->setFormattedOutputEnabled(m_panel->formattedOutputEnabled());
-    m_detachedPanel->setMarkdownOutputEnabled(m_panel->markdownOutputEnabled());
-    m_detachedPanel->seedOutput(m_panel->plainOutput());
-    layout->addWidget(m_detachedPanel, 1);
+    m_detachedCardLayout->addWidget(m_detachedPanel, 1);
 
     connect(m_detachedPanel, &OutputPanel::commandEntered, this, &TerminalDrawer::commandEntered);
+    connect(m_detachedPanel, &OutputPanel::kipRunAgainRequested, this,
+            [this]() { emit kipRunAgainRequested(m_detachedCommandId); });
+    m_detachedPanel->setKipDetachable(false); // já é a janela própria
+    // KIP: só UMA view interativa por sessão (§13.4) — o painel embutido cede o
+    // lugar a um cartão enquanto a janela existir.
+    if (m_panel->kipMode()) {
+        m_panel->setKipDetachedPlaceholder(true);
+    }
 
     // Ctrl+F própria pra janela destacada: o atalho de pesquisa "global"
     // fica preso ao MainWindow (Qt::WindowShortcut só dispara com a janela
@@ -549,16 +632,126 @@ void TerminalDrawer::detachOutput()
     });
 
     connect(m_detachedWindow, &QObject::destroyed, this, [this]() {
+        // Fechar a janela devolve a view KIP ao painel embutido, sem tocar no processo.
+        if (m_panel) {
+            m_panel->setKipDetachedPlaceholder(false);
+        }
         m_detachedCommandId.clear();
         m_detachedWindow = nullptr;
         m_detachedPanel = nullptr;
+        m_detachedCardLayout = nullptr;
     });
 
-    m_detachedWindow->show();
+    showDetachedWindowPerPreference();
     m_detachedWindow->raise();
     m_detachedWindow->activateWindow();
     utils::Logger::info(kLogTag,
         QStringLiteral("Saída destacada para o comando '%1'.").arg(m_detachedCommandId));
+}
+
+void TerminalDrawer::bindKipSession(const QString &commandId, engine::KipSession *session)
+{
+    if (m_detachedPanel && m_detachedCommandId == commandId) {
+        m_detachedPanel->setKipSession(session);
+    }
+    if (m_currentCommandId == commandId) {
+        m_panel->setKipSession(session);
+        m_panel->setKipDetachedPlaceholder(session && m_detachedWindow && m_detachedCommandId == commandId);
+    }
+}
+
+void TerminalDrawer::clearKip()
+{
+    m_panel->setKipSession(nullptr);
+}
+
+bool TerminalDrawer::kipMode() const
+{
+    return m_panel->kipMode();
+}
+
+void TerminalDrawer::closeDetachedWindowFor(const QString &commandId)
+{
+    if (m_detachedWindow && m_detachedCommandId == commandId) {
+        m_detachedWindow->close();
+    }
+}
+
+bool TerminalDrawer::detachedWindowActive() const
+{
+    return m_detachedWindow && m_detachedWindow->isActiveWindow();
+}
+
+void TerminalDrawer::showDetachedWindowPerPreference()
+{
+    core::ConfigManager config;
+    const core::SettingsData st = config.loadSettings();
+    QString mode = st.windowMode.trimmed().toLower();
+    // A view KIP pode ter o PRÓPRIO modo de abertura (Configurações → KIP): "normal"
+    // é a janela com o tamanho das preferências; "preference" segue a geral.
+    if (m_panel->kipMode()) {
+        const QString kipMode = core::kipSettings().detachedWindowMode;
+        if (kipMode == QLatin1String("normal")) {
+            mode = QStringLiteral("size");
+        } else if (kipMode == QLatin1String("maximized") || kipMode == QLatin1String("fullscreen")) {
+            mode = kipMode;
+        }
+    }
+
+    int w = st.windowWidth > 0 ? st.windowWidth : 1280;
+    int h = st.windowHeight > 0 ? st.windowHeight : 760;
+    if (mode == QStringLiteral("remember") && st.detachedWindowWidth > 0 && st.detachedWindowHeight > 0) {
+        w = st.detachedWindowWidth;
+        h = st.detachedWindowHeight;
+    }
+    // Mesma regra da janela principal: não nascer maior que a tela (backends
+    // headless reportam uma tela sintética, onde o limite não faz sentido).
+    const QString platform = QGuiApplication::platformName();
+    const bool headless = platform.contains(QStringLiteral("offscreen"), Qt::CaseInsensitive)
+        || platform.contains(QStringLiteral("minimal"), Qt::CaseInsensitive);
+    if (!headless) {
+        if (const QScreen *screen = window()->screen() ? window()->screen() : QGuiApplication::primaryScreen()) {
+            const QRect avail = screen->availableGeometry();
+            w = qBound(480, w, avail.width());
+            h = qBound(320, h, avail.height());
+        }
+    }
+    m_detachedWindow->resize(w, h);
+
+    if (mode == QStringLiteral("fullscreen")) {
+        m_detachedWindow->showFullScreen();
+    } else if (mode == QStringLiteral("maximized")) {
+        m_detachedWindow->showMaximized();
+    } else {
+        m_detachedWindow->show();
+    }
+}
+
+void TerminalDrawer::rememberDetachedWindowSize()
+{
+    if (!m_detachedWindow || m_detachedWindow->isMaximized() || m_detachedWindow->isFullScreen()) {
+        return;
+    }
+    core::ConfigManager config;
+    core::SettingsData st = config.loadSettings();
+    if (st.windowMode.compare(QStringLiteral("remember"), Qt::CaseInsensitive) != 0) {
+        return;
+    }
+    const QSize size = m_detachedWindow->size();
+    if (size.width() == st.detachedWindowWidth && size.height() == st.detachedWindowHeight) {
+        return;
+    }
+    st.detachedWindowWidth = size.width();
+    st.detachedWindowHeight = size.height();
+    config.saveSettings(st);
+}
+
+bool TerminalDrawer::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_detachedWindow && event->type() == QEvent::Close) {
+        rememberDetachedWindowSize();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void TerminalDrawer::appendToDetached(const QString &rawText, bool isError)
@@ -587,9 +780,16 @@ void TerminalDrawer::setDetachedHttpResult(const engine::HttpResult &result)
 
 void TerminalDrawer::setDetachedStatus(ExecutionStatus status)
 {
-    if (m_detachedPanel) {
-        m_detachedPanel->setStatus(toOutputStatus(status));
+    if (!m_detachedPanel) {
+        return;
     }
+    const OutputStatus next = toOutputStatus(status);
+    // Sucesso só vale como FIM de uma execução em andamento: um comando
+    // ocioso (ou pulado) na janela não vira "Concluído" por si só.
+    if (next == OutputStatus::Success && m_detachedPanel->status() != OutputStatus::Running) {
+        return;
+    }
+    m_detachedPanel->setStatus(next);
 }
 
 } // namespace kai::ui

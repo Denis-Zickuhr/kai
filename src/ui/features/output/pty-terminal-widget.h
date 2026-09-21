@@ -41,7 +41,7 @@ namespace kai::ui {
 // máquina de estados pura sobre o stream de bytes). Isso mantém só UMA
 // instância de vterm viva por vez, simplificando a segurança de foco: só
 // há um widget que pode "capturar" teclas, e ele só faz isso quando tem o
-// foco de teclado de verdade (clique do usuário ou o atalho Ctrl+`` ` ``),
+// foco de teclado de verdade (clique do usuário ou o atalho Ctrl+'),
 // nunca automaticamente ao trocar de comando (mesma filosofia do resto do
 // app: rodar/trocar comando não rouba o foco sozinho).
 //

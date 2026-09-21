@@ -95,7 +95,22 @@ add_library(kai-core STATIC
     src/core/cli-param-binder.h
     src/core/cli-param-binder.cpp
     src/core/cli-reserved-verbs.h
+    src/core/kip-protocol.h
+    src/core/kip-protocol.cpp
+    src/core/kip-settings.h
+    src/core/kip-settings.cpp
+    src/core/ipc-endpoint.h
+    src/core/ipc-endpoint.cpp
+    src/core/interpreter-settings.h
+    src/core/interpreter-settings.cpp
+    src/core/kip-screen-state.h
+    src/core/kip-screen-state.cpp
+    src/core/kip-cli-builder.h
+    src/core/kip-cli-builder.cpp
     src/core/folder-path-resolver.h
+    src/utils/console-context.h
+    src/utils/duration-format.h
+    src/utils/console-context.cpp
     src/utils/path-format.h
     src/utils/path-format.cpp
     src/utils/asset-paths.h
@@ -108,6 +123,8 @@ add_library(kai-core STATIC
     src/utils/theme-manager.cpp
     src/utils/translation-manager.h
     src/utils/translation-manager.cpp
+    src/utils/cron-expression.h
+    src/utils/cron-expression.cpp
 )
 
 target_include_directories(kai-core PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -125,6 +142,13 @@ add_library(kai-engine STATIC
     src/engine/execution-pipeline.cpp
     src/engine/output-responder-matcher.h
     src/engine/output-responder-matcher.cpp
+    src/engine/cron-scheduler.h
+    src/engine/cron-scheduler.cpp
+    src/engine/kip-session.h
+    src/engine/kip-session.cpp
+    src/engine/command-language.h
+    src/engine/command-language.cpp
+    src/engine/kip-modules/kip-modules.qrc
 )
 
 target_include_directories(kai-engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -156,14 +180,34 @@ add_library(kai-ui STATIC
     src/ui/features/output/code-output-view.cpp
     src/ui/features/output/output-panel.h
     src/ui/features/output/output-panel.cpp
+    src/ui/features/output/aba-content.h
+    src/ui/features/output/aba-content.cpp
+    src/ui/features/output/output-metrics-header.h
+    src/ui/features/output/output-metrics-header.cpp
+    src/ui/features/output/output-stdout-content.h
+    src/ui/features/output/output-stdout-content.cpp
+    src/ui/features/output/output-json-content.h
+    src/ui/features/output/output-json-content.cpp
+    src/ui/features/output/output-http-request-content.h
+    src/ui/features/output/output-http-request-content.cpp
+    src/ui/features/output/output-http-headers-content.h
+    src/ui/features/output/output-http-headers-content.cpp
     src/ui/features/output/pty-terminal-widget.h
     src/ui/features/output/pty-terminal-widget.cpp
     src/ui/shared/inline-code-field.h
     src/ui/shared/inline-code-field.cpp
+    src/ui/shared/parameter-field-factory.h
+    src/ui/shared/parameter-field-factory.cpp
     src/ui/features/output/ansi-text-parser.h
     src/ui/features/output/ansi-text-parser.cpp
     src/ui/shared/fuzzy-search.h
     src/ui/shared/fuzzy-search.cpp
+    src/ui/shared/flow-layout.h
+    src/ui/shared/flow-layout.cpp
+    src/ui/shared/collection-chip-picker.h
+    src/ui/shared/collection-chip-picker.cpp
+    src/ui/shared/folder-picker-widget.h
+    src/ui/shared/folder-picker-widget.cpp
     src/ui/features/environments/env-var-autocomplete.h
     src/ui/features/environments/env-var-autocomplete.cpp
     src/ui/features/output/terminal-drawer.h
@@ -205,9 +249,30 @@ add_library(kai-ui STATIC
     src/ui/features/collections/folder-delete-dialog.cpp
     src/ui/features/command-editor/command-editor-dialog.h
     src/ui/features/command-editor/command-editor-dialog.cpp
+    src/ui/features/command-editor/tabs/general-tab.cpp
+    src/ui/features/command-editor/tabs/configuration-tab.cpp
+    src/ui/features/command-editor/tabs/command-kip-tab.cpp
+    src/ui/features/command-editor/tabs/cli-tab.cpp
+    src/ui/features/command-editor/tabs/headers-tab.cpp
+    src/ui/features/command-editor/tabs/extractors-tab.cpp
+    src/ui/features/command-editor/tabs/declared-env-vars-tab.cpp
+    src/ui/features/command-editor/tabs/params-tab.cpp
+    src/ui/features/command-editor/tabs/responders-tab.cpp
+    src/ui/features/command-editor/tabs/conditions-tab.cpp
+    src/ui/features/command-editor/tabs/hooks-tab.cpp
     src/ui/features/command-editor/command-json-editor-dialog.h
     src/ui/features/command-editor/command-json-editor-dialog.cpp
     src/ui/shared/top-utility-bar.h
+    src/ui/shared/window-control-buttons.h
+    src/ui/shared/window-control-buttons.cpp
+    src/ui/shared/window-translucency.h
+    src/ui/shared/window-translucency.cpp
+    src/ui/shared/dialog-frame.h
+    src/ui/shared/dialog-frame.cpp
+    src/ui/shared/native-window-corners.h
+    src/ui/shared/native-window-corners.cpp
+    src/ui/shared/app-window-frame.h
+    src/ui/shared/app-window-frame.cpp
     src/ui/shared/top-utility-bar.cpp
     src/ui/features/settings/settings-dialog.h
     src/ui/features/settings/settings-dialog.cpp
@@ -215,12 +280,20 @@ add_library(kai-ui STATIC
     src/ui/features/settings/tabs/general-tab.cpp
     src/ui/features/settings/tabs/appearance-tab.h
     src/ui/features/settings/tabs/appearance-tab.cpp
+    src/ui/features/settings/tabs/layout-tab.h
+    src/ui/features/settings/tabs/layout-tab.cpp
     src/ui/features/settings/tabs/shortcuts-tab.h
     src/ui/features/settings/tabs/shortcuts-tab.cpp
     src/ui/features/settings/tabs/terminals-tab.h
     src/ui/features/settings/tabs/terminals-tab.cpp
     src/ui/features/settings/tabs/notifications-tab.h
+    src/ui/features/settings/tabs/languages-tab.h
+    src/ui/features/settings/tabs/languages-tab.cpp
+    src/ui/features/settings/tabs/kip-tab.h
+    src/ui/features/settings/tabs/kip-tab.cpp
     src/ui/features/settings/tabs/notifications-tab.cpp
+    src/ui/shared/ai-manifestos-page.h
+    src/ui/shared/ai-manifestos-page.cpp
     src/ui/shared/help-dialog.h
     src/ui/shared/help-dialog.cpp
     src/ui/shared/help-content.cpp
@@ -262,14 +335,36 @@ add_library(kai-ui STATIC
     src/ui/features/history/process-list-dialog.cpp
     src/ui/features/output/log-viewer-dialog.h
     src/ui/features/output/log-viewer-dialog.cpp
+    src/ui/features/kip/kip-chips.h
+    src/ui/features/kip/kip-chips.cpp
+    src/ui/features/kip/kip-blocks.h
+    src/ui/features/kip/kip-blocks.cpp
+    src/ui/features/kip/kip-result-card.h
+    src/ui/features/kip/kip-result-card.cpp
+    src/ui/features/kip/kip-details-drawer.h
+    src/ui/features/kip/kip-details-drawer.cpp
+    src/ui/features/kip/kip-view.h
+    src/ui/features/kip/kip-view.cpp
     src/ui/main-window.h
     src/ui/main-window.cpp
+    src/ui/external-run-session.h
+    src/ui/external-run-session.cpp
     src/ui/shared/welcome-screen.h
     src/ui/shared/welcome-screen.cpp
     src/ui/shared/expand-collapse-bar.h
     src/ui/shared/expand-collapse-bar.cpp
+    src/ui/shared/overflow-indicator.h
+    src/ui/shared/overflow-indicator.cpp
+    src/ui/shared/panel-frame.h
+    src/ui/shared/panel-frame.cpp
+    src/ui/shared/tab-strip-background.h
+    src/ui/shared/tab-strip-background.cpp
     src/ui/shared/item-actions-bar.h
     src/ui/shared/item-actions-bar.cpp
+    src/ui/shared/combo-popup-filter.h
+    src/ui/shared/combo-popup-filter.cpp
+    src/ui/shared/status-line.h
+    src/ui/shared/status-line.cpp
     src/ui/shared/action-group-container.h
     src/ui/shared/action-group-container.cpp
     src/ui/shared/shortcuts-manager-widget.h
@@ -297,6 +392,8 @@ add_library(kai-ipc STATIC
     src/ipc/ipc-server.cpp
     src/ipc/cli-client.h
     src/ipc/cli-client.cpp
+    src/ipc/stream-channel.h
+    src/ipc/stream-channel.cpp
 )
 target_include_directories(kai-ipc PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(kai-ipc PUBLIC kai-core Qt6::Core Qt6::Network)
@@ -311,9 +408,25 @@ target_link_libraries(kai-ipc PUBLIC kai-core Qt6::Core Qt6::Network)
 add_library(kai-cli STATIC
     src/cli/cli-local-executor.h
     src/cli/cli-local-executor.cpp
+    src/cli/terminal-mode-filter.h
+    src/cli/terminal-mode-filter.cpp
+    src/cli/app-delegate.h
+    src/cli/cli-completion.h
+    src/cli/cli-help-format.h
+    src/cli/cli-app-verbs.h
+    src/cli/cli-init.h
+    src/cli/cli-init.cpp
+    src/cli/cli-kip-helper.h
+    src/cli/cli-kip-helper.cpp
+    src/cli/cli-app-verbs.cpp
+    src/cli/cli-help-format.cpp
+    src/cli/cli-completion.cpp
+    src/cli/terminal-input.h
+    src/cli/terminal-input.cpp
+    src/cli/app-delegate.cpp
 )
 target_include_directories(kai-cli PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(kai-cli PUBLIC kai-core kai-engine kai-ui Qt6::Core Qt6::Widgets Qt6::Network)
+target_link_libraries(kai-cli PUBLIC kai-core kai-engine kai-ui kai-ipc Qt6::Core Qt6::Widgets Qt6::Network)
 
 # --- Binário principal ---
 # WIN32: no Windows, marca o executável como GUI app (subsystem WINDOWS),

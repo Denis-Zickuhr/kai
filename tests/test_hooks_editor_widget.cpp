@@ -112,6 +112,39 @@ private slots:
         // Voltou ao escopo padrão (só a pasta): "Deploy Prod" some de novo.
         QVERIFY(!allListTexts(widget).contains(QStringLiteral("Deploy Prod")));
     }
+    // KIP (spec 11 §15): comando KIP não pode ser hook, então o picker nem o oferece
+    // — nem na lista da pasta, nem na busca expandida.
+    void kipCommandsAreHiddenFromTheHookPicker()
+    {
+        HooksEditorWidget widget;
+        kai::core::Command plain;
+        plain.id = QStringLiteral("c_plain");
+        plain.name = QStringLiteral("Plain Build");
+        plain.folderId = QStringLiteral("f_1");
+        kai::core::Command wizard;
+        wizard.id = QStringLiteral("c_wizard");
+        wizard.name = QStringLiteral("Deploy Wizard");
+        wizard.folderId = QStringLiteral("f_1");
+        wizard.kip = true;
+        kai::core::Command otherWizard = wizard;
+        otherWizard.id = QStringLiteral("c_wizard2");
+        otherWizard.name = QStringLiteral("Remote Wizard");
+        otherWizard.folderId = QStringLiteral("f_2");
+
+        widget.setAvailableCommands({plain, wizard});
+        widget.setAllAvailableCommands({plain, wizard, otherWizard});
+        QStringList texts = allListTexts(widget);
+        QVERIFY(texts.contains(QStringLiteral("Plain Build")));
+        QVERIFY(!texts.contains(QStringLiteral("Deploy Wizard")));
+
+        // Busca expandida: também não aparecem.
+        auto *search = widget.findChild<QLineEdit *>();
+        QVERIFY(search);
+        search->setText(QStringLiteral("wizard"));
+        texts = allListTexts(widget);
+        QVERIFY(!texts.contains(QStringLiteral("Deploy Wizard")));
+        QVERIFY(!texts.contains(QStringLiteral("Remote Wizard")));
+    }
 };
 
 QTEST_MAIN(TestHooksEditorWidget)

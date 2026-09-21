@@ -1,0 +1,133 @@
+{
+  "project_name": "Kai KIP Demos",
+  "icon": "wand-sparkles",
+  "commands": [
+    {
+      "name": "1. Deploy wizard",
+      "type": "command",
+      "command": "./deploy.sh",
+      "icon": "rocket",
+      "description": "Select + flags, danger confirm (production), progress, done with actions.",
+      "kip": true
+    },
+    {
+      "name": "1b. Deploy wizard (kai kip helper)",
+      "type": "command",
+      "command": "./helper/deploy.sh",
+      "icon": "rocket",
+      "description": "The same wizard as command 1, written with the `kai kip` helper instead of hand-written JSON. Needs the kai binary reachable from where the script runs.",
+      "kip": true
+    },
+    {
+      "name": "2. Database restore",
+      "type": "command",
+      "command": "./db-restore.sh",
+      "icon": "database",
+      "description": "Table field, destructive confirm with Back, steps checklist.",
+      "kip": true
+    },
+    {
+      "name": "3. Cluster navigator",
+      "type": "command",
+      "command": "./k8s-navigator.sh",
+      "icon": "boxes",
+      "description": "Cascading fields: changing the context updates the namespace and pod lists.",
+      "kip": true
+    },
+    {
+      "name": "4. Scaffold a project",
+      "type": "command",
+      "command": "./scaffold.sh",
+      "icon": "folder-plus",
+      "description": "Text, list, folder picker and flags; try an invalid name (e.g. 'My App') for the round trip.",
+      "kip": true
+    },
+    {
+      "name": "5. Team onboarding (own window)",
+      "type": "command",
+      "command": "./onboarding.sh",
+      "icon": "list-checks",
+      "description": "Live checklist, notification and a warning result. Opens in its own window.",
+      "kip": true,
+      "kip_window": true
+    },
+    {
+      "name": "6. Sign in (exports a token)",
+      "type": "command",
+      "command": "./login.sh",
+      "icon": "key-round",
+      "description": "Secret field. Password: kai. Exports KAI_DEMO_TOKEN; then run command 7.",
+      "kip": true,
+      "declared_env_vars": [
+        {
+          "name": "KAI_DEMO_TOKEN"
+        }
+      ]
+    },
+    {
+      "name": "7. Show the token (plain command)",
+      "type": "command",
+      "icon": "terminal",
+      "command": "echo \"KAI_DEMO_TOKEN={{KAI_DEMO_TOKEN}}\"",
+      "description": "Not KIP: prints the token that command 6 exported."
+    },
+    {
+      "name": "8. Convert a file",
+      "type": "command",
+      "command": "./convert.sh",
+      "icon": "wand-sparkles",
+      "description": "File picker, options, progress, reveal the output.",
+      "kip": true
+    },
+    {
+      "name": "9. Customer lookup",
+      "type": "command",
+      "command": "./lookup.sh",
+      "icon": "search",
+      "description": "Query, result table (select a cell, Ctrl+C), copy action.",
+      "kip": true
+    },
+    {
+      "name": "10. Raw protocol (minimal)",
+      "type": "command",
+      "command": "./raw-protocol.sh",
+      "icon": "file-search",
+      "description": "The smallest KIP program: JSON lines printed by hand, no functions at all; see the script.",
+      "kip": true
+    },
+    {
+      "name": "11. Not a KIP program",
+      "type": "command",
+      "command": "./not-kip.sh",
+      "icon": "hammer",
+      "description": "Marked as KIP but the program doesn't speak it: Kai shows the 'doesn't support KIP' screen.",
+      "kip": true
+    },
+    {
+      "name": "12. Branch picker with chips (quiver-style)",
+      "type": "command",
+      "command": "./branches.sh",
+      "icon": "git-branch",
+      "description": "Paged, filterable list plus chips (ctx / sync / PR / delete): small buttons that run an ephemeral action and show the result in a box. Demo data only.",
+      "kip": true
+    },
+    {
+      "name": "13. Python KIP (no file, `import kip`)",
+      "type": "command",
+      "language": "python",
+      "icon": "wand-sparkles",
+      "description": "The command text IS the program: Kai injects the kip module, so a wizard is a few lines.",
+      "kip": true,
+      "command": "import kip\n\nvalues = kip.prompt([\n    {'name': 'env', 'type': 'select', 'label': 'Environment', 'options': ['dev', 'staging', 'prod'], 'required': True},\n    {'name': 'dry', 'type': 'flags', 'label': 'Options', 'options': [{'name': 'dry', 'label': 'Dry run'}]},\n], id='where', title='Where to?')\n\nif values['env'] == 'prod' and not kip.confirm('Deploy to production?', danger=True, confirm_label='Deploy'):\n    kip.done(title='Cancelled', level='warning')\nelse:\n    kip.progress(50, 'Deploying...')\n    kip.done(title='Deployed to ' + values['env'], text='dry run' if values['dry']['dry'] else None)"
+    },
+    {
+      "name": "14. Node KIP (global `kip`, top-level await)",
+      "type": "command",
+      "language": "node",
+      "icon": "wand-sparkles",
+      "description": "Same wizard in Node: the global kip, promises and top-level await.",
+      "kip": true,
+      "command": "const values = await kip.prompt([\n  { name: 'env', type: 'select', label: 'Environment', options: ['dev', 'staging', 'prod'], required: true },\n], { id: 'where', title: 'Where to?' });\n\nkip.progress(50, 'Deploying...');\nkip.done({ title: 'Deployed to ' + values.env });"
+    }
+  ]
+}

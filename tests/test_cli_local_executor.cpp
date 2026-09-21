@@ -6,6 +6,7 @@
 
 #include "cli/cli-local-executor.h"
 #include "core/config-manager.h"
+#include "core/models.h"
 
 using namespace kai::cli;
 using namespace kai::core;
@@ -32,6 +33,12 @@ private slots:
     {
         QStandardPaths::setTestModeEnabled(true);
         m_originalCwd = QDir::currentPath();
+        // Modo global delega ao app via IPC: socket exclusivo deste teste (nunca
+        // o de um Kai de verdade rodando na máquina) e sem subir app nenhum —
+        // sem app, o global cai no fallback de rodar no próprio processo.
+        qputenv("KAI_IPC_SOCKET_NAME_OVERRIDE",
+                QByteArray("kai-test-cli-local-") + QByteArray::number(QCoreApplication::applicationPid()));
+        qputenv("KAI_CLI_NO_APP_LAUNCH", "1");
     }
 
     void cleanup()
@@ -103,6 +110,59 @@ private slots:
         QFile out(outputFile);
         QVERIFY2(out.open(QIODevice::ReadOnly), "comando não rodou de verdade (arquivo de saída não existe)");
         QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("Hello Kai"));
+    }
+
+    // KIP (spec 11 §15): o modo LOCAL (kai <caminho> numa pasta com kai.yml) recusa
+    // comandos KIP — eles precisam da view do app — e aponta o `kai -g`.
+    void kipCommandIsRefusedInLocalMode()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path());
+        const QString marker = dir.filePath(QStringLiteral("ran.txt"));
+        QFile kaiYml(dir.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(QStringLiteral(
+            "project_name: \"Demo\"\n"
+            "commands:\n"
+            "  - name: \"Wizard\"\n"
+            "    type: shell\n"
+            "    cli_path: wizard\n"
+            "    kip: true\n"
+            "    command: \"touch %1\"\n").arg(marker).toUtf8());
+        kaiYml.close();
+
+        const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("wizard")});
+        QVERIFY(outcome.handled);
+        QCOMPARE(outcome.exitCode, 1);
+        QVERIFY2(!QFile::exists(marker), "o comando KIP não pode ter rodado no modo local");
+    }
+
+    void nonKipCommandStillRunsInLocalModeNextToAKipOne()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path());
+        const QString marker = dir.filePath(QStringLiteral("ran.txt"));
+        QFile kaiYml(dir.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(QStringLiteral(
+            "project_name: \"Demo\"\n"
+            "commands:\n"
+            "  - name: \"Wizard\"\n"
+            "    type: shell\n"
+            "    cli_path: wizard\n"
+            "    kip: true\n"
+            "    command: \"true\"\n"
+            "  - name: \"Plain\"\n"
+            "    type: shell\n"
+            "    cli_path: plain\n"
+            "    command: \"touch %1\"\n").arg(marker).toUtf8());
+        kaiYml.close();
+        const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("plain")});
+        QVERIFY(outcome.handled);
+        QCOMPARE(outcome.exitCode, 0);
+        QVERIFY(QFile::exists(marker));
     }
 
     // Parâmetro opcional NÃO informado usa o default — mesma execução real,
@@ -183,6 +243,29 @@ private slots:
         QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("Salve Kai"));
     }
 
+    // O código de saída do COMANDO chega ao terminal (antes: sempre 0 ou 1) —
+    // importa pra scripts e CI (`kai test all || ...`, 127, 130 no Ctrl+C).
+    void commandExitCodeIsPropagated()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path());
+        QFile kaiYml(dir.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(
+            "project_name: \"Demo\"\n"
+            "commands:\n"
+            "  - name: \"Falha\"\n"
+            "    type: shell\n"
+            "    cli_path: falha\n"
+            "    command: \"exit 7\"\n");
+        kaiYml.close();
+
+        const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("falha")});
+        QVERIFY(outcome.handled);
+        QCOMPARE(outcome.exitCode, 7);
+    }
+
     // Caminho que não bate com nada: exit 2, handled=true.
     void unresolvedPathExitsWithUsageError()
     {
@@ -250,6 +333,78 @@ private slots:
             {QStringLiteral("kai"), QStringLiteral("setenv"), QStringLiteral("--help")});
         QVERIFY(outcome.handled);
         QCOMPARE(outcome.exitCode, 0);
+    }
+    // Bug real: `kai -g <path>` (modo GLOBAL) ignorava os alvos de terminal
+    // do app — o comando caía no shell nativo (cmd.exe no Windows) em vez
+    // do alvo padrão (ex: WSL), quebrando com "'docker' não é reconhecido".
+    // O modo global tem que rodar como a GUI rodaria.
+    void globalModeRunsThroughTheAppDefaultTerminalTarget()
+    {
+        ConfigManager configManager;
+        SettingsData settings = configManager.loadSettings();
+        const SettingsData originalSettings = settings;
+        TerminalProfile marker;
+        marker.name = QStringLiteral("Marcador");
+        marker.commandTemplate = QStringLiteral("KAI_VIA_TARGET=sim bash -c {{command}}");
+        marker.shell = ShellFlavor::Posix;
+        marker.usePty = false;
+        marker.isDefault = true;
+        settings.terminalProfiles = {marker};
+        QVERIFY(configManager.saveSettings(settings));
+
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path()); // sem kai.yml: nada de modo local aqui
+        const QString outputFile = dir.filePath(QStringLiteral("out.txt"));
+
+        CommandsData data;
+        Folder folder;
+        folder.id = QStringLiteral("f_global");
+        folder.name = QStringLiteral("Global");
+        folder.cliPath = QStringLiteral("grupo");
+        data.folders = {folder};
+        Command command;
+        command.id = QStringLiteral("c_marca");
+        command.name = QStringLiteral("Marca");
+        command.folderId = folder.id;
+        command.cliPath = QStringLiteral("marca");
+        command.type = CommandType::Command;
+        command.command = QStringLiteral("echo via=$KAI_VIA_TARGET > %1").arg(outputFile);
+        data.commands = {command};
+        QVERIFY(configManager.saveCommands(data));
+
+        const LocalExecutionOutcome outcome = runGlobalCliDiscover(
+            {QStringLiteral("kai"), QStringLiteral("grupo"), QStringLiteral("marca")});
+        QVERIFY(configManager.saveSettings(originalSettings));
+        QVERIFY(configManager.saveCommands(CommandsData{}));
+        QVERIFY(outcome.handled);
+        QCOMPARE(outcome.exitCode, 0);
+
+        QFile out(outputFile);
+        QVERIFY2(out.open(QIODevice::ReadOnly), "comando global não rodou");
+        QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("via=sim"));
+    }
+
+    // kai.exe (Windows) chamado de uma pasta do WSL: o modo local roda o
+    // comando DENTRO da distro de origem (como um kai nativo do Linux
+    // rodaria), não no cmd.exe — "docker"/"./script.sh" não existem lá.
+    void wslUncCwdMapsToABridgeIntoTheSameDistro()
+    {
+        const std::optional<TerminalProfile> bridge =
+            localWslBridgeProfile(QStringLiteral("//wsl.localhost/Ubuntu-22.04/home/corin/projects/kai"));
+        QVERIFY(bridge.has_value());
+        QVERIFY(bridge->isDefault);
+        QCOMPARE(bridge->shell, ShellFlavor::Posix);
+        // Sem aspas: `wsl.exe -d "Ubuntu"` falha com WSL_E_DISTRO_NOT_FOUND.
+        QVERIFY2(bridge->commandTemplate.startsWith(QStringLiteral("wsl.exe -d Ubuntu-22.04 -- ")),
+                 qPrintable(bridge->commandTemplate));
+        QVERIFY(bridge->commandTemplate.contains(QStringLiteral("{{command_b64}}")));
+
+        QVERIFY(localWslBridgeProfile(QStringLiteral("\\\\wsl$\\Debian\\home")).has_value());
+        QVERIFY(!localWslBridgeProfile(QStringLiteral("C:/Users/corin/projeto")).has_value());
+        QVERIFY(!localWslBridgeProfile(QStringLiteral("/home/corin/projects/kai")).has_value());
+        QVERIFY(!localWslBridgeProfile(QStringLiteral("//fileserver/share/projeto")).has_value());
+        QVERIFY(!localWslBridgeProfile(QStringLiteral("//wsl.localhost/Minha Distro&x/home")).has_value());
     }
 };
 

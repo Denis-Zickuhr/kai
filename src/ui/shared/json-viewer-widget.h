@@ -66,6 +66,13 @@ public:
     // sentido destacar o que já está destacado) — feedback do usuário.
     void setDetachedMode(bool detached);
 
+    // Corpo "colado" na moldura do painel de Saída: sem borda própria (a
+    // moldura e a linha do cabeçalho já desenham), topo reto e canto de
+    // baixo com o raio dado (concêntrico à moldura). Sem isto, o retângulo
+    // arredondado do viewer encostava na linha do cabeçalho e os cantos de
+    // cima pareciam quebrados. `background` é o valor da propriedade QSS.
+    void setFlushBody(const QString &background, int bottomRadius);
+
     // Expande (se preciso) e foca o campo de busca — usado pelo atalho
     // "Ctrl+F"/ação de pesquisa quando esta aba está em foco (ver
     // MainWindow::setupActionShortcuts e OutputPanel::focusSearch).
@@ -85,6 +92,7 @@ private slots:
 
 private:
     void setupUi();
+    void applyViewStyle();
     // Alterna o campo de busca do overlay (chip lupa): colapsado mostra só
     // o chip; expandido mostra o campo. Reposiciona o overlay ao mudar.
     void setSearchExpanded(bool expanded);
@@ -103,6 +111,9 @@ protected:
 private:
 
     FoldableJsonView *m_view = nullptr;
+    bool m_flush = false;
+    QString m_flushBackground;
+    int m_flushBottomRadius = 0;
     QLabel *m_titleLabel = nullptr;
     QLineEdit *m_filterField = nullptr;
     QToolButton *m_detachButton = nullptr;

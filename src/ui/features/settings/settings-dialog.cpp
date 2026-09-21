@@ -1,8 +1,11 @@
 #include "ui/features/settings/settings-dialog.h"
 #include "ui/features/settings/tabs/general-tab.h"
 #include "ui/features/settings/tabs/appearance-tab.h"
+#include "ui/features/settings/tabs/layout-tab.h"
 #include "ui/features/settings/tabs/shortcuts-tab.h"
 #include "ui/features/settings/tabs/terminals-tab.h"
+#include "ui/features/settings/tabs/kip-tab.h"
+#include "ui/features/settings/tabs/languages-tab.h"
 #include "ui/features/settings/tabs/notifications-tab.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/shortcut-capture-field.h"
@@ -84,9 +87,27 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_generalTab = new GeneralTab(currentSettings);
     m_appearanceTab = new AppearanceTab(currentSettings, availableThemeNames, currentSettings.activeTheme);
     connect(m_appearanceTab, &AppearanceTab::importThemeClicked, this, &SettingsDialog::handleImportThemeClicked);
+    m_layoutTab = new LayoutTab(currentSettings);
     m_shortcutsTab = new ShortcutsTab(currentSettings);
     m_terminalsTab = new TerminalsTab(currentSettings);
     m_notificationsTab = new NotificationsTab(currentSettings);
+    m_kipTab = new KipTab(currentSettings.kip);
+    m_languagesTab = new LanguagesTab(currentSettings.interpreters);
+    // Esquecer as respostas lembradas é uma ação IMEDIATA (como na aba Armazenamento):
+    // mexe direto nos comandos vivos e persiste, sem esperar o OK.
+    connect(m_kipTab, &KipTab::clearRememberedRequested, this, [this, &commandsData, persistCommands]() {
+        int cleared = 0;
+        for (core::Command &command : commandsData.commands) {
+            if (!command.kipLastValues.isEmpty()) {
+                command.kipLastValues = QJsonObject();
+                ++cleared;
+            }
+        }
+        if (cleared > 0 && persistCommands) {
+            persistCommands();
+        }
+        m_kipTab->showClearedCount(cleared);
+    });
 
     const QColor navIconColor(utils::tokens::mutedFg());
     struct PageDef { QString title; QString icon; QWidget *page; };
@@ -96,14 +117,20 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
          wrapPage(m_generalTab)},
         {utils::tr(QStringLiteral("settings.group.appearance")), QStringLiteral("palette"),
          wrapPage(m_appearanceTab)},
+        {utils::tr(QStringLiteral("settings.group.layout")), QStringLiteral("layout-grid"),
+         wrapPage(m_layoutTab)},
         {utils::tr(QStringLiteral("settings.group.shortcuts")), QStringLiteral("keyboard"),
          m_shortcutsTab}, // sem wrapPage: a própria tabela já rola internamente
         {utils::tr(QStringLiteral("settings.group.terminals")), QStringLiteral("terminal"),
          wrapPage(m_terminalsTab)},
+        {utils::tr(QStringLiteral("settings.group.languages")), QStringLiteral("code"),
+         wrapPage(m_languagesTab)},
         {utils::tr(QStringLiteral("settings.group.storage")), QStringLiteral("database"),
          buildStoragePage(commandsData, collections, std::move(persistCommands), std::move(persistCollections))},
         {utils::tr(QStringLiteral("settings.group.notifications")), QStringLiteral("bell"),
          wrapPage(m_notificationsTab)},
+        {utils::tr(QStringLiteral("settings.group.kip")), QStringLiteral("wand-sparkles"),
+         wrapPage(m_kipTab)},
     };
 
     for (const PageDef &d : defs) {
@@ -249,19 +276,19 @@ core::SettingsData SettingsDialog::buildSettings() const
     core::SettingsData settings;
     settings.globalHotkey = m_shortcutsTab->hotkeyField()->keySequenceString();
     settings.activeTheme = m_appearanceTab->themeField()->currentText().trimmed();
-    settings.uiDensity = m_appearanceTab->densityField()->currentData().toString();
-    settings.uiCornerStyle = m_appearanceTab->cornerStyleField()->currentData().toInt();
-    settings.treeConnectorStyle = m_appearanceTab->treeConnectorStyleField()->currentData().toInt();
-    if (m_appearanceTab->commandsBgImageField()) {
-        settings.commandsBackgroundImage = m_appearanceTab->commandsBgImageField()->text().trimmed();
+    settings.uiDensity = m_layoutTab->densityField()->currentData().toString();
+    settings.uiCornerStyle = m_layoutTab->cornerStyleField()->currentData().toInt();
+    settings.treeConnectorStyle = m_layoutTab->treeConnectorStyleField()->currentData().toInt();
+    if (m_layoutTab->commandsBgImageField()) {
+        settings.commandsBackgroundImage = m_layoutTab->commandsBgImageField()->text().trimmed();
     }
-    if (m_appearanceTab->commandsBgOpacityField()) {
-        settings.commandsBackgroundOpacity = m_appearanceTab->commandsBgOpacityField()->value();
+    if (m_layoutTab->commandsBgOpacityField()) {
+        settings.commandsBackgroundOpacity = m_layoutTab->commandsBgOpacityField()->value();
     }
-    settings.itemActionsPlacement = m_appearanceTab->itemActionsPlacementField()->currentData().toString();
-    settings.displayActionsPlacement = m_appearanceTab->displayActionsPlacementField()->currentData().toString();
-    settings.executionActionsPlacement = m_appearanceTab->executionActionsPlacementField()->currentData().toString();
-    settings.outputPosition = m_appearanceTab->outputPositionField()->currentData().toString();
+    settings.itemActionsPlacement = m_layoutTab->itemActionsPlacementField()->currentData().toString();
+    settings.displayActionsPlacement = m_layoutTab->displayActionsPlacementField()->currentData().toString();
+    settings.executionActionsPlacement = m_layoutTab->executionActionsPlacementField()->currentData().toString();
+    settings.outputPosition = m_layoutTab->outputPositionField()->currentData().toString();
     // Shortcuts Manager v2: única fonte de verdade gravada a partir de
     // agora (ver ShortcutsManagerWidget). Os campos/mapa legados
     // (actionShortcuts, editItemShortcut, etc.) são preservados como
@@ -282,6 +309,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.toggleEditModeShortcut = m_originalSettings.toggleEditModeShortcut;
     settings.autoHideOnFocusLoss = m_appearanceTab->autoHideField()->isChecked();
     settings.startVisible = m_appearanceTab->startVisibleField()->isChecked();
+    settings.autoCollapseOutputOnFolders = m_generalTab->autoCollapseOutputField()->isChecked();
     settings.windowMode = m_appearanceTab->windowModeField()->currentData().toString();
     settings.windowWidth = m_appearanceTab->windowWidthField()->value();
     settings.windowHeight = m_appearanceTab->windowHeightField()->value();
@@ -289,12 +317,14 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.fxTranslucency = m_appearanceTab->fxTranslucencyField()->isChecked();
     settings.fxBlur = m_appearanceTab->fxBlurField()->isChecked();
     settings.fxAnimations = m_appearanceTab->fxAnimationsField()->isChecked();
+    settings.gradientsEnabled = m_appearanceTab->gradientsEnabledField()->isChecked();
     // Modos de criação/edição de comando: seção removida da UI (obsoleta).
     // Preserva os valores existentes para não alterar o settings.json.
     settings.commandCreationMode = m_originalSettings.commandCreationMode;
     settings.commandEditMode = m_originalSettings.commandEditMode;
     settings.language = m_generalTab->languageField()->currentData().toString();
     settings.autostart = m_generalTab->autostartField()->isChecked();
+    settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
     // Campos NÃO editados neste diálogo são preservados do estado original
     // (feedback do usuário: as env globais foram para os Environments; não
     // podemos zerá-las nem os pacotes ao salvar as Configurações).
@@ -319,7 +349,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.outputAutoScroll = m_originalSettings.outputAutoScroll;
     settings.outputCompact = m_originalSettings.outputCompact;
     settings.outputFontSize = m_originalSettings.outputFontSize;
-    settings.outputMaxLogSizeKb = m_appearanceTab->outputMaxLogSizeField()->value();
+    settings.outputMaxLogSizeKb = m_generalTab->outputMaxLogSizeField()->value();
 
     // Alvos de terminal (nome -> template). Preserva a ordem de inserção
     // não é garantida pelo QMap, mas os alvos são referenciados por nome,
@@ -336,6 +366,8 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.notifyOnConfigRecovered = m_notificationsTab->notifyConfigRecoveredField()->isChecked();
     settings.notifyOnFirstErrorInFormattedOutput = m_notificationsTab->notifyFirstErrorInFormattedOutputField()->isChecked();
     settings.notifyEvenWhenFocused = m_notificationsTab->notifyEvenWhenFocusedField()->isChecked();
+    settings.kip = m_kipTab->settings();
+    settings.interpreters = m_languagesTab->settings();
 
     return settings;
 }

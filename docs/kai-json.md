@@ -11,18 +11,33 @@ Import Project**. Kai creates a folder with its commands and variables.
   "icon": "shopping-cart",
   "env_vars": { "PORT": "8080", "NODE_ENV": "development" },
   "commands": [
-    { "name": "Dev Server", "type": "shell", "command": "npm run dev", "is_background": true },
-    { "name": "Migrations", "type": "shell", "command": "npm run db:migrate" }
+    { "name": "Dev Server", "type": "command", "command": "npm run dev", "is_background": true },
+    { "name": "Migrations", "type": "command", "command": "npm run db:migrate" }
   ]
 }
 ```
+
+## Python and Node commands
+
+`language` makes the text of a command **code** instead of a shell line (`"native"` is the default).
+`interpreter` is optional and overrides the global one (Settings → Languages) for this command:
+
+```json
+{ "name": "Report", "type": "command", "language": "python",
+  "command": "import os\nprint('env =', os.environ['NODE_ENV'])" },
+{ "name": "Hello", "type": "command", "language": "node", "interpreter": "~/.nvm/versions/node/v22/bin/node",
+  "command": "console.log('hello', process.env.USER)" }
+```
+
+`{{VAR}}` is not replaced in Python/Node code: variables and parameters are environment variables. See
+[commands.md](commands.md).
 
 ## Versioned collections + a `select` parameter
 
 ```json
 {
   "commands": [{
-    "name": "Greet", "type": "shell",
+    "name": "Greet", "type": "command",
     "command": "echo {{customer.value}}",
     "params": [{
       "name": "customer", "type": "select",
@@ -55,6 +70,6 @@ its own subfolder.
 
 ## Full reference
 
-See the [`kai.json` manifesto](manifesto/kai-json-manifesto.md) for every
+See the [`kai.json` manifesto](../assets/manifesto/kai-json-manifesto.md) for every
 accepted field (hooks, execution conditions, auto-responders, parameter
 types, and more) and a checklist for generating one with an AI model.

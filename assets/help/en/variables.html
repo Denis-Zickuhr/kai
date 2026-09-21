@@ -1,2 +1,16 @@
 <h2>Variables {{VAR}}</h2>
-<p>Shell, URL, Headers and Body support <code>{{VAR}}</code>.</p><h3>Precedence</h3><pre>Global  &lt;  Folder/Project  &lt;  Dynamic (HTTP)  &lt;  Parameters</pre><p>The rightmost overrides the leftmost. A missing variable becomes an empty string (with a warning in the log) — Kai never crashes because of it.</p><p>See <a href='help://environments'>Environments</a> and <a href='help://dynamic_vars'>Dynamic variables</a>.</p>
+<p><code>{{VAR}}</code> is replaced right before a command runs. It works in <b>native commands</b>, the working directory, HTTP URL / headers / body, the response of an <a href='help://responders'>auto-reply</a> and the values of <a href='help://hooks'>execution conditions</a>. In <a href='help://languages'>Python/Node code</a> it is <i>not</i> replaced — read environment variables instead.</p>
+<p>Names accept letters, digits, <code>_</code> and <code>.</code> (the dot reaches a field of a <a href='help://collections'>collection</a> entry: <code>{{customer.email}}</code>); a <code>$</code> prefix is a <a href='help://dynamic_vars'>dynamic variable</a> (<code>{{$uuid}}</code>). Typing <code>{{</code> in an editor suggests the variables available.</p>
+<h3>Precedence</h3>
+<pre>Global  &lt;  Folder/Project  &lt;  Dynamic (HTTP)  &lt;  Parameters</pre>
+<p>The rightmost overrides the leftmost. A missing variable becomes an empty string (with a warning in the log) — Kai never crashes because of it.</p>
+<h3>Conditional text</h3>
+<p>A block can choose what text survives, before the variables are replaced:</p>
+<pre>docker compose up {% if {{BUILD}} == "true" %}--build{% else %}--no-build{% endif %} {{service}}</pre>
+<ul>
+<li><code>{% if A op B %}</code> … optional <code>{% else %}</code> … <code>{% endif %}</code>; blocks can be nested.</li>
+<li>Operators: <code>==</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>. With numbers on both sides the comparison is numeric (<code>{% if {{PORT}} &gt; 1000 %}</code>); the order operators need numbers, otherwise the condition is false.</li>
+<li>Operands are <code>{{VAR}}</code>, quoted text or a number. With <b>no operator</b> the condition is true when the value is not empty, not <code>false</code> and not <code>0</code>: <code>{% if {{VERBOSE}} %}-v{% endif %}</code>.</li>
+<li><code>kai --dry-run</code> shows the text after the blocks were resolved.</li>
+</ul>
+<p>See <a href='help://environments'>Environments</a> and <a href='help://parameters'>Parameters</a>.</p>

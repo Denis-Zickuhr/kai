@@ -1,0 +1,17 @@
+<h2>Export &amp; Import</h2>
+<p>Move your setup between machines, share it with a team or keep it in git. Both live in the <b>File</b> menu.</p>
+<h3>Export (File → Export…)</h3>
+<ul>
+<li><b>What to export:</b> everything, <i>a specific folder</i> or <i>a specific command</i>.</li>
+<li><b>Include:</b> folders and commands, collections (name, folder, schema), <b>collection data</b> (off by default — a record can hold real data such as a token, so only the structure is exported unless you opt in), environments (variable packs), settings (appearance, shortcuts, window) and execution profiles. When you export a folder or command that uses collections, Kai asks which linked collections to bring along.</li>
+<li><b>File format:</b> JSON or YAML.</li>
+<li><b>Lean file</b> (recommended for versioning by hand): folders by name path, hooks by command name, no ids and no keys that equal the default.</li>
+</ul>
+<div class='tip'>Environments can contain secrets. Review the file before sharing it, or leave environments out.</div>
+<h3>Import (File → Import…)</h3>
+<p>Two sources, detected automatically:</p>
+<ul>
+<li><b>File…</b> — a Kai export (JSON or YAML) or an <a href='help://import_openapi'>OpenAPI/Swagger</a> spec. For a Kai export you choose which categories to bring in. Folders and commands are <i>added</i> to what you have; an execution profile identical to an existing one is not duplicated, and one with the same name but a different configuration is renamed <i>(imported)</i>.</li>
+<li><b>Project folder…</b> — a folder with a <a href='help://kai_json'>kai.json</a>/<code>kai.yml</code>, or any recognizable project (<code>package.json</code>, <code>docker-compose.yml</code>, <code>requirements.txt</code>/<code>pyproject.toml</code>, a Makefile…) when <b>Detect generic definitions</b> is on. You choose the parent folder and how <code>PROJECT_PATH</code> is written (useful on WSL, where the folder picker may return a Windows path).</li>
+</ul>
+<p>To bring in a pasted <code>curl</code> command use the HTTP command editor — see <a href='help://import_curl'>cURL Import</a>. From the terminal: <code>kai import &lt;path&gt;</code> and <code>kai validate &lt;file&gt;</code> (checks a kai.json/kai.yml for typos before importing) — see <a href='help://cli'>CLI</a>.</p>

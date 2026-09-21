@@ -7,6 +7,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include "core/interpreter-settings.h"
+#include "core/kip-settings.h"
 #include "core/models.h"
 
 namespace kai::core {
@@ -16,6 +18,9 @@ struct CommandsData {
     QVector<Folder> folders;
     QVector<Command> commands;
 };
+
+// CollectionFilterState declarado em core/models.h (compartilhado com a UI
+// sem puxar esta classe inteira pros headers de ui/).
 
 // Alvo de terminal configurável (feedback do usuário: escolher em
 // qual terminal executar comandos shell, ex: rodar nativamente no WSL a
@@ -132,6 +137,12 @@ struct SettingsData {
     bool fxTranslucency = false;   // fundo translúcido
     bool fxBlur = false;           // "material líquido": Mica/Acrylic no Win11
     bool fxAnimations = false;     // fade/slide em painéis e diálogos
+    // Gradientes de tema (pedido do usuário: "config de gradientes" pra
+    // janela/header/sidebar/badges, com opção de desligar) — LIGADO por
+    // padrão, ao contrário dos fx_* acima: aqui o "efeito" é definido pelo
+    // TEMA em si (cada tema já declara os pares de cor), não algo que
+    // precise opt-in explícito para não surpreender.
+    bool gradientsEnabled = true;
 
     // --- JANELA (pedido do usuário: tamanho default configurável) ---
     // Modo de abertura: "size" usa windowWidth/windowHeight, "maximized" abre
@@ -145,6 +156,10 @@ struct SettingsData {
     QString windowMode = QStringLiteral("size");
     int windowWidth = 1280;
     int windowHeight = 760;
+    // Último tamanho da janela de SAÍDA desacoplada, usado no modo "remember"
+    // (0 = ainda não lembrado: cai em windowWidth/windowHeight).
+    int detachedWindowWidth = 0;
+    int detachedWindowHeight = 0;
     QString globalHotkey = QStringLiteral("Ctrl+Shift+B");
 
     // INICIAR VISÍVEL (feedback do usuário): override explícito da decisão
@@ -206,7 +221,7 @@ struct SettingsData {
     QString contextMenuShortcut = QStringLiteral("Ins");
     // Foca/desfoca o painel de Saída quando há saída ativa (alterna o foco
     // entre a Saída e a árvore de comandos). Remapeável.
-    QString focusOutputShortcut = QStringLiteral("Ctrl+`");
+    QString focusOutputShortcut = QStringLiteral("Ctrl+'");
     // Alterna o modo de edição SIMPLES <-> AVANÇADO (JSON) nos diálogos que
     // têm modo avançado (coleções, pastas, comandos). Remapeável.
     QString toggleEditModeShortcut = QStringLiteral("Ctrl+E");
@@ -231,6 +246,11 @@ struct SettingsData {
     // os dados vieram do formato legado ou daqui.
     QMap<QString, QStringList> shortcuts;
 
+    // Migrações pontuais de dados do usuário já aplicadas (ids estáveis) —
+    // cada uma roda uma única vez, pra não desfazer uma escolha feita
+    // DEPOIS dela (ver ConfigManager::loadSettings).
+    QStringList appliedMigrations;
+
     // "Mostrar ocultos" (toggle da barra de Exibição): comandos marcados
     // hidden ficam visíveis na árvore enquanto true. Não editável no
     // diálogo de Configurações — é um toggle rápido persistido aqui.
@@ -248,6 +268,10 @@ struct SettingsData {
     // (feedback do usuário: lembrar entre sessões se o terminal estava
     // colapsado). Persistido global em settings.json.
     bool terminalCollapsed = false;
+    // Recolhe a Saída sozinha ao selecionar uma pasta ou coleção (sem saída pra
+    // mostrar) e a reabre ao voltar a um comando. Não sobrescreve
+    // terminalCollapsed (o estado que o usuário escolheu à mão).
+    bool autoCollapseOutputOnFolders = true;
 
     // Opções de exibição da Saída (feedback do usuário: as opções do menu da
     // Saída devem PERSISTIR entre sessões, globalmente — não como config no
@@ -267,6 +291,19 @@ struct SettingsData {
     // Era um valor fixo de 200KB (descartava o INÍCIO do log ao
     // ultrapassar), agora configurável; default 1024 (1MB).
     int outputMaxLogSizeKb = 1024;
+
+    // TEMPO DE ENCERRAMENTO GRACIOSO (pedido do usuário: "o Docker tem um
+    // sistema de gracefully stopping... o Kai mata seco, pede pra parar e
+    // já mata"). Ao clicar em "Parar" (não "Forçar parada"), o Kai manda
+    // SIGTERM e aguarda ESTE tempo (em segundos) antes de escalar pra
+    // SIGKILL — era um valor fixo de 2000ms embutido no código, não
+    // configurável. "Forçar parada" continua sendo SIGKILL IMEDIATO,
+    // ignorando este valor por completo (ver ProcessRunner::forceStop).
+    // Default 5s: tempo curto o bastante pra não travar a UI por muito
+    // tempo, mas maior que os 2s fixos de antes, que eram curtos demais pra
+    // a maioria dos processos com cleanup próprio (ex: servidores que
+    // fecham conexões, containers).
+    int gracefulStopTimeoutSec = 5;
 
     // Iniciar o Kai automaticamente com o sistema (autoboot/autostart).
     // Configurável pelo usuário via SettingsDialog. Quando ligado, o Kai
@@ -317,6 +354,13 @@ struct SettingsData {
     // redundância com o badge vermelho que já aparece na árvore quando o
     // Kai está aberto e visível.
     bool notifyEvenWhenFocused = false;
+
+    // Configurações → KIP (spec 11 §23). Persistido no objeto "kip".
+    KipSettings kip;
+
+    // Configurações → Linguagens: interpretadores de comandos Python/Node.
+    // Persistido no objeto "interpreters".
+    InterpreterSettings interpreters;
 };
 
 // Responsável por carregar/persistir commands.json e settings.json em
@@ -343,6 +387,14 @@ public:
     // (nunca falha o boot do app por causa disto).
     QMap<QString, QMap<QString, QString>> loadPersistedDynamicVars();
     bool savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
+
+    // Arquivo separado dos filtros de tela de seleção de coleções (busca +
+    // favoritos), por Collection::id — ver CollectionFilterState acima.
+    QString collectionFiltersFilePath() const;
+    // collectionId -> filtro. Arquivo ausente/corrompido -> mapa vazio
+    // (nunca falha o boot do app; a tela de seleção cai nos defaults).
+    QMap<QString, CollectionFilterState> loadCollectionFilters();
+    bool saveCollectionFilters(const QMap<QString, CollectionFilterState> &data);
 
     // Carrega commands.json. Em caso de corrupção, faz backup do arquivo
     // inválido, restaura um estado vazio seguro e emite configRecovered().

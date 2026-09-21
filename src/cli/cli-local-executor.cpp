@@ -1,4 +1,8 @@
 #include "cli/cli-local-executor.h"
+#include "cli/terminal-mode-filter.h"
+#include "cli/app-delegate.h"
+#include "cli/cli-help-format.h"
+#include "cli/terminal-input.h"
 
 #include "core/cli-path-resolver.h"
 #include "core/cli-param-binder.h"
@@ -7,55 +11,36 @@
 #include "core/environment-manager.h"
 #include "engine/execution-pipeline.h"
 #include "ui/features/collections/project-selector.h"
+#include "utils/console-context.h"
+#include "utils/duration-format.h"
 #include "utils/translation-manager.h"
 #include "utils/logger.h"
+#include "utils/path-format.h"
 
 #include <QDir>
+#include <QCoreApplication>
+#include <QProcess>
+#include <QDateTime>
 #include <QEventLoop>
+#include <QJsonObject>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QRegularExpression>
 #include <QTextStream>
 
+#include <algorithm>
+#include <optional>
+
 #ifdef Q_OS_WIN
-#include <io.h>
+#include <windows.h>
 #else
-#include <unistd.h>
+#include <csignal>
 #endif
+
 
 namespace kai::cli {
 
 namespace {
-
-// Mesmo helper de ipc/cli-client.cpp, duplicado de propósito (kai-cli não
-// depende de kai-ipc, e vice-versa — são dois módulos de CLI conceitualmente
-// separados; 5 linhas não justificam acoplar os dois só por isto). true só
-// quando a saída padrão é um TERMINAL interativo de verdade — é o que
-// distingue "rodei `kai` solto no terminal dentro da pasta do projeto" de
-// "o launcher/ícone abriu o app com o cwd apontando pra essa pasta por
-// acaso" (esse segundo caso TEM que continuar abrindo a GUI normalmente).
-bool stdoutIsInteractiveTerminal()
-{
-    // KAI_FORCE_GUI: ver o mesmo comentário/bug em ipc/cli-client.cpp —
-    // relançada automática do docker/watch.sh (via entr) roda `./bin/kai`
-    // sob um pty de verdade, então precisa desta válvula de escape pra não
-    // cair aqui também.
-    if (qEnvironmentVariableIsSet("KAI_FORCE_GUI")) {
-        return false;
-    }
-#ifdef Q_OS_WIN
-    // Ver o mesmo comentário detalhado em ipc/cli-client.cpp: main.cpp
-    // sempre TENTA AttachConsole (mesmo na invocação solta); sem console
-    // pai de verdade a tentativa falha e fd fica < 0 — nunca trata como
-    // terminal interativo nesse caso. Com console real atrás (inclusive
-    // via WSL interop chamando o kai.exe do Windows), o fd é válido.
-    const int fd = _fileno(stdout);
-    if (fd < 0) {
-        return false;
-    }
-    return _isatty(fd) != 0;
-#else
-    return isatty(fileno(stdout)) != 0;
-#endif
-}
 
 QTextStream &out()
 {
@@ -81,55 +66,6 @@ QString findLocalKaiFile(const QString &directoryPath)
     return QString();
 }
 
-void printChildren(const QVector<core::CliPathChildEntry> &children)
-{
-    for (const core::CliPathChildEntry &c : children) {
-        out() << "  " << c.cliPath;
-        if (!c.label.isEmpty()) {
-            out() << "\t" << c.label;
-        }
-        out() << "\n";
-        if (!c.description.isEmpty()) {
-            out() << "      " << c.description << "\n";
-        }
-    }
-    out().flush();
-}
-
-void printCommandHelp(const core::Command &command, const QStringList &resolvedPath)
-{
-    QStringList requiredNames, optionalUsage;
-    for (const core::Parameter &p : command.params) {
-        if (p.optional) {
-            optionalUsage << QStringLiteral("[--%1=<value>]").arg(p.name);
-        } else {
-            requiredNames << QStringLiteral("<%1>").arg(p.name);
-        }
-    }
-    out() << "kai " << resolvedPath.join(QLatin1Char(' '));
-    if (!requiredNames.isEmpty()) {
-        out() << ' ' << requiredNames.join(QLatin1Char(' '));
-    }
-    if (!optionalUsage.isEmpty()) {
-        out() << ' ' << optionalUsage.join(QLatin1Char(' '));
-    }
-    out() << "\n\n";
-    if (!command.description.isEmpty()) {
-        out() << command.description << "\n\n";
-    }
-    for (const core::Parameter &p : command.params) {
-        out() << "  " << (p.optional ? QStringLiteral("--%1").arg(p.name) : p.name)
-              << "\t" << (p.optional
-                    ? utils::tr(QStringLiteral("cli_local.help.optional"))
-                    : utils::tr(QStringLiteral("cli_local.help.required")))
-              << "\t" << core::parameterTypeToString(p.type) << "\n";
-        if (!p.description.isEmpty()) {
-            out() << "      " << p.description << "\n";
-        }
-    }
-    out().flush();
-}
-
 // Cadeia raiz -> pasta do comando (mesma lógica de MainWindow::
 // runSelectedCommand, extraída aqui porque o modo local não passa pelo
 // MainWindow) — usada tanto pro merge de env_vars quanto pro escopo de
@@ -152,14 +88,132 @@ QVector<core::Folder> folderChainFor(const QString &folderId, const QVector<core
     return chain;
 }
 
+// O que muda na EXECUÇÃO entre os modos (resolução de path e binding de
+// parâmetros são idênticos):
+//   - LOCAL: só o arquivo manda — nenhum alvo de terminal do app (exceto a
+//     ponte pro WSL de origem, ver localWslBridgeProfile), nada de
+//     dinâmicas persistidas.
+//   - GLOBAL: roda como a GUI rodaria (bug real: `kai -g` ignorava o alvo
+//     de terminal padrão e caía no cmd.exe — "'docker' não é reconhecido").
+struct CliRunProfile {
+    QVector<core::TerminalProfile> terminalProfiles;
+    core::InterpreterSettings interpreters;
+    bool useAppRuntimeState = false; // dinâmicas persistidas + graceful stop
+    bool inheritTerminal = false;    // ver ExecutionPipeline::setInheritTerminal
+    bool delegateToApp = false;      // GLOBAL: roda pelo app (ver runViaApp)
+    // PTY + repasse do teclado (em vez de herdar o terminal): kai.exe local
+    // chamado do WSL — ver runLocalCliPath.
+    bool forwardInput = false;
+    CliFlags flags; // -d/-n/--dry-run/--json (ver cli-local-executor.h)
+};
+
+// Enquanto o comando herda o terminal, o Ctrl+C vai pro grupo de processos
+// inteiro (kai + comando). O kai precisa SOBREVIVER a ele pra esperar o
+// comando terminar e devolver o código de saída dele — igual a um shell.
+// Handler no-op (e não SIG_IGN/ignorar no Windows): disposição "ignorada"
+// seria herdada pelo filho, que aí também não pararia com Ctrl+C.
+class InterruptPassthroughGuard {
+public:
+    InterruptPassthroughGuard()
+    {
+#ifdef Q_OS_WIN
+        ::SetConsoleCtrlHandler(&InterruptPassthroughGuard::onConsoleCtrl, TRUE);
+#else
+        struct sigaction action {};
+        action.sa_handler = [](int) {};
+        sigemptyset(&action.sa_mask);
+        ::sigaction(SIGINT, &action, &m_previous);
+#endif
+    }
+    ~InterruptPassthroughGuard()
+    {
+#ifdef Q_OS_WIN
+        ::SetConsoleCtrlHandler(&InterruptPassthroughGuard::onConsoleCtrl, FALSE);
+#else
+        ::sigaction(SIGINT, &m_previous, nullptr);
+#endif
+    }
+    InterruptPassthroughGuard(const InterruptPassthroughGuard &) = delete;
+    InterruptPassthroughGuard &operator=(const InterruptPassthroughGuard &) = delete;
+
+private:
+#ifdef Q_OS_WIN
+    static BOOL WINAPI onConsoleCtrl(DWORD type)
+    {
+        return type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT;
+    }
+#else
+    struct sigaction m_previous {};
+#endif
+};
+
 // Núcleo compartilhado entre modo LOCAL (runLocalCliPath) e GLOBAL
-// (runGlobalCliDiscover) — a ÚNICA diferença entre os dois é de ONDE
+// (runGlobalCliDiscover) — a diferença entre os dois é de ONDE
 // `allFolders`/`commands` vêm (kai.json/kai.yml local vs commands.json
-// persistido do app); resolução de path, binding de parâmetros e execução
-// do pipeline são idênticos dali em diante.
+// persistido do app) e o CliRunProfile acima.
+// -n/--notify: mesma notificação do `kai raise`, pelo app.
+void notifyRunFinished(const QString &commandName, int exitCode, qint64 elapsedMs)
+{
+    QJsonObject request;
+    request[QStringLiteral("cmd")] = QStringLiteral("raise");
+    request[QStringLiteral("level")] = exitCode == 0 ? QStringLiteral("info") : QStringLiteral("error");
+    request[QStringLiteral("message")] = exitCode == 0
+        ? utils::tr(QStringLiteral("cli.notify.done")).arg(commandName, utils::formatShortDuration(elapsedMs))
+        : utils::tr(QStringLiteral("cli.notify.failed")).arg(commandName).arg(exitCode).arg(utils::formatShortDuration(elapsedMs));
+    requestApp(request, 15000);
+}
+
+// -d/--detached no modo local: relança este kai (mesmo binário, mesmos
+// argumentos, sem o -d) em segundo plano. KAI_CLI_OUTPUT_FILE faz o filho
+// mandar stdout/stderr pro log (ver utils::initConsoleForCli) — mais
+// simples e seguro que herdar handles: no Windows, herdar handles levaria
+// junto os pipes da interop do WSL e seguraria o terminal até o filho sair.
+int spawnDetachedSelf(const core::Command &command, const QStringList &pathArgs, bool global, bool notify)
+{
+    QString slug = command.cliPath.isEmpty() ? command.id : command.cliPath;
+    slug.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")), QStringLiteral("_"));
+    const QString logPath = QDir(QDir::tempPath()).filePath(QStringLiteral("kai-%1-%2.log")
+        .arg(slug, QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"))));
+
+    QProcess child;
+    child.setProgram(QCoreApplication::applicationFilePath());
+    QStringList childArgs;
+    if (global) {
+        childArgs << QStringLiteral("--global");
+    }
+    if (notify) {
+        childArgs << QStringLiteral("--notify"); // o filho avisa quando terminar
+    }
+    childArgs << pathArgs;
+    child.setArguments(childArgs);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("KAI_CLI_OUTPUT_FILE"), logPath);
+    child.setProcessEnvironment(env);
+    child.setWorkingDirectory(QDir::currentPath());
+#ifdef Q_OS_WIN
+    child.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) {
+        a->flags |= CREATE_NO_WINDOW;
+        a->inheritHandles = false;
+    });
+#endif
+    qint64 pid = 0;
+    if (!child.startDetached(&pid)) {
+        err() << utils::tr(QStringLiteral("cli.detached.spawn_failed")).arg(command.name) << "\n";
+        err().flush();
+        return 1;
+    }
+    // kai.exe chamado do WSL: mostra o log no caminho que o shell do Linux abre.
+    const QString shownLog = utils::launchedFromWslInterop() ? utils::toPosixPath(logPath)
+                                                             : QDir::toNativeSeparators(logPath);
+    out() << utils::tr(QStringLiteral("cli.detached.local_started")).arg(command.name).arg(pid).arg(shownLog) << "\n";
+    out().flush();
+    return 0;
+}
+
 LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
                                           const QVector<core::Command> &commands,
-                                          const QStringList &pathArgs)
+                                          const QStringList &pathArgs,
+                                          const CliRunProfile &runProfile)
 {
     LocalExecutionOutcome outcome;
     outcome.handled = true;
@@ -167,16 +221,33 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     core::CliPathResolver resolver(allFolders, commands);
     const core::CliPathResolution resolution = resolver.resolve(pathArgs);
 
+    // Caminho até a pasta que está sendo listada (as linhas de uso de cada
+    // comando mostram o caminho completo): o maior prefixo de `pathArgs` que
+    // ainda resolve pra uma pasta — o resolvedor não diz quantos tokens
+    // consumiu quando para numa pasta ou não acha o próximo.
+    auto listedFolderTokens = [&]() {
+        for (int n = pathArgs.size(); n > 0; --n) {
+            if (resolver.resolve(pathArgs.mid(0, n)).kind == core::CliPathResolution::Kind::Folder) {
+                return pathArgs.mid(0, n);
+            }
+        }
+        return QStringList();
+    };
+
     if (resolution.kind == core::CliPathResolution::Kind::NotFound) {
         err() << utils::tr(QStringLiteral("cli_local.error.path_not_found")).arg(pathArgs.join(QLatin1Char(' '))) << "\n";
         err().flush();
-        printChildren(resolution.children);
+        out() << (runProfile.flags.json ? formatCliListingJson(resolution.children, commands, listedFolderTokens())
+                                         : formatCliListing(resolution.children, commands, listedFolderTokens()));
+        out().flush();
         outcome.exitCode = 2;
         return outcome;
     }
     if (resolution.kind == core::CliPathResolution::Kind::Folder) {
         // Caminho incompleto (ou vazio) — descoberta automática, não é erro.
-        printChildren(resolution.children);
+        out() << (runProfile.flags.json ? formatCliListingJson(resolution.children, commands, listedFolderTokens())
+                                         : formatCliListing(resolution.children, commands, listedFolderTokens()));
+        out().flush();
         outcome.exitCode = 0;
         return outcome;
     }
@@ -202,7 +273,8 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     const core::CliParamBindingResult bound = core::bindCliParams(command->params, resolution.remainingArgs);
     const QStringList resolvedPathTokens = pathArgs.mid(0, pathArgs.size() - resolution.remainingArgs.size());
     if (bound.helpRequested) {
-        printCommandHelp(*command, resolvedPathTokens);
+        out() << formatCommandHelp(*command, resolvedPathTokens);
+        out().flush();
         outcome.exitCode = 0;
         return outcome;
     }
@@ -212,6 +284,15 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
         }
         err().flush();
         outcome.exitCode = 2;
+        return outcome;
+    }
+
+    // KIP precisa do app (a view, o stdin/stdout do protocolo): o modo LOCAL — que
+    // roda o comando com o terminal herdado — recusa com um caminho claro (§15).
+    if (command->kip && command->type == core::CommandType::Command && !runProfile.delegateToApp) {
+        err() << utils::tr(QStringLiteral("kip.error.needs_app")) << "\n";
+        err().flush();
+        outcome.exitCode = 1;
         return outcome;
     }
 
@@ -259,6 +340,104 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     }
     envManager.setParamVars(paramVars);
 
+    if (runProfile.flags.dryRun) {
+        // --dry-run: o que SERIA executado, sem executar nada.
+        engine::ExecutionPipeline previewPipeline;
+        previewPipeline.setFolders(allFolders);
+        previewPipeline.setTerminalProfiles(runProfile.terminalProfiles);
+        previewPipeline.setInterpreters(runProfile.interpreters);
+        DryRunPreview preview;
+        preview.name = command->name;
+        preview.pathTokens = resolvedPathTokens;
+        preview.type = core::commandTypeToString(command->type);
+        preview.target = previewPipeline.effectiveTerminalProfileName(*command);
+        preview.workingDir = envManager.interpolate(command->workingDir);
+        if (command->type == core::CommandType::Http && command->httpConfig.has_value()) {
+            preview.httpMethod = core::httpMethodToString(command->httpConfig->method);
+            preview.httpUrl = envManager.interpolate(command->httpConfig->url);
+            preview.httpBody = envManager.interpolate(command->httpConfig->body);
+        } else {
+            if (command->language == core::CommandLanguage::Native) {
+                preview.command = envManager.interpolate(command->command);
+            } else {
+                // O que roda é o código, sem {{VAR}} nem aspas: mostra-o como
+                // está (a linha real é o código embrulhado em base64).
+                preview.command = command->command;
+                preview.language = core::commandLanguageToString(command->language);
+                preview.interpreter = runProfile.interpreters.resolve(command->language, command->interpreter);
+            }
+        }
+        auto hookNames = [&commands](const QStringList &ids) {
+            QStringList names;
+            for (const QString &id : ids) {
+                const auto it = std::find_if(commands.cbegin(), commands.cend(),
+                    [&id](const core::Command &c) { return c.id == id; });
+                names << (it != commands.cend() ? it->name : id);
+            }
+            return names;
+        };
+        preview.preHooks = hookNames(command->hooks.pre);
+        preview.postHooks = hookNames(command->hooks.post);
+        out() << (runProfile.flags.json ? formatDryRunJson(preview) : formatDryRun(preview));
+        out().flush();
+        outcome.exitCode = 0;
+        return outcome;
+    }
+
+    // -w/--window: a janela de saída é do app, então só há como abri-la
+    // quando o comando roda POR ele (caminhos globais, -g).
+    if (runProfile.flags.window && !runProfile.delegateToApp) {
+        err() << utils::tr(QStringLiteral("cli.error.window_requires_global")) << "\n";
+        err().flush();
+        outcome.exitCode = 2;
+        return outcome;
+    }
+
+    if (runProfile.flags.detached) {
+        // GLOBAL: o app aceita, registra e roda; o terminal volta na hora (e
+        // o próprio app avisa no fim, com -n).
+        if (runProfile.delegateToApp) {
+            if (const std::optional<int> accepted =
+                    runViaApp(*command, paramVars, /*detached=*/true, runProfile.flags.notify,
+                              runProfile.flags.window)) {
+                outcome.exitCode = *accepted;
+                return outcome;
+            }
+        }
+        // LOCAL (ou app inalcançável): este mesmo kai, relançado em segundo
+        // plano sem o -d, roda tudo (hooks inclusive) com a saída num log.
+        outcome.exitCode = spawnDetachedSelf(*command, pathArgs, runProfile.delegateToApp,
+                                             runProfile.flags.notify);
+        return outcome;
+    }
+
+    // -n/--notify: avisa na bandeja quando terminar, com o tempo que levou.
+    QElapsedTimer runTimer;
+    runTimer.start();
+    auto finishWith = [&](int exitCode) {
+        if (runProfile.flags.notify) {
+            notifyRunFinished(command->name, exitCode, runTimer.elapsed());
+        }
+        outcome.exitCode = exitCode;
+        return outcome;
+    };
+
+    bool inheritTerminal = runProfile.inheritTerminal;
+    if (runProfile.delegateToApp) {
+        if (const std::optional<int> delegatedExit = runViaApp(*command, paramVars, /*detached=*/false, /*notify=*/false,
+                          runProfile.flags.window)) {
+            return finishWith(*delegatedExit);
+        }
+        // Não deu pra falar com o app nem subi-lo: roda aqui mesmo (sem
+        // registro), interativo, em vez de simplesmente falhar.
+        err() << utils::tr(QStringLiteral("cli.stream.launch_failed")) << "\n";
+        err().flush();
+        inheritTerminal = true;
+    }
+    if (runProfile.useAppRuntimeState) {
+        envManager.seedPersistedDynamicVars(configManager.loadPersistedDynamicVars());
+    }
+
     QMap<QString, core::Command> allCommandsById;
     for (const core::Command &c : commands) {
         allCommandsById.insert(c.id, c);
@@ -266,11 +445,57 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
 
     engine::ExecutionPipeline pipeline;
     pipeline.setFolders(allFolders);
+    pipeline.setTerminalProfiles(runProfile.terminalProfiles);
+    pipeline.setInterpreters(runProfile.interpreters);
+    pipeline.setInheritTerminal(inheritTerminal);
+    if (runProfile.useAppRuntimeState) {
+        pipeline.setGracefulStopTimeoutMs(settings.gracefulStopTimeoutSec * 1000);
+        // Mesma gravação write-through da GUI (MainWindow) pra EnvExtractor
+        // marcado persist — senão um login via `kai -g` se perdia.
+        QObject::connect(&pipeline, &engine::ExecutionPipeline::dynamicVarPersistRequested, &pipeline,
+            [&configManager](const QString &scopeKey, const QString &name, const QString &value) {
+                QMap<QString, QMap<QString, QString>> all = configManager.loadPersistedDynamicVars();
+                all[scopeKey][name] = value;
+                configManager.savePersistedDynamicVars(all);
+            });
+    }
 
+    // Saída do comando vai pro terminal REAL de quem chamou — passa pelo
+    // filtro de modos de terminal (ver TerminalModeFilter: o ConPTY do
+    // Windows emite ESC[?9001h e deixava o terminal do WSL cuspindo lixo a
+    // cada tecla depois que o kai saía). Um filtro por stream, porque as
+    // sequências podem vir partidas entre chunks do mesmo stream.
+    TerminalModeFilter outFilter;
+    TerminalModeFilter errFilter;
+    QString pendingEcho;
+    bool stripEcho = false;
+    std::optional<StdinForwarder> stdinForwarder;
+    if (runProfile.forwardInput && !inheritTerminal) {
+        stdinForwarder.emplace([&pipeline, &pendingEcho, &stripEcho](const QString &text) {
+            engine::ProcessRunner *runner = pipeline.activeProcessRunner();
+            if (runner && runner->isRunning()) {
+                runner->writeRaw(text);
+                if (stripEcho) {
+                    pendingEcho += text;
+                }
+            }
+        });
+        stripEcho = !stdinForwarder->isTty();
+    }
     QObject::connect(&pipeline, &engine::ExecutionPipeline::logMessage, &pipeline,
-        [](const QString &, const QString &text, bool isError) {
-            (isError ? err() : out()) << text << "\n";
-            (isError ? err() : out()).flush();
+        [&outFilter, &errFilter, &pendingEcho, &stripEcho, interactive = stdinForwarder.has_value()](
+            const QString &, const QString &chunk, bool isError) {
+            const QString text = stripEcho ? stripPendingEcho(chunk, pendingEcho) : chunk;
+            QTextStream &stream = isError ? err() : out();
+            stream << (isError ? errFilter : outFilter).feed(text);
+            // Chunks de saída de shell já trazem a própria quebra de linha;
+            // só mensagens avulsas (ex: avisos do HttpRunner) precisam dela.
+            // Com repasse de teclado, nunca: um prompt ("[y/N] ") termina
+            // sem quebra de propósito.
+            if (!interactive && !text.endsWith(QLatin1Char('\n'))) {
+                stream << "\n";
+            }
+            stream.flush();
         });
 
     // Comando em SEGUNDO PLANO: o pipeline considera sucesso imediato ao
@@ -296,14 +521,56 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
             loop.quit();
         });
 
-    pipeline.run(*command, allCommandsById, envManager);
-    loop.exec();
+    {
+        std::optional<InterruptPassthroughGuard> interruptGuard;
+        if (inheritTerminal) {
+            interruptGuard.emplace();
+        }
+        pipeline.run(*command, allCommandsById, envManager);
+        loop.exec();
+    }
+    out() << outFilter.flush();
+    out().flush();
+    err() << errFilter.flush();
+    err().flush();
 
-    outcome.exitCode = result.success ? 0 : 1;
-    return outcome;
+    return finishWith(result.success ? 0 : qMax(1, result.exitCode));
 }
 
 } // namespace
+
+std::optional<core::TerminalProfile> localWslBridgeProfile(const QString &cwd)
+{
+    static const QRegularExpression wslUnc(
+        QStringLiteral(R"(^(?:\\\\|//)wsl(?:\.localhost|\$)[\\/]([^\\/]+)(?:[\\/]|$))"));
+    const QRegularExpressionMatch m = wslUnc.match(cwd.trimmed());
+    if (!m.hasMatch()) {
+        return std::nullopt;
+    }
+    // Nome SEM aspas: o wsl.exe lê a própria linha de comando e não remove
+    // aspas — `-d "Ubuntu"` dá WSL_E_DISTRO_NOT_FOUND (testado de verdade).
+    // Por isso só aceita nomes que não precisam de quoting.
+    static const QRegularExpression safeDistro(QStringLiteral(R"(^[A-Za-z0-9._-]+$)"));
+    if (!safeDistro.match(m.captured(1)).hasMatch()) {
+        return std::nullopt;
+    }
+    core::TerminalProfile bridge;
+    bridge.name = QStringLiteral("WSL (%1)").arg(m.captured(1));
+    // Mesmo formato do alvo WSL padrão sugerido pelo app: base64 à prova de
+    // aspas, -lic pra carregar ~/.bashrc (PATH/aliases do usuário).
+    bridge.commandTemplate = QStringLiteral(
+        "wsl.exe -d %1 -- bash -lic 'eval \"$(echo \"$1\" | base64 -d)\"' kai {{command_b64}}")
+        .arg(m.captured(1));
+    bridge.shell = core::ShellFlavor::Posix;
+    bridge.usePty = true;
+    bridge.isDefault = true;
+    return bridge;
+}
+
+bool hasLocalKaiFile()
+{
+    return !findLocalKaiFile(QDir::currentPath()).isEmpty();
+}
 
 bool looksLikeLocalCliPathAttempt(const QStringList &args)
 {
@@ -317,7 +584,7 @@ bool looksLikeLocalCliPathAttempt(const QStringList &args)
         // Sem o teto de tty, isto quebraria abrir o app pelo
         // launcher/ícone quando o cwd dele por acaso aponta pra uma pasta
         // com kai.json/kai.yml.
-        return stdoutIsInteractiveTerminal() && !findLocalKaiFile(QDir::currentPath()).isEmpty();
+        return kai::utils::stdoutIsInteractiveTerminal() && !findLocalKaiFile(QDir::currentPath()).isEmpty();
     }
     if (core::reservedCliVerbs().contains(args.at(1))) {
         return false;
@@ -325,10 +592,30 @@ bool looksLikeLocalCliPathAttempt(const QStringList &args)
     return !findLocalKaiFile(QDir::currentPath()).isEmpty();
 }
 
-LocalExecutionOutcome runLocalCliPath(const QStringList &args)
+bool loadLocalCliTree(const QString &directoryPath, QVector<core::Folder> &folders,
+                      QVector<core::Command> &commands)
+{
+    if (findLocalKaiFile(directoryPath).isEmpty()) {
+        return false;
+    }
+    ui::ProjectSelector selector;
+    const ui::ProjectImportResult imported = selector.importFromDirectory(directoryPath);
+    if (!imported.success) {
+        return false;
+    }
+    folders = imported.subFolders;
+    folders.prepend(imported.folder);
+    commands = imported.commands;
+    return true;
+}
+
+LocalExecutionOutcome runLocalCliPath(const QStringList &args, const CliFlags &flags)
 {
     LocalExecutionOutcome outcome;
-    if (!looksLikeLocalCliPathAttempt(args)) {
+    // Com flag (-g/-d/-n/--json...) a chamada já é explicitamente de CLI:
+    // `kai --json | jq` lista a raiz mesmo sem terminal.
+    const bool attempt = flags.any() ? hasLocalKaiFile() : looksLikeLocalCliPathAttempt(args);
+    if (!attempt) {
         return outcome;
     }
 
@@ -347,8 +634,31 @@ LocalExecutionOutcome runLocalCliPath(const QStringList &args)
     const QString cwd = QDir::currentPath();
     outcome.handled = true; // a partir daqui SEMPRE tratamos, mesmo em erro.
 
+    CliRunProfile runProfile;
+    // kai.exe chamado do WSL recebe PIPES da interop, não um terminal: herdar
+    // isso deixaria o lado Linux sem tty — `read -p` nem mostra o prompt e
+    // `bash -i` reclama de job control. Nesse caso o comando fica no ConPTY
+    // (o Linux enxerga um tty) e o teclado é repassado. Em qualquer outro
+    // lugar (Linux nativo, cmd/PowerShell), herda o terminal de verdade.
+    // KAI_CLI_FORWARD_INPUT: força esse caminho fora do WSL (diagnóstico e
+    // teste — reproduz os pipes da interop com um `printf ... | kai <path>`).
+    const bool viaWslInterop = utils::launchedFromWslInterop()
+        || qEnvironmentVariableIsSet("KAI_CLI_FORWARD_INPUT");
+    runProfile.inheritTerminal = !viaWslInterop;
+    runProfile.forwardInput = viaWslInterop;
+    runProfile.flags = flags;
+    QString projectPath; // vazio = o próprio cwd
+#ifdef Q_OS_WIN
+    if (const auto bridge = localWslBridgeProfile(cwd)) {
+        runProfile.terminalProfiles = {*bridge};
+        // Dentro da distro o projeto é /home/..., não o UNC do Windows —
+        // {{PROJECT_PATH}} precisa apontar pro caminho que o bash enxerga.
+        projectPath = utils::toPosixPath(cwd);
+    }
+#endif
+
     ui::ProjectSelector selector;
-    const ui::ProjectImportResult imported = selector.importFromDirectory(cwd);
+    const ui::ProjectImportResult imported = selector.importFromDirectory(cwd, projectPath);
     if (!imported.success) {
         err() << utils::tr(QStringLiteral("cli_local.error.import_failed")).arg(imported.errorMessage) << "\n";
         err().flush();
@@ -359,7 +669,43 @@ LocalExecutionOutcome runLocalCliPath(const QStringList &args)
     QVector<core::Folder> allFolders = imported.subFolders;
     allFolders.prepend(imported.folder);
 
-    return runCliPathAgainst(allFolders, imported.commands, args.mid(1));
+    return runCliPathAgainst(allFolders, imported.commands, args.mid(1), runProfile);
+}
+
+QStringList stripLeadingCliFlags(const QStringList &args, CliFlags &flags)
+{
+    static const QRegularExpression shortCluster(QStringLiteral("^-[gdnw]+$"));
+    QStringList rest;
+    if (args.isEmpty()) {
+        return rest;
+    }
+    rest << args.first();
+    int i = 1;
+    for (; i < args.size(); ++i) {
+        const QString &token = args.at(i);
+        if (token == QStringLiteral("--global")) {
+            flags.global = true;
+        } else if (token == QStringLiteral("--detached")) {
+            flags.detached = true;
+        } else if (token == QStringLiteral("--notify")) {
+            flags.notify = true;
+        } else if (token == QStringLiteral("--window")) {
+            flags.window = true;
+        } else if (token == QStringLiteral("--dry-run")) {
+            flags.dryRun = true;
+        } else if (token == QStringLiteral("--json")) {
+            flags.json = true;
+        } else if (shortCluster.match(token).hasMatch()) {
+            flags.global = flags.global || token.contains(QLatin1Char('g'));
+            flags.detached = flags.detached || token.contains(QLatin1Char('d'));
+            flags.notify = flags.notify || token.contains(QLatin1Char('n'));
+            flags.window = flags.window || token.contains(QLatin1Char('w'));
+        } else {
+            break;
+        }
+    }
+    rest << args.mid(i);
+    return rest;
 }
 
 bool looksLikeGlobalCliPathAttempt(const QStringList &args)
@@ -368,24 +714,25 @@ bool looksLikeGlobalCliPathAttempt(const QStringList &args)
         // Bare (mesmo raciocínio de looksLikeLocalCliPathAttempt): só
         // conta num terminal interativo de verdade, senão quebraria o
         // launcher/ícone.
-        return stdoutIsInteractiveTerminal();
+        return kai::utils::stdoutIsInteractiveTerminal();
     }
     // 2+ args é sempre uma invocação de CLI explícita e intencional (um
     // launcher nunca passa argumento nenhum) — não precisa checar tty
-    // aqui, mesmo padrão do modo local. Isto importa pro prefixo
-    // `kai global <path>` (ver main.cpp): depois de tirar o "global", o
-    // que sobra pode ter só 1 argumento (ex: "testglobal"), e essa
-    // invocação EXPLÍCITA não deveria depender de tty.
+    // aqui, mesmo padrão do modo local. Isto importa pras flags `-g`/`-d`
+    // (ver stripLeadingCliFlags): depois de tirá-las, o que sobra pode ter
+    // só 1 argumento, e essa invocação EXPLÍCITA não depende de tty.
     if (core::reservedCliVerbs().contains(args.at(1))) {
         return false;
     }
     return true;
 }
 
-LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args)
+LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args, const CliFlags &flags)
 {
     LocalExecutionOutcome outcome;
-    if (!looksLikeGlobalCliPathAttempt(args)) {
+    const bool reservedFirst = args.size() >= 2 && core::reservedCliVerbs().contains(args.at(1));
+    const bool attempt = flags.any() ? !reservedFirst : looksLikeGlobalCliPathAttempt(args);
+    if (!attempt) {
         return outcome;
     }
 
@@ -412,7 +759,14 @@ LocalExecutionOutcome runGlobalCliDiscover(const QStringList &args)
         }
     }
 
-    return runCliPathAgainst(data.folders, data.commands, pathArgs);
+    CliRunProfile runProfile;
+    const core::SettingsData appSettings = configManager.loadSettings();
+    runProfile.terminalProfiles = appSettings.terminalProfiles;
+    runProfile.interpreters = appSettings.interpreters;
+    runProfile.useAppRuntimeState = true;
+    runProfile.delegateToApp = true;
+    runProfile.flags = flags;
+    return runCliPathAgainst(data.folders, data.commands, pathArgs, runProfile);
 }
 
 } // namespace kai::cli

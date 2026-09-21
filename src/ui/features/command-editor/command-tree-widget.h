@@ -13,6 +13,7 @@
 
 class QPaintEvent;
 class QEvent;
+class QLabel;
 class QMovie;
 
 #include "core/models.h"
@@ -103,6 +104,12 @@ public:
     void setShowHidden(bool show);
     bool showHidden() const { return m_showHidden; }
 
+    // FILTRO "SÓ EM EXECUÇÃO": só os comandos rodando agora (e as pastas que os
+    // contêm) ficam visíveis, em todas as abas. Acompanha a lista de
+    // execuções em tempo real e combina com a busca. Não reconstrói a árvore.
+    void setShowRunningOnly(bool runningOnly);
+    bool showRunningOnly() const { return m_showRunningOnly; }
+
     // Retorna o item selecionado na árvore da aba ativa.
     QString currentSelectionId() const;
     bool currentSelectionIsFolder() const;
@@ -121,6 +128,11 @@ public:
     // dos itens — quanto menor, mais a imagem transparece através da árvore.
     // Caminho vazio remove o fundo. A imagem é desenhada em "cover".
     void setBackground(const QString &imagePath, int opacity);
+
+    // Altura da barra de abas das pastas raiz e reaplicação do estilo único de
+    // abas (ver ui/shared/tab-bar-style.h): mesma altura/recuo/fonte das abas da
+    // Saída. Chamado no boot e quando o tema/aparência muda.
+    void setTabBarHeight(int height);
 
     // Estilo de renderização das linhas de conexão entre itens (Settings →
     // Aparência → "Linhas da árvore"): 0=nativa, 1=nenhuma, 2=contínua
@@ -149,6 +161,11 @@ public:
     void collapseCurrentItem();
     void expandAll();
     void collapseAll();
+
+    // Ativa a aba que contém o comando `id` e o seleciona (a Saída acompanha a
+    // seleção). false se o comando não existe ou está oculto. Usado pelo
+    // histórico de notificações ("ir para o comando").
+    bool selectCommand(const QString &id) { return selectItemById(id); }
 
 signals:
     void commandActivated(const QString &commandId);
@@ -275,6 +292,10 @@ private:
     QSet<QString> m_failedCommandIds;
     QString m_currentFilter;
     bool m_showHidden = false;
+    bool m_showRunningOnly = false;
+    // Dica sobre a aba quando o filtro "só em execução" não deixa nada visível.
+    QLabel *m_runningOnlyHint = nullptr;
+    void updateRunningOnlyHint();
 
     // Plano de fundo opcional da aba de comandos (ver setBackground).
     QPixmap m_backgroundImage;

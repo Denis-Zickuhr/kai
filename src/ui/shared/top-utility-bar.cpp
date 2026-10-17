@@ -180,6 +180,17 @@ void TopUtilityBar::setupUi()
     // de gestão (criar/editar/excluir pacotes). Todos os elementos são
     // fixados na MESMA altura (24px) e alinhados ao centro vertical, para
     // ficarem em uma linha de base consistente com os botões de janela.
+    m_aiButton = new QToolButton(this);
+    m_aiButton->setObjectName(QStringLiteral("aiChatButton"));
+    m_aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), topBarIconColor(), 16));
+    m_aiButton->setIconSize(QSize(16, 16));
+    m_aiButton->setFixedSize(kBarItemH, kBarItemH);
+    m_aiButton->setAutoRaise(true);
+    m_aiButton->setToolTip(utils::tr(QStringLiteral("ai.topbar.tooltip")));
+    m_aiButton->setVisible(false);
+    connect(m_aiButton, &QToolButton::clicked, this, &TopUtilityBar::aiChatRequested);
+    layout->addWidget(m_aiButton, 0, Qt::AlignVCenter);
+
     auto *envLabel = new QLabel(this);
     m_environmentIcon = envLabel;
     envLabel->setPixmap(LucideIcons::icon(QStringLiteral("layers"), topBarIconColor(), 16).pixmap(16, 16));
@@ -251,6 +262,13 @@ void TopUtilityBar::setEnvironments(const QStringList &ids, const QStringList &n
     }
 }
 
+void TopUtilityBar::setAiAvailable(bool available)
+{
+    if (m_aiButton) {
+        m_aiButton->setVisible(available);
+    }
+}
+
 void TopUtilityBar::refreshStyle()
 {
     refreshIcons();
@@ -266,6 +284,12 @@ void TopUtilityBar::refreshStyle()
             " background-color: %2; border-radius: %1px; }")
             .arg(radius)
             .arg(utils::tokens::bg()));
+    }
+    if (m_aiButton) {
+        m_aiButton->setStyleSheet(QStringLiteral(
+            "QToolButton#aiChatButton { border: none; border-radius: %1px; background: transparent; }"
+            "QToolButton#aiChatButton:hover { background: %2; }")
+            .arg(utils::tokens::radiusSm()).arg(utils::tokens::hoverBg()));
     }
     if (m_manageEnvironmentsButton) {
         m_manageEnvironmentsButton->setStyleSheet(QStringLiteral(
@@ -295,6 +319,9 @@ void TopUtilityBar::refreshIcons()
     }
     if (m_manageEnvironmentsButton) {
         m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), color, 16));
+    }
+    if (m_aiButton) {
+        m_aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), color, 16));
     }
     refreshWindowControlIcon(m_minimizeButton, WindowControl::Minimize);
     refreshWindowControlIcon(m_closeButton, WindowControl::Close);

@@ -41,7 +41,10 @@ bool KeyTraceFilter::eventFilter(QObject *watched, QEvent *event)
     case QEvent::KeyPress: {
         const auto *key = static_cast<QKeyEvent *>(event);
         what = QStringLiteral("KeyPress");
-        detail = QStringLiteral(" %1 text='%2'").arg(QKeySequence(key->keyCombination()).toString(), key->text());
+        detail = QStringLiteral(" %1 text='%2' | sinceActivate=%3 | modal=%4")
+                     .arg(QKeySequence(key->keyCombination()).toString(), key->text(),
+                          m_sinceActivate.isValid() ? QStringLiteral("%1ms").arg(m_sinceActivate.elapsed()) : QStringLiteral("never"),
+                          describe(QApplication::activeModalWidget()));
         break;
     }
     case QEvent::Shortcut:
@@ -54,6 +57,9 @@ bool KeyTraceFilter::eventFilter(QObject *watched, QEvent *event)
             return QObject::eventFilter(watched, event); // só as janelas interessam
         }
         what = type == QEvent::WindowActivate ? QStringLiteral("WindowActivate") : QStringLiteral("WindowDeactivate");
+        if (type == QEvent::WindowActivate) {
+            m_sinceActivate.restart();
+        }
         break;
     }
     default:

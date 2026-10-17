@@ -76,6 +76,14 @@ format may still change between versions.
 - Option to hide the window while a command runs, and to hide it on focus
   loss.
 
+### AI assistant (optional)
+
+- Off until you add a provider (Anthropic, OpenAI, or a local OpenAI-compatible server such as Ollama).
+- An **editor assistant** that writes or changes a command and shows a diff before anything touches the draft.
+- A **chat** that can read Kai and — with your approval, a preview and an undo — create, edit, delete and run things.
+- An **MCP bridge** (`kai mcp`) so an external agent can use the same tools, with every change approved in the app.
+- API keys stay in a `0600` file and are never exported, synced or logged. See [AI assistant](docs/ai.md).
+
 ### Command line
 
 Talks to the running instance over a local socket:
@@ -191,7 +199,8 @@ Import: [cURL](docs/import-curl.md) · [OpenAPI](docs/import-openapi.md) ·
 Advanced: [terminal targets & WSL](docs/terminal-targets-wsl.md) ·
 [parameters](docs/parameters.md) · [collections](docs/collections.md) ·
 [dynamic variables](docs/dynamic-vars.md) · [themes](docs/themes.md) ·
-[shortcuts](docs/shortcuts.md) · [KIP (app-like command interfaces)](docs/kip.md)
+[shortcuts](docs/shortcuts.md) · [KIP (app-like command interfaces)](docs/kip.md) ·
+[AI assistant](docs/ai.md)
 
 Not yet implemented: [feature backlog](docs/roadmap-ideas.md).
 

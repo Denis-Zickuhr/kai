@@ -204,6 +204,11 @@ QString envHeaderVar(const QString &headerName)
 
 } // namespace
 
+QNetworkProxy resolveHttpProxy(const QString &setting, const QUrl &url)
+{
+    return resolveProxy(setting, url);
+}
+
 HttpRunner::HttpRunner(QObject *parent)
     : QObject(parent)
     , m_networkManager(std::make_unique<QNetworkAccessManager>(this))

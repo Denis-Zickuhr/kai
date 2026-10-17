@@ -116,7 +116,7 @@ const QVector<HelpTopicGroup> &helpTopicGroups()
           QStringLiteral("export_import")}},
         {QStringLiteral("terminal"), {QStringLiteral("cli"), QStringLiteral("terminal_targets")}},
         {QStringLiteral("customize"),
-         {QStringLiteral("settings"), QStringLiteral("shortcuts"), QStringLiteral("themes")}},
+         {QStringLiteral("settings"), QStringLiteral("ai"), QStringLiteral("shortcuts"), QStringLiteral("themes")}},
     };
     return groups;
 }

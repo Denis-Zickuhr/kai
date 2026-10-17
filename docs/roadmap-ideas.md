@@ -77,11 +77,28 @@ assertions, export as cURL/code, Postman/Insomnia/HAR/`.env` imports — see
 - A cookie jar **viewer**; HTML response rendering; per-folder default `Content-Type`.
 - A visual **chained flow** (A3) on top of extractors + assertions.
 
-### A10. AI assistant & agent ⭐ (high value / high effort) — analyzed, **not scheduled**
+### A10. AI assistant & agent ⭐ (high value / high effort) — **implemented** (see [AI assistant](ai.md))
 A built-in assistant that can write commands for you (**editor assist**) and an
 agent with a chat that can read, create, edit, delete and run things in Kai
-(**agent chat**), with the user approving every change. Everything below was
-analyzed against the current code; nothing is implemented yet.
+(**agent chat**), with the user approving every change. Phases 1–4 are
+implemented; the analysis below is kept as the design record. Where the
+implementation departs from it:
+
+- Approvals and questions are **native cards** in the chat (and a small window
+  for external agents), not KIP screens — KIP would have needed an answers sink
+  for no gain.
+- The keys, the MCP token and the provider list live in their own `ai.json`
+  (`0600`), outside `settings.json`; a test checks that no export format can
+  carry them.
+- The undo journal is in memory (per chat window / per MCP connection): an
+  **Undo** button appears on each change card, but changes of a past session can
+  no longer be undone from a reopened conversation.
+- The **MCP bridge** (phase 4) is its own authenticated socket (`kai-mcp-v1`)
+  behind the `kai mcp` stdio command, off by default, with an approval window —
+  the mutating tools are still not verbs of the public IPC.
+- Not done: moving the keys to the OS keyring (that is **A1**), extended
+  thinking / prompt-cache tuning beyond the system prompt and tool list, and
+  per-profile model parameters (temperature…).
 
 **Decisions taken**
 - **Providers:** Anthropic, OpenAI and *local*, plus any number of extra profiles.
@@ -260,9 +277,9 @@ whole tree via the context menu and a shortcut.
 6. **A6** — export as curl/code (adoption).
 7. **B3** — UI tests for the newer screens (quality).
 8. **A3 / A8** — chained flows and OAuth2 (big features, plan them out).
-9. **A10** — AI assistant & agent: analyzed in full above, deliberately **not
-   scheduled**. If it moves, do **B2** and **A1** first (the agent reads
-   outputs and environments, and its keys are stored next to them), then phase 1.
+9. **A10** — AI assistant & agent: implemented. Still open next to it: **A1** (the
+   keys sit in `ai.json` as plain text until the keyring lands) and **B2**
+   (masking secrets in logs and history, which the agent can read).
 
 > Living list: add to it or reorder it as real usage reveals actual pain
 > points. Same principle as CopyQ — native, light, stays out of the way.

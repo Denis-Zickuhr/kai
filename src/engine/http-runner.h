@@ -1,8 +1,10 @@
 #pragma once
 
+#include <QNetworkProxy>
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QUrl>
 #include <QStringList>
 #include <memory>
 
@@ -134,5 +136,10 @@ private:
     qint64 m_savedBytes = 0;
     std::unique_ptr<QFile> m_responseFile;
 };
+
+// Proxy para uma URL a partir do ajuste do Kai ("system" = HTTPS_PROXY/HTTP_PROXY/ALL_PROXY e NO_PROXY, "none", ou
+// http://host:porta / socks5://host:porta). Compartilhado com o cliente de IA, que também precisa atravessar o proxy
+// da empresa.
+QNetworkProxy resolveHttpProxy(const QString &setting, const QUrl &url);
 
 } // namespace kai::engine

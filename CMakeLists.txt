@@ -136,6 +136,10 @@ add_library(kai-core STATIC
     src/core/folder-nesting.h
     src/core/grid-param.h
     src/core/grid-param.cpp
+    src/core/ai-profile.h
+    src/core/ai-profile.cpp
+    src/core/ai-conversation.h
+    src/core/ai-conversation.cpp
     src/utils/console-context.h
     src/utils/duration-format.h
     src/utils/json-template.h
@@ -189,6 +193,30 @@ add_library(kai-engine STATIC
     src/engine/script-spill.cpp
     src/engine/module-files.h
     src/engine/module-files.cpp
+    src/engine/ai/ai-types.h
+    src/engine/ai/mcp-session.h
+    src/engine/ai/mcp-session.cpp
+    src/engine/ai/ai-sse-parser.h
+    src/engine/ai/ai-sse-parser.cpp
+    src/engine/ai/ai-wire.h
+    src/engine/ai/ai-wire.cpp
+    src/engine/ai/ai-client.h
+    src/engine/ai/ai-client.cpp
+    src/engine/ai/ai-context.h
+    src/engine/ai/ai-context.cpp
+    src/engine/ai/agent-session.h
+    src/engine/ai/agent-session.cpp
+    src/engine/ai/ai-prompts.h
+    src/engine/ai/ai-prompts.cpp
+    src/engine/ai/manifesto-library.h
+    src/engine/ai/manifesto-library.cpp
+    src/engine/ai/command-json.h
+    src/engine/ai/command-json.cpp
+    src/engine/ai/agent-tool-host.h
+    src/engine/ai/agent-toolbox.h
+    src/engine/ai/agent-toolbox-internal.h
+    src/engine/ai/agent-toolbox.cpp
+    src/engine/ai/agent-toolbox-tools.cpp
     src/engine/kip-modules/kip-modules.qrc
 )
 
@@ -458,6 +486,24 @@ add_library(kai-ui STATIC
     src/ui/features/kip/kip-details-drawer.cpp
     src/ui/features/kip/kip-view.h
     src/ui/features/kip/kip-view.cpp
+    src/ui/features/ai/ai-ui-text.h
+    src/ui/features/ai/ai-ui-text.cpp
+    src/ui/features/ai/ai-profile-dialog.h
+    src/ui/features/ai/ai-profile-dialog.cpp
+    src/ui/features/ai/ai-chat-widgets.h
+    src/ui/features/ai/ai-chat-widgets.cpp
+    src/ui/features/ai/ai-tool-card.h
+    src/ui/features/ai/ai-tool-card.cpp
+    src/ui/features/ai/ai-assist-dialog.h
+    src/ui/features/ai/ai-assist-dialog.cpp
+    src/ui/features/ai/ai-chat-window.h
+    src/ui/features/ai/ai-chat-window.cpp
+    src/ui/features/ai/mcp-bridge.h
+    src/ui/features/ai/mcp-bridge.cpp
+    src/ui/features/ai/main-window-agent-host.h
+    src/ui/features/ai/main-window-agent-host.cpp
+    src/ui/features/settings/tabs/ai-tab.h
+    src/ui/features/settings/tabs/ai-tab.cpp
     src/ui/main-window.h
     src/ui/main-window.cpp
     src/ui/external-run-session.h
@@ -528,6 +574,8 @@ add_library(kai-cli STATIC
     src/cli/app-delegate.h
     src/cli/cli-completion.h
     src/cli/cli-help-format.h
+    src/cli/cli-mcp.h
+    src/cli/cli-mcp.cpp
     src/cli/cli-app-verbs.h
     src/cli/cli-init.h
     src/cli/cli-init.cpp

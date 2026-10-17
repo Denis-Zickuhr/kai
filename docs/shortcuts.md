@@ -8,6 +8,7 @@ Everything below can be changed (or removed) in **Settings → Shortcuts**, whic
 |---|---|
 | `Ctrl+Shift+B` | Show / hide Kai — **global**, works even when another app is focused |
 | `Ctrl+K` | [Command palette](organizing.md#command-palette): find and open anything |
+| *(unset)* | [AI assistant](ai.md) chat — assign one in Settings → Shortcuts |
 | `Ctrl+F` | Show or hide the search bar |
 | `Ctrl+N` / `Ctrl+Shift+N` | New command / new folder |
 | `F2` | Edit the selected item |

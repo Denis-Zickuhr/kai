@@ -90,6 +90,11 @@ public:
     // preservando o conteúdo (via buildCommand()).
     bool switchToAdvancedRequested() const { return m_switchToAdvanced; }
 
+    // Assistente de IA: o diálogo fecha com Accepted levando o comando proposto; quem abriu o editor o
+    // reabre com ele como rascunho (nada é salvo antes do usuário confirmar).
+    bool assistApplied() const { return m_assistApplied; }
+    core::Command assistedCommand() const { return m_assisted; }
+
     static QString generateCommandId(const QString &folderId, const QString &name);
 
 private slots:
@@ -200,6 +205,9 @@ private:
     // Item 8: sinaliza que o usuário pediu para alternar para o modo
     // avançado (JSON). Setado pelo botão do topo antes de accept().
     bool m_switchToAdvanced = false;
+    bool m_assistApplied = false;
+    core::Command m_assisted;
+    QVector<core::Command> m_commandsForAi;
 
     // Corpo Shell/HTTP: QStackedWidget (não mais QTabWidget) trocado pelo
     // segmented control "Shell | HTTP" no cabeçalho do card "Execution

@@ -19,7 +19,7 @@ inline const QSet<QString> &reservedCliVerbs()
         QStringLiteral("validate"), QStringLiteral("ps"), QStringLiteral("attach"),
         QStringLiteral("kill"), QStringLiteral("raise"),
         QStringLiteral("history"), QStringLiteral("last"), QStringLiteral("init"),
-        QStringLiteral("completion"), QStringLiteral("__complete"), QStringLiteral("kip"),
+        QStringLiteral("completion"), QStringLiteral("__complete"), QStringLiteral("kip"), QStringLiteral("mcp"),
         QStringLiteral("--help"), QStringLiteral("-h"),
         QStringLiteral("--global"), QStringLiteral("-g"),
         QStringLiteral("--detached"), QStringLiteral("-d"),

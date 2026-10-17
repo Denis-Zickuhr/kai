@@ -70,6 +70,7 @@ The order below is the order of the in-app **Help** (menu **Help**, which has a 
 
 | Topic | File |
 |--------|---------|
+| AI assistant (editor assist, chat, MCP) | [ai.md](ai.md) |
 | Settings | [settings.md](settings.md) |
 | Keyboard shortcuts | [shortcuts.md](shortcuts.md) |
 | Themes | [themes.md](themes.md) |

@@ -21,6 +21,7 @@ class NotificationsTab;
 class KipTab;
 class ActionsTab;
 class LanguagesTab;
+class AiTab;
 
 // Diálogo de Configurações Globais: gestão do atalho
 // global, seleção de tema ativo, atalhos de todas as ações do app
@@ -58,6 +59,10 @@ public:
                              QWidget *parent = nullptr);
 
     core::SettingsData buildSettings() const;
+    // Perfis de IA editados na aba "IA" (ficam no ai.json, nunca no settings.json).
+    core::AiSettings buildAiSettings() const;
+    // O usuário mexeu em algo da aba "IA"?
+    bool aiSettingsChanged() const;
 
     // Copia `sourcePath` para themesDirPath(), refaz a lista do combo de
     // tema e seleciona o tema recém-importado. Retorna o nome do tema
@@ -96,6 +101,8 @@ private:
     KipTab *m_kipTab = nullptr;
     ActionsTab *m_actionsTab = nullptr;
     LanguagesTab *m_languagesTab = nullptr;
+    AiTab *m_aiTab = nullptr;
+    core::AiSettings m_originalAi;
 
     // Preserva os campos que o diálogo NÃO edita (environments,
     // activeEnvironmentId, globalEnvVars legado, terminalCollapsed) para

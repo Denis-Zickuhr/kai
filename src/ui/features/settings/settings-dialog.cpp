@@ -7,6 +7,8 @@
 #include "ui/features/settings/tabs/actions-tab.h"
 #include "ui/features/settings/tabs/kip-tab.h"
 #include "ui/features/settings/tabs/languages-tab.h"
+#include "ui/features/settings/tabs/ai-tab.h"
+#include "core/ai-conversation.h"
 #include "ui/features/settings/tabs/notifications-tab.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/shortcut-capture-field.h"
@@ -96,6 +98,18 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_kipTab = new KipTab(currentSettings.kip);
     m_actionsTab = new ActionsTab(currentSettings.globalActions, commandsData.commands, commandsData.folders);
     m_languagesTab = new LanguagesTab(currentSettings.interpreters);
+    {
+        core::ConfigManager config;
+        m_originalAi = config.loadAiSettings();
+        const core::AiConversationStore store(config.aiConversationsDirPath());
+        m_aiTab = new AiTab(m_originalAi, int(store.list().size()));
+        // Apagar o histórico é uma ação imediata (como limpar as respostas lembradas do KIP).
+        connect(m_aiTab, &AiTab::clearConversationsRequested, this, [this]() {
+            core::AiConversationStore s(core::ConfigManager().aiConversationsDirPath());
+            s.clearAll();
+            m_aiTab->showClearedCount(0);
+        });
+    }
     // Esquecer as respostas lembradas é uma ação IMEDIATA (como na aba Armazenamento):
     // mexe direto nos comandos vivos e persiste, sem esperar o OK.
     connect(m_kipTab, &KipTab::clearRememberedRequested, this, [this, &commandsData, persistCommands]() {
@@ -136,6 +150,8 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
          wrapPage(m_notificationsTab)},
         {utils::tr(QStringLiteral("settings.group.kip")), QStringLiteral("wand-sparkles"),
          wrapPage(m_kipTab)},
+        {utils::tr(QStringLiteral("settings.group.ai")), QStringLiteral("sparkles"),
+         wrapPage(m_aiTab)},
     };
 
     for (const PageDef &d : defs) {
@@ -274,6 +290,16 @@ QWidget *SettingsDialog::buildStoragePage(core::CommandsData &commandsData, QVec
     m_storageManager = new StorageManagerWidget(commandsData, collections,
         std::move(persistCommands), std::move(persistCollections), nullptr);
     return m_storageManager;
+}
+
+core::AiSettings SettingsDialog::buildAiSettings() const
+{
+    return m_aiTab->settings();
+}
+
+bool SettingsDialog::aiSettingsChanged() const
+{
+    return m_aiTab->settings().toJson(true) != m_originalAi.toJson(true);
 }
 
 core::SettingsData SettingsDialog::buildSettings() const

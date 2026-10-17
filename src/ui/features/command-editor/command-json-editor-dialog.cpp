@@ -1,5 +1,7 @@
 #include "ui/features/command-editor/command-json-editor-dialog.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/features/ai/ai-assist-dialog.h"
+#include "ui/shared/lucide-icons.h"
 #include "ui/features/command-editor/command-editor-dialog.h"
 #include "ui/shared/foldable-json-view.h"
 #include "ui/shared/json-syntax-highlighter.h"
@@ -77,6 +79,36 @@ void CommandJsonEditorDialog::setupUi(const core::Command *existingCommand, cons
         utils::tr(QStringLiteral("command_json_editor.raw_label")),
         utils::tr(QStringLiteral("command_json_editor.simple_mode")));
     mainLayout->addLayout(headerLayout);
+    m_folderId = targetFolderId;
+    if (aiAssistAvailable()) {
+        auto *aiButton = new QToolButton(this);
+        aiButton->setObjectName(QStringLiteral("aiAssistButton"));
+        aiButton->setText(utils::tr(QStringLiteral("ai.editor.button")));
+        aiButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), QColor(utils::tokens::accent()), 16));
+        aiButton->setToolTip(utils::tr(QStringLiteral("ai.editor.tip")));
+        aiButton->setCursor(Qt::PointingHandCursor);
+        aiButton->setStyleSheet(buttons.backButton->styleSheet());
+        headerLayout->insertWidget(2, aiButton);
+        connect(aiButton, &QToolButton::clicked, this, [this]() {
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(m_jsonField->toPlainText().toUtf8(), &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                QMessageBox::warning(this, utils::tr(QStringLiteral("json.dialog.invalid_title")),
+                    utils::tr(QStringLiteral("command_json_editor.switch_invalid")).arg(parseError.errorString()));
+                return;
+            }
+            core::Command current = core::Command::fromJson(doc.object());
+            if (current.folderId.isEmpty()) current.folderId = m_folderId;
+            AiAssistDialog assist(current, current.folderId, m_commandsForAi, this);
+            if (assist.exec() == QDialog::Accepted && assist.hasResult()) {
+                m_result = assist.result();
+                m_hasValidResult = true;
+                m_assistApplied = true;
+                accept();
+            }
+        });
+    }
 
     // Item 8: alternar de volta para o modo simples (formulário). Tenta
     // parsear o JSON atual; se válido, guarda como resultado a transportar

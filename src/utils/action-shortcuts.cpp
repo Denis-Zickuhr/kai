@@ -56,6 +56,10 @@ const QVector<ActionShortcutSpec> &actionShortcutSpecs()
         {QStringLiteral("action.command_palette"), QStringLiteral("settings.shortcut.command_palette"),
          QStringLiteral("settings.shortcut.command_palette.desc"), {QStringLiteral("Ctrl+K")}, ShortcutScope::Window},
 
+        // Assistente de IA: abre o chat (sem atalho por padrão; só age se houver provedor configurado).
+        {QStringLiteral("action.ai_chat"), QStringLiteral("settings.shortcut.ai_chat"),
+         QStringLiteral("settings.shortcut.ai_chat.desc"), {}, ShortcutScope::Window},
+
         // --- Já eram data-driven (grupos Item/Exibição/Execução) ---
         {QStringLiteral("action.new_collection"), QStringLiteral("settings.shortcut.new_collection"),
          QStringLiteral("settings.shortcut.new_collection.desc"), {}, ShortcutScope::Window},

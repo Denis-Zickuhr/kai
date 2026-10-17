@@ -1,0 +1,30 @@
+<h2>AI assistant</h2>
+<p>Kai has an optional <b>AI assistant</b>: an <b>editor assistant</b> that writes or changes a command, a <b>chat</b> that can read — and, with your approval, change and run — things in Kai, and an <b>MCP bridge</b> for external agents. It does not exist until you add a provider: with none configured there are no AI buttons.</p>
+<p>Nothing happens on its own. Every change or run is shown to you first, and your keys stay on your machine.</p>
+
+<h3>1. Add a provider</h3>
+<p><b>Settings → AI → Add.</b> Pick <b>Anthropic</b>, <b>OpenAI</b>, a <b>local</b> server (Ollama, LM Studio — no key needed), <b>OpenRouter</b> or any <b>OpenAI-compatible</b> address. Type the model or press <b>List models</b>, then <b>Test connection</b>.</p>
+<ul>
+<li><b>Supports tools</b> — turn it off for a local model without tool calling: the chat only talks, the editor assistant still works.</li>
+<li><b>Hide secret variables from this provider</b> — values of secret variables are replaced by <code>***hidden***</code> in what the assistant reads.</li>
+<li>The API key is kept in <code>ai.json</code> (mode <code>0600</code>) and is <b>never</b> exported, synced, logged or put in a prompt. You can read it from an environment variable instead.</li>
+</ul>
+
+<h3>2. Editor assistant</h3>
+<p>In the command editor, the <b>AI</b> button next to <i>Advanced mode</i> opens a box: say what you want, press <b>Generate</b> and see a <b>diff</b> (<code>+</code> added, <code>-</code> removed, <code>~</code> changed). <b>Apply</b> puts it back in the editor as a draft — nothing is saved until you press OK.</p>
+
+<h3>3. Chat</h3>
+<p>The <b>✨</b> button at the top right opens the chat. The picker shows a <b>Local</b> or <b>Remote</b> badge (remote: what the assistant reads is sent to that provider). You can switch provider mid-conversation — Kai warns that parts specific to the previous provider are lost.</p>
+<ul>
+<li><b>Reads</b> (commands, folders, environments, runs, logs…) run without asking.</li>
+<li><b>Changes</b> and <b>runs</b> show a card with a preview. <b>Allow</b>, <b>Deny</b> or <b>Allow in this chat</b>.</li>
+<li><b>Deletes</b> and <b>stopping a process</b> always ask for confirmation.</li>
+<li>Every change has an <b>Undo</b> button on its card.</li>
+<li>Whatever comes from a tool — outputs, logs, variable values — is treated as <i>data</i>, never as instructions.</li>
+</ul>
+<p>Conversations are saved (and can be deleted one by one, or all at once in <b>Settings → AI</b>). They are never exported.</p>
+
+<h3>4. External agents (MCP)</h3>
+<p><b>Settings → AI → Allow external agents</b>, then <b>Copy client config</b> and paste it in the agent (Claude Desktop, an IDE…). The agent starts <code>kai mcp</code>, which talks to the running Kai. Every change or run opens a card in an <i>External agent</i> window for you to allow or deny; secrets are hidden from them by default.</p>
+
+<p>Details and the safety rules are in the repository: <code>docs/ai.md</code>. To try it with no key, run <code>sample/ai/fake-provider.py</code>.</p>

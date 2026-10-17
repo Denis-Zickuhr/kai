@@ -40,6 +40,12 @@ public:
     // atual (buildCommand()) como conteúdo a transportar.
     bool switchToSimpleRequested() const { return m_switchToSimple; }
 
+    // Assistente de IA (ver CommandEditorDialog::assistApplied).
+    bool assistApplied() const { return m_assistApplied; }
+    core::Command assistedCommand() const { return m_result; }
+    // Comandos existentes, para o assistente resolver hooks por nome.
+    void setAvailableCommands(const QVector<core::Command> &commands) { m_commandsForAi = commands; }
+
 private slots:
     void handleAcceptRequested();
     void handleFormatJsonRequested();
@@ -53,6 +59,9 @@ private:
     core::Command m_result;
     bool m_hasValidResult = false;
     bool m_switchToSimple = false;
+    bool m_assistApplied = false;
+    QString m_folderId;
+    QVector<core::Command> m_commandsForAi;
 };
 
 } // namespace kai::ui

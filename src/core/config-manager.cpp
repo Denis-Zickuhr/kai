@@ -30,6 +30,7 @@ constexpr const char *kDocUsageFileName = "doc-usage.json";
 constexpr const char *kDocStateFileName = "doc-state.json";
 constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
 constexpr const char *kCollectionFiltersFileName = "collection-filters.json";
+constexpr const char *kAiFileName = "ai.json";
 
 QString shellFlavorToString(ShellFlavor s)
 {
@@ -95,6 +96,38 @@ QString ConfigManager::settingsFilePath() const
 QString ConfigManager::collectionsFilePath() const
 {
     return QDir(configDirPath()).filePath(QString::fromLatin1(kCollectionsFileName));
+}
+
+QString ConfigManager::aiFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kAiFileName));
+}
+
+QString ConfigManager::aiConversationsDirPath() const
+{
+    return QDir(configDirPath()).filePath(QStringLiteral("ai-conversations"));
+}
+
+AiSettings ConfigManager::loadAiSettings()
+{
+    if (!QFile::exists(aiFilePath())) {
+        return {};
+    }
+    return AiSettings::fromJson(readJsonWithRecovery(aiFilePath()));
+}
+
+bool ConfigManager::saveAiSettings(const AiSettings &settings)
+{
+    QDir().mkpath(configDirPath());
+    QSaveFile file(aiFilePath());
+    if (!file.open(QIODevice::WriteOnly)) {
+        utils::Logger::error(kLogTag, QStringLiteral("Não foi possível abrir o ai.json para escrita."));
+        return false;
+    }
+    // As chaves de API ficam em texto puro: só o dono do arquivo as lê (o keyring é um passo futuro).
+    file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    file.write(QJsonDocument(settings.toJson(true)).toJson(QJsonDocument::Indented));
+    return file.commit();
 }
 
 QString ConfigManager::notesFilePath() const

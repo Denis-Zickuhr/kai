@@ -4,6 +4,7 @@
 #include <QGuiApplication>
 #include <QShowEvent>
 #include "ui/shared/inline-code-field.h"
+#include "ui/features/ai/ai-assist-dialog.h"
 #include "ui/features/environments/env-var-autocomplete.h"
 #include "utils/design-tokens.h"
 #include "ui/app-stylesheet.h"
@@ -88,6 +89,7 @@ CommandEditorDialog::CommandEditorDialog(const QString &folderId,
     resize(1040, 760);
     m_autoFitPending = true;
     m_globalInterpreters = core::ConfigManager().loadSettings().interpreters;
+    m_commandsForAi = allCommands;
 
     // Preserva os últimos valores de parâmetros do comando existente para
     // não perdê-los ao salvar (são atualizados pela execução, não editados
@@ -216,6 +218,27 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
         accept();
     });
     installEditModeToggleShortcut(this, switchModeButton);
+    // Assistente de IA: só existe com um provedor configurado.
+    if (aiAssistAvailable()) {
+        auto *aiButton = new QToolButton(modeBar);
+        aiButton->setObjectName(QStringLiteral("aiAssistButton"));
+        aiButton->setText(utils::tr(QStringLiteral("ai.editor.button")));
+        aiButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), QColor(utils::tokens::accent()), 16));
+        aiButton->setToolTip(utils::tr(QStringLiteral("ai.editor.tip")));
+        aiButton->setCursor(Qt::PointingHandCursor);
+        aiButton->setStyleSheet(switchModeButton->styleSheet());
+        connect(aiButton, &QToolButton::clicked, this, [this]() {
+            AiAssistDialog assist(buildCommand(), currentFolderId(), m_commandsForAi, this);
+            if (assist.exec() == QDialog::Accepted && assist.hasResult()) {
+                m_assisted = assist.result();
+                m_assistApplied = true;
+                accept();
+            }
+        });
+        modeBarLayout->addWidget(aiButton);
+        modeBarLayout->addSpacing(utils::tokens::space(3));
+    }
     modeBarLayout->addWidget(switchModeButton);
     outerLayout->addWidget(modeBar);
 

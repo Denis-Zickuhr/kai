@@ -35,6 +35,9 @@ public:
     // ativo. Chamado pela MainWindow ao carregar/alterar os pacotes.
     void setEnvironments(const QStringList &ids, const QStringList &names, const QString &activeId);
 
+    // O botão de IA só existe na barra quando há um provedor configurado.
+    void setAiAvailable(bool available);
+
     // Reaplica o estilo local do seletor de environments (raio/cores dos
     // tokens). Ele tem QSS próprio, fora do stylesheet global, então sem isto
     // trocar "Cantos" nas Configurações não chegava nele até reiniciar.
@@ -57,6 +60,7 @@ signals:
     void newCollectionRequested();
     void newNoteRequested();
     void settingsRequested();
+    void aiChatRequested();
     void helpRequested();
     void manifestoRequested();
     // "Ajuda" -> "Tela de Boas-Vindas" (pedido do usuário: "traga uma
@@ -103,6 +107,7 @@ private:
     QVector<QPair<QAction *, QString>> m_menuIcons;   // ação + nome do ícone Lucide
     QComboBox *m_environmentSelector = nullptr;
     QToolButton *m_manageEnvironmentsButton = nullptr;
+    QToolButton *m_aiButton = nullptr;
     QToolButton *m_minimizeButton = nullptr;
     QToolButton *m_maximizeButton = nullptr;
     QToolButton *m_closeButton = nullptr;

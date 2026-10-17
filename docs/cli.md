@@ -7,6 +7,7 @@ The same `kai` binary works three ways:
 | **Local CLI Paths** | current directory has `kai.yml` | commands from **that file**, no running Kai needed |
 | **Global CLI Paths** | no local file, or forced with `-g` / `--global` | commands with a `cli_path` registered in the app |
 | **Instance control** | `run`, `list`, `env`, `ps`, `attach`, `kill`, `import`, `show` | talks to the running Kai over a local socket |
+| **MCP bridge** | `kai mcp` | stdio server for external AI agents (Claude Desktop, IDEs…); needs Kai open with **Allow external agents** on — see [AI assistant](ai.md) |
 
 ## CLI Paths
 

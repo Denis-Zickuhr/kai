@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QVector>
 
+#include "core/ai-profile.h"
 #include "core/interpreter-settings.h"
 #include "core/kip-settings.h"
 #include "core/models.h"
@@ -397,6 +398,14 @@ public:
     // (nunca falha o boot do app por causa disto).
     QMap<QString, QMap<QString, QString>> loadPersistedDynamicVars();
     bool savePersistedDynamicVars(const QMap<QString, QMap<QString, QString>> &data);
+
+    // ai.json: perfis de provedor de IA, COM as chaves de API (modo 0600). Fica fora do settings.json de
+    // propósito: nenhuma exportação nem sincronização lê este arquivo.
+    QString aiFilePath() const;
+    // Pasta do histórico de conversas da IA (ver AiConversationStore). Também nunca é exportada.
+    QString aiConversationsDirPath() const;
+    AiSettings loadAiSettings();
+    bool saveAiSettings(const AiSettings &settings);
 
     // Arquivo separado dos filtros de tela de seleção de coleções (busca +
     // favoritos), por Collection::id — ver CollectionFilterState acima.

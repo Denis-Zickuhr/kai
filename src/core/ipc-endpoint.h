@@ -6,6 +6,13 @@ namespace kai::core {
 
 inline constexpr char kIpcSocketName[] = "kai-ipc-v1";
 
+// Socket da ponte MCP (agentes externos, `kai mcp`). É OUTRO socket que o do CLI: as ferramentas que mudam
+// coisas nunca são verbos do IPC público, que não tem autenticação.
+inline constexpr char kMcpSocketName[] = "kai-mcp-v1";
+
+// kMcpSocketName, ou KAI_MCP_SOCKET_NAME_OVERRIDE (testes).
+QString mcpSocketName();
+
 // Nome do socket IPC: kIpcSocketName, a menos que KAI_IPC_SOCKET_NAME_OVERRIDE
 // esteja definida (isolamento de testes que abrem um client/server de verdade).
 QString ipcSocketName();

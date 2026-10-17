@@ -12,8 +12,9 @@ Menu **Settings**. Changes apply when you press **OK** (the **Storage** page is 
 | **Languages** | the Python, Node and PHP interpreters — see [Languages](languages.md). |
 | **Storage** | every command, folder and collection in one filterable table, with bulk **duplicate** and **delete**. Deleting a folder moves its contents up one level instead of deleting them. Applies immediately. |
 | **Notifications** | the master switch and one switch per event — see [Notifications & logs](notifications.md). |
+| **AI** | the AI providers (key, address, model — kept in `ai.json`, never exported), the default provider, the agent step limit, extra instructions, the chat history (*Delete all*) and the **MCP bridge** for external agents — see [AI assistant](ai.md). |
 | **KIP** | wait times (first message, field updates, after Cancel), remembering the last answers (and a button to forget them all), opening the Details drawer on failure, and the size of the KIP own window (follow the general setting, normal, maximized or fullscreen) — see [KIP](kip.md). |
 
 ## Where things are stored
 
-Settings, commands, collections, history and notifications are JSON files in your user config folder (`~/.config/kai/` on Linux, `%APPDATA%\Kai\` on Windows). A corrupted file is restored from an automatic backup and Kai tells you. Themes live in `themes/` there.
+Settings, commands, collections, history and notifications are JSON files in your user config folder (`~/.config/kai/` on Linux, `%APPDATA%\Kai\` on Windows). AI providers (with their keys) are in `ai.json` (mode `0600`) and the chats in `ai-conversations/` — neither is ever exported or synced. A corrupted file is restored from an automatic backup and Kai tells you. Themes live in `themes/` there.

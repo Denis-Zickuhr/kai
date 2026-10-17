@@ -11,6 +11,12 @@ QString ipcSocketName()
     return override.isEmpty() ? QString::fromLatin1(kIpcSocketName) : QString::fromLatin1(override);
 }
 
+QString mcpSocketName()
+{
+    const QByteArray override = qgetenv("KAI_MCP_SOCKET_NAME_OVERRIDE");
+    return override.isEmpty() ? QString::fromLatin1(kMcpSocketName) : QString::fromLatin1(override);
+}
+
 QString ipcEndpointPath()
 {
 #if defined(Q_OS_WIN)

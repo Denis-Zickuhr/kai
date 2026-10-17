@@ -51,6 +51,9 @@ class QVBoxLayout;
 namespace kai::ui {
 
 class ExternalRunSession;
+class AiChatWindow;
+class MainWindowAgentHost;
+class McpBridge;
 class QuickRunPopup;
 class DocSessionStore;
 class ParameterFormDialog;
@@ -66,6 +69,9 @@ class ParameterFormDialog;
 // herança — mantendo o desacoplamento exigido pelo AGENTS.md.
 class MainWindow : public QMainWindow {
     Q_OBJECT
+
+    // O host do agente de IA enxerga as listas vivas e a persistência (ver features/ai/).
+    friend class MainWindowAgentHost;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -271,6 +277,9 @@ private slots:
     void deleteFolderWithDialog(const QString &folderId);
     void handleQuickEditBodyRequested(const QString &commandId);
     void handleSettingsRequested();
+    // IA (roadmap A10): abre o chat e mostra/esconde o botão da barra conforme haja provedor configurado.
+    void showAiChat();
+    void refreshAiAvailability();
     // Config corrompida foi restaurada de backup (ConfigManager::
     // configRecovered) — hoje só logava; vira notificação opcional.
     void handleConfigRecovered(const QString &filePath, const QString &backupPath);
@@ -581,6 +590,9 @@ private:
     bool hasDuplicateCollectionName(const QString &folderId, const QString &name, const QString &excludeId) const;
 
     core::ConfigManager m_configManager;
+    MainWindowAgentHost *m_agentHost = nullptr;
+    McpBridge *m_mcpBridge = nullptr;
+    QPointer<AiChatWindow> m_aiChat;
     QVector<core::GlobalAction> m_globalActions;
     std::map<QString, std::shared_ptr<ActionRun>> m_actionRuns; // execuções de ação em andamento
     QSet<QString> m_actionsRan; // ações que já rodaram nesta sessão (têm saída guardada pra carregar)

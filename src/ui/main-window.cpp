@@ -2,6 +2,9 @@
 #include "core/working-dir.h"
 #include "ui/features/docs/note-dialog.h"
 #include "ui/main-window.h"
+#include "ui/features/ai/ai-chat-window.h"
+#include "ui/features/ai/main-window-agent-host.h"
+#include "ui/features/ai/mcp-bridge.h"
 #include "core/folder-nesting.h"
 
 #include "core/http-collection-import.h"
@@ -263,6 +266,10 @@ MainWindow::MainWindow(QWidget *parent)
     }
     setupActionShortcuts();
     loadConfig();
+    // IA: o host guarda os últimos logs desde o início; o botão só aparece com provedor configurado.
+    m_agentHost = new MainWindowAgentHost(this);
+    m_mcpBridge = new McpBridge(m_agentHost, this);
+    refreshAiAvailability();
 
     connect(m_pipeline, &engine::ExecutionPipeline::logMessage, this, &MainWindow::handlePipelineLog);
     connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, this, &MainWindow::handlePipelineFinished);
@@ -455,6 +462,7 @@ void MainWindow::setupUi()
     connect(m_topBar, &TopUtilityBar::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
     connect(m_topBar, &TopUtilityBar::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_topBar, &TopUtilityBar::settingsRequested, this, &MainWindow::handleSettingsRequested);
+    connect(m_topBar, &TopUtilityBar::aiChatRequested, this, &MainWindow::showAiChat);
     connect(m_topBar, &TopUtilityBar::environmentSelected, this, &MainWindow::handleEnvironmentSelected);
     connect(m_topBar, &TopUtilityBar::manageEnvironmentsRequested, this, &MainWindow::handleManageEnvironmentsRequested);
     connect(m_topBar, &TopUtilityBar::runHistoryRequested, this, &MainWindow::handleRunHistoryRequested);
@@ -1306,6 +1314,7 @@ void MainWindow::setupActionShortcuts()
         {QStringLiteral("action.context_menu"), [this]() { m_commandTree->openContextMenuForCurrent(); }},
         {QStringLiteral("action.focus_output"), [this]() { toggleOutputFocus(); }},
         {QStringLiteral("action.command_palette"), [this]() { showCommandPalette(); }},
+        {QStringLiteral("action.ai_chat"), [this]() { showAiChat(); }},
         {QStringLiteral("action.next_output"), [this]() { cycleOutputTab(1); }},
         {QStringLiteral("action.previous_output"), [this]() { cycleOutputTab(-1); }},
         // NOTA: "action.toggle_edit_mode" propositalmente NÃO tem handler
@@ -6953,8 +6962,16 @@ void MainWindow::handleNewCommandRequested()
         if (advanced) {
             // No modo avançado: se já há rascunho, edita-o; senão template.
             CommandJsonEditorDialog dialog(hasDraft ? &draft : nullptr, targetFolderId, this);
+            dialog.setAvailableCommands(m_commandsData.commands);
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
+            }
+            if (dialog.assistApplied()) {
+                // Proposta do assistente de IA: volta ao editor como rascunho, sem salvar nada.
+                draft = dialog.assistedCommand();
+                draft.id.clear();
+                hasDraft = true;
+                continue;
             }
             draft = dialog.buildCommand();
             hasDraft = true;
@@ -6982,6 +6999,12 @@ void MainWindow::handleNewCommandRequested()
             dialog.setAvailableDynamicVarNames(availableDynamicVarNames());
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
+            }
+            if (dialog.assistApplied()) {
+                draft = dialog.assistedCommand();
+                draft.id.clear();
+                hasDraft = true;
+                continue;
             }
             draft = dialog.buildCommand();
             hasDraft = true;
@@ -7112,10 +7135,14 @@ void MainWindow::handleEditRequested(const QString &itemId, bool isFolder)
     while (true) {
         if (advanced) {
             CommandJsonEditorDialog dialog(&working, working.folderId, this);
+            dialog.setAvailableCommands(m_commandsData.commands);
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
             }
             working = dialog.buildCommand();
+            if (dialog.assistApplied()) {
+                continue; // proposta do assistente de IA: reabre com ela como rascunho
+            }
             if (hasDuplicateCommandName(working.folderId, working.name, existing.id)) {
                 QMessageBox::warning(this, utils::tr(QStringLiteral("command.error.duplicate_name.title")),
                     utils::tr(QStringLiteral("command.error.duplicate_name.body")));
@@ -7135,6 +7162,10 @@ void MainWindow::handleEditRequested(const QString &itemId, bool isFolder)
             dialog.setAvailableDynamicVarNames(availableDynamicVarNames());
             if (dialog.exec() != QDialog::Accepted) {
                 return; // cancelou
+            }
+            if (dialog.assistApplied()) {
+                working = dialog.assistedCommand();
+                continue; // proposta do assistente de IA: reabre com ela como rascunho
             }
             working = dialog.buildCommand();
             if (hasDuplicateCommandName(working.folderId, working.name, existing.id)) {
@@ -7706,6 +7737,14 @@ void MainWindow::handleSettingsRequested()
         return;
     }
     m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
+    // Perfis de IA: ficam no ai.json (chaves de API), nunca no settings.json.
+    if (dialog.aiSettingsChanged()) {
+        if (!m_configManager.saveAiSettings(dialog.buildAiSettings())) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("mainwindow.settings.title")),
+                utils::tr(QStringLiteral("mainwindow.settings.save_failed")));
+        }
+        refreshAiAvailability();
+    }
     core::setKipSettings(newSettings.kip); // vale para as próximas sessões KIP
     // Ações globais: valem já (ícones e comandos virtuais), sem reconstruir a árvore.
     m_globalActions = newSettings.globalActions;
@@ -7823,6 +7862,33 @@ void MainWindow::applyActiveEnvironment()
     }
     m_envManager.setGlobalVars(vars);
     refreshEnvironmentSelector();
+}
+
+void MainWindow::refreshAiAvailability()
+{
+    const core::AiSettings ai = m_configManager.loadAiSettings();
+    m_topBar->setAiAvailable(ai.isConfigured());
+    // Ponte MCP (agentes externos): só escuta com a opção ligada nas Configurações.
+    if (m_mcpBridge) {
+        m_mcpBridge->apply(ai);
+    }
+    if (m_aiChat) {
+        m_aiChat->reloadProfiles();
+    }
+}
+
+void MainWindow::showAiChat()
+{
+    if (!m_configManager.loadAiSettings().isConfigured()) {
+        return;
+    }
+    if (!m_aiChat) {
+        m_aiChat = new AiChatWindow(m_agentHost, this);
+        m_aiChat->setAttribute(Qt::WA_DeleteOnClose, false);
+    }
+    m_aiChat->show();
+    m_aiChat->raise();
+    m_aiChat->activateWindow();
 }
 
 void MainWindow::refreshEnvironmentSelector()
@@ -8501,6 +8567,16 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *e)
         if (auto *dialog = qobject_cast<QDialog *>(watched);
             dialog && dialog->isWindow() && !dialog->property("kaiCenterOnShow").toBool()) {
             centerDialogOnShow(dialog);
+        }
+        // Diálogo recém-aberto sem ser a janela ativa: a primeira tecla digitada ia para a janela de trás (a principal,
+        // bloqueada pelo modal, descarta a tecla) — a "primeira letra comida". Pede a ativação já.
+        if (auto *dialog = qobject_cast<QDialog *>(watched); dialog && dialog->isWindow()) {
+            QTimer::singleShot(0, dialog, [dialog]() {
+                if (dialog->isVisible() && !dialog->isActiveWindow()) {
+                    dialog->raise();
+                    dialog->activateWindow();
+                }
+            });
         }
     }
     // Qualquer resize do divisor externo (janela redimensionada, maximizar,

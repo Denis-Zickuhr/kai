@@ -1,0 +1,30 @@
+<h2>Assistente de IA</h2>
+<p>O Kai tem um <b>assistente de IA</b> opcional: um <b>assistente do editor</b> que escreve ou muda um comando, um <b>chat</b> que pode ler — e, com a sua aprovação, mudar e executar — coisas no Kai, e uma <b>ponte MCP</b> para agentes externos. Ele não existe até você adicionar um provedor: sem nenhum configurado, não há botões de IA.</p>
+<p>Nada acontece sozinho. Toda mudança ou execução é mostrada a você antes, e as suas chaves ficam na sua máquina.</p>
+
+<h3>1. Adicionar um provedor</h3>
+<p><b>Configurações → IA → Adicionar.</b> Escolha <b>Anthropic</b>, <b>OpenAI</b>, um servidor <b>local</b> (Ollama, LM Studio — sem chave), <b>OpenRouter</b> ou qualquer endereço <b>compatível com OpenAI</b>. Digite o modelo ou use <b>Listar modelos</b> e depois <b>Testar conexão</b>.</p>
+<ul>
+<li><b>Suporta ferramentas</b> — desligue para um modelo local sem tool calling: o chat só conversa, o assistente do editor continua funcionando.</li>
+<li><b>Ocultar variáveis secretas deste provedor</b> — valores de variáveis secretas viram <code>***hidden***</code> no que o assistente lê.</li>
+<li>A chave de API fica no <code>ai.json</code> (modo <code>0600</code>) e <b>nunca</b> é exportada, sincronizada, logada nem colocada num prompt. Dá para ler de uma variável de ambiente.</li>
+</ul>
+
+<h3>2. Assistente do editor</h3>
+<p>No editor de comando, o botão <b>IA</b> ao lado de <i>Modo avançado</i> abre uma caixa: diga o que quer, use <b>Gerar</b> e veja a <b>diferença</b> (<code>+</code> adicionado, <code>-</code> removido, <code>~</code> alterado). <b>Aplicar</b> devolve ao editor como rascunho — nada é salvo até você apertar OK.</p>
+
+<h3>3. Chat</h3>
+<p>O botão <b>✨</b> no canto superior direito abre o chat. O seletor mostra o selo <b>Local</b> ou <b>Remoto</b> (remoto: o que o assistente lê é enviado a esse provedor). Dá para trocar de provedor no meio da conversa — o Kai avisa que partes específicas do anterior se perdem.</p>
+<ul>
+<li><b>Leituras</b> (comandos, pastas, ambientes, execuções, logs…) rodam sem perguntar.</li>
+<li><b>Mudanças</b> e <b>execuções</b> mostram um cartão com a prévia. <b>Permitir</b>, <b>Negar</b> ou <b>Permitir neste chat</b>.</li>
+<li><b>Exclusões</b> e <b>parar um processo</b> sempre pedem confirmação.</li>
+<li>Toda mudança tem um botão <b>Desfazer</b> no cartão.</li>
+<li>O que vem de uma ferramenta — saídas, logs, valores de variáveis — é tratado como <i>dado</i>, nunca como instrução.</li>
+</ul>
+<p>As conversas ficam salvas (e podem ser apagadas uma a uma, ou todas em <b>Configurações → IA</b>). Elas nunca são exportadas.</p>
+
+<h3>4. Agentes externos (MCP)</h3>
+<p><b>Configurações → IA → Permitir agentes externos</b>, depois <b>Copiar config do cliente</b> e cole no agente (Claude Desktop, uma IDE…). O agente inicia o <code>kai mcp</code>, que fala com o Kai aberto. Toda mudança ou execução abre um cartão numa janela <i>Agente externo</i> para você permitir ou negar; os segredos ficam ocultos deles por padrão.</p>
+
+<p>Os detalhes e as regras de segurança estão no repositório: <code>docs/ai.md</code>. Para testar sem chave, rode <code>sample/ai/fake-provider.py</code>.</p>

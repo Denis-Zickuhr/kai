@@ -34,6 +34,8 @@ private slots:
         QVERIFY2(!keyLine.isEmpty(), "nenhuma linha de KeyPress registrada");
         QVERIFY(keyLine.contains(QStringLiteral("QLineEdit#probe")));
         QVERIFY(keyLine.contains(QStringLiteral("text='a'")));
+        QVERIFY(keyLine.contains(QStringLiteral("sinceActivate=")));
+        QVERIFY(keyLine.contains(QStringLiteral("modal=")));
     }
 };
 

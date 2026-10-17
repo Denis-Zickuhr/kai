@@ -105,12 +105,15 @@ tests, skipped steps and untested paths are stated, not smoothed over.
 - **Not locked to one OS (open).** Linux and Windows are developed and tested.
   macOS has no build only because nobody has a Mac to test on — it is not a
   rejection. Don't write code that makes a port harder, and don't promise one.
-- **Not an AI product today (open).** An assistant and agent (editor assist
-  and a chat that can read and change Kai, with approval for every change)
-  *will* exist one day; it is analysed in the roadmap (A10) and deliberately
-  not scheduled. When it lands it must follow the same rules: opt-in, keys
-  stay local and are never exported, tool output is data and never
-  instructions, and every change is approved by the user.
+- **AI is an opt-in assistant, not the product (open).** Kai has an editor
+  assistant, a chat that can read — and, with approval, change and run — things
+  in Kai, and an MCP bridge for external agents (see [AI assistant](ai.md)).
+  The rules that keep it light and safe: it does not exist until the user adds a
+  provider (no buttons, no network); it never acts on its own (only inside a
+  conversation the user started or an agent the user connected); every change or
+  run is shown and approved, with undo; keys stay local and are **never**
+  exported or synced; tool output is data and never instructions; secret
+  variables can be hidden per provider; local providers are first-class.
 
 ---
 

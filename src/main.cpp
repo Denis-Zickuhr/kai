@@ -21,6 +21,7 @@
 #include "ipc/stream-channel.h"
 #include "ui/external-run-session.h"
 #include "cli/cli-app-verbs.h"
+#include "cli/cli-mcp.h"
 #include "cli/cli-init.h"
 #include "cli/cli-kip-helper.h"
 #include "cli/cli-completion.h"
@@ -153,6 +154,15 @@ int main(int argc, char *argv[])
         Q_UNUSED(kipApp);
         kai::utils::Logger::setConsoleOutputEnabled(false);
         return kai::cli::runKipHelper(rawArgs);
+    }
+
+    // `kai mcp`: ponte MCP (stdio) para agentes externos. O stdout só pode ter JSON, então nada de aviso de
+    // autocompletar e nenhum log no console; sem o Kai aberto, termina com erro (não o abre sozinho).
+    if (rawArgs.size() >= 2 && rawArgs.at(1) == QStringLiteral("mcp")) {
+        QCoreApplication mcpApp(argc, argv);
+        Q_UNUSED(mcpApp);
+        initCliProcess(false);
+        return kai::cli::runMcpVerb(rawArgs);
     }
 
     // Verbos do CLI com implementação própria (kai-cli): falam com o app

@@ -10,6 +10,7 @@
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
 
+#include <QCoreApplication>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QPointer>
@@ -32,8 +33,7 @@ constexpr int kDefaultExpandedHeight = 240;
 // Largura usada ao expandir quando não há um valor anterior lembrado
 // (posição esquerda/direita).
 constexpr int kDefaultExpandedWidth = 360;
-// Largura mínima do painel (também aplicada por MainWindow::applyOutputPosition
-// ao trocar de posição) — repetida aqui como piso ao restaurar de um colapso.
+// Largura mínima do painel (também aplicada por MainWindow::setupLayout) — repetida aqui como piso ao restaurar de um colapso.
 constexpr int kMinPanelWidth = 220;
 // Espaço que a moldura ("panelCard": 1px de borda desenhada pelo QSS, mais o
 // mesmo 1px de respiro para o conteúdo não vazar sobre a borda) toma de CADA
@@ -43,6 +43,25 @@ int frameExtra()
 {
     return panelFrameInset() * 2;
 }
+
+// O splitter que divide o espaço deste painel e o filho direto dele (o painel ou a zona que o contém): o painel já não é
+// filho direto do splitter, vive dentro de uma zona do layout flexível.
+struct SplitterSlot {
+    QSplitter *splitter = nullptr;
+    QWidget *item = nullptr;
+};
+
+SplitterSlot splitterSlotOf(QWidget *widget)
+{
+    for (QWidget *item = widget; item && item->parentWidget(); item = item->parentWidget()) {
+        if (auto *splitter = qobject_cast<QSplitter *>(item->parentWidget())) {
+            return {splitter, item};
+        }
+    }
+    return {};
+}
+
+} // namespace
 
 OutputStatus toOutputStatus(ExecutionStatus status)
 {
@@ -57,7 +76,6 @@ OutputStatus toOutputStatus(ExecutionStatus status)
     default:                          return OutputStatus::Idle;
     }
 }
-} // namespace
 
 // ============================================================================
 // SAÍDA V2 — o drawer agora é só um CONTÊINER colapsável em volta do
@@ -155,6 +173,9 @@ void TerminalDrawer::setDrawerPosition(DrawerPosition position)
         return;
     }
     m_position = position;
+    if (position == DrawerPosition::Center && !m_expanded) {
+        setExpanded(true); // no miolo não há como recolher
+    }
     // Reaplica os limites de tamanho no EIXO certo pra posição nova — sem
     // isto, um colapso feito com a Saída embutida "embaixo" (limite de
     // ALTURA) sobrevivia à troca pra esquerda/direita, e a largura ficava
@@ -198,7 +219,7 @@ void TerminalDrawer::setExpanded(bool expanded)
     // (m_lastExpandedHeight/Width) e desfazia qualquer resize manual do
     // usuário a cada novo comando. Chamar setExpanded no mesmo estado que já
     // está agora não faz nada.
-    if (expanded == m_expanded) {
+    if (expanded == m_expanded || (!expanded && m_position == DrawerPosition::Center)) {
         return;
     }
     m_expanded = expanded;
@@ -224,7 +245,14 @@ void TerminalDrawer::toggleExpanded()
 
 void TerminalDrawer::applyCollapsedConstraints()
 {
-    auto *splitter = qobject_cast<QSplitter *>(parentWidget());
+    const SplitterSlot slot = splitterSlotOf(this);
+    QSplitter *splitter = slot.splitter;
+    // O limite de tamanho pedido abaixo precisa chegar à zona que contém o painel antes de o splitter ser redistribuído.
+    const auto flushZoneLayout = [this]() {
+        if (parentWidget()) {
+            QCoreApplication::sendPostedEvents(parentWidget(), QEvent::LayoutRequest);
+        }
+    };
 
     if (isHorizontalPosition()) {
         // COLAPSO HORIZONTAL (posição esquerda/direita): estreita a LARGURA
@@ -244,11 +272,12 @@ void TerminalDrawer::applyCollapsedConstraints()
         }
         setMinimumWidth(collapsedWidth);
         setMaximumWidth(collapsedWidth);
+        flushZoneLayout();
         // Mesma lógica de "liberar o espaço" do colapso vertical, só que ao
         // longo da largura — QSplitter::sizes() já representa larguras num
         // splitter horizontal, então o código é idêntico ao de baixo.
         if (splitter) {
-            const int idx = splitter->indexOf(this);
+            const int idx = splitter->indexOf(slot.item);
             QList<int> sizes = splitter->sizes();
             if (idx >= 0 && sizes.size() > 1) {
                 const int freed = sizes[idx] - collapsedWidth;
@@ -275,12 +304,13 @@ void TerminalDrawer::applyCollapsedConstraints()
     }
     setMinimumHeight(headerH);
     setMaximumHeight(headerH);
+    flushZoneLayout();
     // LIBERA O ESPAÇO PARA OS COMANDOS: só limitar a altura não bastava — o
     // QSplitter mantinha a divisão e a área liberada não ia para a árvore
     // (bug reportado: "do jeito que tá, tá inútil"). Aqui empurramos a
     // sobra explicitamente para o vizinho de cima.
     if (splitter) {
-        const int idx = splitter->indexOf(this);
+        const int idx = splitter->indexOf(slot.item);
         QList<int> sizes = splitter->sizes();
         if (idx >= 0 && sizes.size() > 1) {
             const int freed = sizes[idx] - headerH;
@@ -298,7 +328,14 @@ void TerminalDrawer::applyCollapsedConstraints()
 
 void TerminalDrawer::applyExpandedConstraints()
 {
-    auto *splitter = qobject_cast<QSplitter *>(parentWidget());
+    const SplitterSlot slot = splitterSlotOf(this);
+    QSplitter *splitter = slot.splitter;
+    // O limite de tamanho pedido abaixo precisa chegar à zona que contém o painel antes de o splitter ser redistribuído.
+    const auto flushZoneLayout = [this]() {
+        if (parentWidget()) {
+            QCoreApplication::sendPostedEvents(parentWidget(), QEvent::LayoutRequest);
+        }
+    };
 
     // Limpa os DOIS eixos incondicionalmente: um colapso anterior pode ter
     // travado largura OU altura, conforme a posição de então (a posição pode
@@ -307,6 +344,7 @@ void TerminalDrawer::applyExpandedConstraints()
     setMaximumWidth(QWIDGETSIZE_MAX);
     setMinimumHeight(0);
     setMaximumHeight(QWIDGETSIZE_MAX);
+    flushZoneLayout();
     m_panel->setCollapsedNarrow(false);
 
     if (isHorizontalPosition()) {
@@ -314,7 +352,7 @@ void TerminalDrawer::applyExpandedConstraints()
         // largura sozinho ao liberar o limite — sem isto o painel voltava
         // com ~kMinPanelWidth de largura em vez do tamanho lembrado.
         if (splitter) {
-            const int idx = splitter->indexOf(this);
+            const int idx = splitter->indexOf(slot.item);
             QList<int> sizes = splitter->sizes();
             if (idx >= 0 && sizes.size() > 1) {
                 const int target = m_lastExpandedWidth > kMinPanelWidth + 40
@@ -340,7 +378,7 @@ void TerminalDrawer::applyExpandedConstraints()
     // tamanhos do splitter explicitamente.
     const int headerH = m_panel->headerHeight() + frameExtra();
     if (splitter) {
-        const int idx = splitter->indexOf(this);
+        const int idx = splitter->indexOf(slot.item);
         QList<int> sizes = splitter->sizes();
         if (idx >= 0 && sizes.size() > 1) {
             const int target = m_lastExpandedHeight > headerH + 40
@@ -375,9 +413,12 @@ void TerminalDrawer::updateToggleIcon()
         iconName = m_expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up");
     }
     m_toggleButton->setIcon(LucideIcons::icon(iconName, QColor(tk::mutedFg()), 15));
+    // No miolo da janela não há para onde recolher: nenhum dos dois botões aparece.
+    const bool collapsible = m_position != DrawerPosition::Center;
+    m_toggleButton->setVisible(collapsible);
     // O mesmo botão no fim da barra de guias: o cabeçalho da Saída (onde está o de cima) some nos modos documento, KIP e
     // "sem execução". Expandida, o ícone aponta para onde a Saída recolhe.
-    m_tabsBar->setOutputToggle(!m_headerShown, iconName);
+    m_tabsBar->setOutputToggle(collapsible && !m_headerShown, iconName);
 }
 
 // ---------------------------------------------------------------- delegação
@@ -424,7 +465,9 @@ void TerminalDrawer::flushPendingOutput()
 void TerminalDrawer::clear(bool keepDocument)
 {
     m_pendingChunks.clear();
-    if (!keepDocument) {
+    // Com o leitor num painel próprio, trocar de seleção não derruba o documento: ele fica ali para ser lido enquanto o
+    // comando roda (a Saída é que muda).
+    if (!keepDocument && !m_panel->documentExternal()) {
         m_panel->clearDocument();
     }
     m_panel->clearAll();
@@ -688,7 +731,21 @@ void TerminalDrawer::bindKipSession(const QString &commandId, engine::KipSession
     }
     if (m_currentCommandId == commandId) {
         m_panel->setKipSession(session);
-        m_panel->setKipDetachedPlaceholder(session && m_detachedWindow && m_detachedCommandId == commandId);
+        m_panel->setKipDetachedPlaceholder(session
+            && ((m_detachedWindow && m_detachedCommandId == commandId) || m_kipPinned.contains(commandId)));
+    }
+}
+
+void TerminalDrawer::setKipPinned(const QString &commandId, bool pinned)
+{
+    if (pinned) {
+        m_kipPinned.insert(commandId);
+    } else {
+        m_kipPinned.remove(commandId);
+    }
+    if (m_panel->kipMode() && m_currentCommandId == commandId) {
+        m_panel->setKipDetachedPlaceholder(
+            m_kipPinned.contains(commandId) || (m_detachedWindow && m_detachedCommandId == commandId));
     }
 }
 

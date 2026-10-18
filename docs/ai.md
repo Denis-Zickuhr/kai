@@ -42,7 +42,7 @@ The prompt carries the relevant sections of the Kai manifesto, so the model know
 
 ## 3. Chat
 
-The **✨** button at the top right (or the **AI assistant** shortcut, unset by default — Settings → Shortcuts) opens the chat window:
+The **✨** button at the top right (or the **AI assistant** shortcut, unset by default — Settings → Shortcuts) opens the chat — a [panel](layout.md) docked on the right (move, float or close it like any other; it only exists while a provider is configured):
 
 - a list of **conversations** on the left (saved, deletable one by one);
 - the **provider picker** at the top, with a **Local / Remote** badge (remote means what the assistant reads is sent to that host) and a *Secrets hidden* badge when that is on;

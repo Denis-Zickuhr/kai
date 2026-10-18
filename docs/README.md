@@ -41,6 +41,7 @@ The order below is the order of the in-app **Help** (menu **Help**, which has a 
 |--------|---------|
 | KIP — app-like command interfaces | [kip.md](kip.md) |
 | The Output panel | [output.md](output.md) |
+| Panels & layout: move, float, maximize, perspectives | [layout.md](layout.md) |
 
 **Monitoring**
 

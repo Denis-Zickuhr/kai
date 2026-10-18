@@ -1,5 +1,6 @@
 #include "ui/features/history/process-list-dialog.h"
 
+#include <QKeyEvent>
 #include <QApplication>
 #include <QClipboard>
 #include <QDialogButtonBox>
@@ -187,14 +188,20 @@ QPushButton *makeButton(QWidget *parent, const QString &iconName, const QString 
 
 } // namespace
 
-ProcessListDialog::ProcessListDialog(engine::ProcessManager *processManager, QWidget *parent)
+ProcessListDialog::ProcessListDialog(engine::ProcessManager *processManager, QWidget *parent, bool embedded)
     : QDialog(parent)
     , m_processManager(processManager)
 {
+    if (embedded) {
+        setWindowFlags(Qt::Widget);
+    }
     setWindowTitle(utils::tr(QStringLiteral("processes.title")));
     setSizeGripEnabled(true);
     setupUi();
     applyStyle();
+    if (embedded) {
+        setEmbedded(true);
+    }
 
     m_tickTimer.setInterval(1000);
     connect(&m_tickTimer, &QTimer::timeout, this, [this]() { tick(); });
@@ -258,6 +265,7 @@ void ProcessListDialog::setupUi()
     auto *listCardLayout = new QVBoxLayout(listCard);
     listCardLayout->setContentsMargins(frameInset, frameInset, frameInset, frameInset);
     m_listStack = new QStackedWidget(listCard);
+    m_listStack->setObjectName(QStringLiteral("processStack")); // transparente: sem um retângulo escuro dentro do cartão
 
     m_list = new QListWidget(m_listStack);
     m_list->setObjectName(QStringLiteral("processList"));
@@ -281,6 +289,7 @@ void ProcessListDialog::setupUi()
     m_listStack->addWidget(m_list);
 
     auto *empty = new QWidget(m_listStack);
+    empty->setObjectName(QStringLiteral("processPage"));
     auto *emptyLayout = new QVBoxLayout(empty);
     emptyLayout->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(4));
     emptyLayout->addStretch(1);
@@ -354,10 +363,10 @@ void ProcessListDialog::setupUi()
     actions->addWidget(m_goToButton);
     actions->addWidget(m_copyPidButton);
     actions->addStretch(1);
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    stripDialogButtonIcons(buttonBox);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    actions->addWidget(buttonBox);
+    m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    stripDialogButtonIcons(m_buttonBox);
+    connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    actions->addWidget(m_buttonBox);
     outer->addLayout(actions);
 
     updateActions();
@@ -368,6 +377,7 @@ void ProcessListDialog::applyStyle()
     // Tudo derivado dos tokens; raios SEMPRE pelos tokens de canto.
     setStyleSheet(QStringLiteral(
         "QFrame#processCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }"
+        "QStackedWidget#processStack, QWidget#processPage { background: transparent; }"
         "QListWidget#processList { background: transparent; border: none; outline: none; }"
         "QListWidget#processList::item { background: transparent; border: none; padding: 0px; }"
         "QListWidget#processList::item:selected { background: transparent; }"
@@ -578,6 +588,33 @@ void ProcessListDialog::tick()
         }
     }
     m_list->viewport()->update();
+}
+
+void ProcessListDialog::setEmbedded(bool embedded)
+{
+    m_embedded = embedded;
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    setProperty("kaiEmbedded", embedded);
+    setSizeGripEnabled(!embedded);
+    m_buttonBox->setVisible(!embedded);
+    setMinimumSize(embedded ? QSize(320, 160) : QSize(640, 400));
+}
+
+void ProcessListDialog::done(int result)
+{
+    if (!m_embedded) {
+        QDialog::done(result);
+    }
+}
+
+// Esc fecha um diálogo, mas não um painel do quadro: quem fecha painel é o menu Exibir ou o X da aba.
+void ProcessListDialog::keyPressEvent(QKeyEvent *event)
+{
+    if (m_embedded && event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void ProcessListDialog::showEvent(QShowEvent *event)

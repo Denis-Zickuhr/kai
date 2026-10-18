@@ -81,6 +81,13 @@ One design system: theme tokens, density and corner-radius preferences are
 honoured everywhere. Every visible string is internationalised (English and
 Portuguese ship together). The keyboard is a first-class way to drive the app.
 
+The window is a board of **panels** that can be moved, closed, floated and
+restored (see [Panels & layout](layout.md)) — a flexible layout is a matter of
+*where things are*, not a step towards an IDE. The default layout is the simple
+one everybody sees until they touch it; floating windows never appear by
+themselves; the layout is personal state (`layout.json`), never part of a
+project; and "Restore layout" is always one click away.
+
 ### 10. Honest about quality **(firm)**
 
 The tests are written with the change; a bug fix has a test that fails on the

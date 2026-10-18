@@ -1607,6 +1607,19 @@ void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &glo
             QAction *exportAction = addIconAction(&menu, QStringLiteral("share-2"), accent,
                 isCommand ? utils::tr(QStringLiteral("ctx.command.export"))
                           : utils::tr(QStringLiteral("ctx.folder.export")));
+            // Um comando KIP pode virar um painel fixo da janela (dashboard de status, formulário de deploy).
+            QAction *pinAction = nullptr;
+            if (isCommand) {
+                for (const core::Command &command : std::as_const(m_commands)) {
+                    if (command.id == itemId) {
+                        if (command.kip && command.type == core::CommandType::Command) {
+                            pinAction = addIconAction(&menu, QStringLiteral("pin"), accent,
+                                                      utils::tr(QStringLiteral("ctx.command.pin_panel")));
+                        }
+                        break;
+                    }
+                }
+            }
             menu.addSeparator();
             QAction *deleteAction = addIconAction(&menu, QStringLiteral("trash-2"), killColor,
                 isCommand ? utils::tr(QStringLiteral("ctx.command.delete"))
@@ -1625,6 +1638,7 @@ void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &glo
             else if (chosen == editAction) emit editRequested(itemId, !isCommand);
             else if (chosen == duplicateAction) emit duplicateRequested(itemId, !isCommand);
             else if (chosen == exportAction) emit exportRequested(itemId, !isCommand);
+            else if (pinAction && chosen == pinAction) emit pinAsPanelRequested(itemId);
             else if (chosen == deleteAction) emit deleteRequested(itemId, !isCommand);
             else if (syncToFileAction && chosen == syncToFileAction) emit projectSyncRequested(itemId, true);
             else if (syncFromFileAction && chosen == syncFromFileAction) emit projectSyncRequested(itemId, false);

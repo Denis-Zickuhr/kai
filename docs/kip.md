@@ -378,7 +378,8 @@ message. The value is available immediately to other commands as
 - Failure, cancellation, unsupported and protocol-error states are full
   cards with the details open and a **Run again** button.
 - With `kip_window`, the view lives in its own window and the panel shows
-  "Running in its own window"; closing the window brings it back.
+  "Open elsewhere"; closing the window brings it back.
+- **Pin as panel** (right click the command): the KIP command becomes a permanent [panel](layout.md#pinning-a-kip-command) of the window, with a **Run** card until it runs. The Output shows the same card while the pinned panel exists.
 - The output panel's own tab bar is hidden for KIP commands; the small pop-out icon in the top-right of the view opens it in its own window.
 - **Chips** sit under the fields; their confirmation, progress and result share one box under them.
 

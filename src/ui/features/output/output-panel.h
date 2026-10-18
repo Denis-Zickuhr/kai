@@ -233,6 +233,11 @@ public:
     // Abre um pedido novo mantendo o documento atual na tela até o novo chegar (sem passar pela saída vazia).
     void beginDocumentRequest();
     bool documentMode() const { return m_docMode; }
+    // O leitor de documentos num painel próprio do quadro (em vez de dentro do corpo da Saída): passar o contêiner dele move
+    // o leitor para lá; nullptr o devolve ao corpo. Com o leitor fora, a Saída segue mostrando a execução ("ler o README
+    // enquanto o comando roda").
+    void setDocumentHost(QWidget *host);
+    bool documentExternal() const { return !m_docHost.isNull(); }
     // nullptr até o primeiro documento aparecer neste painel.
     DocViewer *docViewer() const { return m_docViewer; }
 
@@ -317,6 +322,8 @@ signals:
     void kipFocusWindowRequested();
     // Documentação da pasta: nada a mostrar (sem README) e clique num link `kai:<ação>/<alvo>`.
     void documentUnavailable(const QString &directory);
+    // Um documento passou a ser mostrado enquanto o leitor está fora do corpo (num painel próprio): o painel deve aparecer.
+    void documentModeEntered();
     // Os botões da tela "caminho não encontrado" (sem README e com o diretório inexistente).
     void documentDirectoryFixAutomatically(const QString &directory, const QString &suggestion);
     void documentDirectoryFixManually(const QString &directory);
@@ -534,6 +541,10 @@ private:
     // Documentação da pasta: página do corpo criada no 1º uso.
     DocViewer *ensureDocViewer();
     DocViewer *m_docViewer = nullptr;
+    QPointer<QWidget> m_docHost;
+    // O leitor ocupa a página do corpo (e não um painel próprio)?
+    bool docInBody() const { return m_docMode && m_docViewer && m_docHost.isNull(); }
+    void enterDocMode();
     DocSessionStore *m_docStore = nullptr;
     QString m_docScope;
     std::function<bool(const QString &, const QString &)> m_noteSaver;

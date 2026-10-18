@@ -28,6 +28,7 @@ constexpr const char *kCollectionsFileName = "collections.json";
 constexpr const char *kNotesFileName = "notes.json";
 constexpr const char *kDocUsageFileName = "doc-usage.json";
 constexpr const char *kDocStateFileName = "doc-state.json";
+constexpr const char *kLayoutFileName = "layout.json";
 constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
 constexpr const char *kCollectionFiltersFileName = "collection-filters.json";
 constexpr const char *kAiFileName = "ai.json";
@@ -143,6 +144,11 @@ QString ConfigManager::docUsageFilePath() const
 QString ConfigManager::docStateFilePath() const
 {
     return QDir(configDirPath()).filePath(QString::fromLatin1(kDocStateFileName));
+}
+
+QString ConfigManager::layoutFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kLayoutFileName));
 }
 
 QString ConfigManager::dynamicVarsFilePath() const

@@ -330,6 +330,8 @@ add_library(kai-ui STATIC
     src/ui/shared/working-dir-field.cpp
     src/ui/features/environments/env-var-autocomplete.h
     src/ui/features/environments/env-var-autocomplete.cpp
+    src/ui/features/output/run-mirror-panel.h
+    src/ui/features/output/run-mirror-panel.cpp
     src/ui/features/output/terminal-drawer.h
     src/ui/features/output/terminal-drawer.cpp
     src/ui/features/collections/project-selector.h
@@ -504,6 +506,26 @@ add_library(kai-ui STATIC
     src/ui/features/ai/main-window-agent-host.cpp
     src/ui/features/settings/tabs/ai-tab.h
     src/ui/features/settings/tabs/ai-tab.cpp
+    src/ui/layout/layout-model.h
+    src/ui/layout/layout-model.cpp
+    src/ui/layout/layout-store.h
+    src/ui/layout/layout-store.cpp
+    src/ui/layout/view-registry.h
+    src/ui/layout/view-registry.cpp
+    src/ui/layout/view-zone.h
+    src/ui/layout/view-zone.cpp
+    src/ui/layout/zone-rail.h
+    src/ui/layout/zone-rail.cpp
+    src/ui/layout/drop-overlay.h
+    src/ui/layout/drop-overlay.cpp
+    src/ui/layout/floating-view-window.h
+    src/ui/layout/floating-view-window.cpp
+    src/ui/layout/dock-host.h
+    src/ui/layout/dock-host.cpp
+    src/ui/layout/panel-card.h
+    src/ui/layout/panel-card.cpp
+    src/ui/layout/layout-controller.h
+    src/ui/layout/layout-controller.cpp
     src/ui/main-window.h
     src/ui/main-window.cpp
     src/ui/external-run-session.h

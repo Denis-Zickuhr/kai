@@ -108,7 +108,7 @@ const QVector<HelpTopicGroup> &helpTopicGroups()
           QStringLiteral("hooks"), QStringLiteral("scheduling")}},
         {QStringLiteral("variables"),
          {QStringLiteral("variables"), QStringLiteral("dynamic_vars"), QStringLiteral("environments")}},
-        {QStringLiteral("interfaces"), {QStringLiteral("kip"), QStringLiteral("output")}},
+        {QStringLiteral("interfaces"), {QStringLiteral("kip"), QStringLiteral("output"), QStringLiteral("layout")}},
         {QStringLiteral("monitor"),
          {QStringLiteral("processes"), QStringLiteral("runs"), QStringLiteral("notifications")}},
         {QStringLiteral("projects"),

@@ -75,13 +75,18 @@ QString shortWhen(const QDateTime &when)
 
 } // namespace
 
-AiChatWindow::AiChatWindow(engine::AgentToolHost *host, QWidget *parent)
+AiChatWindow::AiChatWindow(engine::AgentToolHost *host, QWidget *parent, bool embedded)
     : QDialog(parent)
     , m_host(host)
     , m_toolbox(std::make_unique<engine::AgentToolbox>(host))
 {
+    if (embedded) {
+        setWindowFlags(Qt::Widget);
+    }
     setWindowTitle(utils::tr(QStringLiteral("ai.chat.title")));
-    setWindowFlag(Qt::WindowMinMaxButtonsHint, true);
+    if (!embedded) {
+        setWindowFlag(Qt::WindowMinMaxButtonsHint, true);
+    }
     setSizeGripEnabled(true);
     setModal(false);
     resize(1040, 720);
@@ -488,6 +493,32 @@ bool AiChatWindow::eventFilter(QObject *watched, QEvent *event)
         m_messages->setMaximumWidth(m_scroll->viewport()->width());
     }
     return QDialog::eventFilter(watched, event);
+}
+
+void AiChatWindow::setEmbedded(bool embedded)
+{
+    m_embedded = embedded;
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    setProperty("kaiEmbedded", embedded);
+    setSizeGripEnabled(!embedded);
+    setMinimumSize(embedded ? QSize(320, 320) : QSize(440, 420));
+}
+
+void AiChatWindow::done(int result)
+{
+    if (!m_embedded) {
+        QDialog::done(result);
+    }
+}
+
+// Esc fecha um diálogo, mas não um painel do quadro: quem fecha painel é o menu Exibir ou o X da aba.
+void AiChatWindow::keyPressEvent(QKeyEvent *event)
+{
+    if (m_embedded && event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void AiChatWindow::showEvent(QShowEvent *event)

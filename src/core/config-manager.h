@@ -389,6 +389,9 @@ public:
     QString docUsageFilePath() const;
     // Memória do leitor de documentos (posições, rascunhos, recentes) — ver ui::DocSessionStore.
     QString docStateFilePath() const;
+    // Layout flexível da janela (zonas, painéis, flutuantes, perspectivas) — ver ui::layout::LayoutStore. Estado pessoal:
+    // fica fora do settings.json e nunca entra no YAML do projeto.
+    QString layoutFilePath() const;
     // Arquivo separado das variáveis dinâmicas PERSISTENTES (EnvExtractor::
     // persist == true) — NÃO é config estática autorada pelo usuário como
     // environments.json, é o VALOR capturado em runtime, então fica à parte.

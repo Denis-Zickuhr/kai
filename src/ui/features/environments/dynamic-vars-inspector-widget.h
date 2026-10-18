@@ -47,6 +47,11 @@ public:
     // chamar de novo ao trocar de aba — as dinâmicas podem ter mudado desde
     // a abertura, ex: um comando rodou antes desta aba ser vista).
     void refresh();
+    // Troca a lista de pastas (o painel fica aberto enquanto as pastas mudam) e refaz tudo.
+    void setFolders(const QVector<core::Folder> &folders);
+
+protected:
+    void showEvent(QShowEvent *event) override;
 
 private:
     struct RowInfo {

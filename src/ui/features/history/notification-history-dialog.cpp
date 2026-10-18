@@ -1,5 +1,7 @@
 #include "ui/features/history/notification-history-dialog.h"
 
+#include <QKeyEvent>
+#include <QStyle>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
@@ -16,6 +18,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QResizeEvent>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
@@ -250,10 +253,13 @@ QString NotificationHistoryDialog::dayLabel(const QDate &date, const QDate &toda
 }
 
 // --------------------------------------------------------------------- construção
-NotificationHistoryDialog::NotificationHistoryDialog(core::NotificationHistory *history, QWidget *parent)
+NotificationHistoryDialog::NotificationHistoryDialog(core::NotificationHistory *history, QWidget *parent, bool embedded)
     : QDialog(parent)
     , m_history(history)
 {
+    if (embedded) {
+        setWindowFlags(Qt::Widget);
+    }
     setWindowTitle(utils::tr(QStringLiteral("notifications.history.title")));
     setupUi();
     applyStyle();
@@ -276,9 +282,67 @@ NotificationHistoryDialog::NotificationHistoryDialog(core::NotificationHistory *
     }
 
     reload();
+    if (embedded) {
+        setEmbedded(true);
+        return;
+    }
     setMinimumSize(860, 480);
     resize(1000, 600);
     centerOnParent(this);
+}
+
+void NotificationHistoryDialog::setEmbedded(bool embedded)
+{
+    m_embedded = embedded;
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    setProperty("kaiEmbedded", embedded);
+    m_buttonBox->setVisible(!embedded);
+    setMinimumSize(embedded ? QSize(260, 200) : QSize(860, 480));
+    // Num painel estreito os cartões e a busca cedem: o dado vale mais que a folga do diálogo.
+    m_listCard->setMinimumWidth(embedded ? 150 : 300);
+    m_detailCard->setMinimumWidth(embedded ? 150 : 480);
+    m_searchField->setMinimumWidth(embedded ? 120 : 240);
+    for (QWidget *card : {static_cast<QWidget *>(this), m_listCard, m_detailCard}) {
+        style()->unpolish(card);
+        style()->polish(card);
+    }
+}
+
+// Painel estreito (uma lateral): a lista e o detalhe passam a ficar um sobre o outro, e o resumo cede o lugar ao filtro.
+void NotificationHistoryDialog::resizeEvent(QResizeEvent *event)
+{
+    QDialog::resizeEvent(event);
+    if (!m_embedded || !m_splitter) {
+        return;
+    }
+    const bool narrow = width() < 560;
+    const Qt::Orientation wanted = narrow ? Qt::Vertical : Qt::Horizontal;
+    if (m_splitter->orientation() != wanted) {
+        m_splitter->setOrientation(wanted);
+        // Vertical: as larguras mínimas dos cartões não valem mais (o eixo é a altura).
+        m_listCard->setMinimumWidth(narrow ? 100 : 150);
+        m_detailCard->setMinimumWidth(narrow ? 100 : 150);
+        m_listCard->setMinimumHeight(narrow ? 120 : 0);
+        m_detailCard->setMinimumHeight(narrow ? 120 : 0);
+    }
+    m_summaryLabel->setVisible(width() >= 420);
+}
+
+void NotificationHistoryDialog::done(int result)
+{
+    if (!m_embedded) {
+        QDialog::done(result);
+    }
+}
+
+// Esc fecha um diálogo, mas não um painel do quadro: quem fecha painel é o menu Exibir ou o X da aba.
+void NotificationHistoryDialog::keyPressEvent(QKeyEvent *event)
+{
+    if (m_embedded && event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void NotificationHistoryDialog::setCommandResolver(CommandResolver resolver)
@@ -482,8 +546,17 @@ void NotificationHistoryDialog::setupUi()
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({380, 620});
+    m_splitter = splitter;
+    m_listCard = listCard;
+    m_detailCard = detailCard;
     listCard->setMinimumWidth(300);
     detailCard->setMinimumWidth(480);
+    // Páginas dos cartões: transparentes (o fundo do cartão aparece inteiro, sem um retângulo escuro quadrado por dentro).
+    m_listStack->setObjectName(QStringLiteral("notificationStack"));
+    m_detailStack->setObjectName(QStringLiteral("notificationStack"));
+    emptyList->setObjectName(QStringLiteral("notificationPage"));
+    placeholder->setObjectName(QStringLiteral("notificationPage"));
+    detail->setObjectName(QStringLiteral("notificationPage"));
     outer->addWidget(splitter, 1);
 
     // --- Rodapé ---
@@ -499,10 +572,10 @@ void NotificationHistoryDialog::setupUi()
     footer->addWidget(m_markAllButton);
     footer->addWidget(m_clearButton);
     footer->addStretch(1);
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    stripDialogButtonIcons(buttonBox);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    footer->addWidget(buttonBox);
+    m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    stripDialogButtonIcons(m_buttonBox);
+    connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    footer->addWidget(m_buttonBox);
     outer->addLayout(footer);
 
     // Delete exclui a selecionada (atalho de lista de e-mail).
@@ -516,6 +589,9 @@ void NotificationHistoryDialog::applyStyle()
     // Tudo derivado dos tokens; raios SEMPRE pelos tokens de canto.
     setStyleSheet(QStringLiteral(
         "QFrame#notificationCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }"
+        "QStackedWidget#notificationStack, QWidget#notificationPage { background: transparent; }"
+        // Como painel do quadro a moldura é a do próprio painel: os dois cartões ficam planos (a alça do divisor os separa).
+        "QDialog[kaiEmbedded=\"true\"] QFrame#notificationCard { background: transparent; border: none; border-radius: 0px; }"
         "QListWidget#notificationList { background: transparent; border: none; outline: none; }"
         "QListWidget#notificationList::item { background: transparent; border: none; padding: 0px; }"
         "QListWidget#notificationList::item:selected { background: transparent; }"

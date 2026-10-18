@@ -71,16 +71,12 @@ LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
     }
     addFieldToGrid(0, 1, QStringLiteral("settings.corners"), m_cornerStyleField);
 
-    // Linha 1: Posição do Output e Ações de Item
-    m_outputPositionField = new QComboBox(layoutGroup);
-    m_outputPositionField->addItem(utils::tr(QStringLiteral("settings.output_position.bottom")), QStringLiteral("bottom"));
-    m_outputPositionField->addItem(utils::tr(QStringLiteral("settings.output_position.left")), QStringLiteral("left"));
-    m_outputPositionField->addItem(utils::tr(QStringLiteral("settings.output_position.right")), QStringLiteral("right"));
-    {
-        const int idx = m_outputPositionField->findData(currentSettings.outputPosition);
-        m_outputPositionField->setCurrentIndex(idx >= 0 ? idx : 0);
-    }
-    addFieldToGrid(1, 0, QStringLiteral("settings.output_position"), m_outputPositionField);
+    // Linha 1: Painéis (restaurar o layout) e Ações de Item
+    m_restoreLayoutButton = new QPushButton(utils::tr(QStringLiteral("settings.layout.restore")), layoutGroup);
+    m_restoreLayoutButton->setObjectName(QStringLiteral("restoreLayoutButton"));
+    m_restoreLayoutButton->setCursor(Qt::PointingHandCursor);
+    connect(m_restoreLayoutButton, &QPushButton::clicked, this, &LayoutTab::restoreLayoutRequested);
+    addFieldToGrid(1, 0, QStringLiteral("settings.layout.panels"), m_restoreLayoutButton);
 
     auto makePlacementCombo = [layoutGroup](const QString &currentValue) {
         auto *combo = new QComboBox(layoutGroup);

@@ -37,6 +37,7 @@
 #include <QImage>
 #include <QTemporaryDir>
 
+#include "ui/layout/dock-host.h"
 #include "ui/main-window.h"
 #include "ui/features/output/terminal-drawer.h"
 #include "ui/features/output/log-line-view.h"
@@ -201,8 +202,10 @@ private slots:
     void outerSplitterHandleStaysDraggable()
     {
         MainWindow window;
-        auto *splitter = window.findChild<QSplitter *>(QStringLiteral("outerSplitter"));
+        window.dockHost()->applyLayout(kai::ui::layout::LayoutModel::preset(kai::ui::layout::LayoutModel::Preset::Classic));
+        QSplitter *splitter = window.dockHost()->midSplitter();
         QVERIFY(splitter != nullptr);
+        QCOMPARE(splitter->objectName(), QStringLiteral("outerSplitter"));
         QVERIFY(splitter->count() == 2);
         QVERIFY(splitter->handle(1) != nullptr);
         QVERIFY(splitter->handle(1)->isEnabled());
@@ -369,10 +372,16 @@ private slots:
         window.resize(1280, 760);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
+        {
+            // A lista no miolo e a Saída à direita: há uma coluna de ações ENTRE as duas.
+            kai::ui::layout::LayoutModel arrangement = kai::ui::layout::LayoutModel::defaultLayout();
+            arrangement.placeView(kai::ui::layout::view_id::kCommands, kai::ui::layout::Zone::Center);
+            window.dockHost()->applyLayout(arrangement);
+        }
         QTest::qWait(50);
 
         auto *actionsSplitter = window.findChild<QSplitter *>(QStringLiteral("actionsSplitter"));
-        auto *outer = window.findChild<QSplitter *>(QStringLiteral("outerSplitter"));
+        QSplitter *outer = window.dockHost()->rootSplitter();
         QVERIFY(actionsSplitter != nullptr);
         QVERIFY(outer != nullptr);
         QCOMPARE(outer->orientation(), Qt::Horizontal);
@@ -971,6 +980,8 @@ private slots:
         window.resize(1280, 760);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.dockHost()->applyLayout(kai::ui::layout::LayoutModel::preset(kai::ui::layout::LayoutModel::Preset::Classic));
+        QTest::qWait(60);
 
         auto *drawer = window.findChild<TerminalDrawer *>();
         QVERIFY(drawer != nullptr);

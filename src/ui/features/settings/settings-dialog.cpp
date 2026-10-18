@@ -92,6 +92,7 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_appearanceTab = new AppearanceTab(currentSettings, availableThemeNames, currentSettings.activeTheme);
     connect(m_appearanceTab, &AppearanceTab::importThemeClicked, this, &SettingsDialog::handleImportThemeClicked);
     m_layoutTab = new LayoutTab(currentSettings);
+    connect(m_layoutTab, &LayoutTab::restoreLayoutRequested, this, &SettingsDialog::restoreLayoutRequested);
     m_shortcutsTab = new ShortcutsTab(currentSettings);
     m_terminalsTab = new TerminalsTab(currentSettings);
     m_notificationsTab = new NotificationsTab(currentSettings);
@@ -319,7 +320,9 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.itemActionsPlacement = m_layoutTab->itemActionsPlacementField()->currentData().toString();
     settings.displayActionsPlacement = m_layoutTab->displayActionsPlacementField()->currentData().toString();
     settings.executionActionsPlacement = m_layoutTab->executionActionsPlacementField()->currentData().toString();
-    settings.outputPosition = m_layoutTab->outputPositionField()->currentData().toString();
+    // A posição da Saída agora vive no layout.json (painéis arrastáveis); o campo antigo só serve de migração.
+    settings.outputPosition = m_originalSettings.outputPosition;
+    settings.outputSplitterSizes = m_originalSettings.outputSplitterSizes;
     // Shortcuts Manager v2: única fonte de verdade gravada a partir de
     // agora (ver ShortcutsManagerWidget). Os campos/mapa legados
     // (actionShortcuts, editItemShortcut, etc.) são preservados como

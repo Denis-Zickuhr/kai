@@ -1,6 +1,14 @@
 # Análise técnica — Layout flexível (painéis arrastáveis, estilo VSCode/JetBrains)
 
-> Documento de análise/planejamento, **nada implementado ainda**. Escrito em
+> **STATUS (2026-10-17): implementado na branch `feat/flex-layout`** (fases 0 a 4, sem dependência nova — opção D,
+> zonas próprias). Decisões tomadas (padrão depois mudado a pedido: Comandos à esquerda, Saída à direita, abas à mostra; o antigo virou a perspectiva "Clássico"): Comandos no centro e Saída embaixo (visual atual preservado), Comandos pode ser
+> fechado (estado vazio com "Restaurar layout"), flutuantes escondem com o Kai, **uma** Saída com abas arrastáveis (a aba
+> vira um painel-espelho `run:<id>`), `layout.json` separado. Guia de uso em `docs/layout.md`; código em `src/ui/layout/`.
+> O que mudou em relação ao plano: o painel Comandos/Saída com **uma só** aba não mostra a faixa de abas (o visual padrão
+> não muda) — o "Reorganizar painéis" do menu Exibir a mostra em todas as zonas; a perspectiva "Compacto" é Comandos sem a
+> Saída (rodar algo a reabre). O texto abaixo é a análise original.
+>
+> Documento de análise/planejamento, escrito antes da implementação. Escrito em
 > 2026-10-17 a partir da branch `feat/ai-assistant` (commit `922bae6`).
 > Baseado na leitura de `docs/philosophy.md`, `src/ui/main-window.{h,cpp}`,
 > `src/core/config-manager.h`, `src/ui/features/output/terminal-drawer.*`,
@@ -202,7 +210,7 @@ continuam diálogos: são tarefas pontuais, não painéis de acompanhamento.
 2. **Comando KIP fixado como painel:** um comando KIP vira um mini-app permanente na janela (dashboard de status, formulário de deploy). É o princípio 8 levado ao fim e a funcionalidade mais "Kai" da lista.
 3. **Perspectivas/presets:** "Compacto" (só comandos), "Runner" (comandos + saída), "HTTP" (comandos + resposta à direita), "Leitura" (docs grande), além das salvas pelo usuário. Troca por atalho ou pela busca fuzzy. Associar perspectiva a um projeto é opcional e desligado por padrão (princípio 7).
 4. **Maximizar painel:** duplo clique na aba ou atalho põe o painel em tela cheia; repetir volta. Substitui o modo foco atual.
-5. **Recolher para a lateral** (estilo JetBrains): uma zona recolhida vira uma faixa fina de ícones, e um clique abre o painel por cima do conteúdo. Bom para janela pequena.
+5. **Recolher para a lateral** (estilo JetBrains): uma zona recolhida vira uma faixa fina de ícones, e um clique abre o painel ao lado do conteúdo (empurrando-o, com divisória para redimensionar; feedback do uso real: por cima do conteúdo cobria outras zonas e não redimensionava). Bom para janela pequena.
 6. **Flutuante "sempre no topo":** log ou KIP flutuando sobre a IDE enquanto se programa. Combina com um utilitário de bandeja.
 7. **Teclado:** Alt+1..9 foca/alterna cada painel (como o JetBrains), Ctrl+Tab cicla entre painéis e há um atalho para "Restaurar layout". Todos remapeáveis pelo gerenciador de atalhos existente (`actionShortcutSpecs`).
 8. **Fechar e restaurar:** X na aba; volta pelo menu **Exibir** da barra superior, pela busca fuzzy ou pelo atalho do painel, sempre para o último lugar onde estava.

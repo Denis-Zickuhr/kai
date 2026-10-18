@@ -22,7 +22,7 @@ A command stopped on purpose (Stop, kill, reset) is not a failure and never noti
 
 ## The history
 
-The status line at the bottom shows how many notifications are **unread**; click it to open the history and read them. They are kept between sessions.
+The status line at the bottom shows how many notifications are **unread**; click it to open the history and read them (it opens as the **Notifications** [panel](layout.md), docked next to the Output by default). They are kept between sessions.
 
 ## Application logs
 

@@ -17,6 +17,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include "ui/features/output/terminal-drawer.h"
+#include "ui/layout/dock-host.h"
+#include "ui/layout/view-registry.h"
 #include "ui/main-window.h"
 
 using namespace kai;
@@ -354,10 +356,12 @@ private slots:
         window.resize(1000, 700);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
+        // No arranjo clássico (lista em cima, Saída embaixo) a Saída ganha a ALTURA toda ao recolher a lista.
+        window.dockHost()->applyLayout(layout::LayoutModel::preset(layout::LayoutModel::Preset::Classic));
+        QTest::qWait(60);
         auto *drawer = window.findChild<TerminalDrawer *>();
-        auto *splitter = window.findChild<QSplitter *>(QStringLiteral("outerSplitter"));
-        QVERIFY(splitter);
-        QWidget *commands = splitter->widget(splitter->indexOf(drawer) == 0 ? 1 : 0);
+        QWidget *commands = window.viewRegistry()->existingWidget(QStringLiteral("commands"));
+        QVERIFY(commands);
         OutputTabsBar *bar = drawer->outputTabs();
         QVERIFY(bar->toggleRect().isValid());
         QVERIFY(commands->isVisible());
@@ -539,8 +543,7 @@ private slots:
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *drawer = window.findChild<TerminalDrawer *>();
-        auto *splitter = window.findChild<QSplitter *>(QStringLiteral("outerSplitter"));
-        QWidget *commands = splitter->widget(splitter->indexOf(drawer) == 0 ? 1 : 0);
+        QWidget *commands = window.viewRegistry()->existingWidget(QStringLiteral("commands"));
         QTest::mouseClick(drawer->outputTabs(), Qt::LeftButton, Qt::NoModifier, drawer->outputTabs()->toggleRect().center());
         QVERIFY(!commands->isVisible());
         drawer->setExpanded(false);

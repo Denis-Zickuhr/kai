@@ -73,6 +73,10 @@ public:
     // caminho de arquivo).
     QString importThemeFromPath(const QString &sourcePath, bool overwriteExisting);
 
+signals:
+    // "Restaurar layout" (aba Layout): quem abriu o diálogo devolve os painéis ao lugar padrão, na hora.
+    void restoreLayoutRequested();
+
 private:
     void setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,
                  core::CommandsData &commandsData, QVector<core::Collection> &collections,

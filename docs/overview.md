@@ -14,7 +14,7 @@
 
 - **Top bar:** menus **File** (import, export, run history, logs, hide, quit), **Item** (new folder / command / collection), **Settings** and **Help**; the environment selector sits on the right.
 - **Tabs and tree:** one tab per folder, with the commands and subfolders in a tree; the side bar next to it runs, stops, edits and creates things.
-- **Output panel:** the result of the selected command (bottom by default; it can sit left or right in [Settings → Layout](settings.md)).
+- **Output panel:** the result of the selected command (on the right by default; any [panel](layout.md) can be dragged to another zone).
 - **Status line:** how many commands are running (click for the [process list](processes.md)), whether the last run succeeded and the unread [notifications](notifications.md).
 
 > **Tip:** Press **Ctrl+F** to search commands by name. The [global shortcut](shortcuts.md) shows or hides Kai from anywhere.

@@ -1,5 +1,6 @@
 #include "ui/features/history/run-history-dialog.h"
 
+#include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QListWidget>
@@ -9,17 +10,25 @@
 #include <QDialogButtonBox>
 
 #include "ui/shared/dialog-utils.h"
+#include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 
 namespace kai::ui {
 
-RunHistoryDialog::RunHistoryDialog(core::RunHistory *history, QWidget *parent)
+RunHistoryDialog::RunHistoryDialog(core::RunHistory *history, QWidget *parent, bool embedded)
     : QDialog(parent)
     , m_history(history)
 {
+    if (embedded) {
+        setWindowFlags(Qt::Widget);
+    }
     setWindowTitle(utils::tr(QStringLiteral("runs.title")));
     setupUi();
     reload();
+    if (embedded) {
+        setEmbedded(true);
+        return;
+    }
     resize(760, 480);
     centerOnParent(this);
 }
@@ -32,6 +41,11 @@ void RunHistoryDialog::setupUi()
 
     m_list = new QListWidget(this);
     m_list->setMinimumWidth(280);
+    // A mesma caixa (borda e raio da preferência de cantos) do campo de saída ao lado.
+    m_list->setProperty("kaiRole", QStringLiteral("insetList"));
+    m_list->setStyleSheet(QStringLiteral("QListWidget { border: 1px solid %1; border-radius: %2px; }")
+                              .arg(utils::tokens::borderColor())
+                              .arg(utils::tokens::radiusMd()));
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int) { handleSelectionChanged(); });
     body->addWidget(m_list);
 
@@ -56,11 +70,45 @@ void RunHistoryDialog::setupUi()
     footer->addWidget(rerunButton);
     footer->addWidget(clearButton);
     footer->addStretch();
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    stripDialogButtonIcons(buttonBox);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    footer->addWidget(buttonBox);
+    m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    stripDialogButtonIcons(m_buttonBox);
+    connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    footer->addWidget(m_buttonBox);
     outer->addLayout(footer);
+}
+
+void RunHistoryDialog::setEmbedded(bool embedded)
+{
+    m_embedded = embedded;
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    setProperty("kaiEmbedded", embedded);
+    m_buttonBox->setVisible(!embedded);
+    m_list->setMinimumWidth(embedded ? 200 : 280);
+}
+
+void RunHistoryDialog::done(int result)
+{
+    if (!m_embedded) {
+        QDialog::done(result);
+    }
+}
+
+// Esc fecha um diálogo, mas não um painel do quadro: quem fecha painel é o menu Exibir ou o X da aba.
+void RunHistoryDialog::keyPressEvent(QKeyEvent *event)
+{
+    if (m_embedded && event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
+}
+
+void RunHistoryDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    if (m_embedded) {
+        reload(); // o painel fica aberto enquanto novas execuções acontecem
+    }
 }
 
 void RunHistoryDialog::reload()

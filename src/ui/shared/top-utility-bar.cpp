@@ -124,6 +124,10 @@ void TopUtilityBar::setupUi()
     connect(addIconAction(itemMenu, QStringLiteral("notebook"), utils::tr(QStringLiteral("menu.item.new_note"))), &QAction::triggered,
             this, &TopUtilityBar::newNoteRequested);
 
+    // --- Exibir: os painéis da janela (fechar/reabrir, mover, perspectivas). Fica vazio aqui e é repovoado pela
+    // MainWindow a cada abertura (aboutToShow), porque depende do estado atual do layout.
+    m_viewMenu = m_menuBar->addMenu(utils::tr(QStringLiteral("menu.view")));
+
     // --- Configurações (SINGLE-LEVEL — pedido do usuário: "algumas
     // opções, como configurações, são single level, esses não precisam
     // ser menus, podem já abrir direto"): antes era um QMenu com um único

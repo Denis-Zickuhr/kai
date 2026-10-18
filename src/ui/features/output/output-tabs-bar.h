@@ -101,6 +101,10 @@ signals:
     void outputToggleRequested();
     // O usuário arrastou uma guia para outra posição (índice final na barra).
     void tabMoved(const QString &id, int newIndex);
+    // O usuário puxou a guia PARA FORA da barra: começa um arrasto de painel (a execução vira um painel `run:<id>` ao ser
+    // solta numa zona do quadro). `action` Ignore = largada onde nada a aceitou.
+    void tabDragStarted(const QString &id);
+    void tabDragFinished(const QString &id, Qt::DropAction action, const QPoint &globalPos);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -133,6 +137,7 @@ private:
     void updateVisibility();
     void updateTimer();
     void updateDrag(const QPoint &pos);
+    void startExternalDrag();
     void showOverflowMenu();
 
     QVector<OutputTabInfo> m_tabs;

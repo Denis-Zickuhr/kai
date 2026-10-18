@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QPointer>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -16,7 +17,11 @@
 #include "ui/features/kip/kip-view.h"
 #include "ui/features/output/output-panel.h"
 #include "ui/features/output/output-tabs-bar.h"
+#include "ui/features/output/run-mirror-panel.h"
 #include "ui/features/output/terminal-drawer.h"
+#include "ui/layout/dock-host.h"
+#include "ui/layout/layout-controller.h"
+#include "ui/layout/view-registry.h"
 #include "ui/features/command-editor/command-tree-widget.h"
 #include "ui/main-window.h"
 
@@ -871,6 +876,90 @@ private slots:
         QVERIFY(drawer->hasDetachedWindow()); // `-w`: view na janela própria
         QVERIFY(window.isVisible());
         drawer->detachedPanel()->window()->close();
+    }
+
+    // ---- Comando KIP fixado como painel do quadro ---------------------------------------------------------------------
+    void aKipCommandPinnedAsAPanelShowsTheSessionThereAndTheOutputYieldsTheView()
+    {
+        seed({kipCommand(QStringLiteral("deploy"), QStringLiteral("Deploy"), QStringLiteral("happy.sh"))});
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        emit tree->pinAsPanelRequested(QStringLiteral("deploy"));
+        QTest::qWait(80);
+        layout::DockHost *dock = window.dockHost();
+        QCOMPARE(dock->zoneOf(QStringLiteral("kip:deploy")), std::optional<layout::Zone>(layout::Zone::Right));
+        auto *panel = window.findChild<RunMirrorPanel *>();
+        QVERIFY(panel != nullptr);
+        QCOMPARE(panel->kind(), RunMirrorPanel::Kind::Kip);
+        QVERIFY(panel->showsIdleCard()); // nunca rodou: o cartão com o botão, e nada rodou sozinho
+        QVERIFY(drawer->outputTabs()->tabs().isEmpty());
+        QCOMPARE(window.viewRegistry()->title(QStringLiteral("kip:deploy")), QStringLiteral("Deploy"));
+
+        // "Executar" é uma ação explícita do usuário: o painel ganha a view da sessão.
+        auto *run = panel->findChild<QPushButton *>(QStringLiteral("runMirrorRun"));
+        QVERIFY(run != nullptr);
+        run->click();
+        QTRY_VERIFY_WITH_TIMEOUT(panel->output()->kipMode(), 8000);
+        QVERIFY(!panel->showsIdleCard());
+        KipView *view = panel->output()->kipView();
+        QVERIFY(view != nullptr);
+        QVERIFY(view->session() != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(view->session()->screen().awaitingInput(), 8000);
+        // Uma view interativa por sessão: a Saída embutida cede o lugar a um cartão.
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->kipDetachedPlaceholder(), 4000);
+
+        auto *session = view->session();
+        session->setFieldValue(QStringLiteral("env"), QStringLiteral("prod"));
+        QVERIFY(session->submit());
+        QTRY_VERIFY_WITH_TIMEOUT(session->screen().openScreen() && session->screen().openScreen()->id == QStringLiteral("sure")
+                                     && session->screen().awaitingInput(), 8000);
+        QVERIFY(session->confirm(true));
+        QTRY_VERIFY_WITH_TIMEOUT(session->isTerminal(), 8000);
+        QCOMPARE(session->state(), core::KipSessionState::Finished);
+
+        // Fechar o painel devolve a view à Saída.
+        dock->closeView(QStringLiteral("kip:deploy"));
+        QTest::qWait(80);
+        QVERIFY(!dock->model().isPlaced(QStringLiteral("kip:deploy")));
+        QVERIFY(!drawer->embeddedPanel()->kipDetachedPlaceholder());
+    }
+
+    void onlyKipCommandsCanBePinnedAndTheyComeBackWithoutRunning()
+    {
+        core::Command plain;
+        plain.id = QStringLiteral("plain");
+        plain.folderId = QStringLiteral("f1");
+        plain.name = QStringLiteral("Plain");
+        plain.type = core::CommandType::Command;
+        plain.command = QStringLiteral("echo hi");
+        seed({kipCommand(QStringLiteral("deploy"), QStringLiteral("Deploy"), QStringLiteral("happy.sh")), plain});
+        {
+            MainWindow window;
+            window.resize(1300, 800);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QVERIFY(window.viewRegistry()->isKnown(QStringLiteral("kip:deploy")));
+            QVERIFY(!window.viewRegistry()->isKnown(QStringLiteral("kip:plain")));
+            QVERIFY(!window.viewRegistry()->isKnown(QStringLiteral("kip:ghost")));
+            window.layoutController()->focusView(QStringLiteral("kip:deploy"));
+            QVERIFY(window.dockHost()->model().isPlaced(QStringLiteral("kip:deploy")));
+            window.layoutController()->flush();
+        }
+        // O painel fixado é permanente: volta no próximo Kai, mas NUNCA roda sozinho.
+        MainWindow again;
+        again.resize(1300, 800);
+        again.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&again));
+        QVERIFY(again.dockHost()->model().isPlaced(QStringLiteral("kip:deploy")));
+        auto *panel = again.findChild<RunMirrorPanel *>();
+        QVERIFY(panel != nullptr);
+        QVERIFY(panel->showsIdleCard());
+        QTest::qWait(300);
+        QVERIFY(again.findChild<TerminalDrawer *>()->outputTabs()->tabs().isEmpty());
     }
 };
 

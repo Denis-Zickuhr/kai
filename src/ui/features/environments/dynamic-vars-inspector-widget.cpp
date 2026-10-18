@@ -446,4 +446,17 @@ void DynamicVarsInspectorWidget::refresh()
     rebuildTable();
 }
 
+void DynamicVarsInspectorWidget::setFolders(const QVector<core::Folder> &folders)
+{
+    m_allFolders = folders;
+    refresh();
+}
+
+void DynamicVarsInspectorWidget::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    // As dinâmicas mudam enquanto o painel está escondido (um comando rodou, uma extração gravou): mostra o estado de agora.
+    refresh();
+}
+
 } // namespace kai::ui

@@ -10,7 +10,9 @@
 
 #include "engine/process-manager.h"
 
+class QDialogButtonBox;
 class QHideEvent;
+class QKeyEvent;
 class QLabel;
 class QListWidget;
 class QPlainTextEdit;
@@ -37,7 +39,9 @@ class ProcessListDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit ProcessListDialog(engine::ProcessManager *processManager, QWidget *parent = nullptr);
+    // `embedded`: já nasce como painel do quadro (sem moldura de diálogo) — tem de ser desde o construtor, senão o diálogo é
+    // vestido com a barra de título do Kai no primeiro polish.
+    explicit ProcessListDialog(engine::ProcessManager *processManager, QWidget *parent = nullptr, bool embedded = false);
 
     // Liga/desliga o painel de log do processo selecionado (padrão: desligado).
     void setLogsVisible(bool visible);
@@ -47,6 +51,10 @@ public:
     void appendLogFor(const QString &commandId, const QString &text, bool isError);
 
     void setCommandName(const QString &commandId, const QString &displayName);
+
+    // Vive como painel do quadro de painéis: sem moldura de diálogo, sem o botão Fechar, e accept/reject não o escondem.
+    void setEmbedded(bool embedded);
+    bool embedded() const { return m_embedded; }
 
     // Fonte EXTRA: comandos em execução que NÃO são background (o padrão). O
     // ProcessManager só rastreia is_background; sem isto a lista ficava vazia
@@ -66,6 +74,8 @@ signals:
     void commandRequested(const QString &commandId);
 
 protected:
+    void done(int result) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
 
@@ -85,6 +95,8 @@ private:
     QMap<QString, QDateTime> m_runningSince;   // quando o id foi visto rodando pela 1ª vez
     Filter m_filter = Filter::Running;
     bool m_logsVisible = false;
+    bool m_embedded = false;
+    QDialogButtonBox *m_buttonBox = nullptr;
     QTimer m_tickTimer;
 
     QLabel *m_summaryLabel = nullptr;

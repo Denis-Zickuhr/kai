@@ -221,6 +221,8 @@ signals:
     // `kaiToFile` true = Kai -> Arquivo; false = Arquivo -> Kai.
     void projectSyncRequested(const QString &folderId, bool kaiToFile);
     void exportRequested(const QString &itemId, bool isFolder);
+    // "Fixar como painel" (comando KIP): vira um mini-app permanente do quadro de painéis.
+    void pinAsPanelRequested(const QString &commandId);
     // Emitido pela ação "Duplicar" do menu de contexto: pede ao MainWindow
     // para criar uma cópia do comando/pasta (novo id, nome "X (cópia)").
     void duplicateRequested(const QString &itemId, bool isFolder);

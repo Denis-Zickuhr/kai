@@ -8,6 +8,7 @@
 
 class QAction;
 class QLabel;
+class QMenu;
 class QMenuBar;
 class QToolButton;
 class QMouseEvent;
@@ -42,6 +43,9 @@ public:
     // tokens). Ele tem QSS próprio, fora do stylesheet global, então sem isto
     // trocar "Cantos" nas Configurações não chegava nele até reiniciar.
     void refreshStyle();
+
+    // O menu Exibir (painéis e layout): populado pela MainWindow quando abre.
+    QMenu *viewMenu() const { return m_viewMenu; }
 
 signals:
     // Menu único de importação (pedido do usuário, vendo o menu Arquivo
@@ -103,6 +107,7 @@ private:
     void refreshIcons();
 
     QMenuBar *m_menuBar = nullptr;
+    QMenu *m_viewMenu = nullptr;
     QLabel *m_environmentIcon = nullptr;
     QVector<QPair<QAction *, QString>> m_menuIcons;   // ação + nome do ícone Lucide
     QComboBox *m_environmentSelector = nullptr;

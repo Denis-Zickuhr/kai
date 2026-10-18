@@ -1,6 +1,6 @@
 # The Output panel
 
-The panel shows what the selected command printed, live. It sits at the bottom by default; **Settings → Layout** can move it left or right, and **Settings → General** can collapse it when you select a folder.
+The panel shows what the selected command printed, live. It sits on the right by default (the command list on the left) and is one of the movable [panels](layout.md): drag it to another zone, float it, maximize it. **Settings → General** can collapse it when you select a folder.
 
 ## The output bar
 
@@ -11,6 +11,7 @@ Above the panel there is a **bar with one tab per command that ran in this sessi
 - **Close a tab** with the × (it shows on the tab in focus and on hover) or with a middle click. It only closes the **tab**: the command keeps running and its log is kept. Click the command in the tree (or run it again) and the tab comes back. Closing the tab in focus moves to its neighbour; closing the last one clears the panel.
 - **Right click** opens the tab menu — *Stop*, *Run again*, *Show in the command tree*, *Close output*, *Close the other outputs*, *Close finished outputs* — followed by the usual output menu (clear, copy all, export, display options). Right click **does not bring the tab to the front**: the menu acts on the tab you clicked (clear, copy and export use *its* log) while you keep looking at your current output; only *Show in the command tree* switches to it.
 - **Many tabs:** the mouse wheel scrolls the bar and a button at its end lists them all.
+- **A tab in its own panel:** drag it out of the bar onto a zone (or *Open in a panel* in the tab menu) to watch two logs side by side — see [Runs side by side](layout.md#runs-side-by-side).
 - **Keyboard:** **Ctrl+Tab** and **Ctrl+Shift+Tab** switch to the next / previous output (rebindable in **Settings → Shortcuts**).
 
 Tabs are not saved: they start empty on the next launch, like the processes themselves.
@@ -39,6 +40,10 @@ The field at the bottom sends text to the command's input — for `read` prompts
 |---|---|
 | **Interactive terminal** | a real terminal grid for `vim`, `htop`, `less`, a nested Claude Code. Turn it on in the command's advanced settings. |
 | **Formatted output** | each line that is a JSON log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by *level*, and Kai can [notify](notifications.md) on the first ERROR line. |
+
+## Reading the README while a command runs
+
+Open the **Document** panel (**View → Document**) and the folder / note reader moves out of the Output into it: select a folder with a README and it appears there, and **selecting a command no longer replaces it** — the Output keeps showing the run. Close the panel and the reader goes back inside the Output, as it always was.
 
 ## Detach into a window
 

@@ -670,7 +670,17 @@ QString buildModernStylesheet()
     // cada painel. Os widgets precisam de WA_StyledBackground. ---
     qss += QStringLiteral(
         "QWidget#panelCard { background: transparent; border: 1px solid %1;"
-        " border-radius: %2px; }\n")
+        " border-radius: %2px; }\n"
+        // Painel que fica logo abaixo da faixa de abas de uma zona: a faixa é a borda de cima (arredondada), então o
+        // cartão cola nela — sem a própria borda e os cantos de cima retos; só os de baixo seguem o raio.
+        "QWidget#panelCard[kaiTabbed=\"true\"] { border-top: none;"
+        " border-top-left-radius: 0px; border-top-right-radius: 0px; }\n"
+        // Cartões encostados lado a lado sob a mesma faixa: costura com cantos retos e uma só linha.
+        "QWidget#panelCard[kaiJoinRight=\"true\"] { border-right: none;"
+        " border-top-right-radius: 0px; border-bottom-right-radius: 0px; }\n"
+        "QWidget#panelCard[kaiJoinLeft=\"true\"] { border-top-left-radius: 0px; border-bottom-left-radius: 0px; }\n"
+        // Painéis que eram diálogos: dentro de um cartão, o fundo do diálogo some (o cartão é a moldura).
+        "QDialog[kaiEmbedded=\"true\"] { background: transparent; border: none; border-radius: 0px; }\n")
         .arg(border).arg(rMd);
 
     // --- Cantos da JANELA: o contêiner raiz segue o raio médio (radiusMd, o mesmo

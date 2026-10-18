@@ -10,6 +10,7 @@
 #include <QVBoxLayout>
 #include <QMap>
 #include <QByteArray>
+#include <QSet>
 
 #include "core/config-manager.h"
 #include "engine/http-runner.h"
@@ -67,7 +68,12 @@ enum class ExecutionStatus {
 // (comportamento original); "Esquerda"/"Direita" colapsam em LARGURA,
 // mantendo a altura inteira (bug relatado: colapsar na lateral encolhia a
 // ALTURA igual a "embaixo" e o componente "sumia").
-enum class DrawerPosition { Bottom, Left, Right };
+// "Center": a Saída ocupa o miolo da janela (o painel de comandos foi para outra zona) — não há para onde colapsar,
+// então o recolher some e ela fica sempre expandida.
+enum class DrawerPosition { Bottom, Left, Right, Center };
+
+// O estado de execução do cabeçalho da Saída traduzido para o do OutputPanel (usado também pelos painéis espelho).
+OutputStatus toOutputStatus(ExecutionStatus status);
 
 class TerminalDrawer : public QWidget {
     Q_OBJECT
@@ -209,6 +215,9 @@ public:
     // Com a janela destacada aberta para o comando, o painel embutido mostra o
     // cartão "Rodando na própria janela" (só UMA view interativa por sessão).
     void bindKipSession(const QString &commandId, engine::KipSession *session);
+    // O comando KIP está fixado num painel próprio do quadro: só UMA view interativa por sessão, então o painel embutido cede o
+    // lugar a um cartão enquanto o painel fixado existir.
+    void setKipPinned(const QString &commandId, bool pinned);
     // Painel embutido sai do modo KIP (outro comando selecionado, painel limpo).
     void clearKip();
     bool kipMode() const;
@@ -277,7 +286,7 @@ private slots:
     void detachOutput();
 
 private:
-    bool isHorizontalPosition() const { return m_position != DrawerPosition::Bottom; }
+    bool isHorizontalPosition() const { return m_position == DrawerPosition::Left || m_position == DrawerPosition::Right; }
     // Aplicam os limites de tamanho (min/maxWidth ou min/maxHeight, conforme
     // m_position) para o estado colapsado/expandido — extraídos de
     // setExpanded() para serem reaplicados também por setDrawerPosition()
@@ -307,6 +316,7 @@ private:
     QTimer *m_flushTimer = nullptr;
 
     QString m_currentCommandId;   // comando conectado ao painel embutido
+    QSet<QString> m_kipPinned;    // comandos KIP fixados num painel próprio do quadro
     QString m_detachedCommandId;  // comando FIXO da janela destacada
     bool m_headerShown = true; // o cabeçalho da Saída (e o botão de recolher dele) está na tela
     bool m_expanded = true;

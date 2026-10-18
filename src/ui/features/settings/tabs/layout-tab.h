@@ -6,11 +6,12 @@
 
 class QComboBox;
 class QLineEdit;
+class QPushButton;
 class QSlider;
 
 namespace kai::ui {
 
-// Aba "Layout" das Configurações: densidade e cantos, posição da Saída, onde
+// Aba "Layout" das Configurações: densidade e cantos, restaurar o layout dos painéis, onde
 // fica cada grupo de ações, imagem de fundo da lista de comandos e linhas de
 // conexão da árvore. (Saiu da aba Aparência, que ficou grande demais.)
 class LayoutTab : public QWidget {
@@ -27,7 +28,10 @@ public:
     QComboBox *itemActionsPlacementField() const { return m_itemActionsPlacementField; }
     QComboBox *displayActionsPlacementField() const { return m_displayActionsPlacementField; }
     QComboBox *executionActionsPlacementField() const { return m_executionActionsPlacementField; }
-    QComboBox *outputPositionField() const { return m_outputPositionField; }
+    QPushButton *restoreLayoutButton() const { return m_restoreLayoutButton; }
+
+signals:
+    void restoreLayoutRequested();
 
 private:
     QComboBox *m_densityField = nullptr;
@@ -38,7 +42,7 @@ private:
     QComboBox *m_itemActionsPlacementField = nullptr;
     QComboBox *m_displayActionsPlacementField = nullptr;
     QComboBox *m_executionActionsPlacementField = nullptr;
-    QComboBox *m_outputPositionField = nullptr;
+    QPushButton *m_restoreLayoutButton = nullptr;
 };
 
 } // namespace kai::ui

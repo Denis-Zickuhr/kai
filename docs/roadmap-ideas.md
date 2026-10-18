@@ -214,6 +214,13 @@ privacy with remote providers (a local/remote badge in the chat, and the
 secret-hiding switch); weak tool-calling in small local models
 (`supports_tools` fallback); keys in plain text at rest until **A1**.
 
+### A12. Flexible panel layout (medium value / high effort) — **implemented** (see [Panels & layout](layout.md))
+The window is a board of movable panels (Commands, Output, Document, Processes, History, Notifications, Variables, AI chat):
+four zones, tab groups, drag between zones, floating windows, maximize, collapse to the side, perspectives, run panels side by
+side and pinned KIP commands. Own light implementation (no docking library). Still open: tying a perspective to a project
+(would be opt-in and off by default), per-monitor layouts, and a free N-way grid (the alternative would be the Qt Advanced
+Docking System).
+
 ---
 
 ## B. Improvements to existing routines

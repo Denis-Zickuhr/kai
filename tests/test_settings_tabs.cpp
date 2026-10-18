@@ -145,7 +145,7 @@ private slots:
         QTemporaryDir themes;
         QVERIFY(themes.isValid());
         SettingsData settings;
-        settings.outputPosition = QStringLiteral("left");
+        settings.outputPosition = QStringLiteral("left"); // migração: o diálogo não edita mais, só preserva
         settings.uiDensity = QStringLiteral("compact");
         settings.uiCornerStyle = 2;
         settings.treeConnectorStyle = 2;
@@ -167,7 +167,7 @@ private slots:
 
         // A aba de layout tem os campos de layout; a Aparência não os tem mais.
         QVERIFY(dialog.findChild<LayoutTab *>() != nullptr);
-        QVERIFY(dialog.findChild<LayoutTab *>()->outputPositionField() != nullptr);
+        QVERIFY(dialog.findChild<LayoutTab *>()->restoreLayoutButton() != nullptr);
 
         // Opções da Saída vivem na aba Geral.
         auto *general = dialog.findChild<GeneralTab *>();

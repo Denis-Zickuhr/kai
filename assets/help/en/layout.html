@@ -1,0 +1,39 @@
+<h2>Panels &amp; layout</h2>
+<p>The Kai window is a board of <b>panels</b> that you can move, close and bring back. The default layout has the <b>command list on the left</b> and the <b>Output on the right</b>, half the window each, both with their tab strip showing. It is what you see until you change something; the old arrangement (list on top, Output below) is the <i>Classic</i> perspective.</p>
+<h3>The four zones</h3>
+<p>Panels live in four <b>zones</b>: <b>Left</b>, <b>Center</b>, <b>Right</b> and <b>Bottom</b>. A zone with more than one panel shows them as tabs; an empty zone disappears.</p>
+<table>
+<tr><td><b>Commands</b></td><td>the tree, its search and action buttons — left</td></tr>
+<tr><td><b>Output</b></td><td>the tabs of what ran — right</td></tr>
+<tr><td><b>Document</b></td><td>the README / notes reader: read it <i>while a command runs</i> — right</td></tr>
+<tr><td><b>Processes</b>, <b>History</b>, <b>Notifications</b></td><td>the screens that used to be modal windows — right</td></tr>
+<tr><td><b>Variables</b></td><td>the dynamic variables — right</td></tr>
+<tr><td><b>AI chat</b></td><td>only exists once you add a provider — right</td></tr>
+</table>
+<h3>The View menu</h3>
+<p><b>View</b> is the way back to everything: the panel list (a highlighted icon means it is on the window; clicking closes it or brings it back to the last place it was), <i>Panel position</i> (move, float, maximize, collapse, close), <i>Maximize panel</i>, <i>Rearrange panels</i>, <i>Perspectives</i> and <i>Restore layout</i>. Close every panel and the window offers a <b>Restore layout</b> button. <b>Settings → Layout</b> has it too.</p>
+<h3>Moving panels</h3>
+<ul>
+<li><b>View → Rearrange panels</b> is on by default: every zone shows its tab strip (turn it off to hide it on zones with a single panel).</li>
+<li><b>Drag a tab</b> to another zone. Four dashed regions always show where it can land, whatever the layout: <b>left</b> and <b>right</b> (full height), <b>bottom</b> and <b>center</b>; dropping between the tabs of a zone inserts it at that position.</li>
+<li>Drag a tab <b>out of the window</b> to make it a floating window.</li>
+</ul>
+<p>Moving never recreates a panel: a running command, its tabs and the Output text survive any move. The tab menu (right click or <b>⋯</b>) has the same moves without dragging.</p>
+<h3>Maximize, collapse, float</h3>
+<ul>
+<li><b>Maximize</b>: double click the tab, the menu or <b>Ctrl+Shift+M</b>. The old <i>focus mode</i> is the Output maximized.</li>
+<li><b>Collapse to the side</b>: the zone becomes a thin strip of icons; click one and the panel opens beside the content, pushing it aside; drag the divider to resize it and the strip's icons already switch panels, so the opened zone shows no tabs; click the icon again to close it.</li>
+<li><b>Float</b>: the panel gets its own window with an <i>always on top</i> pin and a <i>dock back</i> button. Floating windows <b>hide with Kai and only return with it</b> — they never appear by themselves.</li>
+</ul>
+<h3>Perspectives</h3>
+<p><b>View → Perspectives</b>: <i>Runner</i> (default), <i>Classic</i> (list in the center, Output below), <i>Compact</i> (only commands), <i>HTTP</i> (commands + a wide Output on the right), <i>Reading</i> (the Document in the center) and your own — <i>Save current layout…</i>. Kai never switches perspective by itself.</p>
+<h3>Runs side by side and pinned KIP</h3>
+<p>Drag a tab <b>out of the Output bar</b> onto a zone (or right click it → <i>Open in a panel</i>): that run gets its own live panel, so two logs are visible at once. Right click a <a href='help://kip'>KIP</a> command → <i>Pin as panel</i> to make it a permanent mini-app of the window; until you run it, it shows a <b>Run</b> button — nothing runs on its own.</p>
+<h3>Keyboard</h3>
+<table>
+<tr><td><code>Alt+1</code> … <code>Alt+9</code></td><td>focus the Nth visible panel</td></tr>
+<tr><td><code>F6</code> / <code>Shift+F6</code></td><td>next / previous panel</td></tr>
+<tr><td><code>Ctrl+Shift+M</code></td><td>maximize / restore the focused panel</td></tr>
+</table>
+<p>All remappable in <b>Settings → Shortcuts</b>.</p>
+<div class='tip'>The layout is personal: it lives in <code>layout.json</code> in your config folder and is never exported or part of a project.</div>

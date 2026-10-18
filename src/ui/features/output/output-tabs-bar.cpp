@@ -1,11 +1,15 @@
 #include "ui/features/output/output-tabs-bar.h"
 
+#include "ui/layout/view-mime.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
 #include "utils/duration-format.h"
 #include "utils/translation-manager.h"
 
 #include <QAction>
+#include <QCursor>
+#include <QDrag>
+#include <QMimeData>
 #include <QActionGroup>
 #include <QFontMetrics>
 #include <QImage>
@@ -757,9 +761,44 @@ void OutputTabsBar::updateDrag(const QPoint &pos)
     update();
 }
 
+// Puxar a guia para longe da barra (para cima ou para baixo) a transforma num painel arrastável: soltar numa zona do
+// quadro abre a execução ali, ao lado da Saída (dois logs visíveis ao mesmo tempo).
+void OutputTabsBar::startExternalDrag()
+{
+    if (m_pressed < 0 || m_pressed >= m_tabs.size()) {
+        return;
+    }
+    const OutputTabInfo tab = m_tabs.at(m_pressed);
+    const QRect tabRect = computeLayout().tabs.at(m_pressed);
+    m_dragActive = false;
+    m_pressed = -1;
+    unsetCursor();
+    update();
+
+    auto *mime = new QMimeData;
+    mime->setData(layout::kViewMimeType, (QStringLiteral("run:") + tab.id).toUtf8());
+    auto *drag = new QDrag(this);
+    drag->setMimeData(mime);
+    QPixmap pixmap(tabRect.size() * devicePixelRatioF());
+    pixmap.setDevicePixelRatio(devicePixelRatioF());
+    pixmap.fill(Qt::transparent);
+    render(&pixmap, QPoint(), QRegion(tabRect));
+    drag->setPixmap(pixmap);
+    drag->setHotSpot(QPoint(tabRect.width() / 2, tabRect.height() / 2));
+    emit tabDragStarted(tab.id);
+    const Qt::DropAction action = drag->exec(Qt::CopyAction);
+    emit tabDragFinished(tab.id, action, QCursor::pos());
+}
+
 void OutputTabsBar::mouseMoveEvent(QMouseEvent *event)
 {
     const QPoint pos = event->position().toPoint();
+    constexpr int kDragOutMargin = 18;
+    if (m_pressed >= 0 && !m_pressedClose && (event->buttons() & Qt::LeftButton)
+        && (pos.y() < -kDragOutMargin || pos.y() > height() + kDragOutMargin)) {
+        startExternalDrag();
+        return;
+    }
     if (m_pressed >= 0 && !m_pressedClose && (event->buttons() & Qt::LeftButton)) {
         if (!m_dragActive && (pos - m_pressPos).manhattanLength() >= QApplication::startDragDistance() && m_tabs.size() > 1) {
             m_dragActive = true;

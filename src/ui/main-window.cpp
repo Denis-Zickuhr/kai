@@ -2,6 +2,12 @@
 #include "core/working-dir.h"
 #include "ui/features/docs/note-dialog.h"
 #include "ui/main-window.h"
+
+#include "ui/layout/dock-host.h"
+#include "ui/layout/layout-controller.h"
+#include "ui/layout/panel-card.h"
+#include "ui/layout/layout-store.h"
+#include "ui/layout/view-registry.h"
 #include "ui/features/ai/ai-chat-window.h"
 #include "ui/features/ai/main-window-agent-host.h"
 #include "ui/features/ai/mcp-bridge.h"
@@ -96,10 +102,12 @@
 #include "ui/features/command-editor/command-json-editor-dialog.h"
 #include "ui/features/settings/settings-dialog.h"
 #include "ui/features/environments/environment-manager-dialog.h"
+#include "ui/features/environments/dynamic-vars-inspector-widget.h"
 #include "ui/features/history/run-history-dialog.h"
 #include "ui/features/history/notification-history-dialog.h"
 #include "engine/module-files.h"
 #include "ui/features/output/output-tabs-bar.h"
+#include "ui/features/output/run-mirror-panel.h"
 #include "ui/features/output/quick-run-popup.h"
 #include "engine/script-spill.h"
 #include "ui/shared/help-dialog.h"
@@ -241,8 +249,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_globalActions = initialSettings.globalActions;
 
     setupUi();
-    applyOutputPosition();
     setupToolbar();
+    // O host da IA nasce antes do quadro de painéis: o chat é um painel que pode já estar no layout salvo.
+    m_agentHost = new MainWindowAgentHost(this);
+    setupLayout();
     setupTrayIcon();
     trackScreenChanges();
     setupGlobalHotkey();
@@ -267,9 +277,9 @@ MainWindow::MainWindow(QWidget *parent)
     setupActionShortcuts();
     loadConfig();
     // IA: o host guarda os últimos logs desde o início; o botão só aparece com provedor configurado.
-    m_agentHost = new MainWindowAgentHost(this);
     m_mcpBridge = new McpBridge(m_agentHost, this);
     refreshAiAvailability();
+    restoreLayoutFromDisk();
 
     connect(m_pipeline, &engine::ExecutionPipeline::logMessage, this, &MainWindow::handlePipelineLog);
     connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, this, &MainWindow::handlePipelineFinished);
@@ -367,6 +377,7 @@ void MainWindow::connectPipelineAuxSignals(engine::ExecutionPipeline *pipeline)
             && m_terminalDrawer->detachedCommandId() == commandId) {
             m_terminalDrawer->setDetachedHttpResult(result);
         }
+        forEachMirror(commandId, [&result](RunMirrorPanel *panel) { panel->setHttpResult(result); });
     });
     // Comando HTTP pulado por Execution Condition (ver
     // ExecutionPipeline::commandSkippedByCondition) — badge âmbar "Pulado"
@@ -525,6 +536,7 @@ void MainWindow::setupUi()
         }
     });
     scheduleSyncDriftCheck();
+    connect(m_commandTree, &CommandTreeWidget::pinAsPanelRequested, this, &MainWindow::pinKipPanel);
     connect(m_commandTree, &CommandTreeWidget::exportRequested, this, [this](const QString &id, bool isFolder) {
         showExportDialog(id, isFolder);
     });
@@ -636,6 +648,12 @@ void MainWindow::setupUi()
     m_terminalDrawer = new TerminalDrawer(central);
     connect(m_terminalDrawer, &TerminalDrawer::commandEntered, this, &MainWindow::handleTerminalInputEntered);
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentKaiLinkActivated, this, &MainWindow::handleDocKaiLink);
+    // Um documento passou a ser mostrado no painel próprio: ele sobe para a frente da zona dele.
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentModeEntered, this, [this]() {
+        if (m_dock && m_dock->model().isPlaced(layout::view_id::kDocument)) {
+            m_dock->revealView(layout::view_id::kDocument);
+        }
+    });
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentDirectoryFixAutomatically, this,
             [this](const QString &dir, const QString &suggestion) { fixDocDirectory(true, dir, suggestion); });
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentDirectoryFixManually, this,
@@ -715,6 +733,25 @@ void MainWindow::setupUi()
         refreshOutputTabs();
     });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabContextRequested, this, &MainWindow::showOutputTabMenu);
+    // Puxar uma guia para fora da barra a transforma num painel arrastável (`run:<id>`): ver DockHost::beginViewDrag.
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabDragStarted, this, [this](const QString &) {
+        if (m_dock) {
+            m_dock->beginViewDrag();
+        }
+    });
+    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabDragFinished, this,
+            [this](const QString &id, Qt::DropAction action, const QPoint &globalPos) {
+        if (m_dock) {
+            m_dock->endViewDrag(layout::view_id::kRunPrefix + id, action, globalPos);
+        }
+    });
+    // O cartão "aberto em outro lugar" do painel embutido: leva a atenção ao painel fixado do comando.
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::kipFocusWindowRequested, this, [this]() {
+        const QString id = layout::view_id::kKipPrefix + m_connectedTerminalCommandId;
+        if (m_dock && m_dock->model().isPlaced(id)) {
+            m_dock->revealView(id);
+        }
+    });
     connect(m_terminalDrawer, &TerminalDrawer::interruptRequested, this, &MainWindow::handleTerminalInterrupt);
     connect(m_terminalDrawer, &TerminalDrawer::eofRequested, this, &MainWindow::handleTerminalEof);
     connect(m_terminalDrawer, &TerminalDrawer::rawTerminalInput, this, &MainWindow::handleTerminalRawInput);
@@ -758,7 +795,9 @@ void MainWindow::setupUi()
     connect(m_terminalDrawer, &TerminalDrawer::expandedChanged, this,
         [this](bool expanded) {
             if (expanded) {
-                applyOutputRatio();
+                if (m_dock) {
+                    m_dock->refreshSizes();
+                }
             } else if (m_commandsCollapsed) {
                 setCommandsCollapsed(false); // a tela nunca fica com os dois recolhidos
             }
@@ -827,7 +866,7 @@ void MainWindow::setupUi()
     // mesmo container da árvore, ESCONDIDA por padrão — só aparece quando
     // updateWelcomeScreenVisibility() detecta 0 comandos E 0 pastas (ver
     // reloadCommandTree()). Troca de visibilidade, sem recriar nada, no
-    // mesmo espírito de applyOutputPosition() para widgets já construídos.
+    // mesmo espírito do DockHost, que reparenta widgets já construídos.
     // A tela de boas-vindas é IRMÃ do divisor externo (entra no layout do
     // conteúdo, ver contentLayout abaixo) e o SUBSTITUI: nenhuma barra de ação,
     // lista ou saída é tocada — o divisor inteiro só fica oculto.
@@ -865,7 +904,7 @@ void MainWindow::setupUi()
     }
 
     // Wrapper que agrupa a busca + a área de navegação (árvore/actions),
-    // construído UMA vez aqui — applyOutputPosition() decide depois em
+    // construído UMA vez aqui — o DockHost decide depois em
     // qual splitter (vertical, para "bottom"; horizontal, para "left"/
     // "right") ele entra junto com m_terminalDrawer, sem recriar nada.
     m_mainAreaWrapper = new QWidget(central);
@@ -884,9 +923,7 @@ void MainWindow::setupUi()
     contentLayout->setContentsMargins(16, 8, 16, 16);
     contentLayout->setSpacing(12);
     contentLayout->addWidget(m_welcomeScreen, 1); // começa oculta (ver setWelcomeMode)
-    // O splitter externo (m_outerSplitter: Vertical para "bottom" ou
-    // Horizontal para "left"/"right") é criado/montado em
-    // applyOutputPosition(), chamado logo após setupUi() — aqui só
+    // O DockHost (zonas com os painéis Comandos, Saída, ...) é montado em setupLayout(), logo após setupUi() — aqui só
     // reservamos o layout que vai recebê-lo.
 
     layout->addWidget(m_content, 1);
@@ -1047,7 +1084,8 @@ void MainWindow::setupToolbar()
     // simultaneamente (relatado pelo usuário com captura de tela real).
     // Removida por completo; Importar Projeto e Processos foram
     // incorporados ao menu único da TopUtilityBar.
-    m_processListDialog = new ProcessListDialog(m_processManager, this);
+    m_processListDialog = new ProcessListDialog(m_processManager, this, true);
+    m_processListDialog->hide(); // filho embutido: só aparece quando o painel Processos entra numa zona
     // Parar/forçar pelo diálogo vale para QUALQUER processo (primeiro ou segundo
     // plano): passa pelo mesmo caminho do botão Parar da árvore.
     connect(m_processListDialog, &ProcessListDialog::stopRequested, this,
@@ -1316,6 +1354,20 @@ void MainWindow::setupActionShortcuts()
         {QStringLiteral("action.command_palette"), [this]() { showCommandPalette(); }},
         {QStringLiteral("action.ai_chat"), [this]() { showAiChat(); }},
         {QStringLiteral("action.next_output"), [this]() { cycleOutputTab(1); }},
+        {QStringLiteral("action.focus_panel_1"), [this]() { m_layoutController->focusPanelNumber(1); }},
+        {QStringLiteral("action.focus_panel_2"), [this]() { m_layoutController->focusPanelNumber(2); }},
+        {QStringLiteral("action.focus_panel_3"), [this]() { m_layoutController->focusPanelNumber(3); }},
+        {QStringLiteral("action.focus_panel_4"), [this]() { m_layoutController->focusPanelNumber(4); }},
+        {QStringLiteral("action.focus_panel_5"), [this]() { m_layoutController->focusPanelNumber(5); }},
+        {QStringLiteral("action.focus_panel_6"), [this]() { m_layoutController->focusPanelNumber(6); }},
+        {QStringLiteral("action.focus_panel_7"), [this]() { m_layoutController->focusPanelNumber(7); }},
+        {QStringLiteral("action.focus_panel_8"), [this]() { m_layoutController->focusPanelNumber(8); }},
+        {QStringLiteral("action.focus_panel_9"), [this]() { m_layoutController->focusPanelNumber(9); }},
+        {QStringLiteral("action.next_panel"), [this]() { m_layoutController->cycleFocus(true); }},
+        {QStringLiteral("action.previous_panel"), [this]() { m_layoutController->cycleFocus(false); }},
+        {QStringLiteral("action.maximize_panel"), [this]() { m_layoutController->toggleMaximizeFocused(); }},
+        {QStringLiteral("action.rearrange_panels"), [this]() { m_dock->setEditMode(!m_dock->editMode()); }},
+        {QStringLiteral("action.restore_layout"), [this]() { restoreDefaultLayout(); }},
         {QStringLiteral("action.previous_output"), [this]() { cycleOutputTab(-1); }},
         // NOTA: "action.toggle_edit_mode" propositalmente NÃO tem handler
         // aqui — os próprios diálogos que usam esse atalho
@@ -1413,7 +1465,14 @@ void MainWindow::toggleOutputFocus()
 {
     // Só faz sentido quando há saída ATIVA (o drawer está visível). Se não há,
     // devolve o foco à árvore para o usuário não ficar preso.
-    if (!m_terminalDrawer || !m_terminalDrawer->isVisible()) {
+    if (!m_terminalDrawer) {
+        return;
+    }
+    // Fechada ou em outra aba, a Saída volta à tela: pedir o foco dela é uma ação explícita.
+    if (!m_terminalDrawer->isVisible()) {
+        showOutputPanel();
+    }
+    if (!m_terminalDrawer->isVisible()) {
         m_commandTree->focusFirstVisibleItem();
         return;
     }
@@ -1555,6 +1614,16 @@ void MainWindow::applyFrameInsets()
     if (m_terminalDrawer) {
         m_terminalDrawer->refreshFrameInset();
     }
+    if (m_viewRegistry) {
+        for (const QString &id : m_viewRegistry->registeredIds()) {
+            layout::refreshPanelCardInsets(m_viewRegistry->existingWidget(id));
+        }
+        for (const QPointer<RunMirrorPanel> &mirror : std::as_const(m_mirrors)) {
+            if (mirror) {
+                mirror->refreshStyle();
+            }
+        }
+    }
 }
 
 void MainWindow::syncPanelBarHeights()
@@ -1583,6 +1652,9 @@ void MainWindow::syncPanelBarHeights()
         }
     }
     m_terminalDrawer->setBarHeight(height);
+    if (m_dock) {
+        m_dock->setBarHeight(height);
+    }
     // As abas das pastas raiz têm a mesma altura das barras (e reaplicam o
     // estilo único de abas com os tokens atuais de tema/densidade).
     if (m_commandTree) {
@@ -1590,21 +1662,34 @@ void MainWindow::syncPanelBarHeights()
     }
 }
 
+// A zona lateral (esquerda/direita) onde a Saída está ao lado do miolo da lista de comandos, ou nada. É o único arranjo
+// em que existe uma coluna de ações ENTRE a lista e a Saída (ver updateTreeBorderResizeHandles).
+static std::optional<layout::Zone> outputSideBesideCommands(const layout::DockHost *dock)
+{
+    if (!dock) {
+        return std::nullopt;
+    }
+    const auto output = dock->zoneOf(layout::view_id::kOutput);
+    const auto commands = dock->zoneOf(layout::view_id::kCommands);
+    if (output && commands && *commands == layout::Zone::Center
+        && (*output == layout::Zone::Left || *output == layout::Zone::Right)) {
+        return output;
+    }
+    return std::nullopt;
+}
+
 void MainWindow::updateTreeBorderResizeHandles()
 {
-    if (!m_horizontalSplitter || !m_outerSplitter || !m_terminalDrawer
-        || !m_leftActionsContainer || !m_sideActionsContainer) {
+    if (!m_horizontalSplitter || !m_leftActionsContainer || !m_sideActionsContainer) {
         return;
     }
-    // Só há coluna ENTRE a lista e a Saída quando o divisor externo é
-    // horizontal: Saída à direita -> coluna "side" (handle 2); Saída à
-    // esquerda -> coluna "left" (handle 1). Embaixo não há nada a repassar.
-    const bool outerHorizontal = m_outerSplitter->orientation() == Qt::Horizontal;
-    const int drawerIndex = m_outerSplitter->indexOf(m_terminalDrawer);
+    // Só há coluna ENTRE a lista e a Saída quando a Saída está numa lateral: à direita -> coluna "side" (handle 2); à
+    // esquerda -> coluna "left" (handle 1). Embaixo (ou em qualquer outro arranjo) não há nada a repassar.
+    const auto side = outputSideBesideCommands(m_dock);
     struct Border { int handleIndex; bool active; };
     const Border borders[] = {
-        {1, outerHorizontal && drawerIndex == 0 && !m_leftActionsContainer->isHidden()},
-        {2, outerHorizontal && drawerIndex == 1 && !m_sideActionsContainer->isHidden()},
+        {1, side == layout::Zone::Left && !m_leftActionsContainer->isHidden()},
+        {2, side == layout::Zone::Right && !m_sideActionsContainer->isHidden()},
     };
     for (const Border &border : borders) {
         QSplitterHandle *handle = m_horizontalSplitter->handle(border.handleIndex);
@@ -1626,282 +1711,384 @@ void MainWindow::updateTreeBorderResizeHandles()
 
 void MainWindow::dragTreeBorder(bool press, int globalX)
 {
-    if (!m_outerSplitter || !m_terminalDrawer || !m_mainAreaWrapper || m_commandsCollapsed
-        || m_outerSplitter->orientation() != Qt::Horizontal) {
+    const auto side = outputSideBesideCommands(m_dock);
+    if (!side || m_commandsCollapsed) {
         return;
     }
     if (press) {
         m_treeDragStartX = globalX;
-        m_treeDragStartSizes = m_outerSplitter->sizes();
+        m_treeDragStartWidth = m_dock->zoneWidth(*side);
         return;
     }
-    const int drawerIndex = m_outerSplitter->indexOf(m_terminalDrawer);
-    if (m_treeDragStartSizes.size() != 2 || drawerIndex < 0) {
-        return;
-    }
-    // Arrastar a borda para a direita alarga o lado ESQUERDO do divisor
-    // externo (Saída à esquerda -> a Saída; à direita -> a área da lista).
-    const int total = m_treeDragStartSizes.at(0) + m_treeDragStartSizes.at(1);
-    const int wantLeft = m_treeDragStartSizes.at(0) + (globalX - m_treeDragStartX);
-    const int wantDrawer = drawerIndex == 0 ? wantLeft : total - wantLeft;
-
-    // A Saída respeita seus limites (mínimo, e máximo quando colapsada); a área
-    // da lista mantém um mínimo utilizável.
-    const int mainMin = qMax(m_mainAreaWrapper->minimumSizeHint().width(), 200);
-    const int drawerMin = m_terminalDrawer->minimumWidth();
-    const int drawerMax = qMin(m_terminalDrawer->maximumWidth(), total - mainMin);
-    const int drawerWidth = qBound(drawerMin, wantDrawer, qMax(drawerMin, drawerMax));
-    const int left = drawerIndex == 0 ? drawerWidth : total - drawerWidth;
-
-    m_outerSplitter->setSizes({left, total - left});
-    captureOutputRatio();
-    if (m_outputSplitterSaveTimer) {
-        m_outputSplitterSaveTimer->start();
-    }
+    // Arrastar a borda para a direita alarga a lateral ESQUERDA (a Saída) ou encolhe a DIREITA (a Saída à direita).
+    const int delta = globalX - m_treeDragStartX;
+    m_dock->setZoneWidth(*side, *side == layout::Zone::Left ? m_treeDragStartWidth + delta : m_treeDragStartWidth - delta);
 }
 
-namespace {
-constexpr double kMinOutputRatio = 0.1;
-constexpr double kMaxOutputRatio = 0.9;
-
-double defaultOutputRatio(const QString &position)
+void MainWindow::setupLayout()
 {
-    return position == QStringLiteral("bottom") ? 0.5 : 1.0 / 3.0;
-}
-} // namespace
+    using namespace layout;
+    m_viewRegistry = new ViewRegistry(this);
 
-void MainWindow::captureOutputRatio()
-{
-    if (!m_outerSplitter || !m_terminalDrawer || !m_terminalDrawer->isExpanded() || m_commandsCollapsed) {
-        return;
-    }
-    const int idx = m_outerSplitter->indexOf(m_terminalDrawer);
-    const QList<int> sizes = m_outerSplitter->sizes();
-    if (idx < 0 || sizes.size() != 2 || sizes.at(0) + sizes.at(1) <= 0) {
-        return;
-    }
-    m_outputRatio = qBound(kMinOutputRatio,
-                           double(sizes.at(idx)) / double(sizes.at(0) + sizes.at(1)),
-                           kMaxOutputRatio);
-}
+    ViewSpec commands;
+    commands.id = view_id::kCommands;
+    commands.titleKey = QStringLiteral("layout.view.commands");
+    commands.icon = QStringLiteral("folder-tree");
+    commands.defaultZone = Zone::Left;
+    m_viewRegistry->registerView(commands, m_mainAreaWrapper);
 
-void MainWindow::applyOutputRatio()
-{
-    if (m_applyingOutputRatio || !m_outerSplitter || !m_terminalDrawer || !m_mainAreaWrapper
-        || m_outputRatio <= 0.0 || !m_terminalDrawer->isExpanded() || m_commandsCollapsed) {
-        return;
-    }
-    const int idx = m_outerSplitter->indexOf(m_terminalDrawer);
-    if (idx < 0 || m_outerSplitter->count() != 2) {
-        return;
-    }
-    const bool horizontal = m_outerSplitter->orientation() == Qt::Horizontal;
-    // O geometry do splitter já é o novo (o filtro roda no Resize), mas o
-    // sizes() ainda é o antigo: o total vem da geometria.
-    const int total = (horizontal ? m_outerSplitter->width() : m_outerSplitter->height())
-                      - m_outerSplitter->handleWidth();
-    if (total <= 0) {
-        return;
-    }
-    const auto axis = [horizontal](const QSize &size) { return horizontal ? size.width() : size.height(); };
-    const int drawerMin = qMax(axis(m_terminalDrawer->minimumSize()),
-                               axis(m_terminalDrawer->minimumSizeHint()));
-    const int mainMin = qMax(axis(m_mainAreaWrapper->minimumSizeHint()), horizontal ? 200 : 120);
-    const int drawerMax = qMax(drawerMin, total - mainMin);
-    const int drawerSize = qBound(drawerMin, qRound(m_outputRatio * total), drawerMax);
-
-    QList<int> sizes{0, 0};
-    sizes[idx] = drawerSize;
-    sizes[1 - idx] = total - drawerSize;
-    if (sizes == m_outerSplitter->sizes()) {
-        return;
-    }
-    m_applyingOutputRatio = true;
-    m_outerSplitter->setSizes(sizes);
-    m_applyingOutputRatio = false;
-}
-
-void MainWindow::applyOutputPosition()
-{
-    if (!m_mainAreaWrapper || !m_terminalDrawer || !m_content) {
-        return;
-    }
-
-    const core::SettingsData settings = m_configManager.loadSettings();
-    QString pos = settings.outputPosition;
-    if (pos != QStringLiteral("left") && pos != QStringLiteral("right")) {
-        pos = QStringLiteral("bottom"); // padrão/valor desconhecido ou ausente
-    }
-
-    // Largura mínima do painel de Saída: seu conteúdo (linhas de log,
-    // abas Headers/JSON) foi desenhado supondo uma barra larga no fundo;
-    // sem um mínimo, um "left"/"right" com pouco espaço poderia espremer
-    // o painel a um ponto ilegível. Inofensivo em "bottom" (sempre tem
-    // largura total ali).
+    ViewSpec output;
+    output.id = view_id::kOutput;
+    output.titleKey = QStringLiteral("layout.view.output");
+    output.icon = QStringLiteral("square-terminal");
+    output.defaultZone = Zone::Right;
+    output.minWidth = 220;
+    m_viewRegistry->registerView(output, m_terminalDrawer);
+    // Largura mínima do painel de Saída: o conteúdo (linhas de log, abas Headers/JSON) foi desenhado supondo uma barra
+    // larga; sem um mínimo, numa lateral estreita ela viraria uma tira ilegível.
     m_terminalDrawer->setMinimumWidth(220);
 
-    // Informa a posição pro drawer decidir o EIXO do colapso (altura na
-    // "bottom", largura na "left"/"right") — ver DrawerPosition e o bug
-    // corrigido em TerminalDrawer::applyCollapsedConstraints. Chamado DEPOIS
-    // do setMinimumWidth acima: se o painel já estiver colapsado nesta
-    // posição, reaplica o limite de colapso por cima do mínimo genérico.
-    m_terminalDrawer->setDrawerPosition(
-        pos == QStringLiteral("left") ? DrawerPosition::Left
-        : pos == QStringLiteral("right") ? DrawerPosition::Right
-                                         : DrawerPosition::Bottom);
+    registerPanelViews();
 
-    const Qt::Orientation orientation =
-        (pos == QStringLiteral("left") || pos == QStringLiteral("right")) ? Qt::Horizontal : Qt::Vertical;
+    registerRunViews();
 
-    auto *newSplitter = new QSplitter(orientation, m_content);
-    // Nome usado pelo QSS para tirar a linha do divisor entre as duas molduras.
-    newSplitter->setObjectName(QStringLiteral("outerSplitter"));
-    newSplitter->setChildrenCollapsible(false);
-
-    if (pos == QStringLiteral("left")) {
-        // Saída à esquerda, área principal (busca+árvore/actions) à direita.
-        // STRETCH INVERTIDO (pedido do usuário): ao redimensionar a JANELA
-        // (não o arraste manual do divisor — stretchFactor só afeta esse
-        // caso), quem deve absorver a diferença é a SAÍDA (factor 1), não
-        // a área principal — antes era o contrário, e a Saída parecia
-        // "grudada" no mesmo tamanho enquanto só a janela/área principal
-        // mudava.
-        newSplitter->addWidget(m_terminalDrawer);
-        newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->setStretchFactor(0, 1);
-        newSplitter->setStretchFactor(1, 0);
-        newSplitter->setSizes({4000, 8000});
-    } else if (pos == QStringLiteral("right")) {
-        // Área principal à esquerda, Saída à direita. Mesmo racional acima:
-        // a Saída (agora índice 1) é quem absorve o resize da janela.
-        newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->addWidget(m_terminalDrawer);
-        newSplitter->setStretchFactor(0, 0);
-        newSplitter->setStretchFactor(1, 1);
-        newSplitter->setSizes({8000, 4000});
-    } else {
-        // "bottom" (padrão/histórico) — estrutura e proporção
-        // PIXEL-IDÊNTICAS ao comportamento de sempre: 50/50 entre a área
-        // principal (topo) e o terminal (base). Feedback do usuário: "o
-        // terminal tá vindo muito grande, faça 50/50".
-        newSplitter->addWidget(m_mainAreaWrapper);
-        newSplitter->addWidget(m_terminalDrawer);
-        newSplitter->setStretchFactor(0, 1);
-        newSplitter->setStretchFactor(1, 1);
-        newSplitter->setSizes({10000, 10000});
-    }
-
-    // m_mainAreaWrapper/m_terminalDrawer acabaram de ser reparentados (via
-    // addWidget acima) do splitter externo antigo para o novo — Qt cuida
-    // disso automaticamente, sem recriar nenhum widget (conexões/estado
-    // do TerminalDrawer sobrevivem). O splitter antigo agora está vazio;
-    // removemos ele do layout e agendamos sua destruição.
-    QSplitter *oldSplitter = m_outerSplitter;
-    if (oldSplitter) {
-        if (auto *contentLayout = m_content->layout()) {
-            contentLayout->removeWidget(oldSplitter);
-        }
-        oldSplitter->hide();
-        oldSplitter->deleteLater();
-    }
-
-    // Restaura o tamanho que o usuário deixou salvo (pedido do usuário: "o
-    // que eu salvei redimensionando fica") — sobrescreve o default 50/50
-    // ou 33/67 calculado acima, mas só se houver algo salvo para ESTA
-    // orientação (um tamanho salvo em "bottom" não faz sentido aplicado a
-    // "left"/"right" e vice-versa — ambos são só 2 números, então não dá
-    // pra distinguir por conteúdo; a troca de orientação já reseta pro
-    // default de qualquer forma na próxima chamada de applyOutputPosition,
-    // o que é aceitável: o usuário raramente troca de posição e re-resize
-    // é rápido).
-    // Só a PROPORÇÃO importa (o salvo são dois números relativos, não pixels:
-    // a janela pode abrir maximizada ou menor que da última vez). Trocar a
-    // posição da Saída volta ao padrão da nova orientação.
-    const bool positionChanged = !m_appliedOutputPosition.isEmpty() && m_appliedOutputPosition != pos;
-    m_appliedOutputPosition = pos;
-    m_outputRatio = defaultOutputRatio(pos);
-    if (!positionChanged && settings.outputSplitterSizes.size() == 2) {
-        const int idx = newSplitter->indexOf(m_terminalDrawer);
-        const double sum = double(settings.outputSplitterSizes.at(0)) + settings.outputSplitterSizes.at(1);
-        const double saved = sum > 0 ? settings.outputSplitterSizes.at(idx) / sum : 0.0;
-        if (saved >= kMinOutputRatio && saved <= kMaxOutputRatio) {
-            m_outputRatio = saved;
-        }
-    }
-    newSplitter->installEventFilter(this);
-
+    m_layoutStore = new LayoutStore(m_configManager.layoutFilePath(), this);
+    m_dock = new DockHost(m_viewRegistry, this, m_content);
     if (auto *contentLayout = qobject_cast<QVBoxLayout *>(m_content->layout())) {
-        contentLayout->addWidget(newSplitter, 1);
+        contentLayout->addWidget(m_dock, 1);
     }
-    m_outerSplitter = newSplitter;
-
-    // Painel de Saída SEMPRE visível (bug histórico documentado em
-    // setupUi(): reparentar via QSplitter nunca deve escondê-lo). Na tela de
-    // boas-vindas quem some é o divisor inteiro (ver setWelcomeMode).
-    m_terminalDrawer->setVisible(true);
-    newSplitter->setVisible(!m_welcomeMode);
-
-    // Persiste o tamanho toda vez que o usuário arrasta o divisor (não em
-    // resizes programáticos — splitterMoved só dispara em drag manual do
-    // mouse). Debounced: o sinal dispara repetidamente durante o arraste;
-    // só grava settings.json quando o usuário PARA de arrastar, evitando
-    // I/O a cada pixel movido.
-    if (!m_outputSplitterSaveTimer) {
-        m_outputSplitterSaveTimer = new QTimer(this);
-        m_outputSplitterSaveTimer->setSingleShot(true);
-        m_outputSplitterSaveTimer->setInterval(400);
-        connect(m_outputSplitterSaveTimer, &QTimer::timeout, this, [this]() {
-            if (!m_outerSplitter) {
-                return;
-            }
-            core::SettingsData s = m_configManager.loadSettings();
-            if (m_outputRatio > 0.0) {
-                const int drawerPart = qRound(m_outputRatio * 10000);
-                s.outputSplitterSizes = m_outerSplitter->indexOf(m_terminalDrawer) == 0
-                    ? QList<int>{drawerPart, 10000 - drawerPart}
-                    : QList<int>{10000 - drawerPart, drawerPart};
-            }
-            m_configManager.saveSettings(s);
-        });
-    }
-    connect(newSplitter, &QSplitter::splitterMoved, this, [this]() {
-        captureOutputRatio();
-        m_outputSplitterSaveTimer->start();
+    m_layoutController = new LayoutController(m_dock, m_layoutStore, {}, this, this);
+    connect(m_dock, &DockHost::maximizedChanged, this, &MainWindow::syncCommandsCollapsed);
+    connect(m_dock, &DockHost::restoreRequested, this, &MainWindow::restoreDefaultLayout);
+    connect(m_dock, &DockHost::arrangementChanged, this, [this]() {
+        applyDrawerPosition();
+        updateDocumentHost();
+        updateTreeBorderResizeHandles();
+        updateCommandsToggle();
     });
-    if (positionChanged) {
-        m_outputSplitterSaveTimer->start();
-    }
-    if (m_commandsCollapsed) {
-        m_mainAreaWrapper->setVisible(false); // o reparent para o splitter novo não pode reabri-la
-    }
-    applyOutputRatio();
+    connect(m_topBar->viewMenu(), &QMenu::aboutToShow, this,
+            [this]() { m_layoutController->populateViewMenu(m_topBar->viewMenu()); });
+    // Até o layout.json ser lido (restoreLayoutFromDisk, no fim do construtor) vale o padrão: Comandos e Saída já existem
+    // enquanto a configuração carrega.
+    m_dock->setModel(LayoutModel::defaultLayout());
+    m_dock->setVisible(!m_welcomeMode);
+}
 
-    updateTreeBorderResizeHandles();
-    updateCommandsToggle();
+// Lê o layout.json (ou migra o antigo outputPosition) e o aplica. Roda depois de os comandos e as configurações estarem
+// carregados: os painéis dinâmicos (`kip:<id>`) só são válidos se o comando deles ainda existe.
+void MainWindow::restoreLayoutFromDisk()
+{
+    using namespace layout;
+    const core::SettingsData settings = m_configManager.loadSettings();
+    const LayoutStore::Loaded loaded = m_layoutStore->load(m_viewRegistry->validator(), [&settings]() {
+        // Primeira vez com o layout flexível: o que as configurações antigas diziam (posição e proporção da Saída).
+        return LayoutModel::fromLegacy(settings.outputPosition, settings.outputSplitterSizes);
+    });
+    m_layoutController->setPerspectives(loaded.perspectives);
+    LayoutModel model = loaded.layout;
+    // O espelho de uma execução vale só para a sessão em que nasceu (o log dela já não existe): não volta ao reiniciar.
+    for (const QString &id : model.placedViews() + model.closedViews()) {
+        if (id.startsWith(view_id::kRunPrefix)) {
+            model.forgetView(id);
+        }
+    }
+    // O modo foco (a Saída maximizada) tem a própria persistência e foi restaurado antes: reaplica por cima do layout.
+    if (m_commandsCollapsed) {
+        model.setMaximized(view_id::kOutput);
+    }
+    m_dock->setModel(model);
+    syncCommandsCollapsed();
+    // O menu Exibir é repovoado a cada abertura (aboutToShow); começa já com itens para a barra de menu nunca mostrá-lo vazio.
+    m_layoutController->populateViewMenu(m_topBar->viewMenu());
+    // Um layout migrado das configurações antigas (ou consertado) é gravado já, para o layout.json passar a mandar.
+    if (!loaded.fileExisted && loaded.layout != LayoutModel::defaultLayout()) {
+        m_layoutController->scheduleSave();
+    }
+}
+
+// Os painéis que antes eram diálogos (processos, histórico, notificações, chat de IA) e o inspetor de variáveis. Cada um é
+// construído sob demanda, na primeira vez que aparece; o conteúdo é o mesmo de antes, só que sem a moldura de diálogo.
+void MainWindow::registerPanelViews()
+{
+    using namespace layout;
+    const auto base = [](const QString &id, const char *titleKey, const char *icon, Zone zone) {
+        ViewSpec spec;
+        spec.id = id;
+        spec.titleKey = QString::fromLatin1(titleKey);
+        spec.icon = QString::fromLatin1(icon);
+        spec.defaultZone = zone;
+        return spec;
+    };
+
+    // O leitor de documentos (README das pastas, notas) num painel próprio: dá para ler o documento enquanto o comando
+    // roda. Fechado (o padrão), o leitor continua dentro da Saída, como sempre foi.
+    ViewSpec document = base(view_id::kDocument, "layout.view.document", "file-text", Zone::Right);
+    document.factory = []() -> QWidget * { return wrapInPanelCard(nullptr); };
+    m_viewRegistry->registerView(document);
+
+    ViewSpec processes = base(view_id::kProcesses, "layout.view.processes", "activity", Zone::Right);
+    processes.factory = [this]() -> QWidget * {
+        m_processListDialog->setEmbedded(true);
+        QWidget *card = wrapInPanelCard(m_processListDialog);
+        m_processListDialog->show(); // tinha sido escondido na criação; agora aparece junto com o cartão
+        return card;
+    };
+    m_viewRegistry->registerView(processes);
+
+    ViewSpec history = base(view_id::kHistory, "layout.view.history", "clock", Zone::Right);
+    history.factory = [this]() -> QWidget * {
+        auto *panel = new RunHistoryDialog(&m_runHistory, nullptr, true);
+        connect(panel, &RunHistoryDialog::rerunRequested, this, [this](const QString &commandId) {
+            if (m_commandsById.contains(commandId)) {
+                handleCommandActivated(commandId);
+            } else {
+                utils::Logger::warning(kLogTag,
+                    QStringLiteral("Reexecução: comando '%1' não existe mais.").arg(commandId));
+            }
+        });
+        return wrapInPanelCard(panel);
+    };
+    m_viewRegistry->registerView(history);
+
+    ViewSpec notifications = base(view_id::kNotifications, "layout.view.notifications", "bell", Zone::Right);
+    notifications.factory = [this]() -> QWidget * {
+        auto *panel = new NotificationHistoryDialog(&m_notificationHistory, nullptr, true);
+        // "Ir para o comando" só aparece enquanto o comando ainda existe.
+        panel->setCommandResolver([this](const QString &commandId) {
+            const auto it = m_commandsById.constFind(commandId);
+            return it != m_commandsById.constEnd() ? it->name : QString();
+        });
+        connect(panel, &NotificationHistoryDialog::commandRequested, this, [this](const QString &commandId) {
+            m_commandTree->selectCommand(commandId);
+        });
+        return wrapInPanelCard(panel);
+    };
+    m_viewRegistry->registerView(notifications);
+
+    ViewSpec variables = base(view_id::kVariables, "layout.view.variables", "variable", Zone::Right);
+    variables.factory = [this]() -> QWidget * {
+        auto *inspector = new DynamicVarsInspectorWidget(
+            m_envManager, m_commandsData.folders,
+            [this]() { return m_configManager.loadPersistedDynamicVars(); },
+            [this](const QMap<QString, QMap<QString, QString>> &data) {
+                return m_configManager.savePersistedDynamicVars(data);
+            });
+        inspector->setObjectName(QStringLiteral("variablesInspector"));
+        return wrapInPanelCard(inspector);
+    };
+    m_viewRegistry->registerView(variables);
+
+    // O chat de IA só existe com um provedor configurado (sem provedor: nenhum botão, nenhum painel, nenhuma rede).
+    m_aiConfigured = m_configManager.loadAiSettings().isConfigured();
+    ViewSpec aiChat = base(view_id::kAiChat, "layout.view.ai_chat", "sparkles", Zone::Right);
+    aiChat.available = [this]() { return m_aiConfigured; };
+    aiChat.factory = [this]() -> QWidget * {
+        m_aiChat = new AiChatWindow(m_agentHost, nullptr, true);
+        m_aiChat->setEmbedded(true);
+        return wrapInPanelCard(m_aiChat);
+    };
+    m_viewRegistry->registerView(aiChat);
+}
+
+// Os painéis de UM comando. `run:<id>` é o espelho de uma execução (a guia da Saída puxada para uma zona: dois logs
+// lado a lado); `kip:<id>` é um comando KIP fixado como mini-app permanente da janela. Os dois só existem enquanto o
+// comando existe (um comando apagado leva o painel junto), e os espelhos de execução não sobrevivem ao reinício.
+void MainWindow::registerRunViews()
+{
+    using namespace layout;
+    const auto spec = [this](const QString &id, const QString &prefix, bool kip) -> std::optional<ViewSpec> {
+        const QString commandId = id.mid(prefix.size());
+        const auto it = m_commandsById.constFind(commandId);
+        if (it == m_commandsById.constEnd() || (kip && !(it->kip && it->type == core::CommandType::Command))) {
+            return std::nullopt;
+        }
+        ViewSpec view;
+        view.id = id;
+        view.titleProvider = [this, commandId]() {
+            const auto found = m_commandsById.constFind(commandId);
+            return found != m_commandsById.constEnd() ? found->name : commandId;
+        };
+        view.icon = kip ? QStringLiteral("sparkles") : QStringLiteral("square-terminal");
+        view.defaultZone = Zone::Right;
+        view.factory = [this, commandId, kip]() -> QWidget * { return createMirrorPanel(commandId, kip); };
+        return view;
+    };
+    m_viewRegistry->registerPrefix(view_id::kRunPrefix, [spec](const QString &id) { return spec(id, view_id::kRunPrefix, false); });
+    m_viewRegistry->registerPrefix(view_id::kKipPrefix, [spec](const QString &id) { return spec(id, view_id::kKipPrefix, true); });
+}
+
+QWidget *MainWindow::createMirrorPanel(const QString &commandId, bool kip)
+{
+    const auto it = m_commandsById.constFind(commandId);
+    const QString name = it != m_commandsById.constEnd() ? it->name : commandId;
+    const auto kind = kip ? RunMirrorPanel::Kind::Kip : RunMirrorPanel::Kind::Run;
+    auto *panel = new RunMirrorPanel(commandId, name, kind);
+    OutputPanel *embedded = m_terminalDrawer->embeddedPanel();
+    panel->applyBarHeight(embedded->barHeight());
+    panel->seed(embedded, m_commandLogs.value(commandId));
+    panel->setInitialStatus(executionStatusFor(commandId));
+    if (kip) {
+        if (engine::KipSession *session = kipSessionFor(commandId)) {
+            panel->bindKipSession(session);
+        }
+        m_terminalDrawer->setKipPinned(commandId, true);
+        // O painel fixado some (fechado, comando apagado): o painel embutido volta a poder mostrar a view. O contexto é a
+        // própria Saída (não a janela): ao fechar o app o painel morre durante a destruição da janela.
+        TerminalDrawer *drawer = m_terminalDrawer;
+        connect(panel, &QObject::destroyed, drawer, [drawer, commandId]() { drawer->setKipPinned(commandId, false); });
+    }
+    connect(panel, &RunMirrorPanel::runRequested, this, [this](const QString &id) { handleCommandActivated(id); });
+    m_mirrors.insert((kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId, panel);
+    return panel;
+}
+
+void MainWindow::forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action)
+{
+    for (const QString &prefix : {layout::view_id::kRunPrefix, layout::view_id::kKipPrefix}) {
+        const auto it = m_mirrors.constFind(prefix + commandId);
+        if (it != m_mirrors.constEnd() && it.value()) {
+            action(it.value().data());
+        }
+    }
+}
+
+void MainWindow::setMirrorStatus(const QString &commandId, ExecutionStatus status)
+{
+    forEachMirror(commandId, [status](RunMirrorPanel *panel) { panel->setStatus(status); });
+}
+
+ExecutionStatus MainWindow::executionStatusFor(const QString &commandId) const
+{
+    if (isCommandRunning(commandId)) {
+        return ExecutionStatus::Running;
+    }
+    if (m_skippedReason.contains(commandId)) {
+        return ExecutionStatus::Skipped;
+    }
+    if (m_failedCommandIds.contains(commandId)) {
+        return ExecutionStatus::Failed;
+    }
+    return m_commandLogs.contains(commandId) ? ExecutionStatus::Success : ExecutionStatus::Idle;
+}
+
+void MainWindow::openRunPanel(const QString &commandId)
+{
+    if (m_layoutController && m_commandsById.contains(commandId)) {
+        m_layoutController->focusView(layout::view_id::kRunPrefix + commandId);
+    }
+}
+
+void MainWindow::pinKipPanel(const QString &commandId)
+{
+    if (m_layoutController && m_commandsById.contains(commandId)) {
+        m_layoutController->focusView(layout::view_id::kKipPrefix + commandId);
+    }
+}
+
+// Com o painel Documento no quadro, o leitor mora nele; sem, volta para dentro da Saída.
+void MainWindow::updateDocumentHost()
+{
+    if (!m_dock || !m_terminalDrawer) {
+        return;
+    }
+    QWidget *host = m_viewRegistry->existingWidget(layout::view_id::kDocument);
+    const bool placed = host && m_dock->model().isPlaced(layout::view_id::kDocument);
+    m_terminalDrawer->embeddedPanel()->setDocumentHost(placed ? host : nullptr);
+}
+
+void MainWindow::applyDrawerPosition()
+{
+    using namespace layout;
+    if (!m_dock || !m_terminalDrawer) {
+        return;
+    }
+    const LayoutModel &model = m_dock->model();
+    const auto zone = model.zoneOf(view_id::kOutput);
+    DrawerPosition position = DrawerPosition::Center;
+    // Só recolhe se há para quem devolver o espaço: um vizinho no eixo do colapso (mesmo que um painel maximizado o
+    // esconda no momento: recolher a Saída maximizada devolve a lista).
+    // Numa zona recolhida numa faixa, o painel abre por cima do conteúdo: também não há para onde recolher.
+    if (zone && !model.zone(*zone).collapsed) {
+        const bool center = model.zoneOccupied(Zone::Center);
+        const bool left = model.zoneOccupied(Zone::Left);
+        const bool right = model.zoneOccupied(Zone::Right);
+        const bool bottom = model.zoneOccupied(Zone::Bottom);
+        switch (*zone) {
+        case Zone::Bottom:
+            if (center) {
+                position = DrawerPosition::Bottom;
+            }
+            break;
+        case Zone::Left:
+            if (center || bottom || right) {
+                position = DrawerPosition::Left;
+            }
+            break;
+        case Zone::Right:
+            if (center || bottom || left) {
+                position = DrawerPosition::Right;
+            }
+            break;
+        case Zone::Center:
+            break;
+        }
+    }
+    m_terminalDrawer->setDrawerPosition(position);
+}
+
+void MainWindow::showOutputPanel()
+{
+    if (m_dock) {
+        m_dock->revealView(layout::view_id::kOutput);
+    }
+    if (m_terminalDrawer && !m_terminalDrawer->isExpanded()) {
+        m_terminalDrawer->setExpanded(true);
+    }
+}
+
+// Onde um documento (README, nota) aparece: no painel próprio, se ele está no quadro, senão dentro da Saída.
+void MainWindow::showDocumentTarget()
+{
+    if (m_dock && m_dock->model().isPlaced(layout::view_id::kDocument)) {
+        m_dock->revealView(layout::view_id::kDocument);
+    } else {
+        showOutputPanel();
+    }
+}
+
+void MainWindow::restoreDefaultLayout()
+{
+    if (m_layoutController) {
+        m_layoutController->restoreDefault();
+    }
 }
 
 void MainWindow::setCommandsCollapsed(bool collapsed)
 {
-    if (!m_mainAreaWrapper || !m_terminalDrawer) {
+    if (!m_dock || !m_terminalDrawer) {
         return;
     }
-    if (collapsed != m_commandsCollapsed) {
-        if (collapsed) {
-            captureOutputRatio(); // lembra a divisão para devolver igual
-            m_commandsCollapsed = true;
-            if (!m_terminalDrawer->isExpanded()) {
-                m_terminalDrawer->setExpanded(true);
-            }
-            m_mainAreaWrapper->setVisible(false);
-        } else {
-            m_commandsCollapsed = false;
-            m_mainAreaWrapper->setVisible(true);
-            applyOutputRatio();
-            updateTreeBorderResizeHandles();
-        }
+    if (collapsed) {
+        showOutputPanel();
+        m_dock->setMaximized(layout::view_id::kOutput);
+    } else if (m_dock->model().maximized() == layout::view_id::kOutput) {
+        m_dock->setMaximized(QString());
     }
+    syncCommandsCollapsed();
+}
+
+void MainWindow::syncCommandsCollapsed()
+{
+    if (!m_dock) {
+        return;
+    }
+    const bool collapsed = m_dock->model().maximized() == layout::view_id::kOutput;
+    const bool changed = collapsed != m_commandsCollapsed;
+    m_commandsCollapsed = collapsed;
+    applyDrawerPosition();
+    updateTreeBorderResizeHandles();
     updateCommandsToggle();
-    if (!m_restoringUiState) {
+    if (changed && !m_restoringUiState) {
         core::SettingsData settings = m_configManager.loadSettings();
         if (settings.commandsCollapsed != m_commandsCollapsed) {
             settings.commandsCollapsed = m_commandsCollapsed;
@@ -1960,9 +2147,7 @@ void MainWindow::revealInTree(const QString &itemId, const std::function<void()>
     if (m_commandsCollapsed) {
         setCommandsCollapsed(false);
     }
-    if (m_terminalDrawer && !m_terminalDrawer->isExpanded()) {
-        m_terminalDrawer->setExpanded(true);
-    }
+    showDocumentTarget();
     if (m_commandTree->currentSelectionId() == itemId || !m_commandTree->selectCommand(itemId)) {
         fallback();
     }
@@ -2044,12 +2229,25 @@ void MainWindow::showCommandPalette()
         {"notifications", "statusline.notifications.none", ""},
         {"environments", "env.manage.title", ""},
         {"settings", "menu.settings", ""},
+        // Painéis e layout: a busca também leva a eles (e o atalho de cada ação aparece ao lado).
+        {"view_document", "layout.view.document", ""},
+        {"view_processes", "layout.view.processes", ""},
+        {"view_variables", "layout.view.variables", ""},
+        {"maximize_panel", "menu.view.maximize_panel", "action.maximize_panel"},
+        {"rearrange_panels", "menu.view.rearrange", "action.rearrange_panels"},
+        {"restore_layout", "menu.view.restore_layout", "action.restore_layout"},
     };
     for (const ActionSpec &action : actions) {
         const QString shortcutId = QString::fromLatin1(action.shortcutId);
         const QString shortcut = shortcutId.isEmpty() ? QString()
             : QKeySequence(utils::firstShortcutFor(settings, shortcutId)).toString(QKeySequence::NativeText);
         entries.append({QString::fromLatin1(action.id), utils::tr(QString::fromLatin1(action.labelKey)), shortcut, Kind::Action});
+    }
+    // O chat de IA só existe com um provedor configurado.
+    if (m_aiConfigured) {
+        const QString shortcut = QKeySequence(utils::firstShortcutFor(settings, QStringLiteral("action.ai_chat")))
+                                     .toString(QKeySequence::NativeText);
+        entries.append({QStringLiteral("view_ai_chat"), utils::tr(QStringLiteral("layout.view.ai_chat")), shortcut, Kind::Action});
     }
     m_palette->refreshStyle();
     m_palette->setEntries(entries);
@@ -2071,6 +2269,13 @@ void MainWindow::runPaletteAction(const QString &actionId)
         {QStringLiteral("notifications"), [](MainWindow *w) { w->handleNotificationHistoryRequested(); }},
         {QStringLiteral("environments"), [](MainWindow *w) { w->handleManageEnvironmentsRequested(); }},
         {QStringLiteral("settings"), [](MainWindow *w) { w->handleSettingsRequested(); }},
+        {QStringLiteral("view_document"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kDocument); }},
+        {QStringLiteral("view_processes"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kProcesses); }},
+        {QStringLiteral("view_variables"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kVariables); }},
+        {QStringLiteral("view_ai_chat"), [](MainWindow *w) { w->showAiChat(); }},
+        {QStringLiteral("maximize_panel"), [](MainWindow *w) { w->m_layoutController->toggleMaximizeFocused(); }},
+        {QStringLiteral("rearrange_panels"), [](MainWindow *w) { w->m_dock->setEditMode(!w->m_dock->editMode()); }},
+        {QStringLiteral("restore_layout"), [](MainWindow *w) { w->restoreDefaultLayout(); }},
     };
     if (const auto it = handlers.constFind(actionId); it != handlers.constEnd()) {
         it.value()(this);
@@ -2215,9 +2420,7 @@ void MainWindow::openFolderDocs(const QString &folderId)
     if (!m_terminalDrawer) {
         return;
     }
-    if (!m_terminalDrawer->isExpanded()) {
-        m_terminalDrawer->setExpanded(true);
-    }
+    showDocumentTarget();
     const bool alreadySelected = m_commandTree->currentSelectionId() == folderId;
     if (alreadySelected || !m_commandTree->selectCommand(folderId)) {
         resetDrawerForNonCommand(true);
@@ -2232,10 +2435,13 @@ void MainWindow::updateCommandsToggle()
     }
     // A lista fica em cima quando a Saída está embaixo; ao lado oposto quando a Saída está à esquerda/direita.
     Qt::Edge edge = Qt::TopEdge;
-    if (m_appliedOutputPosition == QStringLiteral("left")) {
-        edge = Qt::RightEdge;
-    } else if (m_appliedOutputPosition == QStringLiteral("right")) {
-        edge = Qt::LeftEdge;
+    if (m_dock) {
+        const auto zone = m_dock->zoneOf(layout::view_id::kOutput);
+        if (zone == layout::Zone::Left) {
+            edge = Qt::RightEdge;
+        } else if (zone == layout::Zone::Right) {
+            edge = Qt::LeftEdge;
+        }
     }
     OutputTabsBar *bar = m_terminalDrawer->outputTabs();
     bar->setCommandsToggleVisible(true);
@@ -2968,6 +3174,9 @@ void MainWindow::showOutputTabMenu(const QString &commandId, const QPoint &globa
     rerunAction->setEnabled(!running);
     QAction *treeAction = menu.addAction(LucideIcons::icon(QStringLiteral("folder-search"), accent, 16),
                                          utils::tr(QStringLiteral("output_tabs.menu.show_in_tree")));
+    // O log desta guia num painel próprio do quadro, ao lado de outros (dois logs visíveis ao mesmo tempo).
+    QAction *panelAction = menu.addAction(LucideIcons::icon(QStringLiteral("panel-right"), accent, 16),
+                                          utils::tr(QStringLiteral("output_tabs.menu.open_panel")));
     menu.addSeparator();
     QAction *closeAction = menu.addAction(LucideIcons::icon(QStringLiteral("x"), accent, 16),
                                           utils::tr(QStringLiteral("output_tabs.menu.close")));
@@ -2999,7 +3208,9 @@ void MainWindow::showOutputTabMenu(const QString &commandId, const QPoint &globa
         return;
     }
     auto plainLog = [this, commandId]() { return plainLogFor(commandId); };
-    if (chosen == clearAction) {
+    if (chosen == panelAction) {
+        openRunPanel(commandId);
+    } else if (chosen == clearAction) {
         m_commandLogs[commandId].clear();
         if (commandId == m_connectedTerminalCommandId) {
             m_terminalDrawer->embeddedPanel()->clearAll();
@@ -3510,11 +3721,17 @@ void MainWindow::refreshDocNotes()
 
 void MainWindow::showFolderDocumentation(const QString &folderId)
 {
-    m_docFolderId.clear();
     OutputPanel *panel = m_terminalDrawer->embeddedPanel();
     if (!panel) {
+        m_docFolderId.clear();
         return;
     }
+    // Selecionar um comando (sem pasta) não tira o documento do painel próprio: ele segue lá, para ser lido enquanto o
+    // comando roda.
+    if (folderId.isEmpty() && panel->documentExternal()) {
+        return;
+    }
+    m_docFolderId.clear();
     if (folderId.isEmpty()) {
         panel->clearDocument();
         return;
@@ -3979,6 +4196,32 @@ void MainWindow::reloadCommandTree()
     rebuildActionCommands();
     m_commandTree->setGlobalActions(m_globalActions);
     m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+    // O painel de variáveis, se já foi aberto, acompanha as pastas.
+    if (m_viewRegistry) {
+        if (auto *variables = qobject_cast<DynamicVarsInspectorWidget *>(
+                m_viewRegistry->existingWidget(layout::view_id::kVariables))) {
+            variables->setFolders(m_commandsData.folders);
+        }
+    }
+    // Os painéis de um comando acompanham o nome dele e saem quando ele é apagado.
+    if (m_dock) {
+        bool renamed = false;
+        for (auto it = m_mirrors.begin(); it != m_mirrors.end();) {
+            RunMirrorPanel *panel = it.value();
+            const auto found = panel ? m_commandsById.constFind(panel->commandId()) : m_commandsById.constEnd();
+            if (found != m_commandsById.constEnd()) {
+                panel->setName(found->name);
+                renamed = true;
+                ++it;
+            } else {
+                it = m_mirrors.erase(it);
+            }
+        }
+        m_dock->revalidate();
+        if (renamed) {
+            m_dock->refreshTabs();
+        }
+    }
     updateRunningCommandStatus();
     updateWelcomeScreenVisibility();
 }
@@ -4023,8 +4266,8 @@ void MainWindow::setWelcomeMode(bool welcome)
     if (m_welcomeScreen) {
         m_welcomeScreen->setVisible(welcome);
     }
-    if (m_outerSplitter) {
-        m_outerSplitter->setVisible(!welcome);
+    if (m_dock) {
+        m_dock->setVisible(!welcome);
     }
 }
 
@@ -4431,7 +4674,9 @@ void MainWindow::prepareDrawerForRun(const core::Command &command)
     m_terminalDrawer->setCommandName(command.name);
     m_terminalDrawer->setCurrentCommandId(command.id);
     m_terminalDrawer->setExecutionStatus(ExecutionStatus::Running);
-    m_terminalDrawer->setExpanded(true);
+    // Os painéis dedicados a este comando também recomeçam: log novo, badge "rodando".
+    forEachMirror(command.id, [](RunMirrorPanel *panel) { panel->beginRun(); });
+    showOutputPanel();
     // Bug real corrigido (feedback do usuário: comandos como
     // `read -p "..." var` não aceitavam resposta digitada): o campo de
     // input só era habilitado dentro de handlePipelineLog, ao chegar o
@@ -4606,6 +4851,7 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
         && m_terminalDrawer->detachedCommandId() == commandId) {
         m_terminalDrawer->appendToDetached(text, isError);
     }
+    forEachMirror(commandId, [&text, isError](RunMirrorPanel *panel) { panel->appendLog(text, isError); });
 
     // Terminal por-comando: só ecoa no Terminal Drawer visível se este for
     // o comando atualmente conectado (ou se nenhum estiver conectado
@@ -4694,6 +4940,8 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
             m_terminalDrawer->setDetachedStatus(result.success ? ExecutionStatus::Success
                 : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
         }
+        setMirrorStatus(result.mainCommandId, result.success ? ExecutionStatus::Success
+            : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
         const QString finishedId = result.mainCommandId;
         m_kipOpenWindowFor.remove(finishedId);
         m_envManager.clearParamVars();
@@ -4744,6 +4992,8 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
         m_terminalDrawer->setDetachedStatus(result.success ? ExecutionStatus::Success
             : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
     }
+    setMirrorStatus(result.mainCommandId, result.success ? ExecutionStatus::Success
+        : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
     if (m_statusLine) {
         const auto finishedIt = m_commandsById.constFind(result.mainCommandId);
         if (finishedIt != m_commandsById.constEnd() && !m_silentRunIds.contains(result.mainCommandId)) {
@@ -5244,6 +5494,13 @@ void MainWindow::handleActionFinished(const QString &actionId, const engine::Pip
     if (!result.success && !error.isEmpty()) {
         appendToCommandLog(actionId, error + QStringLiteral("\n"));
     }
+    forEachMirror(actionId, [&result, &error](RunMirrorPanel *panel) {
+        if (!result.success && !error.isEmpty()) {
+            panel->appendLog(error + QStringLiteral("\n"), true);
+        }
+    });
+    setMirrorStatus(actionId, result.success ? ExecutionStatus::Success
+        : result.stoppedByRequest ? ExecutionStatus::Idle : ExecutionStatus::Failed);
     if (m_connectedTerminalCommandId == actionId) {
         if (!result.success && !error.isEmpty()) {
             m_terminalDrawer->appendRawText(error + QStringLiteral("\n"), true);
@@ -5327,6 +5584,7 @@ void MainWindow::handleBackgroundProcessOutput(const QString &commandId, const Q
         && m_terminalDrawer->detachedCommandId() == commandId) {
         m_terminalDrawer->appendToDetached(text, isError);
     }
+    forEachMirror(commandId, [&text, isError](RunMirrorPanel *panel) { panel->appendLog(text, isError); });
 
     // Terminal por-comando: se o Terminal Drawer principal estiver
     // conectado a este processo em background, ecoa o output ali também
@@ -5397,6 +5655,8 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
     }
 
     updateRunningCommandStatus();
+    setMirrorStatus(commandId, status == engine::ProcessStatus::Running ? ExecutionStatus::Background
+        : status == engine::ProcessStatus::Success ? ExecutionStatus::Success : ExecutionStatus::Failed);
 
     // Reflete o status real (Sucesso/Erro) do processo em background no
     // Terminal Drawer, se este for o comando atualmente conectado
@@ -5421,12 +5681,9 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
 
 void MainWindow::handleShowProcessListRequested()
 {
-    // ATUALIZA ao reabrir: antes só fazia show/raise, então a janela podia
-    // exibir um estado antigo até o próximo sinal chegar.
+    // ATUALIZA ao reabrir: o painel pode exibir um estado antigo até o próximo sinal chegar.
     m_processListDialog->refreshProcessList();
-    m_processListDialog->show();
-    m_processListDialog->raise();
-    m_processListDialog->activateWindow();
+    m_layoutController->focusView(layout::view_id::kProcesses);
 }
 
 void MainWindow::handleKillCommandRequested(const QString &commandId, bool force)
@@ -7725,6 +7982,8 @@ void MainWindow::handleSettingsRequested()
     SettingsDialog dialog(currentSettings, availableThemeNames(), m_themeManager->themesDirPath(),
         m_commandsData, m_collections,
         [this]() { persistCommands(); }, [this]() { persistCollections(); }, this);
+    // O layout dos painéis não depende do OK/Cancelar: restaurar vale na hora (e dá para continuar editando).
+    connect(&dialog, &SettingsDialog::restoreLayoutRequested, this, &MainWindow::restoreDefaultLayout);
 
     if (dialog.exec() != QDialog::Accepted) {
         return;
@@ -7839,13 +8098,6 @@ void MainWindow::handleSettingsRequested()
         || newSettings.showHiddenCommands != currentSettings.showHiddenCommands) {
         applyActionGroupPlacement();
     }
-    // Reposiciona o painel de Saída (bottom/left/right) conforme a
-    // preferência recém-salva — idem: applyOutputPosition() RECONSTRÓI o
-    // QSplitter inteiro do zero, então só faz sentido chamar quando a
-    // posição de fato mudou.
-    if (newSettings.outputPosition != currentSettings.outputPosition) {
-        applyOutputPosition();
-    }
 
     utils::Logger::info(kLogTag, QStringLiteral("Configurações globais atualizadas."));
 }
@@ -7868,6 +8120,11 @@ void MainWindow::refreshAiAvailability()
 {
     const core::AiSettings ai = m_configManager.loadAiSettings();
     m_topBar->setAiAvailable(ai.isConfigured());
+    m_aiConfigured = ai.isConfigured();
+    // Sem provedor, o painel do chat deixa de existir (e some do quadro); com um, volta a poder ser aberto.
+    if (m_dock) {
+        m_dock->revalidate();
+    }
     // Ponte MCP (agentes externos): só escuta com a opção ligada nas Configurações.
     if (m_mcpBridge) {
         m_mcpBridge->apply(ai);
@@ -7879,16 +8136,10 @@ void MainWindow::refreshAiAvailability()
 
 void MainWindow::showAiChat()
 {
-    if (!m_configManager.loadAiSettings().isConfigured()) {
+    if (!m_aiConfigured) {
         return;
     }
-    if (!m_aiChat) {
-        m_aiChat = new AiChatWindow(m_agentHost, this);
-        m_aiChat->setAttribute(Qt::WA_DeleteOnClose, false);
-    }
-    m_aiChat->show();
-    m_aiChat->raise();
-    m_aiChat->activateWindow();
+    m_layoutController->focusView(layout::view_id::kAiChat);
 }
 
 void MainWindow::refreshEnvironmentSelector()
@@ -7959,6 +8210,11 @@ void MainWindow::handleManageEnvironmentsRequested()
 void MainWindow::handleKipSessionStarted(const QString &commandId, engine::KipSession *session)
 {
     m_terminalDrawer->bindKipSession(commandId, session);
+    // O comando KIP fixado num painel próprio ganha a view da sessão que começou.
+    const auto pinned = m_mirrors.constFind(layout::view_id::kKipPrefix + commandId);
+    if (pinned != m_mirrors.constEnd() && pinned.value()) {
+        pinned.value()->bindKipSession(session);
+    }
     const auto it = m_commandsById.constFind(commandId);
     const bool wantsWindow = (it != m_commandsById.constEnd() && it->kipOpenInWindow)
         || m_kipOpenWindowFor.contains(commandId);
@@ -8227,6 +8483,11 @@ void MainWindow::setVisible(bool visible)
         m_hiddenExplicitly = false;
     }
     QMainWindow::setVisible(visible);
+    // As janelas flutuantes dos painéis vão e voltam junto com o Kai: escondê-lo as esconde, e elas só reaparecem quando
+    // ele reaparece por ação do usuário.
+    if (m_dock) {
+        m_dock->setFloatingVisible(isVisible());
+    }
 }
 
 void MainWindow::showAndRaise()
@@ -8383,32 +8644,12 @@ bool MainWindow::resolveProcessTarget(const QString &arg, QString &commandId,
 
 void MainWindow::handleRunHistoryRequested()
 {
-    RunHistoryDialog dialog(&m_runHistory, this);
-    connect(&dialog, &RunHistoryDialog::rerunRequested, this, [this](const QString &commandId) {
-        // Reexecuta pelo id (o dialog já fechou com accept()).
-        if (m_commandsById.contains(commandId)) {
-            handleCommandActivated(commandId);
-        } else {
-            utils::Logger::warning(kLogTag,
-                QStringLiteral("Reexecução: comando '%1' não existe mais.").arg(commandId));
-        }
-    });
-    dialog.exec();
+    m_layoutController->focusView(layout::view_id::kHistory);
 }
 
 void MainWindow::handleNotificationHistoryRequested()
 {
-    NotificationHistoryDialog dialog(&m_notificationHistory, this);
-    // "Ir para o comando" só aparece enquanto o comando ainda existe.
-    dialog.setCommandResolver([this](const QString &commandId) {
-        const auto it = m_commandsById.constFind(commandId);
-        return it != m_commandsById.constEnd() ? it->name : QString();
-    });
-    connect(&dialog, &NotificationHistoryDialog::commandRequested, this, [this](const QString &commandId) {
-        showAndRaise();
-        m_commandTree->selectCommand(commandId);
-    });
-    dialog.exec();
+    m_layoutController->focusView(layout::view_id::kNotifications);
 }
 
 void MainWindow::handleLogsRequested()
@@ -8578,13 +8819,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *e)
                 }
             });
         }
-    }
-    // Qualquer resize do divisor externo (janela redimensionada, maximizar,
-    // restaurar, voltar do minimizado) reaplica a proporção guardada.
-    if (watched == m_outerSplitter && e->type() == QEvent::Resize) {
-        applyOutputRatio();
-        QTimer::singleShot(0, this, [this]() { applyOutputRatio(); });
-        return false;
     }
     // RESIZE POR BORDA (janela frameless). Filtro GLOBAL: os widgets filhos
     // cobrem as bordas, então observamos todos os eventos e só agimos na

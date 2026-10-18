@@ -20,6 +20,8 @@
 #include "ui/features/output/output-panel.h"
 #include "ui/features/output/output-tabs-bar.h"
 #include "ui/features/output/terminal-drawer.h"
+#include "ui/layout/dock-host.h"
+#include "ui/layout/view-registry.h"
 #include "ui/app-stylesheet.h"
 #include "ui/features/docs/doc-file-sidebar.h"
 #include "ui/main-window.h"
@@ -587,6 +589,69 @@ private slots:
         emit panel->documentKaiLinkActivated(QStringLiteral("open"), QStringLiteral("alpha"));
         QCOMPARE(tree->currentSelectionId(), QStringLiteral("a"));
         QVERIFY(!panel->documentMode());
+    }
+
+    // O leitor num painel próprio: o README aparece ali, a Saída segue mostrando a execução ao lado, e fechar o painel
+    // devolve o leitor (com o mesmo documento) para dentro da Saída.
+    void theDocumentPanelHostsTheReaderWhileTheOutputKeepsRunning()
+    {
+        write(m_project.path() + QStringLiteral("/README.md"), QStringLiteral("# Hello panel\n\nSome text.\n"));
+        seed(m_project.path());
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        OutputPanel *panel = drawer->embeddedPanel();
+        layout::DockHost *dock = window.dockHost();
+
+        QVERIFY(dock->revealView(layout::view_id::kDocument));
+        QTest::qWait(60);
+        QWidget *host = window.viewRegistry()->existingWidget(layout::view_id::kDocument);
+        QVERIFY(host != nullptr);
+        QVERIFY(panel->documentExternal());
+        QVERIFY(host->isAncestorOf(panel->docViewer()));
+        QVERIFY(!panel->isAncestorOf(panel->docViewer()));
+
+        QVERIFY(tree->selectCommand(QStringLiteral("f2")));
+        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
+        QVERIFY(panel->docViewer()->browser()->toPlainText().contains(QStringLiteral("Hello panel")));
+        QVERIFY(panel->docViewer()->isVisible());
+
+        // Rodar um comando (selecioná-lo) NÃO tira o README do painel: ele segue lá para ser lido enquanto o comando roda,
+        // e a Saída mostra a execução (o cabeçalho dela aparece: ela não virou o leitor).
+        QVERIFY(tree->selectCommand(QStringLiteral("a")));
+        QVERIFY(QMetaObject::invokeMethod(&window, "handleCommandActivated", Qt::DirectConnection,
+                                          Q_ARG(QString, QStringLiteral("a"))));
+        QTRY_VERIFY_WITH_TIMEOUT(panel->headerShown(), 4000);
+        QVERIFY(panel->documentMode());
+        QVERIFY(panel->docViewer()->browser()->toPlainText().contains(QStringLiteral("Hello panel")));
+        QVERIFY(panel->docViewer()->isVisible());
+
+        // Fechar o painel devolve o leitor para dentro da Saída, no mesmo documento.
+        dock->closeView(layout::view_id::kDocument);
+        QTest::qWait(60);
+        QVERIFY(!panel->documentExternal());
+        QVERIFY(panel->isAncestorOf(panel->docViewer()));
+        QVERIFY(panel->documentMode());
+        QVERIFY(panel->docViewer()->browser()->toPlainText().contains(QStringLiteral("Hello panel")));
+        QVERIFY(!panel->headerShown()); // de volta ao comportamento de sempre: o leitor toma a Saída
+    }
+
+    // Sem o painel Documento no quadro, nada muda: o leitor está dentro da Saída (o padrão).
+    void withoutTheDocumentPanelTheReaderStaysInsideTheOutput()
+    {
+        write(m_project.path() + QStringLiteral("/README.md"), QStringLiteral("# Plain\n"));
+        seed(m_project.path());
+        MainWindow window;
+        window.show();
+        OutputPanel *panel = window.findChild<TerminalDrawer *>()->embeddedPanel();
+        QVERIFY(!panel->documentExternal());
+        QVERIFY(window.findChild<CommandTreeWidget *>()->selectCommand(QStringLiteral("f2")));
+        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
+        QVERIFY(panel->isAncestorOf(panel->docViewer()));
+        QVERIFY(!window.dockHost()->model().isPlaced(layout::view_id::kDocument));
     }
 };
 

@@ -1,0 +1,54 @@
+#pragma once
+
+#include <QRect>
+#include <QString>
+
+#include "ui/shared/app-window-frame.h"
+
+class QToolButton;
+class QVBoxLayout;
+
+namespace kai::ui::layout {
+
+// A janela solta de um painel (flutuante): a moldura própria do app (sem a decoração do sistema, igual à Saída destacada)
+// com o painel dentro e dois botões — devolver ao quadro e fixar no topo. É filha da janela principal, então esconder o
+// Kai esconde as flutuantes, e elas só voltam junto com ele: nunca aparecem sozinhas.
+class FloatingViewWindow : public kai::ui::AppWindowFrame {
+    Q_OBJECT
+
+public:
+    FloatingViewWindow(const QString &viewId, const QString &title, QWidget *parent);
+
+    QString viewId() const { return m_viewId; }
+    void setContent(QWidget *content);
+    // Tira o painel da janela (para devolvê-lo ao quadro ou descartá-lo).
+    QWidget *takeContent(QWidget *newParent);
+    void setAlwaysOnTop(bool onTop);
+    bool alwaysOnTop() const { return m_alwaysOnTop; }
+    void setViewTitle(const QString &title);
+    QToolButton *dockButton() const { return m_dock; }
+    QToolButton *pinButton() const { return m_pin; }
+
+signals:
+    void dockRequested(const QString &viewId);
+    void closeRequested(const QString &viewId);
+    void alwaysOnTopChanged(const QString &viewId, bool onTop);
+    void geometryEdited(const QString &viewId, const QRect &geometry);
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void updatePinIcon();
+
+    QString m_viewId;
+    QVBoxLayout *m_layout = nullptr;
+    QWidget *m_content = nullptr;
+    QToolButton *m_dock = nullptr;
+    QToolButton *m_pin = nullptr;
+    bool m_alwaysOnTop = false;
+};
+
+} // namespace kai::ui::layout

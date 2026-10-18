@@ -13,6 +13,7 @@
 
 class QComboBox;
 class QFrame;
+class QKeyEvent;
 class QLabel;
 class QListWidget;
 class QPlainTextEdit;
@@ -37,8 +38,12 @@ class AiChatWindow : public QDialog {
     Q_OBJECT
 
 public:
-    explicit AiChatWindow(engine::AgentToolHost *host, QWidget *parent = nullptr);
+    explicit AiChatWindow(engine::AgentToolHost *host, QWidget *parent = nullptr, bool embedded = false);
     ~AiChatWindow() override;
+
+    // Vive como painel do quadro de painéis: sem moldura de diálogo e accept/reject (Esc) não o escondem.
+    void setEmbedded(bool embedded);
+    bool embedded() const { return m_embedded; }
 
     // Relê os perfis (ai.json): chamado ao abrir e quando as Configurações mudam.
     void reloadProfiles();
@@ -78,12 +83,15 @@ public:
     int messageWidgetCount() const;
 
 protected:
+    void done(int result) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    bool m_embedded = false;
     void buildUi();
     void selectProfileById(const QString &id);
     void applyProfileToSession();

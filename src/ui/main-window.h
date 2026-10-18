@@ -39,6 +39,7 @@
 #include "ui/shared/action-sidebar.h"
 #include "ui/features/history/process-list-dialog.h"
 #include "ui/features/output/log-viewer-dialog.h"
+#include "ui/layout/layout-model.h"
 #include "utils/theme-manager.h"
 
 class QHotkey;
@@ -50,11 +51,19 @@ class QVBoxLayout;
 
 namespace kai::ui {
 
+namespace layout {
+class DockHost;
+class LayoutController;
+class LayoutStore;
+class ViewRegistry;
+} // namespace layout
+
 class ExternalRunSession;
 class AiChatWindow;
 class MainWindowAgentHost;
 class McpBridge;
 class QuickRunPopup;
+class RunMirrorPanel;
 class DocSessionStore;
 class ParameterFormDialog;
 
@@ -130,6 +139,11 @@ public:
     void armVisibilityGuard();
     // Ver o motivo em setVisible (main-window.cpp): show sem ação do usuário é descartado.
     void setVisible(bool visible) override;
+
+    // O quadro de painéis (zonas, abas, flutuantes) — para os testes e para quem precisa saber onde um painel está.
+    layout::DockHost *dockHost() const { return m_dock; }
+    layout::ViewRegistry *viewRegistry() const { return m_viewRegistry; }
+    layout::LayoutController *layoutController() const { return m_layoutController; }
 
     // true se o ícone de bandeja foi registrado com sucesso. Usado por
     // outras decisões (notificações, "ocultar ao rodar" só faz sentido
@@ -367,12 +381,27 @@ private:
     // de posicionamento de cada grupo (Item/Exibição/Execução) em
     // SettingsData — chamado no setup e ao salvar Configurações.
     void applyActionGroupPlacement();
-    // Reparenta m_mainAreaWrapper (busca+árvore/actions) e m_terminalDrawer
-    // no splitter externo certo, conforme SettingsData::outputPosition
-    // ("bottom"/"left"/"right") — chamado no setup e ao salvar
-    // Configurações. Reparenta os widgets JÁ CONSTRUÍDOS (não recria nada),
-    // então conexões/estado do TerminalDrawer sobrevivem.
-    void applyOutputPosition();
+    // Layout flexível: registra os painéis (Comandos, Saída, ...), lê o layout.json (migrando o antigo outputPosition) e
+    // monta o DockHost. Os widgets dos painéis são construídos uma vez em setupUi(); o host só os reparenta.
+    void setupLayout();
+    void registerPanelViews();
+    void registerRunViews();
+    void restoreLayoutFromDisk();
+    // Painéis de UM comando: o espelho vivo de uma execução (`run:<id>`) e o comando KIP fixado (`kip:<id>`). Recebem log,
+    // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
+    QWidget *createMirrorPanel(const QString &commandId, bool kip);
+    void forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action);
+    void setMirrorStatus(const QString &commandId, ExecutionStatus status);
+    ExecutionStatus executionStatusFor(const QString &commandId) const;
+    void openRunPanel(const QString &commandId);
+    void pinKipPanel(const QString &commandId);
+    void updateDocumentHost();
+    // A Saída descobre pela zona onde está o eixo do colapso (altura embaixo, largura nas laterais, nenhum no miolo).
+    void applyDrawerPosition();
+    // Traz a Saída à tela (reabre se estava fechada). Chamado quando o usuário pede algo que ela mostra.
+    void showOutputPanel();
+    void showDocumentTarget();
+    void restoreDefaultLayout();
     // Iguala a altura das barras horizontais de ação e do cabeçalho/rodapé da
     // Saída (a maior altura real entre elas), em qualquer densidade.
     void syncPanelBarHeights();
@@ -404,7 +433,7 @@ private:
     void applyFrameInsets();
     void dragTreeBorder(bool press, int globalX);
     int m_treeDragStartX = 0;
-    QList<int> m_treeDragStartSizes;
+    int m_treeDragStartWidth = 0;
 
     // Handlers das ações de item/exibição/execução, extraídos das lambdas
     // dos sinais de clique para serem reusados também pelos atalhos de
@@ -494,6 +523,8 @@ private:
     // Documentação da pasta selecionada (README do diretório, ou o primeiro documento que houver) na área de Saída.
     void showFolderDocumentation(const QString &folderId);
     void setCommandsCollapsed(bool collapsed);
+    // Reflete o painel maximizado no DockHost (a Saída maximizada é o modo foco) no flag, no chevron e nas configurações.
+    void syncCommandsCollapsed();
     void updateCommandsToggle();
     void showQuickRun();
     QuickRunPopup *m_quickRun = nullptr;
@@ -593,6 +624,7 @@ private:
     MainWindowAgentHost *m_agentHost = nullptr;
     McpBridge *m_mcpBridge = nullptr;
     QPointer<AiChatWindow> m_aiChat;
+    bool m_aiConfigured = false;
     QVector<core::GlobalAction> m_globalActions;
     std::map<QString, std::shared_ptr<ActionRun>> m_actionRuns; // execuções de ação em andamento
     QSet<QString> m_actionsRan; // ações que já rodaram nesta sessão (têm saída guardada pra carregar)
@@ -748,33 +780,18 @@ private:
     class LoadingOverlay *m_loadingOverlay = nullptr;
     TerminalDrawer *m_terminalDrawer = nullptr;
     QSplitter *m_horizontalSplitter = nullptr;
-    // Widget "fixo" da área principal (busca + m_horizontalSplitter),
-    // construído uma única vez em setupUi(); applyOutputPosition() decide
-    // em qual splitter externo ele entra (m_outerSplitter, junto com
-    // m_terminalDrawer), sem recriar nada — ver applyOutputPosition().
+    // Widget "fixo" da área principal (busca + m_horizontalSplitter), construído uma única vez em setupUi() e entregue ao
+    // DockHost como o painel "commands".
     QWidget *m_mainAreaWrapper = nullptr;
-    // Widget de conteúdo (abaixo da title bar) cujo QVBoxLayout hospeda o
-    // m_outerSplitter — applyOutputPosition() troca o splitter externo
-    // dentro deste layout ao mudar SettingsData::outputPosition.
+    // Widget de conteúdo (abaixo da title bar) que hospeda o DockHost e a tela de boas-vindas.
     QWidget *m_content = nullptr;
-    // Splitter externo ATUAL (recriado por applyOutputPosition() a cada
-    // mudança de posição): Vertical [m_mainAreaWrapper, m_terminalDrawer]
-    // para "bottom" (comportamento padrão/histórico), ou Horizontal
-    // [m_terminalDrawer, m_mainAreaWrapper] / [m_mainAreaWrapper,
-    // m_terminalDrawer] para "left"/"right".
-    QSplitter *m_outerSplitter = nullptr;
-    // Debounce do salvamento do tamanho do m_outerSplitter (pedido do
-    // usuário: "o que eu salvei redimensionando fica") — reinicia a cada
-    // QSplitter::splitterMoved (drag do mouse), só persiste settings.json
-    // quando o usuário PARA de arrastar. Ver applyOutputPosition().
-    QTimer *m_outputSplitterSaveTimer = nullptr;
-    // Fração do divisor externo que pertence à Saída (0..1). É a ÚNICA fonte
-    // da proporção: só muda quando o usuário arrasta o divisor; resize da
-    // janela, maximizar/minimizar e recolher/reabrir apenas a reaplicam.
-    double m_outputRatio = 0.0;
-    bool m_applyingOutputRatio = false;
-    // Modo foco: a lista de comandos some e a Saída (com as guias dos programas ativos) ocupa tudo. O chevron fica
-    // no começo da barra de guias. Vale só para a sessão.
+    layout::ViewRegistry *m_viewRegistry = nullptr;
+    layout::DockHost *m_dock = nullptr;
+    layout::LayoutStore *m_layoutStore = nullptr;
+    layout::LayoutController *m_layoutController = nullptr;
+    QHash<QString, QPointer<RunMirrorPanel>> m_mirrors; // por id do painel (`run:<id>` / `kip:<id>`)
+    // Modo foco: a lista de comandos some e a Saída (com as guias dos programas ativos) ocupa tudo — é o painel Saída
+    // maximizado no DockHost. O chevron fica no começo da barra de guias.
     bool m_commandsCollapsed = false;
     // Execução em segundo plano de um comando OCULTO (cron, auto-run, `kai run`): não puxa a Saída, não a expande e não
     // cria guia. `m_quietRun` vale só durante a chamada que dispara; `m_quietRunIds` guarda os que estão rodando assim.
@@ -785,9 +802,6 @@ private:
     bool m_scheduledRun = false;
     QSet<QString> m_silentRunIds;
     void runInBackground(const QString &commandId, bool scheduled = false);
-    QString m_appliedOutputPosition;
-    void applyOutputRatio();
-    void captureOutputRatio();
     // Shortcuts Manager v2 (ver utils::actionShortcutSpecs): UM QVector
     // cobre TODAS as ações agora (antes eram ~12 ponteiros nomeados +
     // este vetor separado pras data-driven) — cada spec pode gerar 0..N

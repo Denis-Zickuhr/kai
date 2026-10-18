@@ -12,11 +12,15 @@
 #include "core/notification-history.h"
 
 class QButtonGroup;
+class QDialogButtonBox;
+class QKeyEvent;
+class QResizeEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QSplitter;
 class QStackedWidget;
 class QTextBrowser;
 class QToolButton;
@@ -39,9 +43,13 @@ public:
     // (aí "Ir para o comando" some).
     using CommandResolver = std::function<QString(const QString &commandId)>;
 
-    explicit NotificationHistoryDialog(core::NotificationHistory *history, QWidget *parent = nullptr);
+    explicit NotificationHistoryDialog(core::NotificationHistory *history, QWidget *parent = nullptr, bool embedded = false);
 
     void setCommandResolver(CommandResolver resolver);
+
+    // Vive como painel do quadro de painéis: sem moldura de diálogo, sem o botão Fechar, e accept/reject não o escondem.
+    void setEmbedded(bool embedded);
+    bool embedded() const { return m_embedded; }
 
     // Texto curto de "quando": "agora", "há 5 min" ou HH:mm. Estático para
     // teste.
@@ -52,6 +60,11 @@ public:
 signals:
     // Pedido para abrir o comando que originou a notificação. O diálogo fecha.
     void commandRequested(const QString &commandId);
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+    void done(int result) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     enum class Filter { All, Unread };
@@ -71,6 +84,8 @@ private:
     void markAllRead();
     void clearAll();
 
+    bool m_embedded = false;
+    QDialogButtonBox *m_buttonBox = nullptr;
     core::NotificationHistory *m_history = nullptr;
     CommandResolver m_resolver;
     QVector<core::NotificationRecord> m_records;   // todos, mais recentes primeiro
@@ -99,6 +114,9 @@ private:
     QPushButton *m_copyButton = nullptr;
     QPushButton *m_deleteButton = nullptr;
 
+    QSplitter *m_splitter = nullptr;
+    QWidget *m_listCard = nullptr;
+    QWidget *m_detailCard = nullptr;
     QPushButton *m_markAllButton = nullptr;
     QPushButton *m_clearButton = nullptr;
 };

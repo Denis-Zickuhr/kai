@@ -12,6 +12,7 @@ Kai has an optional **AI assistant**: an **editor assistant** that writes or cha
 |---|---|
 | **Anthropic** | API key from your Anthropic account. |
 | **OpenAI** | API key from your OpenAI account. |
+| **Google Gemini (AI Studio)** | API key from [AI Studio](https://aistudio.google.com/apikey). Uses Google's OpenAI-compatible endpoint, so tools and streaming work like any other provider. |
 | **Local (Ollama)**, **Local (LM Studio)** | An OpenAI-compatible server on your machine or network. No key needed. |
 | **OpenRouter**, **Other (OpenAI-compatible)** | Any server that speaks the Chat Completions API — type its address. |
 

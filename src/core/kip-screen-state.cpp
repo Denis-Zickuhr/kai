@@ -3,6 +3,7 @@
 #include "utils/translation-manager.h"
 
 #include <algorithm>
+#include <type_traits>
 
 namespace kai::core {
 
@@ -52,7 +53,8 @@ const KipField *KipOpenScreen::fieldNamed(const QString &name) const
 
 bool KipOpenScreen::isRemembered(const KipField &field) const
 {
-    if (kind != Kind::Prompt || field.type == KipFieldType::Secret) {
+    // Um diff muda a cada execução: lembrar trechos marcados não faz sentido.
+    if (kind != Kind::Prompt || field.type == KipFieldType::Secret || field.type == KipFieldType::Diff) {
         return false;
     }
     // remember:false no prompt OU no campo desliga (o mais conservador).
@@ -212,25 +214,29 @@ KipScreenState::ApplyResult KipScreenState::apply(const KipMessage &message)
         result.changed = true;
         return result;
     }
+    if (const auto *diff = std::get_if<KipDiff>(&message)) {
+        addBlock(*diff);
+        result.changed = true;
+        return result;
+    }
+    if (const auto *kv = std::get_if<KipKv>(&message)) {
+        addBlock(*kv);
+        result.changed = true;
+        return result;
+    }
+    if (const auto *stats = std::get_if<KipStats>(&message)) {
+        addBlock(*stats);
+        result.changed = true;
+        return result;
+    }
+    if (const auto *code = std::get_if<KipCode>(&message)) {
+        addBlock(*code);
+        result.changed = true;
+        return result;
+    }
 
     if (const auto *step = std::get_if<KipStep>(&message)) {
-        for (KipBlock &block : m_blocks) {
-            auto *steps = std::get_if<KipSteps>(&block);
-            if (!steps || steps->id != step->steps) {
-                continue;
-            }
-            for (KipStepItem &item : steps->items) {
-                if (item.id == step->id) {
-                    item.state = step->state;
-                    item.detail = step->detail;
-                    result.changed = true;
-                    return result;
-                }
-            }
-            result.diagnostics << utils::tr(QStringLiteral("kip.diag.step_unknown_item")).arg(step->id, step->steps);
-            return result;
-        }
-        result.diagnostics << utils::tr(QStringLiteral("kip.diag.step_unknown_list")).arg(step->steps);
+        applyStep(*step, result);
         return result;
     }
 
@@ -245,6 +251,55 @@ KipScreenState::ApplyResult KipScreenState::apply(const KipMessage &message)
 
     // notify / set_env não vivem na tela: a sessão os trata.
     return result;
+}
+
+void KipScreenState::applyStep(const KipStep &step, ApplyResult &result)
+{
+    for (KipBlock &block : m_blocks) {
+        auto *steps = std::get_if<KipSteps>(&block);
+        if (!steps || steps->id != step.steps) {
+            continue;
+        }
+        for (KipStepItem &item : steps->items) {
+            if (item.id != step.id) {
+                continue;
+            }
+            if (step.state) item.state = *step.state;
+            if (step.detail) item.detail = *step.detail;
+            if (!step.log.isEmpty()) {
+                QString text = step.log;
+                if (text.endsWith(QLatin1Char('\n'))) text.chop(1);
+                for (QString line : text.split(QLatin1Char('\n'))) {
+                    if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+                    item.log.append(line);
+                }
+                if (item.log.size() > kKipMaxStepLogLines) {
+                    item.log = item.log.mid(item.log.size() - kKipMaxStepLogLines);
+                }
+            }
+            result.changed = true;
+            return;
+        }
+        result.diagnostics << utils::tr(QStringLiteral("kip.diag.step_unknown_item")).arg(step.id, step.steps);
+        return;
+    }
+    result.diagnostics << utils::tr(QStringLiteral("kip.diag.step_unknown_list")).arg(step.steps);
+}
+
+QString KipScreenState::diffViewPreference() const
+{
+    const QString view = m_remembered.value(QStringLiteral("diff_view")).toString();
+    return view == QLatin1String("unified") || view == QLatin1String("split") ? view : QString();
+}
+
+void KipScreenState::setDiffViewPreference(const QString &view)
+{
+    if (view != QLatin1String("unified") && view != QLatin1String("split")) {
+        return;
+    }
+    // Chave sem "/": nunca colide com uma resposta ("<prompt>/<campo>").
+    m_remembered[QStringLiteral("diff_view")] = view;
+    m_committedRemembered[QStringLiteral("diff_view")] = view;
 }
 
 // ---- chips (§21) ----------------------------------------------------------------
@@ -316,6 +371,83 @@ KipScreenState::ChipStart KipScreenState::startChip(const QString &chipId)
     run.phase = KipChipRun::Phase::Running;
     m_open->chipRun = run;
     return ChipStart::Send;
+}
+
+KipScreenState::ChipStart KipScreenState::startRowAction(const QString &field, const QString &table, const QString &row,
+                                                         const QString &action)
+{
+    if (!m_open || m_open->kind != KipOpenScreen::Kind::Prompt || m_open->locked) {
+        return ChipStart::Rejected;
+    }
+    if ((m_open->chipRun && m_open->chipRun->busy()) || m_open->changePending) {
+        return ChipStart::Rejected;
+    }
+    const QVector<KipChip> *actions = nullptr;
+    const QJsonArray *rows = nullptr;
+    QString rowKey;
+    if (!field.isEmpty()) {
+        const KipField *f = m_open->fieldNamed(field);
+        if (!f || f->type != KipFieldType::Table) return ChipStart::Rejected;
+        actions = &f->rowActions;
+        rows = &f->rows;
+        rowKey = f->rowKey;
+    } else {
+        for (const KipBlock &block : m_blocks) {
+            const auto *t = std::get_if<KipTable>(&block);
+            if (t && !t->id.isEmpty() && t->id == table) {
+                actions = &t->rowActions;
+                rows = &t->rows;
+                rowKey = t->rowKey;
+                break;
+            }
+        }
+        if (!actions) return ChipStart::Rejected;
+    }
+    const KipChip *chip = nullptr;
+    for (const KipChip &a : *actions) {
+        if (a.id == action) chip = &a;
+    }
+    if (!chip) return ChipStart::Rejected;
+    bool allowed = false;
+    for (const QJsonValue &r : *rows) {
+        const QJsonObject obj = r.toObject();
+        if (kipRowKey(obj, rowKey) == row) {
+            allowed = kipRowActionIds(obj, *actions).contains(action);
+            break;
+        }
+    }
+    if (!allowed) return ChipStart::Rejected;
+
+    KipChipRun run;
+    run.chipId = action;
+    run.rowAction = true;
+    run.field = field;
+    run.table = field.isEmpty() ? table : QString();
+    run.row = row;
+    run.phase = chip->confirm ? KipChipRun::Phase::Confirming : KipChipRun::Phase::Running;
+    m_open->chipRun = run;
+    return chip->confirm ? ChipStart::NeedsConfirmation : ChipStart::Send;
+}
+
+const KipChip *KipScreenState::runningChipDefinition() const
+{
+    if (!m_open || !m_open->chipRun) return nullptr;
+    const KipChipRun &run = *m_open->chipRun;
+    if (!run.rowAction) return m_open->chipNamed(run.chipId);
+    const QVector<KipChip> *actions = nullptr;
+    if (!run.field.isEmpty()) {
+        if (const KipField *f = m_open->fieldNamed(run.field)) actions = &f->rowActions;
+    } else {
+        for (const KipBlock &block : m_blocks) {
+            const auto *t = std::get_if<KipTable>(&block);
+            if (t && t->id == run.table) actions = &t->rowActions;
+        }
+    }
+    if (!actions) return nullptr;
+    for (const KipChip &a : *actions) {
+        if (a.id == run.chipId) return &a;
+    }
+    return nullptr;
 }
 
 bool KipScreenState::confirmChip()
@@ -400,8 +532,9 @@ void KipScreenState::addBlock(const KipBlock &block)
     if (const auto *progress = std::get_if<KipProgress>(&block)) {
         m_progressCancellable = progress->cancellable;
         for (KipBlock &existing : m_blocks) {
-            if (std::holds_alternative<KipProgress>(existing)) {
-                existing = block; // "um progress posterior atualiza a mesma barra"
+            const auto *old = std::get_if<KipProgress>(&existing);
+            if (old && old->id == progress->id) {
+                existing = block; // "um progress posterior atualiza a mesma barra" (por id, §27)
                 return;
             }
         }
@@ -418,6 +551,34 @@ void KipScreenState::addBlock(const KipBlock &block)
             for (KipBlock &existing : m_blocks) {
                 const auto *old = std::get_if<KipTable>(&existing);
                 if (old && old->id == table->id) {
+                    existing = block;
+                    return;
+                }
+            }
+        }
+    } else {
+        // diff / kv / stats / code: mesmo id substitui (sem id, sempre um bloco novo).
+        const QString id = std::visit([](const auto &b) -> QString {
+            using T = std::decay_t<decltype(b)>;
+            if constexpr (std::is_same_v<T, KipDiff> || std::is_same_v<T, KipKv> || std::is_same_v<T, KipStats>
+                          || std::is_same_v<T, KipCode>) {
+                return b.id;
+            } else {
+                return QString();
+            }
+        }, block);
+        if (!id.isEmpty()) {
+            for (KipBlock &existing : m_blocks) {
+                if (existing.index() == block.index()
+                    && std::visit([&id](const auto &b) -> bool {
+                           using T = std::decay_t<decltype(b)>;
+                           if constexpr (std::is_same_v<T, KipDiff> || std::is_same_v<T, KipKv>
+                                         || std::is_same_v<T, KipStats> || std::is_same_v<T, KipCode>) {
+                               return b.id == id;
+                           } else {
+                               return false;
+                           }
+                       }, existing)) {
                     existing = block;
                     return;
                 }

@@ -41,7 +41,7 @@ constexpr int kClose = 16;        // lado da área do "×"
 constexpr int kMaxTextWidth = 170;
 constexpr int kVerticalInset = 3; // folga acima/abaixo da guia dentro da barra
 constexpr int kOverflowWidth = 24;
-constexpr int kToggleWidth = 26;   // chevron que recolhe a lista de comandos, no começo da barra
+constexpr int kToggleWidth = 26;   // largura dos botões das pontas ("+" no começo, recolher a Saída no fim)
 constexpr int kFade = 14;          // faixa em que a guia cortada pela borda esmaece
 } // namespace
 
@@ -283,11 +283,11 @@ void OutputTabsBar::ensureCurrentVisible()
 
 int OutputTabsBar::leadingWidth() const
 {
-    if (!m_toggleVisible) {
+    if (!m_quickRunVisible) {
         return 0;
     }
-    // Chevron + "+" + documentos: três botões do mesmo tamanho, a partir de kMargin/2.
-    return kMargin / 2 + 3 * (kToggleWidth - kMargin / 2);
+    // O "+" (execução rápida), a partir de kMargin/2.
+    return kMargin / 2 + (kToggleWidth - kMargin / 2);
 }
 
 int OutputTabsBar::usableWidth() const
@@ -317,52 +317,22 @@ QRect OutputTabsBar::outputToggleRect() const
     return QRect(width() - kToggleWidth, kVerticalInset, kToggleWidth - kMargin / 2, std::max(10, height() - 1 - 2 * kVerticalInset));
 }
 
-void OutputTabsBar::setCommandsToggleVisible(bool visible)
+void OutputTabsBar::setQuickRunVisible(bool visible)
 {
-    if (m_toggleVisible == visible) {
+    if (m_quickRunVisible == visible) {
         return;
     }
-    m_toggleVisible = visible;
+    m_quickRunVisible = visible;
     clampScroll();
     update();
-}
-
-void OutputTabsBar::setCommandsToggleState(bool collapsed, Qt::Edge commandsEdge)
-{
-    if (m_toggleCollapsed == collapsed && m_commandsEdge == commandsEdge) {
-        return;
-    }
-    m_toggleCollapsed = collapsed;
-    m_commandsEdge = commandsEdge;
-    clampScroll();
-    ensureCurrentVisible();
-    update();
-}
-
-QRect OutputTabsBar::toggleRect() const
-{
-    if (!m_toggleVisible) {
-        return QRect();
-    }
-    return QRect(kMargin / 2, kVerticalInset, kToggleWidth - kMargin / 2, std::max(10, height() - 1 - 2 * kVerticalInset));
 }
 
 QRect OutputTabsBar::quickRunRect() const
 {
-    if (!m_toggleVisible) {
+    if (!m_quickRunVisible) {
         return QRect();
     }
-    const QRect toggle = toggleRect();
-    return QRect(toggle.right() + 1, toggle.top(), toggle.width(), toggle.height());
-}
-
-QRect OutputTabsBar::docsRect() const
-{
-    const QRect quickRun = quickRunRect();
-    if (!quickRun.isValid()) {
-        return QRect();
-    }
-    return QRect(quickRun.right() + 1, quickRun.top(), quickRun.width(), quickRun.height());
+    return QRect(kMargin / 2, kVerticalInset, kToggleWidth - kMargin / 2, std::max(10, height() - 1 - 2 * kVerticalInset));
 }
 
 bool OutputTabsBar::isOverflowing() const
@@ -435,26 +405,6 @@ void OutputTabsBar::paintEvent(QPaintEvent *)
                                             std::max(0, usableWidth() - 2 * kMargin - kPadX - leadingWidth())));
     }
 
-    const QRect toggle = toggleRect();
-    if (toggle.isValid()) {
-        if (m_hoverToggle) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(tk::hoverBg()));
-            painter.drawRoundedRect(QRectF(toggle), radius, radius);
-        }
-        // O chevron aponta para onde a lista vai (aberta) ou de onde ela volta (recolhida).
-        QString icon;
-        switch (m_commandsEdge) {
-        case Qt::LeftEdge: icon = m_toggleCollapsed ? QStringLiteral("chevron-right") : QStringLiteral("chevron-left"); break;
-        case Qt::RightEdge: icon = m_toggleCollapsed ? QStringLiteral("chevron-left") : QStringLiteral("chevron-right"); break;
-        default: icon = m_toggleCollapsed ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up"); break;
-        }
-        constexpr int kToggleIcon = 14;
-        const QRect iconRect(toggle.left() + (toggle.width() - kToggleIcon) / 2,
-                             toggle.top() + (toggle.height() - kToggleIcon) / 2, kToggleIcon, kToggleIcon);
-        LucideIcons::icon(icon, m_hoverToggle ? fg : muted, kToggleIcon).paint(&painter, iconRect);
-    }
-
     const QRect quickRun = quickRunRect();
     if (quickRun.isValid()) {
         if (m_hoverQuickRun) {
@@ -479,19 +429,6 @@ void OutputTabsBar::paintEvent(QPaintEvent *)
         const QRect iconRect(outputToggle.left() + (outputToggle.width() - kOutputIcon) / 2,
                              outputToggle.top() + (outputToggle.height() - kOutputIcon) / 2, kOutputIcon, kOutputIcon);
         LucideIcons::icon(m_outputToggleIcon, m_hoverOutputToggle ? fg : muted, kOutputIcon).paint(&painter, iconRect);
-    }
-
-    const QRect docs = docsRect();
-    if (docs.isValid()) {
-        if (m_hoverDocs) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(tk::hoverBg()));
-            painter.drawRoundedRect(QRectF(docs), radius, radius);
-        }
-        constexpr int kDocIcon = 14;
-        const QRect docRect(docs.left() + (docs.width() - kDocIcon) / 2, docs.top() + (docs.height() - kDocIcon) / 2,
-                            kDocIcon, kDocIcon);
-        LucideIcons::icon(QStringLiteral("file-text"), m_hoverDocs ? fg : muted, kDocIcon).paint(&painter, docRect);
     }
 
     // As guias rolam entre os botões das pontas. Onde ainda há guia escondida a faixa esmaece, em vez de a guia cortada
@@ -640,9 +577,7 @@ void OutputTabsBar::paintTabs(QPainter &painter, const Layout &layout) const
 void OutputTabsBar::mousePressEvent(QMouseEvent *event)
 {
     m_pressedQuickRun = quickRunRect().contains(event->position().toPoint());
-    m_pressedDocs = docsRect().contains(event->position().toPoint());
     m_pressedOutputToggle = outputToggleRect().contains(event->position().toPoint());
-    m_pressedToggle = toggleRect().contains(event->position().toPoint());
     m_pressedOverflow = overflowRect().contains(event->position().toPoint());
     m_pressed = indexAt(event->position().toPoint());
     m_dragActive = false;
@@ -654,7 +589,7 @@ void OutputTabsBar::mousePressEvent(QMouseEvent *event)
         m_dragGrab = m_pressPos.x() - layout.tabs.at(m_pressed).left();
         m_dragOrigin = m_pressed;
     }
-    if (m_pressed < 0 && !m_pressedOverflow && !m_pressedToggle && !m_pressedQuickRun && !m_pressedDocs
+    if (m_pressed < 0 && !m_pressedOverflow && !m_pressedQuickRun
         && !m_pressedOutputToggle) {
         QWidget::mousePressEvent(event);
     }
@@ -681,24 +616,10 @@ void OutputTabsBar::mouseReleaseEvent(QMouseEvent *event)
         }
         return;
     }
-    if (m_pressedDocs) {
-        m_pressedDocs = false;
-        if (event->button() == Qt::LeftButton && docsRect().contains(event->position().toPoint())) {
-            emit docsRequested();
-        }
-        return;
-    }
     if (m_pressedQuickRun) {
         m_pressedQuickRun = false;
         if (event->button() == Qt::LeftButton && quickRunRect().contains(event->position().toPoint())) {
             emit quickRunRequested();
-        }
-        return;
-    }
-    if (m_pressedToggle) {
-        m_pressedToggle = false;
-        if (event->button() == Qt::LeftButton && toggleRect().contains(event->position().toPoint())) {
-            emit commandsToggleRequested();
         }
         return;
     }
@@ -812,23 +733,19 @@ void OutputTabsBar::mouseMoveEvent(QMouseEvent *event)
     const int index = indexAt(pos);
     const bool onClose = index >= 0 && computeLayout().closes.at(index).contains(pos);
     const bool onOverflow = overflowRect().contains(pos);
-    const bool onToggle = toggleRect().contains(pos);
     const bool onQuickRun = quickRunRect().contains(pos);
-    const bool onDocs = docsRect().contains(pos);
     const bool onOutputToggle = outputToggleRect().contains(pos);
     if (onOutputToggle != m_hoverOutputToggle) {
         m_hoverOutputToggle = onOutputToggle;
         update();
     }
-    if (index != m_hover || onClose != m_hoverClose || onOverflow != m_hoverOverflow || onToggle != m_hoverToggle
-        || onQuickRun != m_hoverQuickRun || onDocs != m_hoverDocs) {
-        m_hoverDocs = onDocs;
+    if (index != m_hover || onClose != m_hoverClose || onOverflow != m_hoverOverflow
+        || onQuickRun != m_hoverQuickRun) {
         m_hoverQuickRun = onQuickRun;
         m_hover = index;
         m_hoverClose = onClose;
         m_hoverOverflow = onOverflow;
-        m_hoverToggle = onToggle;
-        setCursor(index >= 0 || onOverflow || onToggle || onQuickRun || onDocs || onOutputToggle ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setCursor(index >= 0 || onOverflow || onQuickRun || onOutputToggle ? Qt::PointingHandCursor : Qt::ArrowCursor);
         update();
     }
     QWidget::mouseMoveEvent(event);
@@ -836,12 +753,10 @@ void OutputTabsBar::mouseMoveEvent(QMouseEvent *event)
 
 void OutputTabsBar::leaveEvent(QEvent *event)
 {
-    if (m_hover != -1 || m_hoverOverflow || m_hoverToggle || m_hoverQuickRun || m_hoverDocs || m_hoverOutputToggle) {
+    if (m_hover != -1 || m_hoverOverflow || m_hoverQuickRun || m_hoverOutputToggle) {
         m_hover = -1;
         m_hoverOutputToggle = false;
-        m_hoverDocs = false;
         m_hoverQuickRun = false;
-        m_hoverToggle = false;
         m_hoverClose = false;
         m_hoverOverflow = false;
         update();
@@ -870,22 +785,12 @@ bool OutputTabsBar::event(QEvent *event)
 {
     if (event->type() == QEvent::ToolTip) {
         const auto *help = static_cast<QHelpEvent *>(event);
-        if (toggleRect().contains(help->pos())) {
-            QToolTip::showText(help->globalPos(),
-                               utils::tr(m_toggleCollapsed ? QStringLiteral("output_tabs.commands.expand")
-                                                           : QStringLiteral("output_tabs.commands.collapse")), this);
-            return true;
-        }
         if (quickRunRect().contains(help->pos())) {
             QToolTip::showText(help->globalPos(), utils::tr(QStringLiteral("output_tabs.quick_run.tooltip")), this);
             return true;
         }
         if (outputToggleRect().contains(help->pos())) {
             QToolTip::showText(help->globalPos(), utils::tr(QStringLiteral("terminal_drawer.toggle.tooltip")), this);
-            return true;
-        }
-        if (docsRect().contains(help->pos())) {
-            QToolTip::showText(help->globalPos(), utils::tr(QStringLiteral("output_tabs.docs.tooltip")), this);
             return true;
         }
         if (overflowRect().contains(help->pos())) {

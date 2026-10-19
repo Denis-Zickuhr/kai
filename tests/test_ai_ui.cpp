@@ -286,6 +286,13 @@ private slots:
         QVERIFY(out.isLocalEndpoint());
         QVERIFY(out.isUsable()); // local dispensa chave
         QCOMPARE(out.id, QStringLiteral("x"));
+
+        dialog.providerCombo()->setCurrentIndex(dialog.providerCombo()->findData(QStringLiteral("gemini")));
+        dialog.modelCombo()->setCurrentText(QStringLiteral("gemini-2.5-flash"));
+        const AiProfile gemini = dialog.profile();
+        QCOMPARE(gemini.wireFormat, AiWireFormat::OpenAiCompatible);
+        QCOMPARE(gemini.chatUrl(), QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"));
+        QVERIFY(gemini.needsKey());
         QTest::qWait(80);
         shot(&dialog, QStringLiteral("profile-dialog"));
     }

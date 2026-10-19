@@ -46,8 +46,8 @@ QToolButton *makeWindowControlButton(QWidget *parent, WindowControl kind)
     // Fechar tem hover vermelho (padrão moderno); os demais, o hover comum.
     const QString hover = kind == WindowControl::Close ? utils::tokens::dangerBg() : utils::tokens::hoverBg();
     button->setStyleSheet(QStringLiteral(
-        "QToolButton#%1 { border: none; border-radius: 4px; padding: 0px; background: transparent; }"
-        "QToolButton#%1:hover { background: %2; }").arg(name, hover));
+        "QToolButton#%1 { border: none; border-radius: %3px; padding: 0px; background: transparent; }"
+        "QToolButton#%1:hover { background: %2; }").arg(name, hover).arg(utils::tokens::radiusSm()));
     refreshWindowControlIcon(button, kind);
     return button;
 }

@@ -50,74 +50,32 @@ private slots:
         QVERIFY(!bar.isHidden());
     }
 
-    // O chevron que recolhe a lista de comandos: escondido por padrão, no começo da barra (as guias começam depois dele),
-    // e o clique nele só avisa.
-    void theCommandsChevronSitsBeforeTheTabsAndOnlyAsksForTheToggle()
+    // O "+" (execução rápida): escondido por padrão, no começo da barra (as guias começam depois dele); o clique só avisa.
+    void thePlusButtonSitsBeforeTheTabsAndOnlyAsksForTheAction()
     {
         OutputTabsBar bar;
         bar.resize(800, 28);
         bar.setBarHeight(28);
         bar.setTabs(tabs(2));
         bar.show();
-        QVERIFY(!bar.toggleRect().isValid()); // desligado: não existe
-        const int firstTabWithoutToggle = bar.tabRect(QStringLiteral("c0")).left();
+        QVERIFY(!bar.quickRunRect().isValid()); // desligado: não existe
+        const int firstTabWithout = bar.tabRect(QStringLiteral("c0")).left();
 
-        bar.setCommandsToggleVisible(true);
-        QVERIFY(bar.toggleRect().isValid());
-        QVERIFY(bar.toggleRect().right() < bar.tabRect(QStringLiteral("c0")).left());
-        QVERIFY(bar.tabRect(QStringLiteral("c0")).left() > firstTabWithoutToggle);
-        QVERIFY(bar.tabAt(bar.toggleRect().center()).isEmpty());
-
-        QSignalSpy toggled(&bar, &OutputTabsBar::commandsToggleRequested);
-        QSignalSpy activated(&bar, &OutputTabsBar::tabActivated);
-        QTest::mouseClick(&bar, Qt::LeftButton, Qt::NoModifier, bar.toggleRect().center());
-        QCOMPARE(toggled.size(), 1);
-        QCOMPARE(activated.size(), 0);
-
-        // Estado e lado só repintam (o chevron troca de direção); não quebram nada.
-        bar.setCommandsToggleState(true, Qt::RightEdge);
-        bar.setCommandsToggleState(false, Qt::LeftEdge);
-        QTest::mouseClick(&bar, Qt::LeftButton, Qt::NoModifier, bar.toggleRect().center());
-        QCOMPARE(toggled.size(), 2);
-
-        bar.setCommandsToggleVisible(false);
-        QVERIFY(!bar.toggleRect().isValid());
-        QCOMPARE(bar.tabRect(QStringLiteral("c0")).left(), firstTabWithoutToggle);
-    }
-
-    // O "+" e o ícone de documentos ficam ao lado do chevron por padrão (lista aberta ou recolhida), empurram as guias e
-    // cada um pede a sua ação ao clicar.
-    void thePlusAndDocsButtonsSitNextToTheChevronByDefault()
-    {
-        OutputTabsBar bar;
-        bar.resize(800, 28);
-        bar.setBarHeight(28);
-        bar.setTabs(tabs(2));
-        bar.show();
-        QVERIFY(!bar.quickRunRect().isValid());
-        QVERIFY(!bar.docsRect().isValid());
-        bar.setCommandsToggleVisible(true);
-        for (bool collapsed : {false, true}) {
-            bar.setCommandsToggleState(collapsed, Qt::TopEdge);
-            QVERIFY(bar.quickRunRect().isValid());
-            QVERIFY(bar.docsRect().isValid());
-            QVERIFY(bar.quickRunRect().left() > bar.toggleRect().right());
-            QVERIFY(bar.docsRect().left() > bar.quickRunRect().right());
-            QVERIFY(bar.docsRect().right() < bar.tabRect(QStringLiteral("c0")).left());
-        }
+        bar.setQuickRunVisible(true);
+        QVERIFY(bar.quickRunRect().isValid());
+        QVERIFY(bar.quickRunRect().right() < bar.tabRect(QStringLiteral("c0")).left());
+        QVERIFY(bar.tabRect(QStringLiteral("c0")).left() > firstTabWithout);
+        QVERIFY(bar.tabAt(bar.quickRunRect().center()).isEmpty());
 
         QSignalSpy quick(&bar, &OutputTabsBar::quickRunRequested);
-        QSignalSpy docs(&bar, &OutputTabsBar::docsRequested);
-        QSignalSpy toggled(&bar, &OutputTabsBar::commandsToggleRequested);
         QSignalSpy activated(&bar, &OutputTabsBar::tabActivated);
         QTest::mouseClick(&bar, Qt::LeftButton, Qt::NoModifier, bar.quickRunRect().center());
         QCOMPARE(quick.size(), 1);
-        QCOMPARE(docs.size(), 0);
-        QTest::mouseClick(&bar, Qt::LeftButton, Qt::NoModifier, bar.docsRect().center());
-        QCOMPARE(docs.size(), 1);
-        QCOMPARE(quick.size(), 1);
-        QCOMPARE(toggled.size(), 0);
         QCOMPARE(activated.size(), 0);
+
+        bar.setQuickRunVisible(false);
+        QVERIFY(!bar.quickRunRect().isValid());
+        QCOMPARE(bar.tabRect(QStringLiteral("c0")).left(), firstTabWithout);
     }
 
     // Arrastar uma guia a reordena (sem ativá-la por engano); soltar emite o índice final.
@@ -292,7 +250,7 @@ private slots:
         OutputTabsBar bar;
         bar.resize(420, 28);
         bar.setBarHeight(28);
-        bar.setCommandsToggleVisible(true);
+        bar.setQuickRunVisible(true);
         bar.setTabs(tabs(12));
         bar.setCurrent(QStringLiteral("c0"));
         bar.show();
@@ -302,7 +260,7 @@ private slots:
             QCoreApplication::sendEvent(&bar, &wheel);
         }
         const QRect tab = bar.tabRect(QStringLiteral("c0")); // a atual, com fundo, agora metade sob a borda esquerda
-        const int edge = bar.docsRect().right() + 1;
+        const int edge = bar.quickRunRect().right() + 1;
         QVERIFY(tab.left() < edge && tab.right() > edge + 40);
         QImage image(bar.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);

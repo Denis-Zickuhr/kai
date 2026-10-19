@@ -32,6 +32,15 @@ functions (`send`, `esc`, `jget`, `recv`) so it can be copied on its own.
 | 16 | *(inline shell)* | the same wizard as 13 in the shell: `kip prompt`, `kip recv`, `kip get "$KIP_MSG"`, `kip done` |
 | 17 | *(inline PHP)* | the same wizard in PHP: the class `Kip` (`Kip::prompt`, `Kip::progress`, `Kip::done`) — injected, no `require` |
 | 18 | `external-tool.py` | a plain Python **file** called by a native `kip: true` command: Kai exports `PYTHONPATH`, so `import kip` works inside it (same for `NODE_PATH` / `PHP_INI_SCAN_DIR`) |
+| 19 | `git-review.py` | **round-2 components**: a table with cell formats and **row actions** (sync / PR / delete with an inline confirmation; `main` can only sync), a `diff` block, a commit form with a `diff` field (pick hunks), a `max_length` message and a `segmented` select, step output and several bars, then `stats`, `kv` and `code` — fake data |
+| 20 | *(inline shell)* | compare two files: `kip diff --left-file … --right-file …` reads them where the script runs; Kai shows them side by side |
+| 21 | `diff-viewer.py` | the **`diff` block**: pick a commit in a table (copy / badge / muted cells) and see its diff — several files, a rename, a binary, a new file, changed words highlighted; switch unified / side by side (remembered) |
+| 22 | *(inline Python)* | **compare two texts** typed in a form: `diff` with `left` / `right`, folded equal lines, *Ignore whitespace* |
+| 23 | `deploy-history.py` | **row actions on a table block**: Logs (answer in the box), Roll back (confirmation inside the row, then the table is repainted), `_actions` per row |
+| 24 | *(inline shell)* | a **result screen** from `kip stats`, `kip kv` and `kip code` |
+| 25 | *(inline Python)* | **choice fields**: `select` as `cards` and `segmented`, and a `tree` with tri-state boxes and badges |
+| 26 | `partial-commit.py` | the **`diff` field**: pick the hunks of a commit; a `max_length` message; the program rebuilds the patch with only those hunks |
+| 27 | *(inline shell)* | **step output** (`kip step … --log`, opens by itself on error) and **several bars** (`kip progress … --id`) |
 
 Three protocol details worth knowing when reading the scripts:
 - `invalid` keeps the **same** prompt open with the errors shown, so the program

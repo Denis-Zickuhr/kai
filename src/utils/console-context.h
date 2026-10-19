@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 class QTextStream;
 
@@ -52,7 +53,11 @@ bool stdinIsInteractiveTerminal();
 QString parentProcessName();
 
 // Windows: o processo foi lançado pela interop do WSL (pai = wsl.exe). false
-// em qualquer outra plataforma/caso.
+// em qualquer outra plataforma/caso. O `kai.com` (shim de console) fica entre quem chamou e o kai.exe: ele não conta,
+// vale o primeiro ancestral que não é do Kai.
 bool launchedFromWslInterop();
+
+// A parte pura da decisão acima: `ancestorsNearestFirst` são os nomes (minúsculos) dos ancestrais, do pai para cima.
+bool ancestorsAreWslInterop(const QStringList &ancestorsNearestFirst);
 
 } // namespace kai::utils

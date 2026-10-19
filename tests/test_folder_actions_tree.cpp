@@ -488,6 +488,72 @@ private slots:
         QCOMPARE(activated.count(), 0);
     }
 
+    // Bug: o clique direito trocava o item corrente, e a Saída/Documento seguiam o item do menu.
+    void rightClickingAnotherRowKeepsTheCurrentItem()
+    {
+        Fixture f;
+        fill(f);
+        QTreeWidgetItem *current = findItem(f.tree, QStringLiteral("repo_b"));
+        f.tree->setCurrentItem(current);
+        QSignalSpy selection(&f.widget, &CommandTreeWidget::selectionChanged);
+        QSignalSpy folderClicks(&f.widget, &CommandTreeWidget::folderClicked);
+
+        const QRect row = f.tree->visualItemRect(findItem(f.tree, QStringLiteral("repo_a")));
+        const QPoint onName(row.left() + 60, row.center().y());
+        QTest::mouseClick(f.tree->viewport(), Qt::RightButton, {}, onName);
+
+        QCOMPARE(f.tree->currentItem(), current);
+        QCOMPARE(selection.count(), 0);
+        QCOMPARE(folderClicks.count(), 0);
+    }
+
+    // Sem o foco inteligente, o menu do item oferece "Mostrar saída" (comando com saída) e "Abrir documento" (item com
+    // documentação), conforme o que o MainWindow diz que cada um tem.
+    void theMenuOffersShowOutputAndOpenDocumentWhenThereIsSomethingToShow()
+    {
+        Fixture f;
+        fill(f);
+        f.tree->expandAll();
+        QSignalSpy outputs(&f.widget, &CommandTreeWidget::commandOutputRequested);
+        QSignalSpy documents(&f.widget, &CommandTreeWidget::documentRequested);
+        // Abre o menu do item e devolve os textos; escolhe `key`, se existir.
+        auto menuOf = [&](const QString &id, const QString &key) {
+            QStringList texts;
+            f.tree->setCurrentItem(findItem(f.tree, id));
+            QTimer::singleShot(150, [&texts, key]() {
+                auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                if (!menu) return;
+                QAction *wanted = nullptr;
+                for (QAction *a : menu->actions()) {
+                    texts << a->text();
+                    if (!key.isEmpty() && a->text() == kai::utils::tr(key)) wanted = a;
+                }
+                if (wanted) {
+                    menu->setActiveAction(wanted);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                } else {
+                    menu->close();
+                }
+            });
+            f.widget.openContextMenuForCurrent();
+            return texts;
+        };
+        const QString output = kai::utils::tr(QStringLiteral("ctx.show_output"));
+        const QString document = kai::utils::tr(QStringLiteral("ctx.show_document"));
+        QVERIFY(!menuOf(QStringLiteral("c_status"), QString()).contains(output)); // sem predicado: nada
+
+        f.widget.setFocusPredicates([](const QString &id) { return id == QStringLiteral("c_status"); },
+                                    [](const QString &id) { return id == QStringLiteral("repo_a"); });
+        QVERIFY(!menuOf(QStringLiteral("c_pull"), QString()).contains(output));
+        QVERIFY(!menuOf(QStringLiteral("repo_b"), QString()).contains(document));
+        menuOf(QStringLiteral("c_status"), QStringLiteral("ctx.show_output"));
+        QCOMPARE(outputs.count(), 1);
+        QCOMPARE(outputs.first().at(0).toString(), QStringLiteral("c_status"));
+        menuOf(QStringLiteral("repo_a"), QStringLiteral("ctx.show_document"));
+        QCOMPARE(documents.count(), 1);
+        QCOMPARE(documents.first().at(0).toString(), QStringLiteral("repo_a"));
+    }
+
     void rightClickOnAnIconAsksForItsMenuAndOnlyThere()
     {
         Fixture f;
@@ -564,6 +630,56 @@ private slots:
         // Só o par (Status, Repo B) roda: a mesma ação em outra pasta continua parada.
         const QRect otherFolder = FolderActionsView::iconRects(cellOf(f, QStringLiteral("proj")), 2).first();
         QVERIFY(!hasColor(otherFolder, green));
+    }
+
+    // Sem o foco inteligente, o comando com saída ganha uma marca no fim da coluna de status: discreta quando só tem
+    // saída, em accent quando é o que está na Saída. Comando sem saída: nada.
+    void commandsWithOutputGetAMarkAndTheShownOneIsHighlighted()
+    {
+        Fixture f;
+        fill(f);
+        f.tree->expandAll();
+        QTest::qWait(30);
+        const QColor accent(kai::utils::tokens::accent());
+        const QColor muted(kai::utils::tokens::mutedFg());
+        auto markOf = [&](const QString &id) {
+            QRect cell = f.tree->visualItemRect(findItem(f.tree, id));
+            cell.setLeft(f.tree->columnViewportPosition(FolderActionsView::kActionsColumn));
+            cell.setWidth(f.tree->columnWidth(FolderActionsView::kActionsColumn));
+            return QRect(cell.right() - FolderActionsView::kMargin - 19, cell.top(), 20, cell.height());
+        };
+        auto hasColor = [&](const QRect &rect, const QColor &want) {
+            const QImage image = f.tree->viewport()->grab().toImage();
+            for (int y = rect.top(); y <= rect.bottom(); ++y) {
+                for (int x = rect.left(); x <= rect.right(); ++x) {
+                    const QColor c = image.pixelColor(x, y);
+                    if (qAbs(c.red() - want.red()) < 14 && qAbs(c.green() - want.green()) < 14
+                        && qAbs(c.blue() - want.blue()) < 14) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        QVERIFY(!hasColor(markOf(QStringLiteral("c_status")), muted));
+
+        f.widget.setFocusPredicates([](const QString &id) { return id != QStringLiteral("c_git"); },
+                                    [](const QString &) { return false; });
+        f.widget.setShownCommand(QStringLiteral("c_pull"));
+        QTest::qWait(20);
+        QVERIFY2(!hasColor(markOf(QStringLiteral("c_pull")), accent), "marcas desligadas (foco inteligente): nada");
+        f.widget.setOutputMarksEnabled(true);
+        QTest::qWait(20);
+        QVERIFY2(hasColor(markOf(QStringLiteral("c_status")), muted), "com saída: marca discreta");
+        QVERIFY2(!hasColor(markOf(QStringLiteral("c_status")), accent), "só a que está na Saída fica em destaque");
+        QVERIFY2(hasColor(markOf(QStringLiteral("c_pull")), accent), "a que está na Saída fica em destaque");
+        QVERIFY2(!hasColor(markOf(QStringLiteral("c_git")), muted) && !hasColor(markOf(QStringLiteral("c_git")), accent),
+                 "sem saída: sem marca");
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            f.widget.setRunningCommandIds({QStringLiteral("c_status")});
+            QTest::qWait(1200);
+            f.widget.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/output-marks.png"));
+        }
     }
 };
 

@@ -1,4 +1,5 @@
 #include <QTest>
+#include <QToolButton>
 
 #include <QApplication>
 #include <QClipboard>
@@ -110,7 +111,7 @@ private slots:
         KipField field;
         field.name = QStringLiteral("files");
         field.rowKey = QStringLiteral("id");
-        field.columns = {{QStringLiteral("path"), QStringLiteral("File")}};
+        field.columns = {{QStringLiteral("path"), QStringLiteral("File"), {}}};
         field.rows = rows;
         const fields::TableChoiceField choice = fields::makeTableChoice(&host, field, false, 10);
         hostLayout->addWidget(choice.container);
@@ -572,11 +573,11 @@ private slots:
     {
         KipSteps steps;
         steps.id = QStringLiteral("s");
-        steps.items = {{QStringLiteral("a"), QStringLiteral("Alpha"), KipStepState::Success, QStringLiteral("done!")},
-                       {QStringLiteral("b"), QStringLiteral("Beta"), KipStepState::Running, {}},
-                       {QStringLiteral("c"), QStringLiteral("Gamma"), KipStepState::Pending, {}},
-                       {QStringLiteral("d"), QStringLiteral("Delta"), KipStepState::Error, QStringLiteral("boom")},
-                       {QStringLiteral("e"), QStringLiteral("Eps"), KipStepState::Skipped, {}}};
+        steps.items = {{QStringLiteral("a"), QStringLiteral("Alpha"), KipStepState::Success, QStringLiteral("done!"), {}},
+                       {QStringLiteral("b"), QStringLiteral("Beta"), KipStepState::Running, {}, {}},
+                       {QStringLiteral("c"), QStringLiteral("Gamma"), KipStepState::Pending, {}, {}},
+                       {QStringLiteral("d"), QStringLiteral("Delta"), KipStepState::Error, QStringLiteral("boom"), {}},
+                       {QStringLiteral("e"), QStringLiteral("Eps"), KipStepState::Skipped, {}, {}}};
         KipStepsBlockWidget block(steps);
         block.show();
         const auto icons = block.findChildren<KipStateIcon *>();
@@ -695,7 +696,8 @@ private slots:
             view.show();
             QCOMPARE(view.resultCard()->titleText(), c.title);
             QVERIFY(!view.resultCard()->bodyText().isEmpty());
-            QVERIFY(view.details()->isExpanded());
+            // falhas abrem o Detalhes; um cancelamento (pedido pelo usuário) não
+            QCOMPARE(view.details()->isExpanded(), c.state != KipSessionState::Cancelled);
         }
         KipScreenState nonZero;
         nonZero.setSessionState(KipSessionState::Failed, {KipTerminalReason::NonZeroExit, 3, {}});
@@ -1019,6 +1021,7 @@ private slots:
         panel.show();
         QWidget *header = panel.findChild<QWidget *>(QStringLiteral("outputHeader"));
         QVERIFY(header);
+        panel.appendOutput(QStringLiteral("hi\n"), false); // vazia, a Saída esconde a barra (página "sem execução")
         QVERIFY(header->isVisible()); // fora do modo KIP a barra existe
 
         panel.setKipSession(&session);
@@ -1074,6 +1077,50 @@ private slots:
             QVERIFY(view.details()->isExpanded());
         }
         core::setKipSettings(saved);
+    }
+
+    // "Detalhes" fecha sem gastar uma linha: o botão fica na linha dos botões e o log só aparece aberto.
+    void detailsToggleSharesTheFooterRowAndTakesNoSpaceClosed()
+    {
+        engine::KipSession session(nullptr);
+        feed(session, "{\"kip\":1,\"type\":\"hello\"}");
+        feed(session, kLoginPrompt);
+        KipView view;
+        view.resize(520, 420);
+        view.setSession(&session);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        view.flushRefresh();
+        QToolButton *toggle = view.details()->toggleButton();
+        QVERIFY(toggle->isVisible());
+        QVERIFY(view.submitButton()->isVisible());
+        QCOMPARE(toggle->parentWidget(), view.submitButton()->parentWidget()); // mesma linha do rodapé
+        QVERIFY(!view.details()->isVisible());
+        QWidget *pages = view.details()->pageSwitch();
+        QCOMPARE(pages->parentWidget(), toggle->parentWidget()); // o seletor Log | Protocolo também, sem linha de abas
+        QVERIFY(!pages->isVisible());
+        toggle->click();
+        QVERIFY(view.details()->isExpanded());
+        QVERIFY(view.details()->isVisible());
+        QVERIFY(pages->isVisible());
+        QTest::qWait(20);
+        QVERIFY(pages->height() <= toggle->height()); // compacto: da altura do botão "Detalhes", não uma barra de abas
+        const auto pageButtons = pages->findChildren<QToolButton *>(QStringLiteral("kipDetailsPage"));
+        QCOMPARE(pageButtons.size(), 2);
+        QVERIFY(view.details()->logView()->isVisible());
+        pageButtons.at(1)->click();
+        QVERIFY(view.details()->protocolView()->isVisible());
+        QVERIFY(!view.details()->logView()->isVisible());
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            view.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/kip-details-open.png"));
+        }
+        pageButtons.at(0)->click();
+        QVERIFY(view.details()->mapTo(&view, QPoint(0, 0)).y() < toggle->mapTo(&view, QPoint(0, 0)).y()); // abre acima
+        toggle->click();
+        QVERIFY(!view.details()->isVisible());
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            view.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/kip-details-footer.png"));
+        }
     }
 
     void detailsDoNotStayOpenFromAPreviousSession()

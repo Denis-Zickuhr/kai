@@ -10,6 +10,8 @@
 #include "ui/layout/layout-model.h"
 
 #include <functional>
+
+class QMenu;
 #include <optional>
 
 namespace kai::ui::layout {
@@ -23,7 +25,8 @@ struct ViewSpec {
     // Nome do ícone Lucide.
     QString icon;
     bool closable = true;
-    Zone defaultZone = Zone::Right;
+    // Onde nasce: a célula da lista de comandos (Primary) ou a da Saída (Secondary).
+    Home home = Home::Secondary;
     // Cria o widget na primeira vez que o painel é mostrado (custo zero até lá). Ausente = o widget já foi dado.
     std::function<QWidget *()> factory;
     // Largura mínima exigida pelo conteúdo quando vive numa lateral.
@@ -35,6 +38,8 @@ struct ViewSpec {
     // O painel só existe enquanto isto for verdade (ex.: o chat de IA só existe com um provedor configurado). Ausente =
     // sempre. Fora do ar, o id é desconhecido: some do menu Exibir e é descartado do layout.json.
     std::function<bool()> available;
+    // Itens a mais no menu do painel (clique direito na aba), depois dos de posição. Ausente = nenhum.
+    std::function<void(QMenu *menu)> menuExtras;
 };
 
 // Registro dos painéis conhecidos. Os fixos (commands, output, document, ...) são registrados pelo MainWindow; os
@@ -63,7 +68,7 @@ public:
     QString title(const QString &id) const;
     QString icon(const QString &id) const;
     bool closable(const QString &id) const;
-    Zone defaultZone(const QString &id) const;
+    Home defaultHome(const QString &id) const;
     // Os ids fixos disponíveis agora, na ordem em que foram registrados (menu Exibir).
     QStringList staticIds() const;
     // Todos os fixos registrados, disponíveis ou não.

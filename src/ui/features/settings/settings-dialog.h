@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/layout/layout-model.h"
 #include <QDialog>
 #include <QMap>
 #include <functional>
@@ -73,9 +74,14 @@ public:
     // caminho de arquivo).
     QString importThemeFromPath(const QString &sourcePath, bool overwriteExisting);
 
+    // O layout dos painéis de agora (a aba Layout mostra e muda a grade dele).
+    void setLayoutModel(const layout::LayoutModel &model);
+    LayoutTab *layoutTab() const { return m_layoutTab; }
+
 signals:
     // "Restaurar layout" (aba Layout): quem abriu o diálogo devolve os painéis ao lugar padrão, na hora.
     void restoreLayoutRequested();
+    void gridChangeRequested(int cols, int rows, int expansion);
 
 private:
     void setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,

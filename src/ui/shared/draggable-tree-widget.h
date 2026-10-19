@@ -66,6 +66,12 @@ signals:
 protected:
     void mousePressEvent(QMouseEvent *event) override
     {
+        // O botão direito só abre o menu (que usa itemAt): não troca o item corrente, senão a Saída e o
+        // Documento seguem o item do menu.
+        if (event->button() == Qt::RightButton) {
+            event->accept();
+            return;
+        }
         QTreeWidget::mousePressEvent(event);
         if (event->button() != Qt::LeftButton) {
             return;
@@ -139,6 +145,10 @@ protected:
                     "drop manual aceito (sem D&D nativo)."));
                 emit itemsDropped();
             }
+            return;
+        }
+        if (event->button() == Qt::RightButton) {
+            event->accept();
             return;
         }
         m_pressItem = nullptr;

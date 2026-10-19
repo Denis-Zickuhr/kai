@@ -1,6 +1,6 @@
 # The Output panel
 
-The panel shows what the selected command printed, live. It sits on the right by default (the command list on the left) and is one of the movable [panels](layout.md): drag it to another zone, float it, maximize it. **Settings → General** can collapse it when you select a folder.
+The panel shows what the selected command printed, live. It sits on the right by default (the command list on the left) and is one of the movable [panels](layout.md): drag it to another cell, float it, maximize it. **Settings → General** can collapse it when you select a folder.
 
 ## The output bar
 
@@ -11,7 +11,7 @@ Above the panel there is a **bar with one tab per command that ran in this sessi
 - **Close a tab** with the × (it shows on the tab in focus and on hover) or with a middle click. It only closes the **tab**: the command keeps running and its log is kept. Click the command in the tree (or run it again) and the tab comes back. Closing the tab in focus moves to its neighbour; closing the last one clears the panel.
 - **Right click** opens the tab menu — *Stop*, *Run again*, *Show in the command tree*, *Close output*, *Close the other outputs*, *Close finished outputs* — followed by the usual output menu (clear, copy all, export, display options). Right click **does not bring the tab to the front**: the menu acts on the tab you clicked (clear, copy and export use *its* log) while you keep looking at your current output; only *Show in the command tree* switches to it.
 - **Many tabs:** the mouse wheel scrolls the bar and a button at its end lists them all.
-- **A tab in its own panel:** drag it out of the bar onto a zone (or *Open in a panel* in the tab menu) to watch two logs side by side — see [Runs side by side](layout.md#runs-side-by-side).
+- **A tab in its own panel:** drag it out of the bar onto a cell (or *Open in a panel* in the tab menu) to watch two logs side by side — see [Runs side by side](layout.md#runs-side-by-side).
 - **Keyboard:** **Ctrl+Tab** and **Ctrl+Shift+Tab** switch to the next / previous output (rebindable in **Settings → Shortcuts**).
 
 Tabs are not saved: they start empty on the next launch, like the processes themselves.
@@ -43,7 +43,7 @@ The field at the bottom sends text to the command's input — for `read` prompts
 
 ## Reading the README while a command runs
 
-Open the **Document** panel (**View → Document**) and the folder / note reader moves out of the Output into it: select a folder with a README and it appears there, and **selecting a command no longer replaces it** — the Output keeps showing the run. Close the panel and the reader goes back inside the Output, as it always was.
+The folder / note reader lives in its own **Document** panel — by default a tab next to the Output, so nothing is lost: selecting a folder with a README brings the Document tab to the front, and selecting a command brings the Output back. The panel **follows the selection**: select a command and it shows the README of that command's folder (if the folder has one), so you can read it while the command runs. This is **Smart focus** (Settings → General), off by default: with it off, selection moves neither panel. To bring them up, run the command, click its Output tab, or use the two buttons next to Run (also in the item's right-click menu). **Show output** (monitor icon) shows the selected command's output: while it runs, or once it has run. It runs nothing and keeps the selection. Clicking an Output tab also only switches the Output and leaves the tree selection alone. In the tree, a small monitor mark at the end of the status column flags commands that have output, and is highlighted on the one the Output is showing. **Open document** (document icon) opens the Document of the selected folder, or of the selected command's folder. It is enabled only where there is unique documentation: own notes, or the folder's own directory with documents, or a directory it inherits from such a folder. Drag the Document tab to another cell to see both at once — see [Panels & layout](layout.md#documents-and-output). The **folder** button at the start of the reader's bar (and on its empty screen) lists the folders that have documentation, most used first.
 
 ## Detach into a window
 

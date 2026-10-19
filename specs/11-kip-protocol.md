@@ -280,8 +280,8 @@ header, status badge and stop/force-stop buttons stay.
 - Footer: Back (when allowed), Cancel (unless `cancellable: false` on
   the open prompt or the latest progress), Submit.
 - Terminal states — Unsupported, ProtocolError, Failed, Cancelled — are
-  full-screen cards with icon, explanation, the Details drawer expanded,
-  and "Run again". `done` shows its result card (§12.1).
+  full-screen cards with icon, explanation, the Details drawer expanded
+  (except Cancelled: the user asked for it, nothing to diagnose), and "Run again". `done` shows its result card (§12.1).
 
 ### 13.3 Details drawer (collapsed by default)
 Two tabs:
@@ -692,7 +692,7 @@ from the letter of the spec. Updated at the end of every phase.
   disabled until the process has exited (a `done` can arrive before the exit).
 - **Terminal cards.** Unsupported / ProtocolError / Failed / Cancelled replace the
   screen content (the answered-steps summary stays above) and open Details once
-  per state transition. Texts reuse the engine's `kip.error.*` messages.
+  per state transition — all but Cancelled, which keeps Details as it was. Texts reuse the engine's `kip.error.*` messages.
 - **Details.** Protocol direction markers: `←` = arrived from the program,
   `→` = sent by Kai. Entries Kai refused/ignored carry a `⚠` note.
 - **Markdown.** `QTextBrowser` with every resource blocked (the override returns
@@ -1061,3 +1061,74 @@ move the text to a file, `ExecutionPipeline::resolveCommandLine` does it:
   spread over 20 variables — one variable alone cannot pass 128 KB inside a Linux either), `filesAreReadableByTheOwnerOnly`.
 - Any problem (the write fails, a quote in the path) leaves the command as it was. The process starts after the
   write finishes; when nothing needs to be written, `done` runs synchronously as before.
+
+## 27. Round 2 components (diff, row actions, result blocks, new fields)
+
+Added after a design round (mockups first, then the build). The user-facing reference is `docs/kip.md` §3–§6; this is the
+contract and the decisions behind it.
+
+### 27.1 Contract
+- **`diff` block** — `patch` (unified diff text, many files) **or** `left` + `right` (`{name?, text}`), plus `title?`,
+  `id?`, `language?`, `view?` (`unified`|`split`), `context?` (default 3, `-1` = no folding), `ignore_whitespace?`,
+  `collapse_after?` (default 3), `truncated?`. With both, `patch` wins (diagnostic). Neither → invalid message.
+  Same `id` replaces (like `steps`/`table`). It stays on the result screen.
+- **Who picks unified/split**: the user. The block toggle is remembered per command under the answers key
+  **`diff_view`** (no `/`, so it never collides with `<prompt>/<field>`), through the same path and the same
+  "remember answers" setting. `view` from the program is only the default; two texts default to `split`.
+- **Kai never reads files for a diff.** The program (or `kai kip` / the shell `kip`, which run where the script runs)
+  sends the text. This keeps WSL/docker/ssh working with no path translation and keeps the protocol from becoming an
+  arbitrary file reader.
+- **Big texts**: a diff patch, each diff side and a `code` text accept up to `kKipMaxBigTextBytes` (512 KiB); above it the
+  parser cuts at the last whole line and sets `truncated` (the view shows a note). The helpers apply the same rule when
+  they read files/stdin (minus the final newline), so the line stays under the 1 MiB transport limit.
+- **`kv`** (`items[]` of `{key, value, format?, copy?}`; formats `mono`/`muted`/`badge`/`link`, `link` http(s) only,
+  else demoted to text), **`stats`** (`items[]` of `{label, value, detail?, tone?}`, at most 8), **`code`** (`text`,
+  `title?`, `language?`, `highlight?[]`, `max_lines?`, `line_numbers?`). Tones: `neutral info success warning error
+  accent`; an unknown tone is dropped with a diagnostic.
+- **Table cells**: `columns[].format` = `mono` | `muted` | `number` | `badge` (`{text, tone}` or a string) | `copy`.
+- **Row actions**: `row_actions[]` on a `table` field or a `table` block (the block needs an `id`), with the chip keys
+  (`requires` is cleared: the row is the requirement), at most 8. `rows[]._actions` (array of ids) restricts a row.
+  They **reuse the chip machinery**: one run at a time (chips and row actions share it), confirm → running →
+  success/error, answered with `chip_result`. Kai → program: `chip` with `field` (or `table`) and `row` (the row key).
+  On a block they only run while a prompt is open (the program is reading stdin).
+- **Fields**: `select.style` = `cards` | `segmented` (an older Kai shows the dropdown); `options[].icon`;
+  `text`/`textarea.max_length` (counter, over the limit = not submittable, a remembered value over it falls back);
+  **`tree`** (`nodes[]` of `{id, label?, icon?, badge?, expanded?, children?[]}`, `multiple`, `searchable`; at most 5000
+  nodes / 32 levels; value: the selected id, or the checked ids — a parent counts only when fully checked);
+  **`diff`** (`patch`, `select` = `hunks`|`files`, `default` = `all` (absent) | `none` | ids; value: ids `"path@n"` or
+  `"path"`; never remembered).
+- **`step`**: `state` and `detail` became optional; absent = keep what the item had; `log` appends lines (the last 200
+  stay). A `step` with none of the three keeps the old meaning (back to `pending`).
+- **`progress.id`**: one bar per id; no id = the single bar of before. All bars leave on `done`/terminal states.
+- **Repeated `hello` without a title** (the shell `kip` inside a pipe's subshell sends its own) is ignored with a
+  diagnostic instead of wiping the title.
+
+### 27.2 Implementation notes
+- Pure core: `core/text-diff.{h,cpp}` (Myers line diff with prefix/suffix trim and a cost cap that falls back to
+  "delete the rest, insert the rest"; word spans only when the lines share ≥ 40% of their visible characters; whole-text
+  diff with folds) and `core/unified-diff.{h,cpp}` (git/plain `diff -u`, renames, quoted paths, binary, count-driven hunk
+  bodies so `--- `/`+++ ` lines inside a hunk stay lines). Tests: `test_text_diff`.
+- `ui/shared/diff-view.*` is shared (not KIP-only): a painted, virtualized `QAbstractScrollArea` — unified/split, folds,
+  change navigation (F7 / Shift+F7, n/p), selection mode with tri-state file boxes, syntax colors via the Document
+  panel's `DocHighlighter` run over a hidden `QTextDocument`. Colors derive from success/error/info with alpha; a theme
+  may set `diff_add_bg` / `diff_del_bg`. It owns Enter (`kaiOwnsEnter` property, honoured by `KipView::eventFilter`).
+- `ui/shared/data-table-widget.*`: `DataTableWidget` moved out of the field factory, plus `DataCellDelegate` (formats;
+  installed only when a column has a format or there are actions, so plain tables keep their old look) and
+  `RowActionsController` + `RowActionsDelegate` (icons painted, not widgets; hover row tracked by the table; the
+  confirmation is a cell widget spanning the row, with the delegate's `updateEditorGeometry` giving it the whole row,
+  Enter on its buttons consumed so it never reaches the form).
+- `ui/shared/kip-extra-fields.*`: `ChoiceButtonsField` (cards/segmented), `TreeChoiceField`, `DiffChoiceField`.
+  `ui/features/kip/kip-rich-blocks.*`: the `diff`, `kv`, `stats`, `code` blocks. Font sizes in these use QSS, not
+  `setFont`, because the app QSS overrides `setFont` on `QLabel`.
+- Helpers: `kai kip diff|kv|stats|code`, `--row-action*`, `--style`, `--option-icon`, `--max-length`, `--nodes-json`,
+  `--patch`/`--patch-file`/`--select`, `table --row-key`, `progress --id`, `step --log`; the C++ builder takes a stdin
+  reader (tests inject one). The awk twin matches case by case (`tests/data/kip-helper-cases.json`). `--column
+  key:label:format` only takes the last piece as a format when it is a known one, so labels with `:` still work.
+  `--option-icon` goes to the last option added. awk: **never `close("/dev/stdin")`** — mawk 1.3.4 segfaults.
+- Modules: `kip.diff/kv/stats/code` (Python/Node/PHP), `step(..., log=)` with an optional state, and
+  `on_row_action(action, row, values)` / `onRowAction` (a `chip` with `row` goes there; without the callback, to
+  `on_chip` as before).
+- Tests: `test_text_diff`, `test_kip_protocol`, `test_kip_screen_state`, `test_kip_session` (fixture
+  `sample/kip/fixtures/row-actions.sh`), `test_kip_round2_view` (real `MainWindow` QSS; `KAI_TEST_SCREENSHOT_DIR`,
+  `KAI_TEST_THEME`, `KAI_TEST_CORNERS` save PNGs of every new screen), `test_kip_cli_builder`, `test_kip_shell_helper`,
+  `test_command_language`.

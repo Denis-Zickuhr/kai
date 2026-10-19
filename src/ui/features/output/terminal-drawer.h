@@ -70,7 +70,7 @@ enum class ExecutionStatus {
 // ALTURA igual a "embaixo" e o componente "sumia").
 // "Center": a Saída ocupa o miolo da janela (o painel de comandos foi para outra zona) — não há para onde colapsar,
 // então o recolher some e ela fica sempre expandida.
-enum class DrawerPosition { Bottom, Left, Right, Center };
+enum class DrawerPosition { Bottom, Left, Right, Center, Top };
 
 // O estado de execução do cabeçalho da Saída traduzido para o do OutputPanel (usado também pelos painéis espelho).
 OutputStatus toOutputStatus(ExecutionStatus status);
@@ -103,8 +103,7 @@ public:
     // chunk travava a GUI).
     void flushPendingOutput();
 
-    // `keepDocument`: não derruba o documento da pasta (a troca de pasta o substitui sem piscar a saída vazia).
-    void clear(bool keepDocument = false);
+    void clear();
     bool isExpanded() const;
 
     // Habilita/desabilita o campo de input, refletindo se há um processo

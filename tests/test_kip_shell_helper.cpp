@@ -325,6 +325,35 @@ private slots:
         QCOMPARE(r.out.trimmed(), QByteArray("1"));
     }
 
+    // `git diff | kip diff --patch -`, arquivos dos dois lados e `code --file`: o helper lê onde o script roda, igual ao
+    // `kai kip` (sem a quebra de linha final).
+    void diffAndCodeReadPipesAndFilesLikeKaiKip()
+    {
+        const QString a = writeFile(QStringLiteral("left.json"), QStringLiteral("{\n  \"r\": 2\n}\n"));
+        const QString b = writeFile(QStringLiteral("right.json"), QStringLiteral("{\n  \"r\": 6\n}\n"));
+        const QString code = QStringLiteral(
+            "printf -- '--- a/x\\n+++ b/x\\n@@ -1 +1 @@\\n-a\\n+b\\n' | kip diff --title Piped --patch -\n"
+            "kip diff --left-file '%1' --right-file '%2'\n"
+            "kip code --file '%1' --language json\n").arg(a, b);
+        const RunResult r = run(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), kipLine(code)});
+        QCOMPARE(r.exitCode, 0);
+        // Num pipe o `kip` roda num subshell e não sabe que o hello já foi: sai outro hello (sem título), que o Kai ignora.
+        QList<QByteArray> lines;
+        for (const QByteArray &l : r.out.trimmed().split('\n')) {
+            if (!l.contains("\"type\":\"hello\"")) lines << l;
+        }
+        lines.prepend(QByteArray());
+        QCOMPARE(lines.size(), 4);
+        const QJsonObject piped = QJsonDocument::fromJson(lines.at(1)).object();
+        QCOMPARE(piped.value("patch").toString(), QStringLiteral("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b"));
+        const KipCliResult reference = runKipCli({QStringLiteral("diff"), QStringLiteral("--left-file"), a,
+                                                  QStringLiteral("--right-file"), b});
+        QCOMPARE(normalized(lines.at(2)), normalized(reference.output));
+        const KipCliResult codeReference = runKipCli({QStringLiteral("code"), QStringLiteral("--file"), a,
+                                                      QStringLiteral("--language"), QStringLiteral("json")});
+        QCOMPARE(normalized(lines.at(3)), normalized(codeReference.output));
+    }
+
     void cancelFromKaiMakesRecvExitWith130()
     {
         const QString line = kipLine(QStringLiteral("kip hello\nkip recv\necho never"));

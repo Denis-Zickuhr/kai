@@ -1,6 +1,7 @@
 #include "ui/features/output/run-mirror-panel.h"
 
 #include "engine/kip-session.h"
+#include "ui/features/kip/kip-view.h"
 #include "ui/features/output/output-panel.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/panel-metrics.h"
@@ -81,12 +82,9 @@ void RunMirrorPanel::showOutput()
 void RunMirrorPanel::seed(const OutputPanel *embedded, const QString &storedLog)
 {
     if (embedded && embedded->commandId() == m_commandId) {
+        // A sessão KIP vem junto (espelho de um app KIP = a view dele); quem cede o lugar é a Saída embutida.
         m_output->copyStateFrom(*embedded);
         m_output->setKipDetachable(false);
-        // O espelho de execução mostra o log do comando; só o KIP fixado tem a view da sessão (uma view por sessão).
-        if (m_kind == Kind::Run) {
-            m_output->setKipSession(nullptr);
-        }
         showOutput();
         return;
     }
@@ -137,9 +135,12 @@ void RunMirrorPanel::setStatus(ExecutionStatus status)
     }
 }
 
-void RunMirrorPanel::bindKipSession(engine::KipSession *session)
+void RunMirrorPanel::bindKipSession(engine::KipSession *session, bool takeFocus)
 {
     m_output->setKipSession(session);
+    if (KipView *view = m_output->kipView()) {
+        view->setAutoFocus(takeFocus);
+    }
     if (session) {
         showOutput();
     }

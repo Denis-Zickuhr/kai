@@ -98,6 +98,10 @@ public slots:
     bool confirmChip();
     // Fecha a caixa do chip (cancela a confirmação ou dispensa o resultado).
     void dismissChip();
+    // Ação de linha (§27) numa tabela: `field` do prompt aberto OU `table` (id de um bloco). Mesmo ciclo de um chip.
+    bool startRowAction(const QString &field, const QString &table, const QString &row, const QString &action);
+    // O usuário trocou unificado/lado a lado num diff: lembrado por comando (como as respostas).
+    void setDiffViewPreference(const QString &view);
     // Cancel: manda `cancel`, espera a graça e então stop().
     void cancel();
 

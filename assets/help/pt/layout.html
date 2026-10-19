@@ -1,34 +1,34 @@
 <h2>Painéis e layout</h2>
 <p>A janela do Kai é um quadro de <b>painéis</b> que você pode mover, fechar e trazer de volta. O layout padrão tem a <b>lista de comandos à esquerda</b> e a <b>Saída à direita</b>, metade da janela cada uma, com a faixa de abas à mostra. É o que você vê até mudar alguma coisa; o arranjo antigo (lista em cima, Saída embaixo) é a perspectiva <i>Clássico</i>.</p>
-<h3>As quatro zonas</h3>
-<p>Os painéis vivem em quatro <b>zonas</b>: <b>Esquerda</b>, <b>Centro</b>, <b>Direita</b> e <b>Embaixo</b>. Uma zona com mais de um painel mostra os painéis como abas; uma zona vazia some.</p>
+<h3>A grade</h3>
+<p>Os painéis vivem nas <b>células</b> de uma grade de <b>colunas × linhas</b> (de 1 a 5 cada; o padrão é 2 × 2). Uma célula com mais de um painel mostra os painéis como abas. Uma célula <b>sem painel some</b> e as vizinhas ocupam o lugar dela: com <i>Preencher na vertical</i> cada coluna empilha só as células preenchidas, de cima para baixo (uma célula sozinha ocupa a coluna toda); com <i>Preencher na horizontal</i> acontece o mesmo com as linhas, da esquerda para a direita. <b>Configurações → Layout → Grade de painéis</b> define as colunas, as linhas e o modo, com uma miniatura. Diminuir a grade nunca perde um painel: os das células removidas viram abas da célula mais próxima.</p>
 <table>
 <tr><td><b>Comandos</b></td><td>a árvore, a busca e os botões de ação — esquerda</td></tr>
 <tr><td><b>Saída</b></td><td>as guias do que rodou — direita</td></tr>
-<tr><td><b>Documento</b></td><td>o leitor de README / notas: leia <i>enquanto um comando roda</i> — direita</td></tr>
+<tr><td><b>Documento</b></td><td>o leitor de README / notas: uma aba ao lado da Saída que acompanha a seleção — leia <i>enquanto um comando roda</i> — direita</td></tr>
 <tr><td><b>Processos</b>, <b>Histórico</b>, <b>Notificações</b></td><td>as telas que eram janelas modais — direita</td></tr>
-<tr><td><b>Variáveis</b></td><td>as variáveis dinâmicas — direita</td></tr>
+<tr><td><b>Variáveis</b></td><td>a tela de ambientes (pacotes de variáveis e variáveis dinâmicas), editada no lugar — direita</td></tr>
 <tr><td><b>Chat de IA</b></td><td>só existe depois de você adicionar um provedor — direita</td></tr>
 </table>
 <h3>O menu Exibir</h3>
 <p><b>Exibir</b> é o caminho de volta para tudo: a lista de painéis (o ícone destacado diz que está na janela; clicar fecha ou traz de volta ao último lugar em que estava), <i>Posição dos painéis</i> (mover, flutuar, maximizar, recolher, fechar), <i>Maximizar painel</i>, <i>Reorganizar painéis</i>, <i>Perspectivas</i> e <i>Restaurar layout</i>. Fechou todos os painéis? A janela oferece um botão <b>Restaurar layout</b>. <b>Configurações → Layout</b> também tem.</p>
 <h3>Mover painéis</h3>
 <ul>
-<li><b>Exibir → Reorganizar painéis</b> vem ligado: toda zona mostra a faixa de abas (desligue para escondê-la nas zonas com um painel só).</li>
-<li><b>Arraste uma aba</b> para outra zona. Quatro regiões tracejadas mostram sempre onde ela pode cair, seja qual for o layout: <b>esquerda</b> e <b>direita</b> (altura toda), <b>baixo</b> e <b>centro</b>; soltar entre as abas de uma zona insere na posição sob o cursor.</li>
+<li><b>Exibir → Reorganizar painéis</b> vem ligado: toda célula mostra a faixa de abas (desligue para escondê-la nas células com um painel só).</li>
+<li><b>Arraste uma aba</b> para outra célula. Durante o arrasto a grade inteira aparece em células tracejadas — as vazias também — mais uma pílula <b>Flutuar</b> que transforma o painel numa janela flutuante; soltar numa célula vazia a preenche, soltar entre as abas de uma célula insere na posição sob o cursor. <b>Dividir este grupo</b> (menu do painel) mostra todos os painéis da célula ao mesmo tempo, em vez de abas.</li>
 <li>Arraste uma aba <b>para fora da janela</b> para transformá-la numa janela flutuante.</li>
 </ul>
 <p>Mover nunca recria um painel: um comando rodando, as guias dele e o texto da Saída sobrevivem a qualquer movimento. O menu da aba (botão direito ou <b>⋯</b>) tem os mesmos movimentos sem arrastar.</p>
 <h3>Maximizar, recolher, flutuar</h3>
 <ul>
 <li><b>Maximizar</b>: duplo clique na aba, o menu ou <b>Ctrl+Shift+M</b>. O antigo <i>modo foco</i> é a Saída maximizada.</li>
-<li><b>Recolher para a lateral</b>: a zona vira uma faixa fina de ícones; clique num e o painel abre ao lado, empurrando o conteúdo; arraste a divisória para redimensionar e a faixa já troca de painel pelos ícones, então a zona aberta não mostra abas; clique no ícone de novo para fechar.</li>
+<li><b>Recolher para a lateral</b> (só as células da borda da grade): a célula vira uma faixa fina de ícones naquela borda; clique num e o painel abre ao lado, empurrando o conteúdo; arraste a divisória para redimensionar e a faixa já troca de painel pelos ícones, então a célula aberta não mostra abas; clique no ícone de novo para fechar. A faixa volta aberta depois de reiniciar.</li>
 <li><b>Flutuar</b>: o painel ganha uma janela própria com um alfinete de <i>sempre no topo</i> e um botão de <i>devolver à janela</i>. As janelas flutuantes <b>somem com o Kai e só voltam com ele</b> — nunca aparecem sozinhas.</li>
 </ul>
 <h3>Perspectivas</h3>
-<p><b>Exibir → Perspectivas</b>: <i>Executor</i> (padrão), <i>Clássico</i> (lista no centro, Saída embaixo), <i>Compacto</i> (só os comandos), <i>HTTP</i> (comandos + uma Saída larga à direita), <i>Leitura</i> (o Documento no centro) e as suas — <i>Salvar layout atual…</i>. O Kai nunca troca de perspectiva sozinho.</p>
+<p><b>Exibir → Perspectivas</b>: <i>Executor</i> (padrão), <i>Clássico</i> (lista em cima, Saída embaixo), <i>Compacto</i> (só os comandos), <i>HTTP</i> (comandos + uma Saída larga à direita), <i>Leitura</i> (o Documento sobre a Saída, ao lado da lista), <i>Triplo</i> (lista | Saída | Documento), <i>Quádruplo</i> (quatro painéis numa grade 2 × 2) e as suas — <i>Salvar layout atual…</i>. O Kai nunca troca de perspectiva sozinho.</p>
 <h3>Execuções lado a lado e KIP fixado</h3>
-<p>Arraste uma guia <b>para fora da barra da Saída</b> até uma zona (ou botão direito → <i>Abrir num painel</i>): aquela execução ganha um painel ao vivo, e dois logs ficam visíveis ao mesmo tempo. Botão direito num comando <a href='help://kip'>KIP</a> → <i>Fixar como painel</i> o transforma num mini-app permanente da janela; enquanto você não o roda, ele mostra um botão <b>Executar</b> — nada roda sozinho.</p>
+<p>Arraste uma guia <b>para fora da barra da Saída</b> até uma célula (ou botão direito → <i>Abrir num painel</i>): aquela execução ganha um painel ao vivo, e dois logs ficam visíveis ao mesmo tempo. Botão direito num comando <a href='help://kip'>KIP</a> → <i>Fixar como painel</i> o transforma num mini-app permanente da janela; enquanto você não o roda, ele mostra um botão <b>Executar</b> — nada roda sozinho.</p>
 <h3>Teclado</h3>
 <table>
 <tr><td><code>Alt+1</code> … <code>Alt+9</code></td><td>foca o enésimo painel visível</td></tr>
@@ -36,4 +36,5 @@
 <tr><td><code>Ctrl+Shift+M</code></td><td>maximiza / restaura o painel em foco</td></tr>
 </table>
 <p>Tudo reatribuível em <b>Configurações → Atalhos</b>.</p>
+<div class='tip'>Numa janela pequena o quadro <b>rola</b> em vez de espremer os painéis: cada célula mantém um tamanho confortável e os formulários (Variáveis, Processos, Histórico…) mantêm a largura de que precisam.</div>
 <div class='tip'>O layout é pessoal: fica em <code>layout.json</code> na sua pasta de configuração e nunca é exportado nem entra num projeto.</div>

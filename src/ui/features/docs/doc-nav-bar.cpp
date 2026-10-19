@@ -80,9 +80,20 @@ void DocNavBar::setCrumbs(const QVector<DocCrumb> &crumbs)
     update();
 }
 
+void DocNavBar::setFoldersVisible(bool visible)
+{
+    if (m_foldersVisible == visible) {
+        return;
+    }
+    m_foldersVisible = visible;
+    layoutItems();
+    update();
+}
+
 QRect DocNavBar::rectOf(Item item) const
 {
     switch (item) {
+    case Item::Folders: return m_folders;
     case Item::Back: return m_back;
     case Item::Forward: return m_forward;
     case Item::Recent: return m_recent;
@@ -104,6 +115,11 @@ void DocNavBar::layoutItems()
 {
     const int top = (m_barHeight - 1 - kButton) / 2;
     int x = kMargin;
+    m_folders = QRect();
+    if (m_foldersVisible) {
+        m_folders = QRect(x, top, kButton, kButton);
+        x += kButton + kGap;
+    }
     m_tree = QRect(x, top, kButton, kButton);
     x += kButton + kMargin;
     m_back = QRect(x, top, kButton, kButton);
@@ -182,7 +198,7 @@ bool DocNavBar::isEnabled(Item item) const
 
 DocNavBar::Hit DocNavBar::hitAt(const QPoint &pos) const
 {
-    const std::pair<Item, QRect> items[] = {{Item::Tree, m_tree}, {Item::Back, m_back},       {Item::Forward, m_forward}, {Item::Recent, m_recent},
+    const std::pair<Item, QRect> items[] = {{Item::Folders, m_folders}, {Item::Tree, m_tree}, {Item::Back, m_back},       {Item::Forward, m_forward}, {Item::Recent, m_recent},
                                             {Item::ZoomOut, m_zoomOut}, {Item::ZoomLabel, m_zoomLabel}, {Item::ZoomIn, m_zoomIn}};
     for (const auto &entry : items) {
         if (entry.second.contains(pos)) {
@@ -233,6 +249,9 @@ void DocNavBar::paintEvent(QPaintEvent *)
         painter.setPen(QPen(QColor(tk::bg()), 1.2));
         painter.setBrush(QColor(tk::warningFg()));
         painter.drawEllipse(QPointF(m_recent.right() - 6.5, m_recent.top() + 7.5), 3.5, 3.5);
+    }
+    if (m_foldersVisible) {
+        drawButton(Item::Folders, m_folders, QStringLiteral("folder-open"));
     }
     drawButton(Item::Tree, m_tree, QStringLiteral("list-tree"), m_treeActive);
     drawButton(Item::ZoomOut, m_zoomOut, QStringLiteral("minus"));
@@ -297,6 +316,7 @@ void DocNavBar::mouseReleaseEvent(QMouseEvent *event)
     case Item::Forward: emit forwardRequested(); break;
     case Item::Recent: emit recentRequested(event->globalPosition().toPoint()); break;
     case Item::Tree: emit treeToggleRequested(); break;
+    case Item::Folders: emit foldersRequested(event->globalPosition().toPoint()); break;
     case Item::ZoomIn: emit zoomInRequested(); break;
     case Item::ZoomOut: emit zoomOutRequested(); break;
     case Item::ZoomLabel: emit zoomResetRequested(); break;
@@ -332,6 +352,7 @@ QString DocNavBar::tooltipFor(const Hit &hit) const
     case Item::Forward: return utils::tr(QStringLiteral("doc.nav.forward"));
     case Item::Recent: return utils::tr(QStringLiteral("doc.nav.recent"));
     case Item::Tree: return utils::tr(QStringLiteral("doc.nav.tree"));
+    case Item::Folders: return utils::tr(QStringLiteral("doc.nav.folders"));
     case Item::ZoomOut: return utils::tr(QStringLiteral("doc.nav.zoom_out"));
     case Item::ZoomIn: return utils::tr(QStringLiteral("doc.nav.zoom_in"));
     case Item::ZoomLabel: return utils::tr(QStringLiteral("doc.nav.zoom_reset"));

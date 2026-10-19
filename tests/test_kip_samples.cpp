@@ -17,6 +17,8 @@
 #include <memory>
 
 #include "core/kai-file-validator.h"
+#include "core/text-diff.h"
+#include "core/unified-diff.h"
 #include "engine/command-language.h"
 #include "engine/kip-session.h"
 
@@ -89,6 +91,53 @@ struct Demo {
             if (int(b.index()) == index) return true;
         }
         return false;
+    }
+};
+
+QString commandText(const QString &prefix)
+{
+    QFile file(repoRoot() + QStringLiteral("/sample/kip/kai.yml"));
+    if (!file.open(QIODevice::ReadOnly)) return QString();
+    for (const QJsonValue &v : QJsonDocument::fromJson(kai::core::yamlTextToJsonText(QString::fromUtf8(file.readAll())).toUtf8()).object().value("commands").toArray()) {
+        if (v.toObject().value("name").toString().startsWith(prefix)) return v.toObject().value("command").toString();
+    }
+    return QString();
+}
+
+// Um comando Python de kai.yml (o texto é o programa), com o módulo `kip` no PYTHONPATH e a pasta do projeto.
+struct PythonDemo {
+    ProcessRunner runner;
+    KipSession session{&runner};
+    QTemporaryDir tmp;
+    bool start(const QString &code)
+    {
+        const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+        if (python.isEmpty() || code.isEmpty()) return false;
+        QFile script(tmp.filePath(QStringLiteral("demo.py")));
+        script.open(QIODevice::WriteOnly);
+        script.write(code.toUtf8());
+        script.close();
+        runner.setKillTimeoutMs(400);
+        QMap<QString, QString> env;
+        env.insert(QStringLiteral("PATH"), QProcessEnvironment::systemEnvironment().value(QStringLiteral("PATH")));
+        env.insert(QStringLiteral("KIP_VERSION"), QStringLiteral("1"));
+        env.insert(QStringLiteral("PYTHONPATH"), repoRoot() + QStringLiteral("/src/engine/kip-modules"));
+        env.insert(QStringLiteral("PYTHONDONTWRITEBYTECODE"), QStringLiteral("1"));
+        session.start(QStringLiteral("%1 -u '%2'").arg(python, script.fileName()), repoRoot() + QStringLiteral("/sample/kip"), env);
+        return true;
+    }
+    bool awaiting(const QString &id) const
+    {
+        const auto &o = session.screen().openScreen();
+        return o && o->id == id && session.screen().awaitingInput() && !o->locked;
+    }
+    template <typename T>
+    const T *block() const
+    {
+        for (const KipBlock &b : session.screen().blocks()) {
+            if (const auto *t = std::get_if<T>(&b)) return t;
+        }
+        return nullptr;
     }
 };
 
@@ -521,6 +570,219 @@ private slots:
         d.waitFinished();
         QVERIFY(d.session.outcome().success);
         QCOMPARE(d.done().title, QStringLiteral("On branch feat/search"));
+    }
+
+    // Demo 19: a rodada 2 inteira — ações por linha (com a confirmação na linha), diff, campo diff, log de passo,
+    // várias barras e o resultado com stats / kv / code.
+    void gitReviewUsesTheRoundTwoComponents()
+    {
+        const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+        if (python.isEmpty()) {
+            QSKIP("python3 not available");
+        }
+        ProcessRunner runner;
+        KipSession session(&runner);
+        runner.setKillTimeoutMs(400);
+        QMap<QString, QString> env;
+        env.insert(QStringLiteral("PATH"), QProcessEnvironment::systemEnvironment().value(QStringLiteral("PATH")));
+        env.insert(QStringLiteral("KIP_VERSION"), QStringLiteral("1"));
+        env.insert(QStringLiteral("PYTHONPATH"), repoRoot() + QStringLiteral("/src/engine/kip-modules"));
+        env.insert(QStringLiteral("PYTHONDONTWRITEBYTECODE"), QStringLiteral("1"));
+        session.start(QStringLiteral("%1 -u -c \"import runpy; runpy.run_path('%2/sample/kip/git-review.py', run_name='__main__')\"")
+                          .arg(python, repoRoot()), QString(), env);
+        const auto awaiting = [&](const QString &id) {
+            const auto &o = session.screen().openScreen();
+            return o && o->id == id && session.screen().awaitingInput() && !o->locked;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(awaiting(QStringLiteral("branches")), kWait);
+        const auto rows = [&]() { return session.screen().openScreen()->fieldNamed(QStringLiteral("branch"))->rows.size(); };
+        QCOMPARE(rows(), 5);
+        // `main` só sincroniza
+        QVERIFY(!session.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("delete")));
+        QVERIFY(session.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("fix/cart-total"), QStringLiteral("delete")));
+        QCOMPARE(session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Confirming);
+        QVERIFY(session.confirmChip());
+        QTRY_COMPARE_WITH_TIMEOUT(session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Success, kWait);
+        QCOMPARE(rows(), 4); // o programa repintou a tabela
+        session.dismissChip();
+        QVERIFY(session.submit());
+
+        QTRY_VERIFY_WITH_TIMEOUT(awaiting(QStringLiteral("commit")), kWait);
+        bool diffBlock = false;
+        for (const KipBlock &b : session.screen().blocks()) diffBlock = diffBlock || std::holds_alternative<KipDiff>(b);
+        QVERIFY(diffBlock);
+        QCOMPARE(session.screen().openScreen()->values.value("hunks").toArray().size(), 4);
+        session.setFieldValue(QStringLiteral("hunks"), QJsonArray{"src/auth/session.ts@0", "config/deploy.yml@0"});
+        QVERIFY(session.submit());
+
+        QTRY_VERIFY_WITH_TIMEOUT(session.outcome().finished, kWait);
+        QVERIFY(session.outcome().success);
+        QCOMPARE(session.screen().done()->title, QStringLiteral("Committed to feat/login"));
+        int stats = 0, kv = 0, code = 0;
+        for (const KipBlock &b : session.screen().blocks()) {
+            stats += std::holds_alternative<KipStats>(b);
+            kv += std::holds_alternative<KipKv>(b);
+            code += std::holds_alternative<KipCode>(b);
+            if (const auto *steps = std::get_if<KipSteps>(&b)) {
+                QCOMPARE(steps->items.at(1).log.size(), 6);
+                QCOMPARE(steps->items.at(1).state, KipStepState::Success);
+            }
+        }
+        QCOMPARE(stats + kv + code, 3);
+        QCOMPARE(std::get<KipStats>(session.screen().blocks().at(1)).items.first().value, QStringLiteral("2"));
+    }
+
+    // Demo 20: o `kip` injetado lê os dois arquivos onde o script roda e manda os textos.
+    void compareTwoFilesWithTheInjectedHelper()
+    {
+        QFile file(repoRoot() + QStringLiteral("/sample/kip/kai.yml"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QString code;
+        for (const QJsonValue &v : QJsonDocument::fromJson(kai::core::yamlTextToJsonText(QString::fromUtf8(file.readAll())).toUtf8()).object().value("commands").toArray()) {
+            if (v.toObject().value("name").toString().startsWith(QStringLiteral("20."))) {
+                code = v.toObject().value("command").toString();
+            }
+        }
+        QVERIFY(!code.isEmpty());
+        std::unique_ptr<Demo> demo(Demo::injected(code));
+        demo->waitFinished();
+        QVERIFY(demo->session.outcome().success);
+        const KipDiff *diff = nullptr;
+        for (const KipBlock &b : demo->session.screen().blocks()) {
+            if (const auto *d = std::get_if<KipDiff>(&b)) diff = d;
+        }
+        QVERIFY(diff);
+        QVERIFY(diff->left && diff->right);
+        QCOMPARE(diff->left->name, QStringLiteral("staging.json"));
+        QVERIFY(diff->right->text.contains(QStringLiteral("\"replicas\": 6")));
+    }
+
+    // ---- demos 21–27: um por componente da rodada 2 ----
+    void commitViewerShowsTheDiffOfThePickedCommit()
+    {
+        PythonDemo d;
+        if (!d.start(commandText(QStringLiteral("21.")))) QSKIP("python3 not available");
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("pick")), kWait);
+        d.session.setFieldValue(QStringLiteral("commit"), QStringLiteral("585439b"));
+        QVERIFY(d.session.submit());
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("more")), kWait);
+        const KipDiff *diff = d.block<KipDiff>();
+        QVERIFY(diff);
+        const QVector<DiffFile> files = parseUnifiedDiff(diff->patch);
+        QCOMPARE(files.size(), 3);
+        QCOMPARE(files.at(0).status, DiffFileStatus::Renamed);
+        QVERIFY(files.at(1).binary);
+        QCOMPARE(files.at(2).status, DiffFileStatus::Added);
+        QVERIFY(d.session.confirm(false));
+        QTRY_VERIFY_WITH_TIMEOUT(d.session.outcome().finished, kWait);
+        QVERIFY(d.session.outcome().success);
+    }
+
+    void compareTwoTextsSendsBothSides()
+    {
+        PythonDemo d;
+        if (!d.start(commandText(QStringLiteral("22.")))) QSKIP("python3 not available");
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("texts")), kWait);
+        d.session.setFieldValue(QStringLiteral("opts"), QJsonObject{{"ws", true}, {"json", true}});
+        QVERIFY(d.session.submit());
+        QTRY_VERIFY_WITH_TIMEOUT(d.session.outcome().finished, kWait);
+        const KipDiff *diff = d.block<KipDiff>();
+        QVERIFY(diff && diff->left && diff->right);
+        QVERIFY(diff->ignoreWhitespace);
+        // sem espaços, a linha reindentada é igual: sobram replicas, memory, log_level e new_checkout
+        const DiffFile f = diffTexts(diff->left->text, diff->right->text, 3, true);
+        QCOMPARE(f.deletions, 4);
+    }
+
+    void deployHistoryRollsBackFromTheTableBlock()
+    {
+        PythonDemo d;
+        if (!d.start(commandText(QStringLiteral("23.")))) QSKIP("python3 not available");
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("history")), kWait);
+        QVERIFY(!d.session.startRowAction({}, QStringLiteral("deploys"), QStringLiteral("d-1039"), QStringLiteral("rollback")));
+        QVERIFY(d.session.startRowAction({}, QStringLiteral("deploys"), QStringLiteral("d-1042"), QStringLiteral("rollback")));
+        QVERIFY(d.session.confirmChip());
+        QTRY_COMPARE_WITH_TIMEOUT(d.session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Success, kWait);
+        const KipTable *table = d.block<KipTable>();
+        QVERIFY(table);
+        QCOMPARE(table->rows.first().toObject().value("status").toObject().value("text").toString(), QStringLiteral("rolled back"));
+        d.session.dismissChip();
+        QVERIFY(d.session.startRowAction({}, QStringLiteral("deploys"), QStringLiteral("d-1041"), QStringLiteral("logs")));
+        QTRY_COMPARE_WITH_TIMEOUT(d.session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Success, kWait);
+        QVERIFY(d.session.screen().openScreen()->chipRun->text.contains(QStringLiteral("health check ok")));
+        d.session.dismissChip();
+        QVERIFY(d.session.submit());
+        QTRY_VERIFY_WITH_TIMEOUT(d.session.outcome().finished, kWait);
+        QVERIFY(d.session.outcome().success);
+    }
+
+    void releaseSummaryIsMadeOfResultBlocks()
+    {
+        const QString code = commandText(QStringLiteral("24."));
+        QVERIFY(!code.isEmpty());
+        std::unique_ptr<Demo> demo(Demo::injected(code));
+        demo->waitFinished();
+        QVERIFY(demo->session.outcome().success);
+        int stats = 0, kv = 0, codeBlocks = 0;
+        for (const KipBlock &b : demo->session.screen().blocks()) {
+            if (const auto *s = std::get_if<KipStats>(&b)) { ++stats; QCOMPARE(s->items.size(), 3); }
+            if (const auto *k = std::get_if<KipKv>(&b)) { ++kv; QCOMPARE(k->items.at(3).format, QStringLiteral("link")); }
+            if (const auto *c = std::get_if<KipCode>(&b)) { ++codeBlocks; QCOMPARE(c->highlight, (QVector<int>{3, 4})); }
+        }
+        QCOMPARE(stats + kv + codeBlocks, 3);
+    }
+
+    void choicesAnswerWithPlainValues()
+    {
+        PythonDemo d;
+        if (!d.start(commandText(QStringLiteral("25.")))) QSKIP("python3 not available");
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("land")), kWait);
+        QCOMPARE(d.session.screen().openScreen()->values.value("tests"), QJsonValue(QJsonArray{"src/auth"}));
+        d.session.setFieldValue(QStringLiteral("strategy"), QStringLiteral("squash"));
+        d.session.setFieldValue(QStringLiteral("tests"), QJsonArray{"src/auth", "docs"});
+        QVERIFY(d.session.submit());
+        QTRY_VERIFY_WITH_TIMEOUT(d.session.outcome().finished, kWait);
+        const KipKv *kv = d.block<KipKv>();
+        QVERIFY(kv);
+        QCOMPARE(kv->items.at(0).value.toString(), QStringLiteral("squash"));
+        QCOMPARE(kv->items.at(2).value.toString(), QStringLiteral("src/auth, docs"));
+    }
+
+    void partialCommitKeepsOnlyThePickedHunks()
+    {
+        PythonDemo d;
+        if (!d.start(commandText(QStringLiteral("26.")))) QSKIP("python3 not available");
+        QTRY_VERIFY_WITH_TIMEOUT(d.awaiting(QStringLiteral("commit")), kWait);
+        QCOMPARE(d.session.screen().openScreen()->values.value("hunks").toArray().size(), 4);
+        d.session.setFieldValue(QStringLiteral("hunks"), QJsonArray{"src/auth/session.ts@1", "config/deploy.yml@0"});
+        QVERIFY(d.session.submit());
+        QTRY_VERIFY_WITH_TIMEOUT(d.session.outcome().finished, kWait);
+        const KipCode *code = d.block<KipCode>();
+        QVERIFY(code);
+        const QVector<DiffFile> staged = parseUnifiedDiff(code->text);
+        QCOMPARE(staged.size(), 2); // debug.log ficou de fora
+        QCOMPARE(staged.at(0).hunks.size(), 1);
+        QVERIFY(staged.at(0).hunks.first().lines.at(1).text.contains(QStringLiteral("clear();")));
+        QCOMPARE(d.block<KipStats>()->items.first().value, QStringLiteral("2 / 4"));
+    }
+
+    void buildShowsStepOutputAndSeveralBars()
+    {
+        const QString code = commandText(QStringLiteral("27."));
+        QVERIFY(!code.isEmpty());
+        std::unique_ptr<Demo> demo(Demo::injected(code));
+        demo->waitFinished();
+        QVERIFY(demo->session.outcome().success);
+        const KipSteps *steps = nullptr;
+        for (const KipBlock &b : demo->session.screen().blocks()) {
+            if (const auto *s = std::get_if<KipSteps>(&b)) steps = s;
+        }
+        QVERIFY(steps);
+        QCOMPARE(steps->items.at(1).log.size(), 12);
+        QCOMPARE(steps->items.at(2).state, KipStepState::Error);
+        QCOMPARE(steps->items.at(2).log.size(), 2);
+        QCOMPARE(steps->items.at(3).state, KipStepState::Success);
+        QCOMPARE(demo->done().level, KipLevel::Warning);
     }
 
     void rawProtocolWorksWithoutHelper()

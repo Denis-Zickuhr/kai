@@ -30,10 +30,17 @@ void DropOverlay::setTargetProvider(TargetFn target, EdgesFn edges)
     m_edgesFn = std::move(edges);
 }
 
+void DropOverlay::setFloatPill(const QRect &rect, const QString &label)
+{
+    m_floatRect = rect;
+    m_floatLabel = label;
+    update();
+}
+
 void DropOverlay::setTarget(const DropTarget &target)
 {
     if (target.valid == m_target.valid && target.zone == m_target.zone && target.index == m_target.index
-        && target.rect == m_target.rect) {
+        && target.rect == m_target.rect && target.floating == m_target.floating) {
         return;
     }
     m_target = target;
@@ -87,7 +94,7 @@ void DropOverlay::paintEvent(QPaintEvent *)
     const QColor accent(tk::accent());
     const int radius = tk::radiusMd();
 
-    // As bordas vazias onde dá para soltar: sempre à vista durante o arrasto.
+    // As células onde dá para soltar (as vazias também): sempre à vista durante o arrasto.
     if (m_edgesFn) {
         QColor faint(tk::mutedFg());
         faint.setAlpha(110);
@@ -106,7 +113,23 @@ void DropOverlay::paintEvent(QPaintEvent *)
             p.drawText(rect, Qt::AlignCenter, label);
         }
     }
-    if (m_target.valid) {
+    // O alvo virtual "Flutuar": uma pílula que acende quando o painel está sobre ela.
+    if (m_floatRect.isValid()) {
+        const bool hot = m_target.valid && m_target.floating;
+        QColor fill(tk::altBg());
+        fill.setAlpha(hot ? 255 : 235);
+        QColor border = hot ? accent : QColor(tk::borderColor());
+        p.setPen(QPen(border, hot ? 2 : 1));
+        p.setBrush(hot ? QColor(accent.red(), accent.green(), accent.blue(), 70) : fill);
+        const QRectF pill = QRectF(m_floatRect).adjusted(1, 1, -1, -1);
+        p.drawRoundedRect(pill, qMin(double(radius) + 4, pill.height() / 2), qMin(double(radius) + 4, pill.height() / 2));
+        QFont font = p.font();
+        font.setBold(true);
+        p.setFont(font);
+        p.setPen(hot ? accent : QColor(tk::mutedFg()));
+        p.drawText(m_floatRect, Qt::AlignCenter, m_floatLabel);
+    }
+    if (m_target.valid && !m_target.floating) {
         QColor fill = accent;
         fill.setAlpha(55);
         p.setPen(QPen(accent, 2));

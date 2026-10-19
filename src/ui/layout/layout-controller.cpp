@@ -108,10 +108,23 @@ QStringList LayoutController::visibleViewOrder() const
 {
     QStringList order;
     const LayoutModel &model = m_dock->model();
-    for (Zone zone : kAllZones) {
-        const QString active = model.zone(zone).active;
-        if (!active.isEmpty() && m_dock->isViewVisible(active)) {
-            order.append(active);
+    // Na ordem em que aparecem na tela: pilha a pilha (colunas da esquerda para a direita no modo vertical, linhas de cima
+    // para baixo no horizontal), e dentro de cada pilha da primeira à última célula.
+    const GridPlan plan = model.plan([&model](Zone zone) { return model.zoneOccupied(zone); });
+    for (const GridStack &stack : plan.stacks) {
+        for (Zone zone : stack.cells) {
+            if (model.zone(zone).split) {
+                for (const QString &id : model.zone(zone).views) { // dividida: todos estão à vista
+                    if (m_dock->isViewVisible(id)) {
+                        order.append(id);
+                    }
+                }
+                continue;
+            }
+            const QString active = model.zone(zone).active;
+            if (!active.isEmpty() && m_dock->isViewVisible(active)) {
+                order.append(active);
+            }
         }
     }
     for (const FloatingView &floating : model.floating()) {
@@ -243,6 +256,8 @@ void LayoutController::populateViewMenu(QMenu *menu)
         {LayoutModel::Preset::Compact, "menu.view.perspective.compact"},
         {LayoutModel::Preset::Http, "menu.view.perspective.http"},
         {LayoutModel::Preset::Reading, "menu.view.perspective.reading"},
+        {LayoutModel::Preset::Triple, "menu.view.perspective.triple"},
+        {LayoutModel::Preset::Quad, "menu.view.perspective.quad"},
     };
     for (const Builtin &builtin : builtins) {
         const LayoutModel::Preset preset = builtin.preset;

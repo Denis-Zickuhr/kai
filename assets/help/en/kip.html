@@ -29,11 +29,13 @@
 <tr><td><code>notify</code></td><td>system notification</td></tr>
 <tr><td><code>set_env</code></td><td>exports a declared variable</td></tr>
 <tr><td><code>chip_result</code></td><td>progress and outcome of a <b>chip</b> (see below)</td></tr>
+<tr><td><code>diff</code></td><td>a diff: the output of <code>git diff</code>, or two texts Kai compares</td></tr>
+<tr><td><code>kv</code>, <code>stats</code>, <code>code</code></td><td>label/value pairs, big numbers and a code snippet for results</td></tr>
 <tr><td><code>done</code></td><td>result screen with buttons: open URL (http/https), reveal in the file manager, copy</td></tr>
 </table>
 
 <h3>3. Field types</h3>
-<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code> and <code>flags</code>. Fields can be <code>required</code>, have a <code>default</code>, belong to a <code>group</code> and be <code>watch</code>ed: when the user changes a watched field Kai sends <code>change</code> and the program answers with a <code>patch</code> (this is how a second list depends on the first). Kai remembers the last answers of each prompt (never <code>secret</code>); turn it off with <code>remember: false</code>.</p>
+<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code>, <code>flags</code>, <code>tree</code> (a checkable tree) and <code>diff</code> (pick hunks or files of a patch). A <code>select</code> can show as <code>cards</code> or a <code>segmented</code> control; <code>text</code> and <code>textarea</code> take a <code>max_length</code> with a counter. Fields can be <code>required</code>, have a <code>default</code>, belong to a <code>group</code> and be <code>watch</code>ed: when the user changes a watched field Kai sends <code>change</code> and the program answers with a <code>patch</code> (this is how a second list depends on the first). Kai remembers the last answers of each prompt (never <code>secret</code>); turn it off with <code>remember: false</code>.</p>
 
 <h3>4. Chips and long lists</h3>
 <p><b>Chips</b> are small buttons under the fields of a prompt for <i>ephemeral</i> actions — "show the context of this branch", "sync", "delete". Clicking one does not answer the form: Kai sends <code>chip</code> to the program, which replies with <code>chip_result</code> messages (<code>running</code>, then <code>success</code> or <code>error</code>, with a Markdown <code>text</code>) shown in a box under the chips. The step stays open and an error never ends the session.</p>
@@ -43,6 +45,13 @@
 <li>One chip runs at a time; close the box with the × button.</li>
 </ul>
 <p>For <code>list</code> and <code>table</code> fields, <code>searchable</code> forces (or hides) the filter box and <code>page_size</code> splits the items into pages with a "Page 2 of 5" bar. Pages apply to the filtered result and keep what you selected.</p>
+
+<h3>4b. Diffs, row actions and results</h3>
+<ul>
+<li><b>Diffs</b> show unified or side by side — your choice, remembered per command. Changed words are highlighted, equal stretches fold into "⋯ N unchanged lines", and ↑ ↓ (F7) walk the changes. Kai never reads files for a diff: the program sends the text (<code>git diff | kai kip diff --patch -</code>, <code>kai kip diff --left-file a --right-file b</code>).</li>
+<li><b>Row actions</b> (<code>row_actions</code> on a table) are chips tied to a row: icons at the end of the row on hover, also in the right-click menu. A destructive one turns the row into "Delete X? [Keep] [Delete]" before anything runs.</li>
+<li>Table cells can be <code>mono</code>, <code>muted</code>, <code>number</code>, <code>badge</code> or <code>copy</code>. A step can carry its output (<code>log</code>, collapsed, opens on error) and <code>progress</code> with an <code>id</code> stacks several bars.</li>
+</ul>
 
 <h3>5. The <code>kai kip</code> helper</h3>
 <p>You don't need to write JSON by hand in shell scripts:</p>
@@ -90,9 +99,9 @@ kip done --title "Deployed to $target"</pre>
 <li>One screen at a time, with a summary of your previous answers above it (secrets appear as ••••).</li>
 <li><b>Back</b> appears when the program allows it; <b>Cancel run</b> asks the program to stop (and stops it after 3 seconds).</li>
 <li>A destructive confirmation focuses the decline button, so Enter never confirms by accident.</li>
-<li><b>Details</b> (collapsed): the <b>Log</b> and the <b>Protocol</b> inspector with every message in both directions.</li>
+<li><b>Details</b> (collapsed, on the left of the buttons row): the <b>Log</b> and the <b>Protocol</b> inspector with every message in both directions.</li>
 <li>The output panel's tab bar is hidden for KIP commands; the icon at the top-right of the view opens it in its own window.</li>
-<li>Failures, cancellation, unsupported and protocol errors show a card with the details open and <b>Run again</b>.</li>
+<li>Failures, cancellation, unsupported and protocol errors show a card with <b>Run again</b>; all but cancellation open the details.</li>
 </ul>
 
 <h3>8. Settings and the creation manifesto</h3>

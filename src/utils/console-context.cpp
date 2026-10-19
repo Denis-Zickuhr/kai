@@ -1,6 +1,9 @@
 #include "utils/console-context.h"
 
 #include <QFile>
+#include <QHash>
+#include <QPair>
+#include <QSet>
 #include <QIODevice>
 #include <QStringDecoder>
 #include <QTextStream>
@@ -34,42 +37,57 @@ bool isUsableStdHandle(DWORD which)
     return h && h != INVALID_HANDLE_VALUE && ::GetFileType(h) != FILE_TYPE_UNKNOWN;
 }
 
-// Nome do executável do processo pai (minúsculo), ou vazio.
-QString parentProcessExeName()
+// Nomes (minúsculos) dos ancestrais deste processo, do pai para cima, até `maxDepth`.
+QStringList ancestorExeNames(int maxDepth)
 {
-    const DWORD self = ::GetCurrentProcessId();
     HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
         return {};
     }
+    QHash<DWORD, QPair<DWORD, QString>> processes; // pid -> (pid do pai, nome)
     PROCESSENTRY32W entry;
     entry.dwSize = sizeof(entry);
-    DWORD parentPid = 0;
     if (::Process32FirstW(snapshot, &entry)) {
         do {
-            if (entry.th32ProcessID == self) {
-                parentPid = entry.th32ParentProcessID;
-                break;
-            }
-        } while (::Process32NextW(snapshot, &entry));
-    }
-    QString name;
-    if (parentPid != 0 && ::Process32FirstW(snapshot, &entry)) {
-        do {
-            if (entry.th32ProcessID == parentPid) {
-                name = QString::fromWCharArray(entry.szExeFile).toLower();
-                break;
-            }
+            processes.insert(entry.th32ProcessID,
+                             {entry.th32ParentProcessID, QString::fromWCharArray(entry.szExeFile).toLower()});
         } while (::Process32NextW(snapshot, &entry));
     }
     ::CloseHandle(snapshot);
-    return name;
+    QStringList names;
+    QSet<DWORD> seen;
+    DWORD pid = ::GetCurrentProcessId();
+    for (int depth = 0; depth < maxDepth; ++depth) {
+        const auto self = processes.constFind(pid);
+        if (self == processes.constEnd()) {
+            break;
+        }
+        pid = self->first; // o PID do pai pode ter sido reaproveitado: sem laço
+        const auto parent = processes.constFind(pid);
+        if (parent == processes.constEnd() || seen.contains(pid)) {
+            break;
+        }
+        seen.insert(pid);
+        names << parent->second;
+    }
+    return names;
+}
+
+// Nome do executável do processo pai (minúsculo), ou vazio.
+QString parentProcessExeName()
+{
+    // Pula o kai.com/kai.exe: o "pai" que interessa (o shell do usuário, o wsl.exe) é quem chamou o Kai.
+    for (const QString &name : ancestorExeNames(4)) {
+        if (name != QLatin1String("kai.com") && name != QLatin1String("kai.exe")) {
+            return name;
+        }
+    }
+    return {};
 }
 
 bool parentProcessIsWsl()
 {
-    const QString name = parentProcessExeName();
-    return name == QLatin1String("wsl.exe") || name == QLatin1String("wslhost.exe");
+    return ancestorsAreWslInterop(ancestorExeNames(4));
 }
 #endif
 
@@ -282,6 +300,18 @@ QString parentProcessName()
     }
     return QString::fromUtf8(comm.readAll()).trimmed().toLower();
 #endif
+}
+
+bool ancestorsAreWslInterop(const QStringList &ancestorsNearestFirst)
+{
+    // O kai.com (shim de console) e o kai.exe que ele chama são do próprio Kai: quem os chamou é que decide.
+    for (const QString &name : ancestorsNearestFirst) {
+        if (name == QLatin1String("kai.com") || name == QLatin1String("kai.exe")) {
+            continue;
+        }
+        return name == QLatin1String("wsl.exe") || name == QLatin1String("wslhost.exe");
+    }
+    return false;
 }
 
 bool launchedFromWslInterop()

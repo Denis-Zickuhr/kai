@@ -26,6 +26,7 @@
 #include "ui/features/docs/doc-editor-pane.h"
 #include "ui/features/docs/doc-file-sidebar.h"
 #include "ui/features/docs/doc-viewer.h"
+#include "ui/features/docs/document-panel.h"
 #include "ui/features/docs/note-dialog.h"
 #include "ui/shared/folder-picker-widget.h"
 #include <QComboBox>
@@ -40,6 +41,18 @@ using namespace kai::ui;
 Q_DECLARE_METATYPE(kai::core::NoteFileAction)
 
 // Notas: o modelo e a persistência (notes.json), o item na árvore, a seção "Notas" do leitor e o fluxo completo na janela.
+
+namespace {
+// Foco inteligente ligado: a seleção na árvore leva a Saída e o Documento (o que estes testes conferem).
+void enableSmartFocus()
+{
+    kai::core::ConfigManager config;
+    kai::core::SettingsData settings = config.loadSettings();
+    settings.smartFocus = true;
+    QVERIFY(config.saveSettings(settings));
+}
+} // namespace
+
 class TestNotes : public QObject {
     Q_OBJECT
 
@@ -533,10 +546,11 @@ private slots:
     {
         seed(QString(), {note(QStringLiteral("n1"), QStringLiteral("sub"), QStringLiteral("Lembrete"), QStringLiteral("# Lembrete\n\ncomprar leite")),
                          note(QStringLiteral("n2"), QStringLiteral("sub"), QStringLiteral("Outra"), QStringLiteral("x"))});
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *tree = window.findChild<CommandTreeWidget *>();
-        OutputPanel *panel = window.findChild<TerminalDrawer *>()->embeddedPanel();
+        DocumentPanel *panel = window.documentPanel();
         QVERIFY(tree->selectCommand(QStringLiteral("root")) || true);
         QVERIFY(tree->selectCommand(QStringLiteral("n2"))); // sai da pasta para forçar a seleção da pasta depois
         QVERIFY(tree->selectCommand(QStringLiteral("sub")));
@@ -552,10 +566,11 @@ private slots:
         QVERIFY(project.isValid());
         seed(project.path(), {note(QStringLiteral("n1"), QStringLiteral("sub"), QStringLiteral("Lembrete"), QStringLiteral("texto"))},
              QStringLiteral("# Readme da pasta\n"));
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *tree = window.findChild<CommandTreeWidget *>();
-        OutputPanel *panel = window.findChild<TerminalDrawer *>()->embeddedPanel();
+        DocumentPanel *panel = window.documentPanel();
         QVERIFY(tree->selectCommand(QStringLiteral("root")) || true);
         QVERIFY(tree->selectCommand(QStringLiteral("sub")));
         QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
@@ -571,7 +586,7 @@ private slots:
         window.show();
         auto *tree = window.findChild<CommandTreeWidget *>();
         auto *drawer = window.findChild<TerminalDrawer *>();
-        OutputPanel *panel = drawer->embeddedPanel();
+        DocumentPanel *panel = window.documentPanel();
         QVERIFY(tree->selectCommand(QStringLiteral("n1")));
         QVERIFY(tree->currentSelectionIsNote());
         QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);

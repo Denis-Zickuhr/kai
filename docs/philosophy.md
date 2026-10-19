@@ -68,6 +68,11 @@ It does not edit shell rc files, install anything or contact the network on
 its own — anything like that is asked once, per case, with consent. A feature
 that acts "helpfully" on its own needs an off switch and defaults to off.
 
+One deliberate exception, chosen by the user (2026-10-21): a **KIP app the user put in a panel** opens with Kai —
+its process starts and waits on its first screen. A KIP app is inert until someone answers it, so starting it is
+like opening a document, not like running a task. It is still per panel and switchable ("Open with Kai" in the
+panel menu); an app that needs a parameters form, and any non-KIP command, never starts by itself.
+
 ### 8. From a one-liner to a small app **(firm)**
 
 A command can start as a shell line and grow: Python/Node/PHP code, an HTTP

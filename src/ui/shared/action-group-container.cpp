@@ -3,6 +3,7 @@
 #include "utils/design-tokens.h"
 
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QVBoxLayout>
@@ -69,9 +70,32 @@ ActionGroupContainer::ActionGroupContainer(Qt::Orientation orientation, QWidget 
         outer->addWidget(m_scroll);
         setMinimumHeight(0);
     } else {
-        m_layout = new QBoxLayout(QBoxLayout::LeftToRight, this);
-        m_layout->setContentsMargins(utils::tokens::space(1), 0, utils::tokens::space(1), 0);
+        auto *outer = new QHBoxLayout(this);
+        outer->setContentsMargins(utils::tokens::space(1), 0, utils::tokens::space(1), 0);
+        outer->setSpacing(0);
+        m_scroll = new QScrollArea(this);
+        m_scroll->setObjectName(QStringLiteral("actionBarScroll"));
+        m_scroll->setFrameShape(QFrame::NoFrame);
+        m_scroll->setWidgetResizable(true);
+        m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_scroll->setStyleSheet(QStringLiteral(
+            "QScrollArea#actionBarScroll { background: transparent; border: none; }"
+            "QScrollArea#actionBarScroll QScrollBar:horizontal { background: transparent; height: 4px; margin: 0; }"
+            "QScrollArea#actionBarScroll QScrollBar::handle:horizontal { background: %1; border-radius: 2px; min-width: 16px; }"
+            "QScrollArea#actionBarScroll QScrollBar::add-line, QScrollArea#actionBarScroll QScrollBar::sub-line { height: 0; width: 0; }"
+            "QScrollArea#actionBarScroll QScrollBar::add-page, QScrollArea#actionBarScroll QScrollBar::sub-page { background: transparent; }")
+            .arg(utils::tokens::borderColor()));
+        m_scroll->viewport()->setStyleSheet(QStringLiteral("background: transparent;"));
+        m_flat = new QWidget(m_scroll);
+        m_flat->setObjectName(QStringLiteral("actionGroupFlat"));
+        m_flat->setAttribute(Qt::WA_StyledBackground, true);
+        m_flat->setStyleSheet(QStringLiteral("QWidget#actionGroupFlat { background: transparent; }"));
+        m_layout = new QBoxLayout(QBoxLayout::LeftToRight, m_flat);
+        m_layout->setContentsMargins(0, 0, 0, 0);
         m_layout->setSpacing(0);
+        m_scroll->setWidget(m_flat);
+        outer->addWidget(m_scroll);
         // Mesma altura da barra do cabeçalho da Saída, para as duas linhas
         // separadoras ficarem alinhadas.
         setMinimumHeight(utils::tokens::controlHeight() + utils::tokens::space(2));
@@ -94,7 +118,7 @@ void ActionGroupContainer::setGroups(const QVector<QWidget *> &groups)
     qDeleteAll(m_separators);
     m_separators.clear();
 
-    QWidget *host = m_pill ? m_pill : this;
+    QWidget *host = m_pill ? m_pill : (m_flat ? m_flat : this);
 
     bool first = true;
     for (QWidget *group : groups) {
@@ -119,7 +143,7 @@ void ActionGroupContainer::setGroups(const QVector<QWidget *> &groups)
 
 QWidget *ActionGroupContainer::createSeparator()
 {
-    auto *line = new QFrame(m_pill ? m_pill : this);
+    auto *line = new QFrame(m_pill ? m_pill : (m_flat ? m_flat : this));
     line->setObjectName(QStringLiteral("actionGroupSeparator"));
     line->setFrameShape(m_orientation == Qt::Horizontal ? QFrame::VLine : QFrame::HLine);
     if (m_orientation == Qt::Horizontal) {
@@ -141,6 +165,24 @@ int ActionGroupContainer::contentWidth() const
         return m_pill->sizeHint().width() + 4 + kFrameInset * 2;
     }
     return sizeHint().width();
+}
+
+QSize ActionGroupContainer::sizeHint() const
+{
+    if (m_flat) {
+        const QSize content = m_flat->sizeHint();
+        const QMargins margins = contentsMargins();
+        return QSize(content.width() + utils::tokens::space(1) * 2 + margins.left() + margins.right(), content.height());
+    }
+    return QWidget::sizeHint();
+}
+
+QSize ActionGroupContainer::minimumSizeHint() const
+{
+    if (m_flat) {
+        return QSize(utils::tokens::controlHeight() * 2, minimumHeight());
+    }
+    return QWidget::minimumSizeHint();
 }
 
 int ActionGroupContainer::naturalBarHeight() const

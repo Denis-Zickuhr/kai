@@ -1,5 +1,7 @@
 #include "ui/features/kip/kip-blocks.h"
 
+#include "ui/features/kip/kip-rich-blocks.h"
+#include "ui/shared/data-table-widget.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/parameter-field-factory.h"
 #include "ui/shared/table-utils.h"
@@ -14,6 +16,9 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QToolButton>
 #include <QProgressBar>
 #include <QResizeEvent>
 #include <QTableWidget>
@@ -336,10 +341,13 @@ void KipMarkdownBlockWidget::update(const core::KipBlock &block)
 
 KipProgressBlockWidget::KipProgressBlockWidget(const core::KipProgress &block, QWidget *parent)
     : KipBlockWidget(parent)
+    , m_id(block.id)
 {
+    // Com id (várias barras, §27): linha compacta — nome mono, % à direita, barra fina.
+    const bool compact = !m_id.isEmpty();
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(tk::space(1));
+    layout->setSpacing(compact ? 3 : tk::space(1));
 
     auto *top = new QHBoxLayout();
     top->setContentsMargins(0, 0, 0, 0);
@@ -347,38 +355,59 @@ KipProgressBlockWidget::KipProgressBlockWidget(const core::KipProgress &block, Q
     m_label->setStyleSheet(QStringLiteral("color: %1;").arg(tk::fg()));
     m_percent = new QLabel(this);
     m_percent->setStyleSheet(QStringLiteral("color: %1;").arg(tk::mutedFg()));
+    if (compact) {
+        const QFont mono = tk::monoFont(qMax(8, tk::fontSizeSmallPt()));
+        m_label->setFont(mono);
+        m_percent->setFont(mono);
+        m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    }
     top->addWidget(m_label, 1);
     top->addWidget(m_percent);
     layout->addLayout(top);
 
     m_bar = new QProgressBar(this);
     m_bar->setTextVisible(false);
-    m_bar->setFixedHeight(qMax(8, tk::space(2) + 2));
+    m_bar->setFixedHeight(compact ? 5 : qMax(8, tk::space(2) + 2));
+    layout->addWidget(m_bar);
+    applyStyle(false);
+    update(block);
+}
+
+void KipProgressBlockWidget::applyStyle(bool done)
+{
+    m_done = done;
+    const int radius = m_id.isEmpty() ? tk::radiusSm() : qMin(tk::radiusSm(), 2);
     m_bar->setStyleSheet(QStringLiteral(
         "QProgressBar { background-color: %1; border: none; border-radius: %3px; }"
         "QProgressBar::chunk { background-color: %2; border-radius: %3px; }")
-        .arg(tk::surface2(), tk::accent()).arg(tk::radiusSm()));
-    layout->addWidget(m_bar);
-    update(block);
+        .arg(tk::surface2(), done ? tk::successFg() : tk::accent()).arg(radius));
 }
 
 bool KipProgressBlockWidget::accepts(const core::KipBlock &block) const
 {
-    return std::holds_alternative<core::KipProgress>(block);
+    const auto *progress = std::get_if<core::KipProgress>(&block);
+    return progress && progress->id == m_id;
 }
 
 void KipProgressBlockWidget::update(const core::KipBlock &block)
 {
     const auto &progress = std::get<core::KipProgress>(block);
-    m_label->setText(progress.label);
-    m_label->setVisible(!progress.label.isEmpty());
+    m_label->setText(progress.label.isEmpty() ? m_id : progress.label);
+    m_label->setToolTip(m_label->text());
+    m_label->setVisible(!m_label->text().isEmpty());
+    const bool done = progress.value && *progress.value >= 100.0;
+    if (done != m_done) {
+        applyStyle(done);
+    }
     if (progress.value) {
         m_bar->setRange(0, 1000);
         m_bar->setValue(qRound(*progress.value * 10));
-        m_percent->setText(QStringLiteral("%1%").arg(qRound(*progress.value)));
+        m_percent->setText(done && !m_id.isEmpty() ? utils::tr(QStringLiteral("kip.progress.done"))
+                                                   : QStringLiteral("%1%").arg(qRound(*progress.value)));
+        m_percent->setStyleSheet(QStringLiteral("color: %1;").arg(done && !m_id.isEmpty() ? tk::successFg() : tk::mutedFg()));
     } else {
         m_bar->setRange(0, 0); // indeterminada
-        m_percent->clear();
+        m_percent->setText(m_id.isEmpty() ? QString() : utils::tr(QStringLiteral("kip.progress.waiting")));
     }
 }
 
@@ -435,17 +464,53 @@ void KipStepsBlockWidget::rebuildRows(const core::KipSteps &steps)
         auto *texts = new QVBoxLayout();
         texts->setContentsMargins(0, 0, 0, 0);
         texts->setSpacing(0);
+        auto *labelRow = new QHBoxLayout();
+        labelRow->setContentsMargins(0, 0, 0, 0);
+        labelRow->setSpacing(tk::space(1));
         r.label = new QLabel(row);
         r.label->setWordWrap(true);
+        r.toggle = new QToolButton(row);
+        r.toggle->setAutoRaise(true);
+        r.toggle->setCursor(Qt::PointingHandCursor);
+        r.toggle->setToolTip(utils::tr(QStringLiteral("kip.steps.log")));
+        r.toggle->setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; border-radius: %1px; padding: 1px; }"
+                                               "QToolButton:hover { background-color: %2; }")
+                                    .arg(tk::radiusSm()).arg(tk::hoverBg()));
+        r.toggle->setVisible(false);
+        labelRow->addWidget(r.label, 1);
+        labelRow->addWidget(r.toggle, 0, Qt::AlignTop);
         r.detail = new QLabel(row);
         r.detail->setWordWrap(true);
         r.detail->setStyleSheet(QStringLiteral("color: %1; font-size: %2pt;")
                                     .arg(tk::mutedFg()).arg(tk::fontSizeSmallPt()));
-        texts->addWidget(r.label);
+        r.log = new QPlainTextEdit(row);
+        r.log->setObjectName(QStringLiteral("kipStepLog"));
+        r.log->setReadOnly(true);
+        r.log->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+        r.log->document()->setDocumentMargin(2);
+        r.log->setFont(tk::monoFont(qMax(7, tk::fontSizeSmallPt())));
+        r.log->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit#kipStepLog { background-color: %1; color: %2; border: 1px solid %3; border-radius: %4px;"
+            " padding: 2px 4px; }")
+            .arg(tk::codeBg(), tk::codeFg(), tk::borderColor()).arg(tk::radiusSm()));
+        r.log->setVisible(false);
+        texts->addLayout(labelRow);
         texts->addWidget(r.detail);
+        texts->addSpacing(2);
+        texts->addWidget(r.log);
         grid->addLayout(texts, 1);
         rowsLayout->addWidget(row);
         m_rowWidgets.append(r);
+        const int index = m_rowWidgets.size() - 1;
+        connect(r.toggle, &QToolButton::clicked, this, [this, index]() {
+            if (index >= m_rowWidgets.size()) return;
+            Row &target = m_rowWidgets[index];
+            target.expanded = !target.expanded;
+            target.log->setVisible(target.expanded);
+            target.toggle->setIcon(LucideIcons::icon(target.expanded ? QStringLiteral("chevron-down")
+                                                                     : QStringLiteral("chevron-right"),
+                                                     QColor(tk::mutedFg()), 14));
+        });
     }
 }
 
@@ -471,7 +536,43 @@ void KipStepsBlockWidget::update(const core::KipBlock &block)
         row.label->setStyleSheet(QStringLiteral("color: %1;").arg(dim ? tk::mutedFg() : tk::fg()));
         row.detail->setText(step.detail);
         row.detail->setVisible(!step.detail.isEmpty());
+        // log (`step.log`, §27): recolhido por padrão; abre sozinho uma vez quando o passo falha
+        const bool hasLog = !step.log.isEmpty();
+        row.toggle->setVisible(hasLog);
+        if (hasLog) {
+            if (step.state == core::KipStepState::Error && !row.autoOpened) {
+                row.expanded = true;
+                row.autoOpened = true;
+            }
+            const QString text = step.log.join(QLatin1Char('\n'));
+            if (row.log->toPlainText() != text) {
+                row.log->setPlainText(text);
+                row.log->verticalScrollBar()->setValue(row.log->verticalScrollBar()->maximum());
+            }
+            const int lines = qMin(7, int(step.log.size()));
+            row.log->ensurePolished();
+            row.log->setFixedHeight(lines * QFontMetrics(row.log->font()).lineSpacing() + 2 * 2 + 2 * 2 + 2 + 2);
+        }
+        row.log->setVisible(hasLog && row.expanded);
+        row.toggle->setIcon(LucideIcons::icon(row.expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-right"),
+                                              QColor(tk::mutedFg()), 14));
     }
+}
+
+bool KipStepsBlockWidget::logVisible(const QString &itemId) const
+{
+    for (const Row &r : m_rowWidgets) {
+        if (r.id == itemId) return r.log && r.log->isVisibleTo(const_cast<KipStepsBlockWidget *>(this));
+    }
+    return false;
+}
+
+QToolButton *KipStepsBlockWidget::logToggle(const QString &itemId) const
+{
+    for (const Row &r : m_rowWidgets) {
+        if (r.id == itemId) return r.toggle;
+    }
+    return nullptr;
 }
 
 // ---------------------------------------------------------------- tabela
@@ -506,11 +607,44 @@ void KipTableBlockWidget::rebuild(const core::KipTable &block)
         m_layout->removeWidget(m_table);
         kipDiscard(m_table);
     }
-    m_table = fields::makeDataTable(this, block.columns, block.rows, QStringLiteral("id"),
-                                    fields::DataTableMode::ReadOnly);
+    m_table = fields::makeDataTable(this, block.columns, block.rows, block.rowKey, fields::DataTableMode::ReadOnly,
+                                    block.rowActions);
     const int visibleRows = qBound(1, block.rows.size(), 10);
     fields::fitDataTableHeight(m_table, visibleRows);
     m_layout->addWidget(m_table);
+    if (fields::RowActionsController *actions = fields::rowActionsOf(m_table)) {
+        connect(actions, &fields::RowActionsController::actionClicked, this,
+                [this](const QString &row, const QString &action) { emit rowActionClicked(m_id, row, action); });
+        connect(actions, &fields::RowActionsController::confirmed, this, &KipTableBlockWidget::rowActionConfirmed);
+        connect(actions, &fields::RowActionsController::cancelled, this, &KipTableBlockWidget::rowActionCancelled);
+    }
+}
+
+void KipTableBlockWidget::syncRowActions(const core::KipOpenScreen *open, bool interactive)
+{
+    fields::RowActionsController *actions = fields::rowActionsOf(m_table);
+    if (!actions) {
+        return;
+    }
+    using Phase = fields::RowActionsController::Phase;
+    QString row;
+    QString action;
+    Phase phase = Phase::None;
+    const bool mine = open && open->chipRun && open->chipRun->rowAction && open->chipRun->field.isEmpty()
+        && open->chipRun->table == m_id;
+    if (mine) {
+        row = open->chipRun->row;
+        action = open->chipRun->chipId;
+        switch (open->chipRun->phase) {
+        case core::KipChipRun::Phase::Confirming: phase = Phase::Confirming; break;
+        case core::KipChipRun::Phase::Running: phase = Phase::Running; break;
+        case core::KipChipRun::Phase::Success: phase = Phase::Success; break;
+        case core::KipChipRun::Phase::Error: phase = Phase::Error; break;
+        }
+    }
+    const bool usable = open && open->kind == core::KipOpenScreen::Kind::Prompt && !open->locked
+        && !open->changePending && !(open->chipRun && open->chipRun->busy());
+    actions->sync(row, action, phase, interactive && usable);
 }
 
 void KipTableBlockWidget::update(const core::KipBlock &block)
@@ -524,6 +658,10 @@ KipBlockWidget *createKipBlockWidget(const core::KipBlock &block, QWidget *paren
     if (const auto *m = std::get_if<core::KipMarkdown>(&block)) return new KipMarkdownBlockWidget(*m, parent);
     if (const auto *m = std::get_if<core::KipProgress>(&block)) return new KipProgressBlockWidget(*m, parent);
     if (const auto *m = std::get_if<core::KipSteps>(&block)) return new KipStepsBlockWidget(*m, parent);
+    if (const auto *m = std::get_if<core::KipDiff>(&block)) return new KipDiffBlockWidget(*m, parent);
+    if (const auto *m = std::get_if<core::KipKv>(&block)) return new KipKvBlockWidget(*m, parent);
+    if (const auto *m = std::get_if<core::KipStats>(&block)) return new KipStatsBlockWidget(*m, parent);
+    if (const auto *m = std::get_if<core::KipCode>(&block)) return new KipCodeBlockWidget(*m, parent);
     return new KipTableBlockWidget(std::get<core::KipTable>(block), parent);
 }
 

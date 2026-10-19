@@ -64,8 +64,8 @@ def _read():
         return msg
 
 
-def _answer(id, on_change=None, on_chip=None, validate=None):
-    """Wait for the answer to prompt/confirm `id`, serving change/chip/invalid on the way."""
+def _answer(id, on_change=None, on_chip=None, validate=None, on_row_action=None):
+    """Wait for the answer to prompt/confirm `id`, serving change/chip/row action/invalid on the way."""
     while True:
         msg = _read()
         if msg.get("id") != id:
@@ -84,10 +84,13 @@ def _answer(id, on_change=None, on_chip=None, validate=None):
             reply = on_change(msg.get("field"), msg.get("values") or {}) if on_change else None
             patch = reply if isinstance(reply, dict) else {"fields": reply or []}
             send("patch", id=id, seq=msg.get("seq"), **patch)
-        elif kind == "chip" and on_chip:
+        elif kind == "chip" and (on_chip or (on_row_action and "row" in msg)):
             chip = msg.get("chip")
             try:
-                result = on_chip(chip, msg.get("values") or {})
+                if "row" in msg and on_row_action:
+                    result = on_row_action(chip, msg.get("row"), msg.get("values") or {})
+                else:
+                    result = on_chip(chip, msg.get("values") or {})
                 result = {"text": result} if isinstance(result, str) else (result or {})
                 result.setdefault("state", "success")
             except Exception as error:
@@ -95,16 +98,17 @@ def _answer(id, on_change=None, on_chip=None, validate=None):
             send("chip_result", chip=chip, id=id, **result)
 
 
-def prompt(fields, id="prompt", on_change=None, on_chip=None, validate=None, **options):
+def prompt(fields, id="prompt", on_change=None, on_chip=None, validate=None, on_row_action=None, **options):
     """Show a form and return its values dict.
 
     options: title, description, submit_label, back, cancellable, remember, chips.
     on_change(field, values) -> fields to patch (a `watch` field changed).
     on_chip(chip, values)    -> text or {state, title, text} for a chip.
+    on_row_action(action, row, values) -> the same, for a table row action (`row_actions`).
     validate(values)         -> {field: message} to keep the form open.
     """
     send("prompt", id=id, fields=fields, **options)
-    return _answer(id, on_change, on_chip, validate)
+    return _answer(id, on_change, on_chip, validate, on_row_action)
 
 
 def confirm(text, id="confirm", **options):
@@ -135,15 +139,41 @@ def steps(id, items, title=None):
     send("steps", id=id, title=title, items=items)
 
 
-def step(steps_id, id, state, detail=None):
-    """state: pending | running | success | error | skipped"""
-    send("step", steps=steps_id, id=id, state=state, detail=detail)
+def step(steps_id, id, state=None, detail=None, log=None):
+    """state: pending | running | success | error | skipped (None keeps it); log: lines to append."""
+    send("step", steps=steps_id, id=id, state=state, detail=detail, log=log)
 
 
-def table(columns, rows, id=None, title=None):
-    """columns: ["name", ...] or [{"key": "name", "label": "Name"}, ...]"""
+def table(columns, rows, id=None, title=None, **options):
+    """columns: ["name", ...] or [{"key": "name", "label": "Name", "format": "badge"}, ...].
+    options: row_key, row_actions (answered by prompt(on_row_action=...))."""
     columns = [{"key": c, "label": c} if isinstance(c, str) else c for c in columns]
-    send("table", id=id, title=title, columns=columns, rows=rows)
+    send("table", id=id, title=title, columns=columns, rows=rows, **options)
+
+
+def diff(patch=None, left=None, right=None, **options):
+    """A diff block: patch="<git diff output>", or left/right as text or {"name", "text"}.
+    options: id, title, language, view (unified|split), context, ignore_whitespace, collapse_after."""
+    side = lambda s: {"text": s} if isinstance(s, str) else s
+    if patch is not None:
+        send("diff", patch=patch, **options)
+    else:
+        send("diff", left=side(left), right=side(right), **options)
+
+
+def kv(items, id=None, title=None):
+    """items: [{"key": "Version", "value": "1.4.0", "format": "mono", "copy": True}, ...]"""
+    send("kv", id=id, title=title, items=items)
+
+
+def stats(items, id=None):
+    """items: [{"label": "Tests", "value": "412", "detail": "all passed", "tone": "success"}, ...]"""
+    send("stats", id=id, items=items)
+
+
+def code(text, id=None, title=None, language=None, **options):
+    """options: highlight=[4, 5], max_lines, line_numbers."""
+    send("code", id=id, title=title, language=language, text=text, **options)
 
 
 def notify(title, text=None, level=None):

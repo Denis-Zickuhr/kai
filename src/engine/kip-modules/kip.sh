@@ -9,7 +9,7 @@ _KIP='@@AWK@@'
 _kip_h=
 kip() {
   case "${1-}" in
-    hello|prompt|confirm|patch|invalid|message|markdown|progress|steps|step|table|notify|set-env|done|chip-result)
+    hello|prompt|confirm|patch|invalid|message|markdown|progress|steps|step|table|notify|set-env|done|chip-result|diff|kv|stats|code)
       # The first protocol message must be `hello`: send a plain one if the script did not.
       if [ -z "$_kip_h" ] && [ "$1" != hello ]; then printf '%s\n' '{"kip":1,"type":"hello"}'; fi
       _kip_h=1
@@ -26,12 +26,12 @@ kip() {
       _kip_t=$(LC_ALL=C awk "$_KIP" get "$2" type 2>/dev/null) && LC_ALL=C awk "$_KIP" get "$2" kip >/dev/null 2>&1 || {
         echo 'Not a valid KIP message: it must be a JSON object with a "kip" key' >&2; unset _kip_t; return 2; }
       case $_kip_t in
-        hello|prompt|confirm|patch|invalid|message|markdown|progress|steps|step|table|notify|set_env|done|chip_result) LC_ALL=C awk "$_KIP" get "$2" "" ;;
+        hello|prompt|confirm|patch|invalid|message|markdown|progress|steps|step|table|notify|set_env|done|chip_result|diff|kv|stats|code) LC_ALL=C awk "$_KIP" get "$2" "" ;;
         *) echo "Not a valid KIP message: unknown message type '$_kip_t'" >&2; unset _kip_t; return 2 ;;
       esac
       unset _kip_t ;;
     help|--help|-h)
-      echo "kip <verb> [options] - verbs: hello prompt confirm patch invalid message markdown progress steps step table notify set-env done chip-result raw get recv. Same syntax as kai kip; see Help > Creation manifesto." ;;
+      echo "kip <verb> [options] - verbs: hello prompt confirm patch invalid message markdown progress steps step table notify set-env done chip-result diff kv stats code raw get recv. Same syntax as kai kip; see Help > Creation manifesto." ;;
     '') echo "Usage: kip <verb> [options]   (kip --help)" >&2; return 2 ;;
     *) echo "Unknown verb '$1' (kip --help)" >&2; return 2 ;;
   esac

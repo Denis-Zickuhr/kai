@@ -5,6 +5,7 @@
 #include "ui/features/kip/kip-chips.h"
 #include "ui/features/kip/kip-details-drawer.h"
 #include "ui/features/kip/kip-result-card.h"
+#include "ui/features/kip/kip-rich-blocks.h"
 #include "ui/shared/collapsible-section-card.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/lucide-icons.h"
@@ -179,11 +180,13 @@ KipView::KipView(QWidget *parent)
     m_scroll->setWidget(content);
     root->addWidget(m_scroll, 1);
 
-    // ---- detalhes (recolhido) ----
+    // ---- detalhes: o log e o protocolo, só quando abertos (o botão fica no rodapé, sem gastar uma linha) ----
     m_details = new KipDetailsDrawer(this);
+    m_details->setVisible(false);
+    connect(m_details, &KipDetailsDrawer::expandedChanged, m_details, &QWidget::setVisible);
     root->addWidget(m_details);
 
-    // ---- rodapé: Back | Cancel | (Decline Confirm | Submit) ----
+    // ---- rodapé: Detalhes Back | Cancel | (Decline Confirm | Submit) ----
     m_footer = new QWidget(this);
     m_footer->setObjectName(QStringLiteral("kipFooter"));
     m_footer->setStyleSheet(QStringLiteral("QWidget#kipFooter { background: transparent; }") + kipPrimaryDisabledQss());
@@ -197,6 +200,8 @@ KipView::KipView(QWidget *parent)
     m_confirm = new QPushButton(m_footer);
     m_submit = new QPushButton(m_footer);
     m_submit->setProperty("kaiRole", QStringLiteral("primary"));
+    footer->addWidget(m_details->toggleButton());
+    footer->addWidget(m_details->pageSwitch(), 0, Qt::AlignVCenter);
     footer->addWidget(m_back);
     footer->addStretch(1);
     footer->addWidget(m_cancel);
@@ -257,6 +262,7 @@ void KipView::setSession(engine::KipSession *session)
     m_staticState = nullptr;
     m_summaryCount = -1;
     m_promptSerial = 0;
+    m_autoFocus = true;
     m_autoExpanded = false;
     // Cada execução começa com o Detalhes recolhido: uma falha da rodada anterior
     // (ou um clique do usuário) não pode deixar o log aberto numa tela nova.
@@ -342,8 +348,8 @@ void KipView::refresh()
     refreshResult(s);
     refreshFooter(s);
 
-    // Falhas abrem o Detalhes sozinhas, uma vez por estado (§4, §13.2).
-    if (bad && core::kipSettings().expandDetailsOnFailure
+    // Falhas abrem o Detalhes sozinhas, uma vez por estado (§4, §13.2). Cancelar não é falha: foi o usuário quem pediu.
+    if (bad && s.sessionState() != core::KipSessionState::Cancelled && core::kipSettings().expandDetailsOnFailure
         && (!m_autoExpanded || m_autoExpandedFor != s.sessionState())) {
         m_details->setExpanded(true);
         m_autoExpanded = true;
@@ -382,8 +388,19 @@ void KipView::refreshBlocks(const core::KipScreenState &s, bool show)
                 reuse->update(block);
                 next.append(reuse);
             } else {
-                next.append(createKipBlockWidget(block, m_blocksLayout->parentWidget()));
+                KipBlockWidget *created = createKipBlockWidget(block, m_blocksLayout->parentWidget());
+                wireBlock(created);
+                next.append(created);
             }
+        }
+    }
+    // Estado das ações de linha (tabelas) e a escolha lembrada unificado/lado a lado (diffs).
+    const core::KipOpenScreen *open = s.openScreen() ? &*s.openScreen() : nullptr;
+    for (KipBlockWidget *w : next) {
+        if (auto *table = qobject_cast<KipTableBlockWidget *>(w)) {
+            table->syncRowActions(open, m_session != nullptr);
+        } else if (auto *diff = qobject_cast<KipDiffBlockWidget *>(w)) {
+            diff->setPreferredView(s.diffViewPreference());
         }
     }
     if (next == m_blocks) {
@@ -400,6 +417,26 @@ void KipView::refreshBlocks(const core::KipScreenState &s, bool show)
         w->show();
     }
     m_blocks = next;
+}
+
+void KipView::wireBlock(KipBlockWidget *block)
+{
+    if (auto *table = qobject_cast<KipTableBlockWidget *>(block)) {
+        connect(table, &KipTableBlockWidget::rowActionClicked, this,
+                [this](const QString &tableId, const QString &row, const QString &action) {
+                    if (m_session) m_session->startRowAction(QString(), tableId, row, action);
+                });
+        connect(table, &KipTableBlockWidget::rowActionConfirmed, this, [this]() {
+            if (m_session) m_session->confirmChip();
+        });
+        connect(table, &KipTableBlockWidget::rowActionCancelled, this, [this]() {
+            if (m_session) m_session->dismissChip();
+        });
+    } else if (auto *diff = qobject_cast<KipDiffBlockWidget *>(block)) {
+        connect(diff, &KipDiffBlockWidget::viewChosen, this, [this](const QString &view) {
+            if (m_session) m_session->setDiffViewPreference(view);
+        });
+    }
 }
 
 // ============================================================== prompt / confirm
@@ -438,18 +475,26 @@ void KipView::refreshPrompt(const core::KipScreenState &s, bool show)
                                                        : QStringLiteral("kip.status.updating")));
     if (open.kind == core::KipOpenScreen::Kind::Prompt) {
         syncFields(open);
-        syncChips(open);
+        syncChips(s);
     }
 }
 
-void KipView::syncChips(const core::KipOpenScreen &open)
+void KipView::syncChips(const core::KipScreenState &s)
 {
-    if (!m_chipBar || !m_chipBox) {
+    if (!m_chipBar || !m_chipBox || !s.openScreen()) {
         return;
     }
+    const core::KipOpenScreen &open = *s.openScreen();
     m_chipBar->sync(open, m_session != nullptr);
-    const core::KipChip *chip = open.chipRun ? open.chipNamed(open.chipRun->chipId) : nullptr;
-    if (open.chipRun && chip) {
+    const core::KipChip *chip = s.runningChipDefinition();
+    bool show = open.chipRun && chip;
+    if (show && open.chipRun->rowAction) {
+        // Ação de linha: a confirmação e o "rodando" vivem na própria linha; a caixa só aparece com o que o
+        // programa tiver a dizer (texto, ou o resultado final).
+        show = open.chipRun->phase != core::KipChipRun::Phase::Confirming
+            && (open.chipRun->finished() || !open.chipRun->text.isEmpty());
+    }
+    if (show) {
         m_chipBox->setRun(*chip, *open.chipRun);
         m_chipBox->show();
     } else {
@@ -605,6 +650,38 @@ KipView::FieldSlot KipView::makeFieldSlot(const core::KipField &field, const QJs
     if (field.watch) {
         connect(editor, &KipFieldEditor::userEdited, this, [this, name = field.name]() { handleFieldEdited(name); });
     }
+    connect(editor, &KipFieldEditor::rowActionClicked, this, [this, name = field.name](const QString &row, const QString &action) {
+        if (m_session) m_session->startRowAction(name, QString(), row, action);
+    });
+    connect(editor, &KipFieldEditor::rowActionConfirmed, this, [this]() {
+        if (m_session) m_session->confirmChip();
+    });
+    connect(editor, &KipFieldEditor::rowActionCancelled, this, [this]() {
+        if (m_session) m_session->dismissChip();
+    });
+    if (field.maxLength > 0) {
+        // Contador "41 / 72" à direita do rótulo.
+        if (QLayoutItem *first = wrapLayout->itemAt(0); first && first->widget()) {
+            QWidget *labelWidget = first->widget();
+            wrapLayout->removeWidget(labelWidget);
+            auto *labelRow = new QHBoxLayout();
+            labelRow->setContentsMargins(0, 0, 0, 0);
+            labelRow->addWidget(labelWidget, 1);
+            auto *counter = new QLabel(slot.wrap);
+            counter->setObjectName(QStringLiteral("kipFieldCounter"));
+            counter->setFont(tk::monoFont(qMax(7, tk::fontSizeSmallPt())));
+            labelRow->addWidget(counter, 0, Qt::AlignBottom);
+            wrapLayout->insertLayout(0, labelRow);
+            const auto refreshCounter = [counter, editor, max = field.maxLength]() {
+                const int length = editor->value().toString().size();
+                counter->setText(QStringLiteral("%1 / %2").arg(length).arg(max));
+                counter->setStyleSheet(QStringLiteral("color: %1; background: transparent;")
+                                           .arg(length > max ? tk::errorFg() : tk::mutedFg()));
+            };
+            refreshCounter();
+            connect(editor, &KipFieldEditor::valueChanged, counter, refreshCounter);
+        }
+    }
     installSubmitFilter(editor->widget());
     return slot;
 }
@@ -656,6 +733,7 @@ void KipView::syncFields(const core::KipOpenScreen &open)
         slot.error->setText(error);
         slot.error->setVisible(!error.isEmpty());
         if (slot.editor) slot.editor->setReadOnly(locked);
+        if (slot.editor) slot.editor->syncRowActions(open, m_session != nullptr);
         if (!error.isEmpty() && !slot.group.isEmpty() && m_groups.contains(slot.group)) {
             m_groups[slot.group].card->setExpanded(true, false);
         }
@@ -725,7 +803,7 @@ void KipView::focusFirstField()
     const bool typingElsewhere = current && !inside
         && (qobject_cast<QLineEdit *>(current) || qobject_cast<QPlainTextEdit *>(current)
             || qobject_cast<QAbstractSpinBox *>(current));
-    if (typingElsewhere) {
+    if (typingElsewhere || (!m_autoFocus && !inside)) {
         return;
     }
     if (open->kind == core::KipOpenScreen::Kind::Confirm) {
@@ -747,6 +825,9 @@ bool KipView::allRequiredFilled() const
 {
     for (const FieldSlot &slot : m_slots) {
         if (slot.editor && slot.editor->field().required && !slot.editor->isFilled()) {
+            return false;
+        }
+        if (slot.editor && !slot.editor->withinLimits()) {
             return false;
         }
     }
@@ -951,7 +1032,7 @@ void KipView::refreshFooter(const core::KipScreenState &s)
     const bool unlocked = open && !open->locked;
     const bool cancelling = m_session && m_session->cancelRequested();
 
-    m_footer->setVisible(!terminal);
+    // Terminado, o rodapé fica só com o "Detalhes" (é onde se vê por que falhou).
     m_back->setVisible(open && unlocked && open->back);
     m_back->setEnabled(live);
 
@@ -1022,9 +1103,9 @@ bool KipView::eventFilter(QObject *watched, QEvent *event)
                 button->click(); // botões simples não reagem a Enter fora de um QDialog
                 return true;
             }
-            // Em textarea, lista e tabela o Enter é do próprio campo (§7.1).
+            // Em textarea, lista, tabela e diff o Enter é do próprio campo (§7.1).
             if (qobject_cast<QPlainTextEdit *>(watched) || qobject_cast<QTextEdit *>(watched)
-                || qobject_cast<QAbstractItemView *>(watched)) {
+                || qobject_cast<QAbstractItemView *>(watched) || watched->property("kaiOwnsEnter").toBool()) {
                 return QWidget::eventFilter(watched, event);
             }
             if (m_submit->isVisible() && m_submit->isEnabled()) {

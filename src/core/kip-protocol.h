@@ -30,6 +30,14 @@ inline constexpr int kKipMaxPageSize = 200;
 inline constexpr int kKipMaxChips = 24;
 inline constexpr int kKipMaxTextBytes = 64 * 1024;
 inline constexpr int kKipMaxLineBytes = 1024 * 1024;
+// Textos grandes de propósito (patch/lados de um `diff`, `code`): cortados numa quebra de linha, com aviso na tela.
+inline constexpr int kKipMaxBigTextBytes = 512 * 1024;
+inline constexpr int kKipMaxTreeNodes = 5000;
+inline constexpr int kKipMaxTreeDepth = 32;
+inline constexpr int kKipMaxRowActions = 8;
+inline constexpr int kKipMaxKvItems = 200;
+inline constexpr int kKipMaxStats = 8;
+inline constexpr int kKipMaxStepLogLines = 200;
 
 // Máscara usada no lugar de valores secretos (resumo, inspetor).
 inline constexpr char16_t kKipSecretMask[] = u"••••";
@@ -45,7 +53,9 @@ enum class KipFieldType {
     Table,
     Filepick,
     Folderpick,
-    Flags
+    Flags,
+    Tree,
+    Diff
 };
 
 QString kipFieldTypeToString(KipFieldType type);
@@ -56,7 +66,11 @@ struct KipOption {
     QString value;
     QString label;
     QString description;
+    QString icon; // select com style "cards"
 };
+
+// Tons de badge/estatística: neutral | info | success | warning | error | accent.
+bool kipIsTone(const QString &tone);
 
 struct KipFlagOption {
     QString name;
@@ -68,6 +82,43 @@ struct KipFlagOption {
 struct KipColumn {
     QString key;
     QString label;
+    // Como a célula aparece: "" (texto) | mono | muted | number | badge ({text, tone}) | copy.
+    QString format;
+};
+bool kipIsColumnFormat(const QString &format);
+
+// Nó do campo `tree`.
+struct KipTreeNode {
+    QString id;
+    QString label; // vazio = o id
+    QString icon;
+    QString badge;
+    QString badgeTone; // vazio = neutral
+    bool expanded = false;
+    QVector<KipTreeNode> children;
+};
+
+// ---- chips: ações efêmeras de uma tela (§21) ----------------------------------
+// Um chip é um botão pequeno ao lado dos campos de um prompt. Clicar NÃO envia a
+// tela: o Kai manda `chip` ao programa, que responde com `chip_result` (rodando /
+// sucesso / erro) e o resultado aparece numa caixa sob os chips, sem sair do passo.
+struct KipChipConfirm {
+    QString title;
+    QString text;         // vazio = pergunta padrão do Kai
+    QString confirmLabel; // vazio = "Run"
+    QString cancelLabel;  // vazio = "Cancel"
+};
+
+struct KipChip {
+    QString id;
+    QString label;        // vazio = o id
+    QString description;  // tooltip
+    QString icon;         // nome de ícone Lucide do Kai (opcional)
+    bool danger = false;  // visual destrutivo (e botão de confirmação vermelho)
+    std::optional<KipChipConfirm> confirm; // pede confirmação antes de executar
+    QStringList requiresFields; // campos que precisam estar preenchidos para habilitar o chip
+
+    QJsonObject toJson() const;
 };
 
 struct KipField {
@@ -113,6 +164,19 @@ struct KipField {
     // flags
     QVector<KipFlagOption> flags;
 
+    // select: "" (dropdown) | cards | segmented
+    QString style;
+    // text / textarea: limite de caracteres com contador (0 = sem limite)
+    int maxLength = 0;
+    // table: ações por linha (chips presos a uma linha, §27)
+    QVector<KipChip> rowActions;
+    // tree
+    QVector<KipTreeNode> nodes;
+    // diff: patch unificado; `select` = files | hunks
+    QString patch;
+    QString select = QStringLiteral("hunks");
+    bool truncated = false;
+
     QJsonObject toJson() const;
 
 private:
@@ -132,6 +196,7 @@ struct KipStepItem {
     QString label;
     KipStepState state = KipStepState::Pending;
     QString detail;
+    QStringList log; // últimas kKipMaxStepLogLines linhas (`step.log`)
 };
 
 enum class KipActionType { OpenUrl, Reveal, Copy };
@@ -143,29 +208,6 @@ struct KipAction {
     QString path;       // reveal
     QString pathFormat = QStringLiteral("native"); // reveal
     QString value;      // copy
-};
-
-// ---- chips: ações efêmeras de uma tela (§21) ----------------------------------
-// Um chip é um botão pequeno ao lado dos campos de um prompt. Clicar NÃO envia a
-// tela: o Kai manda `chip` ao programa, que responde com `chip_result` (rodando /
-// sucesso / erro) e o resultado aparece numa caixa sob os chips, sem sair do passo.
-struct KipChipConfirm {
-    QString title;
-    QString text;         // vazio = pergunta padrão do Kai
-    QString confirmLabel; // vazio = "Run"
-    QString cancelLabel;  // vazio = "Cancel"
-};
-
-struct KipChip {
-    QString id;
-    QString label;        // vazio = o id
-    QString description;  // tooltip
-    QString icon;         // nome de ícone Lucide do Kai (opcional)
-    bool danger = false;  // visual destrutivo (e botão de confirmação vermelho)
-    std::optional<KipChipConfirm> confirm; // pede confirmação antes de executar
-    QStringList requiresFields; // campos que precisam estar preenchidos para habilitar o chip
-
-    QJsonObject toJson() const;
 };
 
 enum class KipChipState { Running, Success, Error };
@@ -234,6 +276,7 @@ struct KipProgress {
     std::optional<double> value; // nullopt = indeterminado
     QString label;
     std::optional<bool> cancellable;
+    QString id; // vazio = a barra única; com id, uma barra por id (§27)
 };
 
 struct KipSteps {
@@ -245,8 +288,10 @@ struct KipSteps {
 struct KipStep {
     QString steps;
     QString id;
-    KipStepState state = KipStepState::Pending;
-    QString detail;
+    // Ausentes = mantém o que o item já tinha (um `step` só com `log` não mexe no estado).
+    std::optional<KipStepState> state;
+    std::optional<QString> detail;
+    QString log; // linhas acrescentadas ao log do item
 };
 
 struct KipTable {
@@ -254,6 +299,64 @@ struct KipTable {
     QString title;
     QVector<KipColumn> columns;
     QJsonArray rows;
+    QString rowKey = QStringLiteral("id");
+    QVector<KipChip> rowActions; // valem enquanto houver um prompt aberto (§27)
+};
+
+// ---- blocos da rodada 2 (§27) ----------------------------------------------------
+struct KipDiffSide {
+    QString name;
+    QString text;
+};
+
+struct KipDiff {
+    QString id;
+    QString title;
+    QString patch; // OU left + right
+    std::optional<KipDiffSide> left;
+    std::optional<KipDiffSide> right;
+    QString language; // vazio = pela extensão do nome
+    QString view;     // sugestão: unified | split (a escolha do usuário vence)
+    int context = 3;
+    bool ignoreWhitespace = false;
+    int collapseAfter = 3; // arquivos além deste começam recolhidos
+    bool truncated = false;
+};
+
+struct KipKvItem {
+    QString key;
+    QJsonValue value; // texto; badge = {text, tone}
+    QString format;   // "" | mono | muted | badge | link
+    bool copy = false;
+};
+
+struct KipKv {
+    QString id;
+    QString title;
+    QVector<KipKvItem> items;
+};
+
+struct KipStatItem {
+    QString label;
+    QString value;
+    QString detail;
+    QString tone;
+};
+
+struct KipStats {
+    QString id;
+    QVector<KipStatItem> items;
+};
+
+struct KipCode {
+    QString id;
+    QString title;
+    QString language;
+    QString text;
+    QVector<int> highlight; // linhas (1-based) destacadas
+    int maxLines = 0;       // 0 = tudo; acima disso recolhe com "Mostrar tudo"
+    bool lineNumbers = true;
+    bool truncated = false;
 };
 
 struct KipNotify {
@@ -285,7 +388,7 @@ struct KipChipResult {
 
 using KipMessage = std::variant<KipHello, KipPrompt, KipConfirm, KipPatch, KipInvalid, KipMessageBlock,
                                 KipMarkdown, KipProgress, KipSteps, KipStep, KipTable, KipNotify,
-                                KipSetEnv, KipDone, KipChipResult>;
+                                KipSetEnv, KipDone, KipChipResult, KipDiff, KipKv, KipStats, KipCode>;
 
 // Resultado de interpretar UMA linha de stdout.
 struct KipParseResult {
@@ -322,6 +425,9 @@ QByteArray kipSerializeMessage(const KipMessage &message);
 QByteArray kipSerializeResponse(const QString &id, const QJsonObject &values);
 QByteArray kipSerializeChange(const QString &id, int seq, const QString &field, const QJsonObject &values);
 QByteArray kipSerializeChip(const QString &id, const QString &chip, const QJsonObject &values);
+// Ação de linha (§27): o `chip` de sempre com a origem (`field` do prompt ou `table` de um bloco) e a chave da linha.
+QByteArray kipSerializeRowAction(const QString &id, const QString &action, const QString &field, const QString &table,
+                                 const QString &row, const QJsonObject &values);
 QByteArray kipSerializeBack(const QString &id);
 QByteArray kipSerializeCancel();
 
@@ -344,6 +450,17 @@ QString kipDisplayValue(const KipField &field, const QJsonValue &value);
 // Valor de uma célula de tabela como texto (§11): string como veio, número sem
 // zeros à toa, bool true/false, null vazio, array/objeto como JSON compacto.
 QString kipCellText(const QJsonValue &value);
+// Célula/valor de badge: {text, tone} ou um texto simples (tom neutral).
+QString kipBadgeText(const QJsonValue &value, QString *tone = nullptr);
+
+// Ações de linha permitidas numa linha de tabela: `_actions` (lista de ids) restringe; ausente = todas.
+QStringList kipRowActionIds(const QJsonObject &row, const QVector<KipChip> &actions);
+QString kipRowKey(const QJsonObject &row, const QString &rowKey);
+
+// Campo `diff`: ids selecionáveis do patch, na ordem ("caminho" em files; "caminho@n" em hunks).
+QStringList kipDiffFieldIds(const KipField &field);
+// Campo `tree`: todos os ids dos nós (pré-ordem).
+QStringList kipTreeNodeIds(const QVector<KipTreeNode> &nodes);
 
 // http/https apenas (§12.1, §17).
 bool kipIsSafeHttpUrl(const QString &url);

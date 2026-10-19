@@ -1,6 +1,6 @@
 # Run history
 
-Menu **File → Run History** (it opens as the **History** [panel](layout.md), in the bottom zone by default — move it wherever you like). Lists the latest runs (Shell and HTTP)
+Menu **File → Run History** (it opens as the **History** [panel](layout.md), in the Output's cell by default, as a tab — move it wherever you like). Lists the latest runs (Shell and HTTP)
 with:
 
 - **Timestamp** and **duration**

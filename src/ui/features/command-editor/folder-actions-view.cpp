@@ -208,6 +208,9 @@ void FolderActionsView::paint(QPainter *painter, const QStyleOptionViewItem &opt
     if (icons.isEmpty()) {
         // Linha de comando (play + tempo) ou pasta sem ação: o desenho padrão da coluna.
         QStyledItemDelegate::paint(painter, option, index);
+        if (item && folderId.isEmpty() && m_provider.outputMarkOf) {
+            paintOutputMark(painter, option.rect, m_provider.outputMarkOf(item));
+        }
         return;
     }
     const QVector<Slot> row = slotsFor(icons);
@@ -233,6 +236,32 @@ void FolderActionsView::paint(QPainter *painter, const QStyleOptionViewItem &opt
                       anyRunning(m_provider, slot.members), anyFocused(focused, slot.members),
                       (isGroup ? groupIdFor(folderId, slot.group) : expanderIdFor(folderId)) == m_hoverId);
     }
+}
+
+// No fim da coluna (o tempo de execução fica no começo): discreta quando o comando tem saída, em destaque quando é a que
+// está na Saída.
+void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark)
+{
+    if (mark == OutputMark::None) {
+        return;
+    }
+    const bool shown = mark == OutputMark::Shown;
+    const QColor color(shown ? tk::accent() : tk::mutedFg());
+    const int box = 20;
+    const QRect rect(cell.right() - kMargin - box + 1, cell.top() + (cell.height() - box) / 2, box, box);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    if (shown) {
+        QColor fill = color;
+        fill.setAlpha(50);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(fill);
+        painter->drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), tk::radiusSm(), tk::radiusSm());
+    }
+    const int size = 14;
+    const QRect inner(rect.left() + (box - size) / 2, rect.top() + (box - size) / 2, size, size);
+    LucideIcons::icon(QStringLiteral("monitor"), color, size).paint(painter, inner);
+    painter->restore();
 }
 
 void FolderActionsView::paintMenuSlot(QPainter *painter, const QRect &box, const QString &iconName,

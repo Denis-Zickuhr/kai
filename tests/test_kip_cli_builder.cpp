@@ -541,6 +541,120 @@ private slots:
                        QStringLiteral("values.zzz")}, &out, &err), 1);
         QVERIFY(out.isEmpty());
     }
+
+    // ---- rodada 2 (§27) ----
+    void diffFromTwoTextsAndFromStdin()
+    {
+        const KipCliResult sides = run({"diff", "--title", "a × b", "--left-text", "x\ny", "--right-text", "x\nz",
+                                        "--left-name", "a.txt", "--right-name", "b.txt", "--view", "split", "--context", "1"});
+        verifyIsOneValidProtocolLine(sides);
+        const QJsonObject o = jsonOf(sides);
+        QCOMPARE(o.value("left").toObject().value("name").toString(), QStringLiteral("a.txt"));
+        QCOMPARE(o.value("right").toObject().value("text").toString(), QStringLiteral("x\nz"));
+        QCOMPARE(o.value("context").toInt(), 1);
+
+        const KipCliResult piped = runKipCli({QStringLiteral("diff"), QStringLiteral("--patch"), QStringLiteral("-")},
+                                             []() { return QByteArray("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"); });
+        verifyIsOneValidProtocolLine(piped);
+        QCOMPARE(jsonOf(piped).value("patch").toString(), QStringLiteral("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b"));
+
+        verifyUsageError(run({"diff", "--left-text", "only one side"}));
+        verifyUsageError(run({"diff", "--patch", "x", "--view", "3d"}));
+    }
+
+    void diffFromFilesNamesTheSidesByPath()
+    {
+        QTemporaryDir dir;
+        const QString a = dir.filePath(QStringLiteral("staging.json"));
+        const QString b = dir.filePath(QStringLiteral("prod.json"));
+        QFile fa(a), fb(b);
+        QVERIFY(fa.open(QIODevice::WriteOnly) && fb.open(QIODevice::WriteOnly));
+        fa.write("{\n  \"r\": 2\n}\n");
+        fb.write("{\n  \"r\": 6\n}\n");
+        fa.close();
+        fb.close();
+        const KipCliResult r = runKipCli({QStringLiteral("diff"), QStringLiteral("--left-file"), a, QStringLiteral("--right-file"), b});
+        verifyIsOneValidProtocolLine(r);
+        QCOMPARE(jsonOf(r).value("left").toObject().value("name").toString(), a);
+        QCOMPARE(jsonOf(r).value("right").toObject().value("text").toString(), QStringLiteral("{\n  \"r\": 6\n}"));
+        verifyUsageError(runKipCli({QStringLiteral("diff"), QStringLiteral("--left-file"), dir.filePath(QStringLiteral("nope")),
+                                    QStringLiteral("--right-file"), b}));
+    }
+
+    void kvStatsAndCode()
+    {
+        const KipCliResult kv = run({"kv", "--title", "Release", "--item", "Version", "1.4.0", "--format", "mono", "--copy",
+                                     "--item", "Channel", "stable", "--tone", "success"});
+        verifyIsOneValidProtocolLine(kv);
+        const QJsonArray items = jsonOf(kv).value("items").toArray();
+        QCOMPARE(items.at(0).toObject().value("copy").toBool(), true);
+        QCOMPARE(items.at(1).toObject().value("format").toString(), QStringLiteral("badge"));
+        QCOMPARE(items.at(1).toObject().value("value").toObject().value("tone").toString(), QStringLiteral("success"));
+        verifyUsageError(run({"kv", "--copy"}));
+        verifyUsageError(run({"kv", "--item", "only-key"}));
+
+        const KipCliResult stats = run({"stats", "--stat", "Tests", "412", "--detail", "all passed", "--tone", "success"});
+        verifyIsOneValidProtocolLine(stats);
+        QCOMPARE(jsonOf(stats).value("items").toArray().at(0).toObject().value("tone").toString(), QStringLiteral("success"));
+
+        const KipCliResult code = run({"code", "--title", "kai.yml", "--language", "yaml", "--highlight", "1,2",
+                                       "--max-lines", "8", "--no-line-numbers", "a: 1", "b: 2"});
+        verifyIsOneValidProtocolLine(code);
+        QCOMPARE(jsonOf(code).value("text").toString(), QStringLiteral("a: 1\nb: 2"));
+        QCOMPARE(jsonOf(code).value("highlight").toArray().size(), 2);
+        QCOMPARE(jsonOf(code).value("line_numbers").toBool(true), false);
+        verifyUsageError(run({"code", "--highlight", "zero", "x"}));
+        verifyUsageError(run({"code"}));
+    }
+
+    void tablesWithRowActionsAndCellFormats()
+    {
+        const KipCliResult r = run({"table", "--id", "b", "--row-key", "name", "--column", "name:Branch:mono",
+                                    "--column", "time:At 10:30", "--rows-json", "[{\"name\":\"main\"}]",
+                                    "--row-action", "delete", "Delete", "--row-action-icon", "trash-2", "--row-action-danger",
+                                    "--row-action-confirm-text", "Sure?"});
+        verifyIsOneValidProtocolLine(r);
+        const QJsonObject o = jsonOf(r);
+        QCOMPARE(o.value("columns").toArray().at(0).toObject().value("format").toString(), QStringLiteral("mono"));
+        // um ':' no rótulo continua sendo parte do rótulo
+        QCOMPARE(o.value("columns").toArray().at(1).toObject().value("label").toString(), QStringLiteral("At 10:30"));
+        const QJsonObject action = o.value("row_actions").toArray().at(0).toObject();
+        QCOMPARE(action.value("danger").toBool(), true);
+        QCOMPARE(action.value("confirm").toObject().value("text").toString(), QStringLiteral("Sure?"));
+        verifyUsageError(run({"table", "--column", "a", "--row-action-icon", "x"}));
+    }
+
+    void promptsWithTheNewFieldTypes()
+    {
+        const KipCliResult r = run({"prompt", "--id", "p",
+                                    "--field", "select", "s", "--style", "cards", "--option", "merge:Merge:Keeps history",
+                                    "--option-icon", "git-merge",
+                                    "--field", "textarea", "m", "--max-length", "72",
+                                    "--field", "tree", "t", "--multiple", "--nodes-json", "[{\"id\":\"src\",\"children\":[\"src/a\"]}]",
+                                    "--field", "diff", "h", "--patch", "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b", "--select", "files",
+                                    "--field", "table", "b", "--column", "name", "--rows-json", "[]", "--row-action", "sync"});
+        verifyIsOneValidProtocolLine(r);
+        const QJsonArray f = jsonOf(r).value("fields").toArray();
+        QCOMPARE(f.at(0).toObject().value("options").toArray().at(0).toObject().value("icon").toString(), QStringLiteral("git-merge"));
+        QCOMPARE(f.at(1).toObject().value("max_length").toInt(), 72);
+        QCOMPARE(f.at(2).toObject().value("nodes").toArray().at(0).toObject().value("children").toArray().size(), 1);
+        QCOMPARE(f.at(3).toObject().value("select").toString(), QStringLiteral("files"));
+        QCOMPARE(f.at(4).toObject().value("row_actions").toArray().size(), 1);
+        verifyUsageError(run({"prompt", "--id", "p", "--row-action", "x"}));
+        verifyUsageError(run({"prompt", "--id", "p", "--field", "select", "s", "--option-icon", "x"}));
+    }
+
+    void progressBarsAndStepLogs()
+    {
+        const KipCliResult bar = run({"progress", "40", "linux.tar.gz", "--id", "linux"});
+        verifyIsOneValidProtocolLine(bar);
+        QCOMPARE(jsonOf(bar).value("id").toString(), QStringLiteral("linux"));
+        const KipCliResult log = run({"step", "build", "compile", "--log", "[1/9] cc a.c"});
+        verifyIsOneValidProtocolLine(log);
+        QVERIFY(!jsonOf(log).contains("state"));
+        QCOMPARE(jsonOf(log).value("log").toString(), QStringLiteral("[1/9] cc a.c"));
+        verifyUsageError(run({"step", "build", "compile"}));
+    }
 };
 
 QTEST_MAIN(TestKipCliBuilder)

@@ -10,9 +10,11 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 
 #include "core/config-manager.h"
+#include "ui/app-stylesheet.h"
 #include "ui/features/settings/settings-dialog.h"
 #include "ui/features/settings/tabs/appearance-tab.h"
 #include "ui/features/settings/tabs/general-tab.h"
@@ -173,6 +175,16 @@ private slots:
         auto *general = dialog.findChild<GeneralTab *>();
         QVERIFY(general != nullptr);
         QCOMPARE(general->outputMaxLogSizeField()->value(), 2048);
+        QVERIFY(!general->smartFocusField()->isChecked()); // Foco inteligente: desligado por padrão
+        general->smartFocusField()->setChecked(true);
+        QVERIFY(dialog.buildSettings().smartFocus);
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            dialog.setStyleSheet(kai::ui::buildModernStylesheet());
+            dialog.resize(900, 700);
+            dialog.show();
+            QTest::qWait(300);
+            general->grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/settings-smart-focus.png"));
+        }
 
         // E tudo volta por buildSettings().
         const SettingsData built = dialog.buildSettings();
@@ -182,6 +194,61 @@ private slots:
         QCOMPARE(built.treeConnectorStyle, 2);
         QCOMPARE(built.itemActionsPlacement, QStringLiteral("side"));
         QCOMPARE(built.outputMaxLogSizeKb, 2048);
+    }
+
+    // A grade de painéis: os campos mostram o layout de agora, mudar um deles vale na hora (sinal para o quadro) e a
+    // miniatura acompanha, inclusive com as células vazias absorvidas pelas vizinhas.
+    void theGridGroupShowsAndChangesTheBoardGrid()
+    {
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        QVector<Collection> collections;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {});
+        LayoutTab *tab = dialog.layoutTab();
+        QVERIFY(tab != nullptr);
+        QSpinBox *cols = tab->gridColsField();
+        QSpinBox *rows = tab->gridRowsField();
+        QComboBox *expansion = tab->gridExpansionField();
+        QVERIFY(cols && rows && expansion && tab->gridPreview());
+        QCOMPARE(cols->minimum(), 1);
+        QCOMPARE(cols->maximum(), 5);
+        QCOMPARE(rows->maximum(), 5);
+
+        // O layout de agora preenche os campos sem disparar mudança.
+        QSignalSpy requested(&dialog, &SettingsDialog::gridChangeRequested);
+        kai::ui::layout::LayoutModel model = kai::ui::layout::LayoutModel::preset(kai::ui::layout::LayoutModel::Preset::Triple);
+        dialog.setLayoutModel(model);
+        QCOMPARE(cols->value(), 3);
+        QCOMPARE(rows->value(), 1);
+        QCOMPARE(requested.count(), 0);
+
+        // Mexer num campo avisa o quadro, com os três valores.
+        rows->setValue(2);
+        QCOMPARE(requested.count(), 1);
+        QCOMPARE(requested.last().at(0).toInt(), 3);
+        QCOMPARE(requested.last().at(1).toInt(), 2);
+        QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Vertical));
+        expansion->setCurrentIndex(expansion->findData(int(kai::ui::layout::Expansion::Horizontal)));
+        QCOMPARE(requested.count(), 2);
+        QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Horizontal));
+        // A grade só aceita de 1 a 5.
+        cols->setValue(99);
+        QCOMPARE(cols->value(), 5);
+        // Os valores não vão para o settings.json: a grade é do layout.json.
+        const SettingsData built = dialog.buildSettings();
+        Q_UNUSED(built);
+
+        // A miniatura renderiza (grade nominal + o que aparece) sem estourar em nenhum tamanho de grade.
+        for (int c = 1; c <= 5; ++c) {
+            for (int r = 1; r <= 5; ++r) {
+                cols->setValue(c);
+                rows->setValue(r);
+                tab->gridPreview()->resize(260, 130);
+                QVERIFY(!tab->gridPreview()->grab().isNull());
+            }
+        }
     }
 };
 

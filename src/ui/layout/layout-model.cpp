@@ -13,46 +13,66 @@ const QRect kDefaultFloatingGeometry(100, 100, 420, 600);
 constexpr int kMinFloatingWidth = 160;
 constexpr int kMinFloatingHeight = 120;
 
-double defaultSizeFor(Zone zone)
+// Frações a partir dos tamanhos guardados: o que ainda não tem tamanho (0) leva a média dos que têm; sem nenhum, partes
+// iguais. A soma é sempre 1.
+QList<double> normalised(const QList<double> &raw)
 {
-    return zone == Zone::Bottom ? LayoutModel::kDefaultBottomSize : LayoutModel::kDefaultSideSize;
-}
-
-double maxSizeFor(Zone zone)
-{
-    return zone == Zone::Bottom ? LayoutModel::kMaxBottomSize : LayoutModel::kMaxSideSize;
-}
-
-bool isSizedZone(Zone zone)
-{
-    return zone != Zone::Center;
+    QList<double> out;
+    if (raw.isEmpty()) {
+        return out;
+    }
+    double sum = 0.0;
+    int set = 0;
+    for (double value : raw) {
+        if (value > 0.0) {
+            sum += value;
+            ++set;
+        }
+    }
+    const double mean = set > 0 ? sum / set : 1.0;
+    double total = 0.0;
+    for (double value : raw) {
+        const double v = value > 0.0 ? value : mean;
+        out.append(v);
+        total += v;
+    }
+    for (double &value : out) {
+        value /= total;
+    }
+    return out;
 }
 
 } // namespace
 
 QString zoneName(Zone zone)
 {
-    switch (zone) {
-    case Zone::Left:
-        return QStringLiteral("left");
-    case Zone::Center:
-        return QStringLiteral("center");
-    case Zone::Right:
-        return QStringLiteral("right");
-    case Zone::Bottom:
-        return QStringLiteral("bottom");
-    }
-    return QStringLiteral("center");
+    return QStringLiteral("%1,%2").arg(zone.row).arg(zone.col);
 }
 
 std::optional<Zone> zoneFromName(const QString &name)
 {
-    for (Zone zone : kAllZones) {
-        if (zoneName(zone) == name) {
-            return zone;
-        }
+    const QStringList parts = name.split(QLatin1Char(','));
+    if (parts.size() != 2) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    bool rowOk = false;
+    bool colOk = false;
+    const int row = parts.at(0).trimmed().toInt(&rowOk);
+    const int col = parts.at(1).trimmed().toInt(&colOk);
+    if (!rowOk || !colOk || row < 0 || col < 0 || row >= kMaxGridLines || col >= kMaxGridLines) {
+        return std::nullopt;
+    }
+    return Zone{row, col};
+}
+
+QString expansionName(Expansion expansion)
+{
+    return expansion == Expansion::Horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical");
+}
+
+Expansion expansionFromName(const QString &name)
+{
+    return name == QStringLiteral("horizontal") ? Expansion::Horizontal : Expansion::Vertical;
 }
 
 // ------------------------------------------------------------------------------------------------------ construção
@@ -60,11 +80,11 @@ std::optional<Zone> zoneFromName(const QString &name)
 LayoutModel LayoutModel::defaultLayout()
 {
     LayoutModel model;
-    model.m_zones[int(Zone::Left)].views = {view_id::kCommands};
-    model.m_zones[int(Zone::Left)].active = view_id::kCommands;
-    model.m_zones[int(Zone::Left)].size = 0.5;
-    model.m_zones[int(Zone::Right)].views = {view_id::kOutput};
-    model.m_zones[int(Zone::Right)].active = view_id::kOutput;
+    model.m_zones[slotOf(Zone{0, 0})].views = {view_id::kCommands};
+    model.m_zones[slotOf(Zone{0, 0})].active = view_id::kCommands;
+    // O Documento é aba ao lado da Saída: a seleção na árvore leva para uma ou para a outra.
+    model.m_zones[slotOf(Zone{0, 1})].views = {view_id::kOutput, view_id::kDocument};
+    model.m_zones[slotOf(Zone{0, 1})].active = view_id::kOutput;
     return model;
 }
 
@@ -84,21 +104,42 @@ LayoutModel LayoutModel::preset(Preset preset)
     case Preset::Runner:
         break;
     case Preset::Classic:
-        model.placeView(view_id::kCommands, Zone::Center);
-        model.placeView(view_id::kOutput, Zone::Bottom);
-        model.m_zones[int(Zone::Left)].size = 0.0;
+        // A lista em cima, a Saída embaixo: uma coluna, duas linhas.
+        model.m_cols = 1;
+        model.m_rows = 2;
+        model.m_zones[slotOf(Zone{0, 1})] = ZoneState{};
+        model.placeView(view_id::kCommands, Zone{0, 0});
+        model.placeView(view_id::kOutput, Zone{1, 0});
+        model.placeView(view_id::kDocument, Zone{1, 0});
+        model.setActive(view_id::kOutput);
         break;
     case Preset::Compact:
         model.closeView(view_id::kOutput);
+        model.closeView(view_id::kDocument);
         break;
     case Preset::Http:
-        model.setZoneSize(Zone::Left, 0.35); // a Saída (a resposta) fica com a maior parte
+        model.setLineSize(0, 0.35); // a Saída (a resposta) fica com a maior parte
+        model.setLineSize(1, 0.65);
         break;
     case Preset::Reading:
-        model.setZoneSize(Zone::Left, 0.25);
-        model.placeView(view_id::kDocument, Zone::Center);
-        model.placeView(view_id::kOutput, Zone::Bottom);
-        model.setZoneSize(Zone::Bottom, 0.3);
+        // A lista sozinha na coluna da esquerda (a célula de baixo vazia deixa ela ocupar a coluna toda), o Documento em
+        // cima e a Saída embaixo.
+        model.setLineSize(0, 0.25);
+        model.setLineSize(1, 0.75);
+        model.placeView(view_id::kDocument, Zone{0, 1});
+        model.placeView(view_id::kOutput, Zone{1, 1});
+        model.setZoneSize(Zone{1, 1}, 0.3);
+        model.setZoneSize(Zone{0, 1}, 0.7);
+        break;
+    case Preset::Triple:
+        model.m_cols = 3;
+        model.m_rows = 1;
+        model.placeView(view_id::kDocument, Zone{0, 2});
+        break;
+    case Preset::Quad:
+        model.placeView(view_id::kDocument, Zone{1, 0});
+        model.placeView(view_id::kProcesses, Zone{1, 1});
+        model.setActive(view_id::kOutput);
         break;
     }
     return model;
@@ -106,7 +147,8 @@ LayoutModel LayoutModel::preset(Preset preset)
 
 std::optional<LayoutModel::Preset> LayoutModel::presetFromName(const QString &name)
 {
-    for (Preset preset : {Preset::Compact, Preset::Runner, Preset::Http, Preset::Reading, Preset::Classic}) {
+    for (Preset preset : {Preset::Compact, Preset::Runner, Preset::Http, Preset::Reading, Preset::Classic, Preset::Triple,
+                          Preset::Quad}) {
         if (presetName(preset) == name) {
             return preset;
         }
@@ -127,6 +169,10 @@ QString LayoutModel::presetName(Preset preset)
         return QStringLiteral("reading");
     case Preset::Classic:
         return QStringLiteral("classic");
+    case Preset::Triple:
+        return QStringLiteral("triple");
+    case Preset::Quad:
+        return QStringLiteral("quad");
     }
     return QStringLiteral("runner");
 }
@@ -136,29 +182,34 @@ LayoutModel LayoutModel::fromLegacy(const QString &outputPosition, const QList<i
     // O "embaixo" antigo (o padrão de antes, gravado em toda instalação) e o desconhecido caem no padrão novo; só quem
     // escolheu a Saída à esquerda mantém essa escolha. A direita já é o padrão novo (lista à esquerda, Saída à direita).
     LayoutModel model = defaultLayout();
-    if (outputPosition == QStringLiteral("left")) {
-        model = LayoutModel();
-        model.m_zones[int(Zone::Center)].views = {view_id::kCommands};
-        model.m_zones[int(Zone::Center)].active = view_id::kCommands;
-        model.placeView(view_id::kOutput, Zone::Left);
-        if (outputSplitterSizes.size() == 2) {
-            // Os dois números seguem a ordem do divisor: Saída primeiro à esquerda, depois a lista.
-            const double sum = double(outputSplitterSizes.at(0)) + outputSplitterSizes.at(1);
-            if (sum > 0) {
-                const double saved = outputSplitterSizes.at(0) / sum;
-                if (saved >= kMinSize && saved <= kMaxSideSize) {
-                    model.m_zones[int(Zone::Left)].size = saved;
-                }
-            }
+    const auto savedShare = [&outputSplitterSizes]() -> std::optional<double> {
+        if (outputSplitterSizes.size() != 2) {
+            return std::nullopt;
         }
-    } else if (outputPosition == QStringLiteral("right") && outputSplitterSizes.size() == 2) {
-        // Lista à esquerda: a proporção da lista é o primeiro número.
         const double sum = double(outputSplitterSizes.at(0)) + outputSplitterSizes.at(1);
-        if (sum > 0) {
-            const double saved = outputSplitterSizes.at(0) / sum;
-            if (saved >= kMinSize && saved <= kMaxSideSize) {
-                model.m_zones[int(Zone::Left)].size = saved;
-            }
+        if (sum <= 0) {
+            return std::nullopt;
+        }
+        const double share = outputSplitterSizes.at(0) / sum;
+        return (share >= 0.1 && share <= 0.85) ? std::optional<double>(share) : std::nullopt;
+    };
+    if (outputPosition == QStringLiteral("left")) {
+        // Os dois números seguem a ordem do divisor: Saída primeiro à esquerda, depois a lista.
+        model = LayoutModel();
+        model.m_zones[slotOf(Zone{0, 1})].views = {view_id::kCommands};
+        model.m_zones[slotOf(Zone{0, 1})].active = view_id::kCommands;
+        model.placeView(view_id::kOutput, Zone{0, 0});
+        model.placeView(view_id::kDocument, Zone{0, 0});
+        model.setActive(view_id::kOutput);
+        if (const auto share = savedShare()) {
+            model.setLineSize(0, *share);
+            model.setLineSize(1, 1.0 - *share);
+        }
+    } else if (outputPosition == QStringLiteral("right")) {
+        // Lista à esquerda: a proporção da lista é o primeiro número.
+        if (const auto share = savedShare()) {
+            model.setLineSize(0, *share);
+            model.setLineSize(1, 1.0 - *share);
         }
     }
     return model;
@@ -166,24 +217,49 @@ LayoutModel LayoutModel::fromLegacy(const QString &outputPosition, const QList<i
 
 // --------------------------------------------------------------------------------------------------------- JSON
 
+bool LayoutModel::isPreGrid(const QJsonObject &root)
+{
+    return root.value(QStringLiteral("version")).toInt(1) < 3 || !root.contains(QStringLiteral("grid"));
+}
+
 QJsonObject LayoutModel::toJson() const
 {
-    QJsonObject zones;
-    for (Zone zone : kAllZones) {
-        const ZoneState &state = m_zones[int(zone)];
+    QJsonObject cells;
+    for (int slot = 0; slot < kSlots; ++slot) {
+        const ZoneState &state = m_zones[slot];
+        if (state.views.isEmpty()) {
+            continue;
+        }
         QJsonObject obj;
         obj.insert(QStringLiteral("views"), QJsonArray::fromStringList(state.views));
         if (!state.active.isEmpty()) {
             obj.insert(QStringLiteral("active"), state.active);
         }
-        if (isSizedZone(zone) && state.size > 0.0) {
+        if (state.size > 0.0) {
             obj.insert(QStringLiteral("size"), state.size);
+        }
+        if (state.split) {
+            obj.insert(QStringLiteral("split"), true);
         }
         if (state.collapsed) {
             obj.insert(QStringLiteral("collapsed"), true);
+            if (!state.open.isEmpty()) {
+                obj.insert(QStringLiteral("open"), state.open);
+            }
         }
-        zones.insert(zoneName(zone), obj);
+        cells.insert(zoneName(zoneAt(slot)), obj);
     }
+    QJsonArray lines;
+    const int lineCount = m_expansion == Expansion::Vertical ? m_cols : m_rows;
+    for (int i = 0; i < lineCount; ++i) {
+        lines.append(m_lineSizes[i]);
+    }
+    QJsonObject grid;
+    grid.insert(QStringLiteral("cols"), m_cols);
+    grid.insert(QStringLiteral("rows"), m_rows);
+    grid.insert(QStringLiteral("expansion"), expansionName(m_expansion));
+    grid.insert(QStringLiteral("lines"), lines);
+
     QJsonArray floating;
     for (const FloatingView &view : m_floating) {
         QJsonObject obj;
@@ -199,7 +275,8 @@ QJsonObject LayoutModel::toJson() const
     }
     QJsonObject root;
     root.insert(QStringLiteral("version"), kVersion);
-    root.insert(QStringLiteral("zones"), zones);
+    root.insert(QStringLiteral("grid"), grid);
+    root.insert(QStringLiteral("cells"), cells);
     root.insert(QStringLiteral("floating"), floating);
     root.insert(QStringLiteral("closed"), QJsonArray::fromStringList(m_closed));
     root.insert(QStringLiteral("last"), last);
@@ -210,21 +287,47 @@ QJsonObject LayoutModel::toJson() const
 
 LayoutModel LayoutModel::fromJson(const QJsonObject &root, const Validator &isKnown, QStringList *problems)
 {
+    if (isPreGrid(root)) {
+        if (problems) {
+            problems->append(QStringLiteral("layout de antes da grade: usando o padrão"));
+        }
+        LayoutModel fresh = defaultLayout();
+        fresh.repair(isKnown, problems);
+        return fresh;
+    }
     LayoutModel model;
-    const QJsonObject zones = root.value(QStringLiteral("zones")).toObject();
-    for (Zone zone : kAllZones) {
-        const QJsonObject obj = zones.value(zoneName(zone)).toObject();
-        ZoneState &state = model.m_zones[int(zone)];
+    const QJsonObject grid = root.value(QStringLiteral("grid")).toObject();
+    model.m_cols = std::clamp(grid.value(QStringLiteral("cols")).toInt(kDefaultCols), 1, kMaxGridLines);
+    model.m_rows = std::clamp(grid.value(QStringLiteral("rows")).toInt(kDefaultRows), 1, kMaxGridLines);
+    model.m_expansion = expansionFromName(grid.value(QStringLiteral("expansion")).toString());
+    const QJsonArray lines = grid.value(QStringLiteral("lines")).toArray();
+    for (int i = 0; i < kMaxGridLines && i < lines.size(); ++i) {
+        model.m_lineSizes[i] = lines.at(i).toDouble(0.0);
+    }
+
+    const QJsonObject cells = root.value(QStringLiteral("cells")).toObject();
+    for (auto it = cells.constBegin(); it != cells.constEnd(); ++it) {
+        const auto zone = zoneFromName(it.key());
+        if (!zone) {
+            if (problems) {
+                problems->append(QStringLiteral("célula '%1' desconhecida descartada").arg(it.key()));
+            }
+            continue;
+        }
+        const QJsonObject obj = it.value().toObject();
+        ZoneState &state = model.m_zones[slotOf(*zone)];
         for (const QJsonValue &value : obj.value(QStringLiteral("views")).toArray()) {
             if (value.isString()) {
                 state.views.append(value.toString());
             } else if (problems) {
-                problems->append(QStringLiteral("zona '%1': entrada de painel que não é texto").arg(zoneName(zone)));
+                problems->append(QStringLiteral("célula '%1': entrada de painel que não é texto").arg(it.key()));
             }
         }
         state.active = obj.value(QStringLiteral("active")).toString();
         state.size = obj.value(QStringLiteral("size")).toDouble(0.0);
         state.collapsed = obj.value(QStringLiteral("collapsed")).toBool(false);
+        state.open = obj.value(QStringLiteral("open")).toString();
+        state.split = obj.value(QStringLiteral("split")).toBool(false);
     }
     for (const QJsonValue &value : root.value(QStringLiteral("floating")).toArray()) {
         const QJsonObject obj = value.toObject();
@@ -255,7 +358,172 @@ LayoutModel LayoutModel::fromJson(const QJsonObject &root, const Validator &isKn
     return model;
 }
 
+// ------------------------------------------------------------------------------------------------------ a grade
+
+Zone LayoutModel::secondaryZone() const
+{
+    if (m_cols > 1) {
+        return Zone{0, m_cols - 1};
+    }
+    return Zone{m_rows > 1 ? m_rows - 1 : 0, 0};
+}
+
+QList<Zone> LayoutModel::cells() const
+{
+    QList<Zone> result;
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
+            result.append(Zone{row, col});
+        }
+    }
+    return result;
+}
+
+std::optional<Edge> LayoutModel::railEdge(Zone zone) const
+{
+    if (!inGrid(zone)) {
+        return std::nullopt;
+    }
+    if (m_expansion == Expansion::Vertical) {
+        if (zone.col == 0) {
+            return Edge::Left;
+        }
+        return zone.col == m_cols - 1 ? std::optional<Edge>(Edge::Right) : std::nullopt;
+    }
+    if (zone.row == 0) {
+        return Edge::Top;
+    }
+    return zone.row == m_rows - 1 ? std::optional<Edge>(Edge::Bottom) : std::nullopt;
+}
+
+bool LayoutModel::setGrid(int cols, int rows, Expansion expansion)
+{
+    cols = std::clamp(cols, 1, kMaxGridLines);
+    rows = std::clamp(rows, 1, kMaxGridLines);
+    if (cols == m_cols && rows == m_rows && expansion == m_expansion) {
+        return false;
+    }
+    m_cols = cols;
+    m_rows = rows;
+    m_expansion = expansion;
+    relocateOutsideGrid();
+    // As proporções eram desta forma de grade: com outra, partes iguais.
+    for (double &size : m_lineSizes) {
+        size = 0.0;
+    }
+    for (ZoneState &state : m_zones) {
+        state.size = 0.0;
+    }
+    for (int slot = 0; slot < kSlots; ++slot) {
+        ZoneState &state = m_zones[slot];
+        if (state.collapsed && !collapsible(zoneAt(slot))) {
+            state.collapsed = false;
+            state.open.clear();
+        }
+    }
+    return true;
+}
+
+void LayoutModel::relocateOutsideGrid()
+{
+    for (int slot = 0; slot < kSlots; ++slot) {
+        const Zone zone = zoneAt(slot);
+        if (inGrid(zone)) {
+            continue;
+        }
+        ZoneState &state = m_zones[slot];
+        const Zone target{std::min(zone.row, m_rows - 1), std::min(zone.col, m_cols - 1)};
+        if (!state.views.isEmpty()) {
+            ZoneState &into = m_zones[slotOf(target)];
+            into.views += state.views;
+            if (into.active.isEmpty()) {
+                into.active = state.active;
+            }
+        }
+        state = ZoneState{};
+        for (auto it = m_last.begin(); it != m_last.end(); ++it) {
+            if (it.value() == zone) {
+                it.value() = target;
+            }
+        }
+    }
+    for (auto it = m_last.begin(); it != m_last.end(); ++it) {
+        if (!inGrid(it.value())) {
+            it.value() = Zone{std::min(it.value().row, m_rows - 1), std::min(it.value().col, m_cols - 1)};
+        }
+    }
+}
+
+GridPlan LayoutModel::plan(const std::function<bool(Zone)> &visible) const
+{
+    GridPlan result;
+    result.expansion = m_expansion;
+    const auto shown = [&](Zone zone) { return visible ? visible(zone) : (zoneOccupied(zone) && !this->zone(zone).collapsed); };
+    const bool vertical = m_expansion == Expansion::Vertical;
+    const int lines = vertical ? m_cols : m_rows;
+    const int span = vertical ? m_rows : m_cols;
+    QList<double> rawLines;
+    for (int line = 0; line < lines; ++line) {
+        GridStack stack;
+        stack.line = line;
+        QList<double> raw;
+        for (int k = 0; k < span; ++k) {
+            const Zone zone = vertical ? Zone{k, line} : Zone{line, k};
+            if (shown(zone)) {
+                stack.cells.append(zone);
+                raw.append(this->zone(zone).size);
+            }
+        }
+        if (stack.cells.isEmpty()) {
+            continue;
+        }
+        stack.weights = normalised(raw);
+        result.stacks.append(stack);
+        rawLines.append(m_lineSizes[line]);
+    }
+    result.lineWeights = normalised(rawLines);
+    return result;
+}
+
+double LayoutModel::lineSize(int line) const
+{
+    return line >= 0 && line < kMaxGridLines ? m_lineSizes[line] : 0.0;
+}
+
+bool LayoutModel::setLineSize(int line, double size)
+{
+    if (line < 0 || line >= kMaxGridLines) {
+        return false;
+    }
+    const double clamped = std::clamp(size, kMinSize, 1.0);
+    if (qFuzzyCompare(m_lineSizes[line] + 1.0, clamped + 1.0)) {
+        return false;
+    }
+    m_lineSizes[line] = clamped;
+    return true;
+}
+
 // ------------------------------------------------------------------------------------------------------- reparo
+
+void LayoutModel::clampSizes(QStringList *notes)
+{
+    const auto fix = [notes](double &value, const QString &what) {
+        if (value <= 0.0) {
+            value = 0.0;
+        } else if (value < kMinSize || value > 1.0) {
+            if (notes) {
+                notes->append(QStringLiteral("tamanho de '%1' fora do limite: ajustado").arg(what));
+            }
+            value = std::clamp(value, kMinSize, 1.0);
+        }
+    };
+    for (int slot = 0; slot < kSlots; ++slot) {
+        fix(m_zones[slot].size, zoneName(zoneAt(slot)));
+    }
+    for (int i = 0; i < kMaxGridLines; ++i) {
+        fix(m_lineSizes[i], QStringLiteral("coluna/linha %1").arg(i));
+    }
+}
 
 void LayoutModel::repair(const Validator &isKnown, QStringList *problems)
 {
@@ -266,9 +534,12 @@ void LayoutModel::repair(const Validator &isKnown, QStringList *problems)
     };
     const auto known = [&isKnown](const QString &id) { return !id.isEmpty() && (!isKnown || isKnown(id)); };
 
+    m_cols = std::clamp(m_cols, 1, kMaxGridLines);
+    m_rows = std::clamp(m_rows, 1, kMaxGridLines);
+
     QSet<QString> seen;
-    for (Zone zone : kAllZones) {
-        ZoneState &state = m_zones[int(zone)];
+    for (int slot = 0; slot < kSlots; ++slot) {
+        ZoneState &state = m_zones[slot];
         QStringList kept;
         for (const QString &id : std::as_const(state.views)) {
             if (!known(id)) {
@@ -282,6 +553,7 @@ void LayoutModel::repair(const Validator &isKnown, QStringList *problems)
         }
         state.views = kept;
     }
+    relocateOutsideGrid();
 
     QList<FloatingView> floating;
     for (FloatingView view : std::as_const(m_floating)) {
@@ -321,47 +593,51 @@ void LayoutModel::repair(const Validator &isKnown, QStringList *problems)
     // ficam de fora se o usuário os fechou.
     const auto mentioned = [this, &seen](const QString &id) { return seen.contains(id) || m_closed.contains(id); };
     if (known(view_id::kCommands) && !mentioned(view_id::kCommands)) {
-        m_zones[int(Zone::Left)].views.append(view_id::kCommands);
+        m_zones[slotOf(primaryZone())].views.append(view_id::kCommands);
         seen.insert(view_id::kCommands);
     }
     if (known(view_id::kOutput) && !mentioned(view_id::kOutput)) {
-        m_zones[int(Zone::Right)].views.append(view_id::kOutput);
+        m_zones[slotOf(secondaryZone())].views.append(view_id::kOutput);
         seen.insert(view_id::kOutput);
+    }
+
+    // O painel Documento é aba ao lado da Saída: um arquivo de antes de ele existir ganha a aba. Com a Saída fechada, o
+    // Documento também começa fechado.
+    if (known(view_id::kDocument) && !mentioned(view_id::kDocument)) {
+        if (const auto outputZone = zoneOf(view_id::kOutput)) {
+            m_zones[slotOf(*outputZone)].views.append(view_id::kDocument);
+            seen.insert(view_id::kDocument);
+        } else {
+            m_closed.append(view_id::kDocument);
+        }
     }
 
     // A janela nunca fica sem nenhum painel.
     if (seen.isEmpty()) {
         note(QStringLiteral("layout sem nenhum painel: voltando ao padrão"));
         const LayoutModel fresh = defaultLayout();
-        for (Zone zone : kAllZones) {
-            m_zones[int(zone)] = fresh.m_zones[int(zone)];
+        for (int slot = 0; slot < kSlots; ++slot) {
+            m_zones[slot] = fresh.m_zones[slot];
+        }
+        m_cols = fresh.m_cols;
+        m_rows = fresh.m_rows;
+        m_expansion = fresh.m_expansion;
+        for (int i = 0; i < kMaxGridLines; ++i) {
+            m_lineSizes[i] = fresh.m_lineSizes[i];
         }
         m_closed.clear();
     }
 
-    for (Zone zone : kAllZones) {
-        ZoneState &state = m_zones[int(zone)];
+    for (int slot = 0; slot < kSlots; ++slot) {
+        ZoneState &state = m_zones[slot];
         fixActive(state);
-        if (!isSizedZone(zone)) {
-            state.size = 0.0;
-            continue;
-        }
-        if (state.size <= 0.0) {
-            state.size = 0.0; // sem tamanho salvo: o padrão da zona vale
-        } else if (state.size < kMinSize || state.size > maxSizeFor(zone)) {
-            note(QStringLiteral("tamanho da zona '%1' fora do limite: ajustado").arg(zoneName(zone)));
-            state.size = std::clamp(state.size, kMinSize, maxSizeFor(zone));
+        // Só as células da borda recolhem (a grade mudou de forma, ou o arquivo foi editado à mão).
+        if (state.collapsed && !collapsible(zoneAt(slot))) {
+            state.collapsed = false;
+            state.open.clear();
         }
     }
-    // Esquerda + direita não podem comer a janela inteira: sobra sempre um miolo.
-    // (Sem miolo nem painel embaixo as duas laterais dividem a janela toda: nada a reservar.)
-    const double sides = effectiveSize(Zone::Left) * zoneOccupied(Zone::Left)
-                         + effectiveSize(Zone::Right) * zoneOccupied(Zone::Right);
-    const bool hasMiddle = zoneOccupied(Zone::Center) || zoneOccupied(Zone::Bottom);
-    if (hasMiddle && sides > 0.8) {
-        note(QStringLiteral("laterais ocupam a janela toda: ajustadas"));
-        m_zones[int(Zone::Left)].size = m_zones[int(Zone::Right)].size = 0.0;
-    }
+    clampSizes(problems);
 
     if (!m_maximized.isEmpty() && !zoneOf(m_maximized)) {
         m_maximized.clear();
@@ -373,8 +649,14 @@ void LayoutModel::fixActive(ZoneState &zone)
     if (zone.views.isEmpty()) {
         zone.active.clear();
         zone.collapsed = false;
+        zone.split = false;
+        zone.size = 0.0;
     } else if (!zone.views.contains(zone.active)) {
         zone.active = zone.views.first();
+    }
+    // O painel aberto ao lado só vale numa zona recolhida que ainda o tem.
+    if (!zone.collapsed || !zone.views.contains(zone.open)) {
+        zone.open.clear();
     }
 }
 
@@ -382,9 +664,9 @@ void LayoutModel::fixActive(ZoneState &zone)
 
 std::optional<Zone> LayoutModel::zoneOf(const QString &view) const
 {
-    for (Zone zone : kAllZones) {
-        if (m_zones[int(zone)].views.contains(view)) {
-            return zone;
+    for (int slot = 0; slot < kSlots; ++slot) {
+        if (m_zones[slot].views.contains(view)) {
+            return zoneAt(slot);
         }
     }
     return std::nullopt;
@@ -404,8 +686,8 @@ bool LayoutModel::isPlaced(const QString &view) const
 QStringList LayoutModel::placedViews() const
 {
     QStringList result;
-    for (Zone zone : kAllZones) {
-        result += m_zones[int(zone)].views;
+    for (int slot = 0; slot < kSlots; ++slot) {
+        result += m_zones[slot].views;
     }
     for (const FloatingView &view : m_floating) {
         result.append(view.view);
@@ -423,18 +705,11 @@ Zone LayoutModel::lastZoneOf(const QString &view, Zone fallback) const
     return m_last.value(view, fallback);
 }
 
-double LayoutModel::effectiveSize(Zone zone) const
-{
-    const double size = m_zones[int(zone)].size;
-    return size > 0.0 ? size : defaultSizeFor(zone);
-}
-
 // ------------------------------------------------------------------------------------------------------- mudança
 
 void LayoutModel::removeEverywhere(const QString &view)
 {
-    for (Zone zone : kAllZones) {
-        ZoneState &state = m_zones[int(zone)];
+    for (ZoneState &state : m_zones) {
         if (state.views.removeAll(view) > 0) {
             fixActive(state);
         }
@@ -456,8 +731,14 @@ bool LayoutModel::placeView(const QString &view, Zone zone, int index)
         return false;
     }
     const LayoutModel before = *this;
+    zone = Zone{std::clamp(zone.row, 0, m_rows - 1), std::clamp(zone.col, 0, m_cols - 1)};
+    // Reordenar dentro da MESMA zona: o índice pedido conta a posição antes da remoção; se o painel estava antes dele, ao
+    // sair a lista encurta e o destino anda uma casa para trás.
+    if (index >= 0 && zoneOf(view) == std::optional<Zone>(zone) && m_zones[slotOf(zone)].views.indexOf(view) < index) {
+        --index;
+    }
     removeEverywhere(view);
-    ZoneState &state = m_zones[int(zone)];
+    ZoneState &state = m_zones[slotOf(zone)];
     const int at = index < 0 || index > state.views.size() ? int(state.views.size()) : index;
     state.views.insert(at, view);
     state.active = view;
@@ -559,7 +840,7 @@ bool LayoutModel::setActive(const QString &view)
     if (!zone) {
         return false;
     }
-    ZoneState &state = m_zones[int(*zone)];
+    ZoneState &state = m_zones[slotOf(*zone)];
     if (state.active == view) {
         return false;
     }
@@ -584,11 +865,11 @@ bool LayoutModel::setMaximized(const QString &view)
 
 bool LayoutModel::setZoneSize(Zone zone, double size)
 {
-    if (!isSizedZone(zone)) {
+    if (!inGrid(zone)) {
         return false;
     }
-    const double clamped = std::clamp(size, kMinSize, maxSizeFor(zone));
-    ZoneState &state = m_zones[int(zone)];
+    const double clamped = std::clamp(size, kMinSize, 1.0);
+    ZoneState &state = m_zones[slotOf(zone)];
     if (qFuzzyCompare(state.size + 1.0, clamped + 1.0)) {
         return false;
     }
@@ -598,11 +879,44 @@ bool LayoutModel::setZoneSize(Zone zone, double size)
 
 bool LayoutModel::setZoneCollapsed(Zone zone, bool collapsed)
 {
-    ZoneState &state = m_zones[int(zone)];
+    if (!inGrid(zone) || (collapsed && !collapsible(zone))) {
+        return false;
+    }
+    ZoneState &state = m_zones[slotOf(zone)];
     if (state.views.isEmpty() || state.collapsed == collapsed) {
         return false;
     }
     state.collapsed = collapsed;
+    if (!collapsed) {
+        state.open.clear();
+    }
+    return true;
+}
+
+bool LayoutModel::setZoneSplit(Zone zone, bool split)
+{
+    if (!inGrid(zone)) {
+        return false;
+    }
+    ZoneState &state = m_zones[slotOf(zone)];
+    if (state.views.isEmpty() || state.split == split) {
+        return false;
+    }
+    state.split = split;
+    return true;
+}
+
+bool LayoutModel::setZoneOpen(Zone zone, const QString &view)
+{
+    if (!inGrid(zone)) {
+        return false;
+    }
+    ZoneState &state = m_zones[slotOf(zone)];
+    const QString wanted = (state.collapsed && state.views.contains(view)) ? view : QString();
+    if (state.open == wanted) {
+        return false;
+    }
+    state.open = wanted;
     return true;
 }
 
@@ -612,7 +926,7 @@ bool LayoutModel::moveWithinZone(const QString &view, int index)
     if (!zone) {
         return false;
     }
-    QStringList &views = m_zones[int(*zone)].views;
+    QStringList &views = m_zones[slotOf(*zone)].views;
     const int from = int(views.indexOf(view));
     const int to = std::clamp(index, 0, int(views.size()) - 1);
     if (from == to) {
@@ -628,7 +942,7 @@ bool LayoutModel::closeOthersInZone(const QString &keep)
     if (!zone) {
         return false;
     }
-    const QStringList others = m_zones[int(*zone)].views;
+    const QStringList others = m_zones[slotOf(*zone)].views;
     bool changed = false;
     for (const QString &id : others) {
         if (id != keep) {

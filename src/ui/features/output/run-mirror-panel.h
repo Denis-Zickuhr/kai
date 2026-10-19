@@ -19,7 +19,7 @@ namespace kai::ui {
 class OutputPanel;
 
 // Um painel do quadro dedicado a UM comando: o espelho vivo da execução dele (uma guia da Saída puxada para outra zona,
-// `run:<id>`) ou um comando KIP fixado como mini-app permanente (`kip:<id>`). É o mesmo OutputPanel da Saída, então tem as
+// `run:<id>`; de um comando KIP, a view KIP da sessão) ou um comando KIP fixado como mini-app permanente (`kip:<id>`). É o mesmo OutputPanel da Saída, então tem as
 // mesmas abas, o mesmo badge e as mesmas opções; só não segue a seleção da lista: fica no comando de origem, como a
 // Saída destacada. O MainWindow o alimenta (log, resposta HTTP, estado, sessão KIP).
 //
@@ -48,7 +48,8 @@ public:
     void appendLog(const QString &text, bool isError);
     void setHttpResult(const engine::HttpResult &result);
     void setStatus(ExecutionStatus status);
-    void bindKipSession(engine::KipSession *session);
+    // `takeFocus` falso: a view não puxa o foco do teclado (o app que abriu sozinho no boot).
+    void bindKipSession(engine::KipSession *session, bool takeFocus = true);
     void setName(const QString &name);
     void applyBarHeight(int height);
     void refreshStyle();

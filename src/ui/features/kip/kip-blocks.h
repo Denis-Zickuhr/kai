@@ -9,8 +9,10 @@
 #include <QWidget>
 
 class QLabel;
+class QPlainTextEdit;
 class QProgressBar;
 class QTableWidget;
+class QToolButton;
 class QVBoxLayout;
 
 namespace kai::ui {
@@ -139,6 +141,10 @@ public:
     QProgressBar *bar() const { return m_bar; }
 
 private:
+    void applyStyle(bool done);
+
+    QString m_id;
+    bool m_done = false;
     QLabel *m_label = nullptr;
     QLabel *m_percent = nullptr;
     QProgressBar *m_bar = nullptr;
@@ -152,6 +158,9 @@ public:
     explicit KipStepsBlockWidget(const core::KipSteps &block, QWidget *parent = nullptr);
     bool accepts(const core::KipBlock &block) const override;
     void update(const core::KipBlock &block) override;
+    // Testes: o log do item está à vista?
+    bool logVisible(const QString &itemId) const;
+    QToolButton *logToggle(const QString &itemId) const;
 
 private:
     void rebuildRows(const core::KipSteps &steps);
@@ -164,11 +173,15 @@ private:
         KipStateIcon *icon = nullptr;
         QLabel *label = nullptr;
         QLabel *detail = nullptr;
+        QToolButton *toggle = nullptr; // abre/fecha o log (`step.log`, §27)
+        QPlainTextEdit *log = nullptr;
+        bool expanded = false;
+        bool autoOpened = false; // já abriu sozinho num erro
     };
     QVector<Row> m_rowWidgets;
 };
 
-// `table`: bloco somente leitura, com seleção/cópia de célula.
+// `table`: bloco somente leitura, com seleção/cópia de célula e, com `row_actions`, ações por linha (§27).
 class KipTableBlockWidget : public KipBlockWidget {
     Q_OBJECT
 
@@ -177,6 +190,14 @@ public:
     bool accepts(const core::KipBlock &block) const override;
     void update(const core::KipBlock &block) override;
     QTableWidget *table() const { return m_table; }
+    const QString &tableId() const { return m_id; }
+    // Estado das ações de linha vindo da tela (`open` nulo = nenhum prompt aberto: ações desligadas).
+    void syncRowActions(const core::KipOpenScreen *open, bool interactive);
+
+signals:
+    void rowActionClicked(const QString &table, const QString &row, const QString &action);
+    void rowActionConfirmed();
+    void rowActionCancelled();
 
 private:
     void rebuild(const core::KipTable &block);

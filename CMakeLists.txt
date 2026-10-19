@@ -122,6 +122,10 @@ add_library(kai-core STATIC
     src/core/cli-reserved-verbs.h
     src/core/kip-protocol.h
     src/core/kip-protocol.cpp
+    src/core/text-diff.h
+    src/core/text-diff.cpp
+    src/core/unified-diff.h
+    src/core/unified-diff.cpp
     src/core/kip-settings.h
     src/core/kip-settings.cpp
     src/core/ipc-endpoint.h
@@ -265,6 +269,8 @@ add_library(kai-ui STATIC
     src/ui/features/docs/doc-nav-bar.cpp
     src/ui/features/docs/doc-viewer.h
     src/ui/features/docs/doc-viewer.cpp
+    src/ui/features/docs/document-panel.h
+    src/ui/features/docs/document-panel.cpp
     src/ui/features/docs/doc-session-store.h
     src/ui/features/docs/doc-session-store.cpp
     src/ui/features/docs/doc-file-sidebar.h
@@ -312,6 +318,12 @@ add_library(kai-ui STATIC
     src/ui/shared/inline-code-field.cpp
     src/ui/shared/parameter-field-factory.h
     src/ui/shared/parameter-field-factory.cpp
+    src/ui/shared/data-table-widget.h
+    src/ui/shared/data-table-widget.cpp
+    src/ui/shared/diff-view.h
+    src/ui/shared/diff-view.cpp
+    src/ui/shared/kip-extra-fields.h
+    src/ui/shared/kip-extra-fields.cpp
     src/ui/shared/grid-param-field.h
     src/ui/shared/grid-param-field.cpp
     src/ui/features/output/ansi-text-parser.h
@@ -482,6 +494,8 @@ add_library(kai-ui STATIC
     src/ui/features/kip/kip-chips.cpp
     src/ui/features/kip/kip-blocks.h
     src/ui/features/kip/kip-blocks.cpp
+    src/ui/features/kip/kip-rich-blocks.h
+    src/ui/features/kip/kip-rich-blocks.cpp
     src/ui/features/kip/kip-result-card.h
     src/ui/features/kip/kip-result-card.cpp
     src/ui/features/kip/kip-details-drawer.h

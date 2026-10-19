@@ -93,7 +93,7 @@ async function nextMessage() {
   }
 }
 
-async function answer(id, { onChange, onChip, validate } = {}) {
+async function answer(id, { onChange, onChip, validate, onRowAction } = {}) {
   for (;;) {
     const msg = await nextMessage();
     if (msg.id !== id) continue;
@@ -111,10 +111,12 @@ async function answer(id, { onChange, onChip, validate } = {}) {
       const reply = onChange ? await onChange(msg.field, msg.values || {}) : null;
       const patch = Array.isArray(reply) || !reply ? { fields: reply || [] } : reply;
       send('patch', { id, seq: msg.seq, ...patch });
-    } else if (msg.type === 'chip' && onChip) {
+    } else if (msg.type === 'chip' && (onChip || (onRowAction && 'row' in msg))) {
       let result;
       try {
-        result = await onChip(msg.chip, msg.values || {});
+        result = 'row' in msg && onRowAction
+          ? await onRowAction(msg.chip, msg.row, msg.values || {})
+          : await onChip(msg.chip, msg.values || {});
         result = typeof result === 'string' ? { text: result } : { ...result };
         result.state = result.state || 'success';
       } catch (error) {
@@ -128,11 +130,12 @@ async function answer(id, { onChange, onChip, validate } = {}) {
 // Show a form and resolve with its values.
 // options: id, title, description, submit_label, back, cancellable, remember, chips,
 //          onChange(field, values) -> fields to patch, onChip(chip, values) -> text | {state, title, text},
+//          onRowAction(action, row, values) -> the same, for a table row action (`row_actions`),
 //          validate(values) -> { field: message } to keep the form open.
 async function prompt(fields, options = {}) {
-  const { id = 'prompt', onChange, onChip, validate, ...rest } = options;
+  const { id = 'prompt', onChange, onChip, validate, onRowAction, ...rest } = options;
   send('prompt', { id, fields, ...rest });
-  return answer(id, { onChange, onChip, validate });
+  return answer(id, { onChange, onChip, validate, onRowAction });
 }
 
 // Yes/no screen; resolves true/false. options: id, title, danger, confirm_label, cancel_label, back.
@@ -164,12 +167,36 @@ function steps(id, items, title) {
   send('steps', { id, title, items });
 }
 
-// state: pending | running | success | error | skipped
-function step(stepsId, id, state, detail) {
-  send('step', { steps: stepsId, id, state, detail });
+// state: pending | running | success | error | skipped (undefined keeps it); log: lines to append.
+function step(stepsId, id, state, detail, log) {
+  send('step', { steps: stepsId, id, state, detail, log });
 }
 
-// columns: ['name', ...] or [{ key: 'name', label: 'Name' }, ...]
+// A diff block: { patch: '<git diff output>' } or { left, right } (text or { name, text }).
+// options: id, title, language, view (unified|split), context, ignore_whitespace, collapse_after.
+function diff(options = {}) {
+  const side = (s) => (typeof s === 'string' ? { text: s } : s);
+  const { left, right, ...rest } = options;
+  send('diff', left !== undefined ? { ...rest, left: side(left), right: side(right) } : rest);
+}
+
+// items: [{ key: 'Version', value: '1.4.0', format: 'mono', copy: true }, ...]
+function kv(items, options = {}) {
+  send('kv', { ...options, items });
+}
+
+// items: [{ label: 'Tests', value: '412', detail: 'all passed', tone: 'success' }, ...]
+function stats(items, options = {}) {
+  send('stats', { ...options, items });
+}
+
+// options: id, title, language, highlight: [4, 5], max_lines, line_numbers.
+function code(text, options = {}) {
+  send('code', { ...options, text });
+}
+
+// columns: ['name', ...] or [{ key: 'name', label: 'Name', format: 'badge' }, ...]
+// options: id, title, row_key, row_actions (answered by prompt's onRowAction).
 function table(columns, rows, options = {}) {
   const cols = columns.map((c) => (typeof c === 'string' ? { key: c, label: c } : c));
   send('table', { ...options, columns: cols, rows });
@@ -202,7 +229,7 @@ function done(options = {}) {
 
 const kip = {
   VERSION, Back, send, hello, log, prompt, confirm, message, markdown, progress,
-  steps, step, table, notify, setEnv, patch, chipResult, done,
+  steps, step, table, notify, setEnv, patch, chipResult, done, diff, kv, stats, code,
 };
 
 module.exports = kip;

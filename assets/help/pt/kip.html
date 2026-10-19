@@ -29,11 +29,13 @@
 <tr><td><code>notify</code></td><td>notificação do sistema</td></tr>
 <tr><td><code>set_env</code></td><td>exporta uma variável declarada</td></tr>
 <tr><td><code>chip_result</code></td><td>andamento e resultado de um <b>chip</b> (veja abaixo)</td></tr>
+<tr><td><code>diff</code></td><td>um diff: a saída do <code>git diff</code>, ou dois textos que o Kai compara</td></tr>
+<tr><td><code>kv</code>, <code>stats</code>, <code>code</code></td><td>pares rótulo/valor, números grandes e um trecho de código para resultados</td></tr>
 <tr><td><code>done</code></td><td>tela de resultado com botões: abrir URL (http/https), mostrar no gerenciador de arquivos, copiar</td></tr>
 </table>
 
 <h3>3. Tipos de campo</h3>
-<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code> e <code>flags</code>. Os campos podem ser <code>required</code>, ter <code>default</code>, pertencer a um <code>group</code> e ser observados (<code>watch</code>): quando o usuário muda um campo observado o Kai envia <code>change</code> e o programa responde com um <code>patch</code> (é assim que uma segunda lista depende da primeira). O Kai lembra as últimas respostas de cada prompt (nunca de <code>secret</code>); desligue com <code>remember: false</code>.</p>
+<p><code>text</code>, <code>secret</code>, <code>textarea</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>list</code>, <code>table</code>, <code>filepick</code>, <code>folderpick</code>, <code>flags</code>, <code>tree</code> (uma árvore com caixas) e <code>diff</code> (escolher trechos ou arquivos de um patch). Um <code>select</code> pode aparecer como <code>cards</code> ou como controle <code>segmented</code>; <code>text</code> e <code>textarea</code> aceitam <code>max_length</code> com contador. Os campos podem ser <code>required</code>, ter <code>default</code>, pertencer a um <code>group</code> e ser observados (<code>watch</code>): quando o usuário muda um campo observado o Kai envia <code>change</code> e o programa responde com um <code>patch</code> (é assim que uma segunda lista depende da primeira). O Kai lembra as últimas respostas de cada prompt (nunca de <code>secret</code>); desligue com <code>remember: false</code>.</p>
 
 <h3>4. Chips e listas longas</h3>
 <p><b>Chips</b> são botões pequenos sob os campos de um prompt para ações <i>efêmeras</i> — "mostrar o contexto desta branch", "sincronizar", "apagar". Clicar não responde o formulário: o Kai envia <code>chip</code> ao programa, que responde com mensagens <code>chip_result</code> (<code>running</code> e depois <code>success</code> ou <code>error</code>, com um <code>text</code> em Markdown) exibidas numa caixa sob os chips. O passo continua aberto e um erro nunca encerra a sessão.</p>
@@ -43,6 +45,13 @@
 <li>Um chip roda por vez; feche a caixa no botão ×.</li>
 </ul>
 <p>Nos campos <code>list</code> e <code>table</code>, <code>searchable</code> força (ou esconde) a caixa de filtro e <code>page_size</code> divide os itens em páginas, com a barra "Página 2 de 5". As páginas valem para o resultado filtrado e mantêm a sua seleção.</p>
+
+<h3>4b. Diffs, ações por linha e resultados</h3>
+<ul>
+<li><b>Diffs</b> aparecem unificados ou lado a lado — escolha sua, lembrada por comando. As palavras que mudaram ficam destacadas, trechos iguais viram "⋯ N linhas iguais" e ↑ ↓ (F7) passam pelas mudanças. O Kai nunca lê arquivos para um diff: o programa manda o texto (<code>git diff | kai kip diff --patch -</code>, <code>kai kip diff --left-file a --right-file b</code>).</li>
+<li><b>Ações por linha</b> (<code>row_actions</code> numa tabela) são chips presos a uma linha: ícones no fim da linha ao passar o mouse, e também no menu do botão direito. Uma destrutiva transforma a linha em "Apagar X? [Manter] [Apagar]" antes de rodar qualquer coisa.</li>
+<li>Células de tabela podem ser <code>mono</code>, <code>muted</code>, <code>number</code>, <code>badge</code> ou <code>copy</code>. Um passo pode levar a sua saída (<code>log</code>, recolhida, abre sozinha em erro) e <code>progress</code> com <code>id</code> empilha várias barras.</li>
+</ul>
 
 <h3>5. O auxiliar <code>kai kip</code></h3>
 <p>Em scripts shell você não precisa escrever JSON à mão:</p>
@@ -90,9 +99,9 @@ kip done --title "Publicado em $alvo"</pre>
 <li>Uma tela por vez, com um resumo das respostas anteriores acima (segredos aparecem como ••••).</li>
 <li><b>Voltar</b> aparece quando o programa permite; <b>Cancelar execução</b> pede ao programa que pare (e o encerra após 3 segundos).</li>
 <li>Uma confirmação destrutiva dá foco ao botão de recusa, então o Enter nunca confirma sem querer.</li>
-<li><b>Detalhes</b> (recolhido): o <b>Log</b> e o inspetor de <b>Protocolo</b> com todas as mensagens nos dois sentidos.</li>
+<li><b>Detalhes</b> (recolhido, à esquerda na linha dos botões): o <b>Log</b> e o inspetor de <b>Protocolo</b> com todas as mensagens nos dois sentidos.</li>
 <li>A barra de abas do painel de saída fica oculta em comandos KIP; o ícone no canto superior direito da view abre a janela própria.</li>
-<li>Falhas, cancelamento, comando sem suporte e erros de protocolo mostram um cartão com os detalhes abertos e <b>Executar de novo</b>.</li>
+<li>Falhas, cancelamento, comando sem suporte e erros de protocolo mostram um cartão com <b>Executar de novo</b>; todos menos o cancelamento abrem os detalhes.</li>
 </ul>
 
 <h3>8. Configurações e o manifesto de criação</h3>

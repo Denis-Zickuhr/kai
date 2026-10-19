@@ -670,6 +670,7 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("autostart")) {
         data.autostart = root.value("autostart").toBool(false);
     }
+    data.smartFocus = root.value("smart_focus").toBool(data.smartFocus);
     if (root.contains("language")) {
         data.language = root.value("language").toString();
     }
@@ -860,6 +861,11 @@ SettingsData ConfigManager::loadSettings()
         kip.detachedWindowMode = k.value("detached_window_mode").toString(kip.detachedWindowMode);
         data.kip = kip.clamped();
     }
+    for (const QJsonValue &v : root.value("kip_panel_autostart").toArray()) {
+        if (v.isString() && !v.toString().isEmpty() && !data.kipPanelAutoStart.contains(v.toString())) {
+            data.kipPanelAutoStart << v.toString();
+        }
+    }
     if (root.value("interpreters").isObject()) {
         const QJsonObject i = root.value("interpreters").toObject();
         data.interpreters.python = i.value("python").toString(data.interpreters.python);
@@ -956,6 +962,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["output_max_log_size_kb"] = data.outputMaxLogSizeKb;
     root["graceful_stop_timeout_sec"] = data.gracefulStopTimeoutSec;
     root["autostart"] = data.autostart;
+    root["smart_focus"] = data.smartFocus;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
 
@@ -1024,6 +1031,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
         k["detached_window_mode"] = kip.detachedWindowMode;
         root["kip"] = k;
     }
+    root["kip_panel_autostart"] = QJsonArray::fromStringList(data.kipPanelAutoStart);
     {
         QJsonObject i;
         i["python"] = data.interpreters.python;
@@ -1635,6 +1643,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["output_max_log_size_kb"] = settings.outputMaxLogSizeKb;
     settingsObj["graceful_stop_timeout_sec"] = settings.gracefulStopTimeoutSec;
     settingsObj["autostart"] = settings.autostart;
+    settingsObj["smart_focus"] = settings.smartFocus;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
         QJsonObject obj;
@@ -2645,6 +2654,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.outputMaxLogSizeKb = s.value("output_max_log_size_kb").toInt(result.settings.outputMaxLogSizeKb);
         result.settings.gracefulStopTimeoutSec = s.value("graceful_stop_timeout_sec").toInt(result.settings.gracefulStopTimeoutSec);
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
+        result.settings.smartFocus = s.value("smart_focus").toBool(result.settings.smartFocus);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {
             const QJsonObject o = v.toObject();

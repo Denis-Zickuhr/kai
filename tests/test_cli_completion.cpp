@@ -171,6 +171,24 @@ private slots:
             folders, commands, {QStringLiteral("kip"), QStringLiteral("prompt"), QStringLiteral("--field")}, QString(), true);
         QVERIFY(types.contains(QStringLiteral("select")));
         QVERIFY(types.contains(QStringLiteral("flags")));
+        QVERIFY(types.contains(QStringLiteral("tree")));
+        QVERIFY(types.contains(QStringLiteral("diff")));
+    }
+
+    void kipCompletesTheRoundTwoVerbs()
+    {
+        QVector<Folder> folders;
+        QVector<Command> commands;
+        const QStringList verbs = cli::completionCandidates(folders, commands, {QStringLiteral("kip")}, QString(), true);
+        for (const char *v : {"diff", "kv", "stats", "code"}) {
+            QVERIFY2(verbs.contains(QString::fromLatin1(v)), v);
+        }
+        const QStringList diff = cli::completionCandidates(
+            folders, commands, {QStringLiteral("kip"), QStringLiteral("diff")}, QStringLiteral("--le"), true);
+        QCOMPARE(diff, (QStringList{QStringLiteral("--left-file"), QStringLiteral("--left-text"), QStringLiteral("--left-name")}));
+        const QStringList table = cli::completionCandidates(
+            folders, commands, {QStringLiteral("kip"), QStringLiteral("table")}, QStringLiteral("--row-action-d"), true);
+        QCOMPARE(table, (QStringList{QStringLiteral("--row-action-danger"), QStringLiteral("--row-action-description")}));
     }
 };
 

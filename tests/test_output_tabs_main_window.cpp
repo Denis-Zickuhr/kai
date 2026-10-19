@@ -12,20 +12,38 @@
 #include "core/config-manager.h"
 #include "core/models.h"
 #include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/history/process-list-dialog.h"
 #include "ui/features/output/output-tabs-bar.h"
 #include "ui/features/output/quick-run-popup.h"
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
 #include "ui/features/output/terminal-drawer.h"
 #include "ui/layout/dock-host.h"
+#include "ui/layout/layout-controller.h"
 #include "ui/layout/view-registry.h"
 #include "ui/main-window.h"
+#include "ui/shared/fuzzy-search.h"
+#include "utils/translation-manager.h"
 
 using namespace kai;
 using namespace kai::ui;
 
 // A barra de guias das saídas ligada ao MainWindow: uma guia por comando executado, trocar de saída pela guia,
 // fechar sem parar o processo e a guia que volta ao clicar no comando.
+
+namespace {
+// Foco inteligente ligado: a seleção na árvore leva a Saída e o Documento (o que estes testes conferem).
+void enableSmartFocus()
+{
+    kai::core::ConfigManager config;
+    kai::core::SettingsData settings = config.loadSettings();
+    settings.smartFocus = true;
+    QVERIFY(config.saveSettings(settings));
+}
+} // namespace
+
 class TestOutputTabsMainWindow : public QObject {
     Q_OBJECT
 
@@ -62,6 +80,38 @@ private:
     }
 
 private slots:
+    // O painel Processos mostra o NOME de cada comando em execução (bug: aparecia o id cru), com a pasta como contexto.
+    void processesPanelShowsCommandNamesNotIds()
+    {
+        seed({shell(QStringLiteral("cmd_alpha_1"), QStringLiteral("Alpha"), QStringLiteral("sleep 4")),
+              shell(QStringLiteral("cmd_beta_2"), QStringLiteral("Beta"), QStringLiteral("sleep 4"))});
+        MainWindow window;
+        window.resize(1100, 700);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        activate(window, QStringLiteral("cmd_alpha_1"));
+        activate(window, QStringLiteral("cmd_beta_2"));
+        window.layoutController()->focusView(QStringLiteral("processes"));
+        auto *dialog = window.findChild<ProcessListDialog *>();
+        QVERIFY(dialog != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(dialog->isVisible(), 2000);
+        auto *list = dialog->findChild<QListWidget *>(QStringLiteral("processList"));
+        QVERIFY(list != nullptr);
+        QTRY_COMPARE_WITH_TIMEOUT(list->count(), 2, 4000);
+        QStringList names;
+        for (int i = 0; i < list->count(); ++i) {
+            names << list->item(i)->text();
+        }
+        names.sort();
+        QCOMPARE(names, (QStringList{QStringLiteral("Alpha"), QStringLiteral("Beta")}));
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            list->setCurrentRow(0);
+            QTest::qWait(400);
+            window.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/processes-window.png"));
+            dialog->grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/processes-panel.png"));
+        }
+    }
+
     void init()
     {
         QDir(m_config.path()).removeRecursively();
@@ -125,6 +175,7 @@ private slots:
     {
         seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out; sleep 2")),
               shell(QStringLiteral("b"), QStringLiteral("Beta"), QStringLiteral("echo beta-out; sleep 2"))});
+        enableSmartFocus(); // com o foco inteligente a guia também seleciona o comando
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
@@ -316,6 +367,7 @@ private slots:
     {
         seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out; sleep 3")),
               shell(QStringLiteral("b"), QStringLiteral("Beta"), QStringLiteral("echo beta-out; sleep 3"))});
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
@@ -348,6 +400,40 @@ private slots:
         QTest::qWait(3500); // deixa os comandos de fundo terminarem antes de destruir a janela
     }
 
+    // Bug (foco manual): fechar a guia da saída na tela não fechava — a seleção da vizinha não reconecta a Saída, e a
+    // guia fechada voltava porque a Saída ainda era dela.
+    void withManualFocusClosingTheShownTabClosesIt()
+    {
+        seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out; sleep 3")),
+              shell(QStringLiteral("b"), QStringLiteral("Beta"), QStringLiteral("echo beta-out; sleep 3"))});
+        MainWindow window;
+        window.show();
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        OutputTabsBar *bar = drawer->outputTabs();
+        activate(window, QStringLiteral("a"));
+        activate(window, QStringLiteral("b"));
+        QTRY_COMPARE_WITH_TIMEOUT(bar->ids().size(), 2, 4000);
+        // Mostra a 1 e depois a 2 pelas guias. Sem o foco inteligente a guia só troca a Saída: a árvore fica onde está.
+        const QString selected = tree->currentSelectionId();
+        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->tabRect(QStringLiteral("a")).center());
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("a"));
+        QCOMPARE(tree->shownCommand(), QStringLiteral("a"));
+        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->tabRect(QStringLiteral("b")).center());
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("b"));
+        QCOMPARE(tree->shownCommand(), QStringLiteral("b"));
+        QCOMPARE(tree->currentSelectionId(), selected);
+
+        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->closeRect(QStringLiteral("b")).center());
+        QTRY_COMPARE_WITH_TIMEOUT(bar->ids(), QStringList{QStringLiteral("a")}, 3000);
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("a"));
+        QCOMPARE(bar->currentId(), QStringLiteral("a"));
+
+        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->closeRect(QStringLiteral("a")).center());
+        QTRY_VERIFY_WITH_TIMEOUT(bar->tabs().isEmpty(), 3000);
+        QTest::qWait(3500); // deixa os comandos de fundo terminarem antes de destruir a janela
+    }
+
     // O chevron do começo da barra recolhe a lista de comandos: a Saída ocupa tudo e, ao voltar, a divisão é a mesma.
     void theChevronHidesTheCommandListAndGivesTheSameSplitBack()
     {
@@ -363,16 +449,16 @@ private slots:
         QWidget *commands = window.viewRegistry()->existingWidget(QStringLiteral("commands"));
         QVERIFY(commands);
         OutputTabsBar *bar = drawer->outputTabs();
-        QVERIFY(bar->toggleRect().isValid());
+        QVERIFY(bar->quickRunRect().isValid());
         QVERIFY(commands->isVisible());
         const int drawerBefore = drawer->height();
 
-        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->toggleRect().center());
+        window.dockHost()->toggleMaximize(layout::view_id::kOutput); // o modo foco: a Saída maximizada
         QVERIFY(!commands->isVisible());
         QTRY_VERIFY_WITH_TIMEOUT(drawer->height() > drawerBefore + 100, 2000); // a Saída ficou com o espaço todo
         QVERIFY(drawer->isVisible());
 
-        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->toggleRect().center());
+        window.dockHost()->toggleMaximize(layout::view_id::kOutput);
         QVERIFY(commands->isVisible());
         QTRY_VERIFY_WITH_TIMEOUT(qAbs(drawer->height() - drawerBefore) <= 6, 2000);
     }
@@ -460,7 +546,7 @@ private slots:
         auto *drawer = window.findChild<TerminalDrawer *>();
         OutputTabsBar *bar = drawer->outputTabs();
         QVERIFY(bar->quickRunRect().isValid()); // o "+" aparece por padrão, com a lista aberta
-        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->toggleRect().center()); // recolhe a lista
+        window.dockHost()->toggleMaximize(layout::view_id::kOutput); // recolhe a lista (modo foco)
         QVERIFY(bar->quickRunRect().isValid());
 
         QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->quickRunRect().center());
@@ -515,6 +601,52 @@ private slots:
         QCOMPARE(tree->currentSelectionId(), QStringLiteral("f2"));
     }
 
+    // Ctrl+F: a busca inerte. Escolher um comando leva até ele na árvore e abre o menu de ações dele — não executa. A
+    // barra de busca da árvore não existe mais.
+    void ctrlFFindsAnItemAndOpensItsActionsWithoutRunningIt()
+    {
+        seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out")),
+              shell(QStringLiteral("b"), QStringLiteral("Beta"), QStringLiteral("echo beta-out"))});
+        MainWindow window;
+        window.resize(1000, 700);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QApplication::setActiveWindow(&window);
+        QVERIFY(!window.findChild<FuzzySearchBar *>());
+
+        QTest::keyClick(&window, Qt::Key_F, Qt::ControlModifier);
+        auto *finder = window.findChild<QuickRunPopup *>(QStringLiteral("findPalette"));
+        QVERIFY(finder);
+        QTRY_VERIFY_WITH_TIMEOUT(finder->isVisible(), 2000);
+        QVERIFY(finder->visibleIds().contains(QStringLiteral("a")));
+        QVERIFY(!finder->visibleIds().contains(QStringLiteral("settings"))); // só itens: as ações vêm no menu do item
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            QTest::qWait(300);
+            window.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/find-palette-window.png"));
+            finder->grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/find-palette.png"));
+        }
+
+        QStringList menuTexts;
+        QTimer::singleShot(300, [&menuTexts]() {
+            if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+                for (QAction *action : menu->actions()) {
+                    menuTexts << action->text();
+                }
+                menu->close();
+            }
+        });
+        QTest::keyClicks(finder->searchField(), QStringLiteral("beta"));
+        QCOMPARE(finder->visibleIds().value(0), QStringLiteral("b"));
+        QTest::keyClick(finder->searchField(), Qt::Key_Return);
+        QVERIFY(!finder->isVisible());
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        QTRY_COMPARE_WITH_TIMEOUT(tree->currentSelectionId(), QStringLiteral("b"), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(menuTexts.contains(kai::utils::tr(QStringLiteral("tree.run"))), 2000);
+        QTest::qWait(300);
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        QVERIFY(drawer->outputTabs()->ids().isEmpty()); // nada executou
+    }
+
     // Pela paleta também se executa: escolher um comando mostra a saída dele.
     void theCommandPaletteRunsTheChosenCommand()
     {
@@ -544,7 +676,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *drawer = window.findChild<TerminalDrawer *>();
         QWidget *commands = window.viewRegistry()->existingWidget(QStringLiteral("commands"));
-        QTest::mouseClick(drawer->outputTabs(), Qt::LeftButton, Qt::NoModifier, drawer->outputTabs()->toggleRect().center());
+        window.dockHost()->toggleMaximize(layout::view_id::kOutput); // modo foco
         QVERIFY(!commands->isVisible());
         drawer->setExpanded(false);
         QVERIFY(commands->isVisible());

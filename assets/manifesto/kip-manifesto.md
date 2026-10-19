@@ -86,10 +86,14 @@ with `"kip"` greater than the version Kai speaks, is a protocol error.
 | `invalid` | `id`, `errors{field: text}`, `message?` | Rejects an answer; the same prompt stays open with the errors shown (§6). |
 | `message` | `level` (`info` `success` `warning` `error`), `text` | A status card on the current screen. |
 | `markdown` | `text` | Formatted text (headings, lists, code, http/https links; images are never loaded). |
-| `progress` | `value` (0–100 or `null`), `label?`, `cancellable?` | A progress bar; the next `progress` updates the same bar. `null` = indeterminate. |
+| `progress` | `value` (0–100 or `null`), `label?`, `cancellable?`, `id?` | A progress bar; the next `progress` with the same `id` updates the same bar. `null` = indeterminate. Several `id`s = several bars. |
 | `steps` | `id`, `title?`, `items[]` of `{id, label, state?, detail?}` | A checklist. |
-| `step` | `steps`, `id`, `state`, `detail?` | Updates one checklist item. States: `pending` `running` `success` `error` `skipped`. |
-| `table` | `id?`, `title?`, `columns[]` of `{key, label}`, `rows[]` of objects | A read-only table (users can copy a cell). Same `id` ⇒ replaces the previous one in place. |
+| `step` | `steps`, `id`, `state?`, `detail?`, `log?` | Updates one checklist item. States: `pending` `running` `success` `error` `skipped`. `log` appends output lines to the item (collapsed; opens by itself on error). Keys left out keep their value. |
+| `table` | `id?`, `title?`, `columns[]` of `{key, label, format?}`, `rows[]` of objects, `row_key?`, `row_actions[]?` | A read-only table (users can copy a cell). Same `id` ⇒ replaces the previous one in place. Formats and row actions: §9.1. |
+| `diff` | `patch` (the output of `git diff`) **or** `left`+`right` (`{name?, text}`), `id?`, `title?`, `language?`, `view?`, `context?`, `ignore_whitespace?`, `collapse_after?` | A diff, unified or side by side (§8.1). |
+| `kv` | `id?`, `title?`, `items[]` of `{key, value, format?, copy?}` | Label/value pairs for results (§8.2). |
+| `stats` | `id?`, `items[]` of `{label, value, detail?, tone?}` | Big numbers, up to 8 (§8.2). |
+| `code` | `text`, `id?`, `title?`, `language?`, `highlight[]?`, `max_lines?`, `line_numbers?` | A code/config snippet with a copy button (§8.2). |
 | `notify` | `title`, `text?`, `level?` | A system notification (respects the user's notification settings). |
 | `set_env` | `name`, `value` | Exports a variable to Kai (§11). |
 | `chip_result` | `chip`, `state?`, `title?`, `text?`, `id?` | Progress/outcome of a running chip (§9). |
@@ -105,6 +109,7 @@ Unknown `type`s are ignored (and logged). `id`s are strings you choose. A `respo
 {"kip":1,"type":"response","id":"target","values":{"env":"prod","opts":{"dry":false}}}
 {"kip":1,"type":"change","id":"nav","seq":3,"field":"context","values":{"context":"eu","namespace":"default"}}
 {"kip":1,"type":"chip","id":"pick","chip":"ctx","values":{"branch":"feat/login"}}
+{"kip":1,"type":"chip","id":"pick","chip":"delete","field":"branch","row":"feat/login","values":{"branch":"main"}}
 {"kip":1,"type":"back","id":"sure"}
 {"kip":1,"type":"cancel"}
 ```
@@ -113,7 +118,7 @@ Unknown `type`s are ignored (and logged). `id`s are strings you choose. A `respo
 |---|---|---|
 | `response` | `id`, `values{}` | The user submitted prompt/confirm `id`. For a `confirm`: `values.confirmed` is `true`/`false` (declining is an answer, not a cancel). |
 | `change` | `id`, `seq`, `field`, `values{}` | A field with `watch:true` changed (§7). |
-| `chip` | `id`, `chip`, `values{}` | The user ran a chip (§9). The prompt stays open. |
+| `chip` | `id`, `chip`, `values{}` | The user ran a chip (§9). The prompt stays open. With `row` (and `field` or `table`) it is a **row action** (§9.1) on that row key. |
 | `back` | `id` | The user pressed Back on a prompt/confirm that allowed it. |
 | `cancel` | — | The user pressed Cancel. Exit promptly. |
 
@@ -130,19 +135,23 @@ collapsible section), `watch` (§7), `remember` (§6).
 
 | `type` | Extra keys | Value in `response.values.<name>` |
 |---|---|---|
-| `text` | — | string |
+| `text` | `max_length` | string |
 | `secret` | — (masked, **never remembered**, hidden in the inspector) | string |
-| `textarea` | — | string |
+| `textarea` | `max_length` (shows "41 / 72"; over the limit Submit stays off) | string |
 | `number` | `min`, `max`, `step`, `decimals` | JSON number, or `null` when left empty |
 | `date` | `mode` (`date` `time` `datetime`), `range` | ISO string (`yyyy-MM-dd`, `HH:mm:ss`, `yyyy-MM-ddTHH:mm:ss`); with `range`: `{"start","end"}` |
-| `select` | `options[]` | string (`""` if none chosen) |
+| `select` | `options[]`, `style` (`cards` for 2–4 options with descriptions/icons, `segmented` for 2–5 short ones; default a dropdown) | string (`""` if none chosen) |
 | `list` | `options[]`, `multiple`, `searchable`, `page_size` | string, or an array of strings with `multiple` |
-| `table` | `columns[]`, `rows[]`, `row_key` (default `"id"`), `multiple`, `searchable`, `page_size` | the **row key** (string), or an array with `multiple` |
+| `table` | `columns[]`, `rows[]`, `row_key` (default `"id"`), `multiple`, `searchable`, `page_size`, `row_actions[]` (§9.1) | the **row key** (string), or an array with `multiple` |
+| `tree` | `nodes[]` of `{id, label?, icon?, badge?, expanded?, children[]?}`, `multiple`, `searchable` | the node id, or (with `multiple`) an array of the **checked** ids (a folder counts only when all its children are checked) |
+| `diff` | `patch`, `select` (`hunks` default, or `files`), `default` (`all` default, `none`, or ids) | an array of the checked ids: `"src/a.ts@0"` (first hunk of that file) or `"src/a.ts"` with `files`. Never remembered. |
 | `filepick` | `filter` (Qt name filter, e.g. `"Images (*.png *.jpg);;All (*)"`), `initial_dir`, `path_format` | string |
 | `folderpick` | `initial_dir`, `path_format` | string |
 | `flags` | `options[]` of `{name, label, description?, default}` | an object `{name: bool}` — **every flag is present** |
 
-* `options[]` accepts plain strings (value = label) or `{value, label?, description?}`.
+* `options[]` accepts plain strings (value = label) or `{value, label?, description?, icon?}` (`icon` shows on `cards`).
+* A `badge` (tree nodes, table cells, `kv`) is a text or `{text, tone}`; tones: `neutral` `info` `success` `warning`
+  `error` `accent`.
 * An unanswered field is sent empty: `""`, `[]`, `false` per flag, `null` for number/date.
 * `required` is checked by Kai (Submit stays disabled). Anything else is **your** job: reply
   with `invalid` (§6).
@@ -237,6 +246,40 @@ a list (page change, delete, refresh), or a refresh after an action. (An explici
 {"kip":1,"type":"notify","title":"Done","text":"5 of 6 steps finished","level":"warning"}
 ```
 
+### 8.1 Diffs and comparing files
+
+Send the output of `git diff` as `patch`, or two whole texts as `left` and `right` and Kai compares them (changed words
+highlighted, JSON/YAML/XML/Markdown colored, long equal stretches folded). Kai **never reads files** for a diff — your
+program sends the text (`kai kip diff --left-file a --right-file b` reads them for you where the script runs).
+Unified vs side by side is the **user's** choice, kept per command; `view` is only the default.
+
+```jsonl
+{"kip":1,"type":"diff","id":"wc","title":"Uncommitted changes","patch":"diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n import os\n-print('hi')\n+print('hello')\n"}
+{"kip":1,"type":"diff","title":"staging × production","left":{"name":"staging.json","text":"{\n  \"replicas\": 2\n}"},"right":{"name":"production.json","text":"{\n  \"replicas\": 6\n}"},"language":"json","view":"split"}
+```
+
+As a **field** the same view gets checkboxes — for a partial commit, ask which hunks go in and build the patch yourself
+(`git apply --cached`):
+
+```jsonl
+{"kip":1,"type":"prompt","id":"commit","title":"Commit","submit_label":"Commit","fields":[{"name":"msg","type":"textarea","label":"Message","max_length":72,"required":true},{"name":"hunks","type":"diff","label":"What goes in","required":true,"patch":"--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hi')\n+print('hello')\n"}]}
+```
+
+### 8.2 Result blocks: `kv`, `stats`, `code`
+
+Better than Markdown for the end of a run (they stay on the result screen):
+
+```jsonl
+{"kip":1,"type":"stats","items":[{"label":"Tests","value":"412","detail":"all passed","tone":"success"},{"label":"Duration","value":"3m 12s"}]}
+{"kip":1,"type":"kv","items":[{"key":"Version","value":"1.4.2","format":"mono","copy":true},{"key":"Channel","value":{"text":"stable","tone":"success"},"format":"badge"},{"key":"Release","value":"https://example.com/r/1.4.2","format":"link"}]}
+{"kip":1,"type":"code","title":"docker-compose.override.yml","language":"yaml","text":"services:\n  api:\n    replicas: 6","highlight":[3],"max_lines":20}
+{"kip":1,"type":"step","steps":"setup","id":"repos","log":"Cloning into 'api'...\ndone."}
+{"kip":1,"type":"progress","id":"linux","label":"app-linux.tar.gz","value":72}
+```
+
+`kv` formats: `mono`, `muted`, `badge`, `link` (http/https only). `stats` shows up to 4 per row. `code` collapses past
+`max_lines` with "Show all".
+
 **`done`** ends the run and shows the result card (icon from `level`, default `success`):
 
 ```jsonl
@@ -288,6 +331,25 @@ outcome appears in a box under the chips. The step stays open and an `error` nev
   and let Kai ask; you only receive `chip` after the user agreed.
 * Chips are for actions *about the current selection*. For things that move the wizard forward, use
   the normal submit.
+
+### 9.1 Tables: cell formats and row actions
+
+`columns[].format`: `mono` (ids, hashes, paths), `muted`, `number` (right-aligned), `badge` (cell `{text, tone}`) and
+`copy` (mono with a copy icon). **Row actions** are chips tied to one row — icons at the end of the row (hover, selected
+row, right-click menu), with the chip keys `id`, `label`, `description`, `icon`, `danger`, `confirm` (no `requires`).
+A row's `_actions` lists which actions it allows.
+
+```jsonl
+{"kip":1,"type":"prompt","id":"pick","title":"Branches","fields":[{"name":"branch","type":"table","row_key":"name","columns":[{"key":"name","label":"Branch","format":"mono"},{"key":"state","label":"State","format":"badge"}],"rows":[{"name":"main","state":{"text":"default","tone":"info"},"_actions":["sync"]},{"name":"feat/login","state":"merged"}],"row_actions":[{"id":"sync","label":"Sync","icon":"refresh-cw"},{"id":"delete","label":"Delete","icon":"trash-2","danger":true,"confirm":{"text":"The local branch is gone for good.","confirm_label":"Delete","cancel_label":"Keep"}}]}]}
+{"kip":1,"type":"chip_result","chip":"delete","state":"success","text":"Branch **feat/login** deleted."}
+{"kip":1,"type":"patch","id":"pick","fields":[{"name":"branch","type":"table","row_key":"name","columns":[{"key":"name","label":"Branch","format":"mono"}],"rows":[{"name":"main","_actions":["sync"]}],"row_actions":[{"id":"sync","label":"Sync","icon":"refresh-cw"}]}]}
+```
+
+* Kai sends `{"type":"chip","id":"pick","chip":"delete","field":"branch","row":"feat/login","values":{…}}` (`table`
+  instead of `field` on a table **block**, which needs an `id`). Answer with `chip_result` exactly like a chip.
+* With `confirm` the row turns into the question itself; nothing is sent until the user agrees.
+* To remove/refresh rows afterwards, send a `patch` **without `seq`** (spontaneous) with the new table.
+* On a table block, actions work only while a prompt is open (that is when you are reading stdin).
 
 ---
 

@@ -13,10 +13,14 @@ namespace kai::ui::layout {
 
 namespace tk = kai::utils::tokens;
 
-FloatingViewWindow::FloatingViewWindow(const QString &viewId, const QString &title, QWidget *parent)
-    : AppWindowFrame(parent)
+FloatingViewWindow::FloatingViewWindow(const QString &viewId, const QString &title, QWidget *styleSource)
+    // Janela própria, SEM dono: uma janela com dono anda em grupo com ele no Windows, e clicar no painel (fixo no topo)
+    // trazia o Kai inteiro para a frente de tudo. Esconder junto com o Kai é feito pelo DockHost (setFloatingVisible).
+    : AppWindowFrame(nullptr)
     , m_viewId(viewId)
 {
+    // Sem dono ela não herda o stylesheet da janela principal: `styleSource` é de onde copiá-lo (e refazer a cópia).
+    syncStyleFrom(styleSource);
     setObjectName(QStringLiteral("floatingViewWindow"));
     setAttribute(Qt::WA_DeleteOnClose, false);
     setWindowTitle(title);
@@ -51,6 +55,15 @@ FloatingViewWindow::FloatingViewWindow(const QString &viewId, const QString &tit
         setAlwaysOnTop(checked);
         emit alwaysOnTopChanged(m_viewId, checked);
     });
+}
+
+void FloatingViewWindow::syncStyleFrom(const QWidget *source)
+{
+    if (!source) {
+        return;
+    }
+    setStyleSheet(source->styleSheet());
+    refreshAppearance();
 }
 
 void FloatingViewWindow::updatePinIcon()

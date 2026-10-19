@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/kip-protocol.h"
+#include "core/kip-screen-state.h"
 
 #include <QDateTime>
 #include <QJsonValue>
@@ -41,6 +42,10 @@ class InlineCodeField;
 //     mudança, checagem de obrigatório).
 // ============================================================================
 namespace fields {
+
+class ChoiceButtonsField;
+class TreeChoiceField;
+class DiffChoiceField;
 
 // Rótulo empilhado ACIMA do campo (Top Label), com asterisco sutil quando
 // obrigatório. Tira `field` do pai atual e o põe dentro do container devolvido.
@@ -174,8 +179,13 @@ void setDatePickValues(QLineEdit *edit, const QDateTime &start, const QDateTime 
 enum class DataTableMode { ReadOnly, SelectRow, SelectRows };
 // Tabela de dados com colunas {key,label} e linhas-objeto. A chave da linha
 // fica em Qt::UserRole da 1ª célula (ver `rowKey`).
+// Com `rowActions`, ganha a coluna de ações por linha (§27) — ver rowActionsOf().
 QTableWidget *makeDataTable(QWidget *parent, const QVector<core::KipColumn> &columns, const QJsonArray &rows,
-                            const QString &rowKey, DataTableMode mode);
+                            const QString &rowKey, DataTableMode mode,
+                            const QVector<core::KipChip> &rowActions = {});
+class RowActionsController;
+// As ações de linha de uma tabela feita por makeDataTable (nullptr se ela não tem).
+RowActionsController *rowActionsOf(const QTableWidget *table);
 // Altura que mostra `visibleRows` linhas inteiras + cabeçalho + moldura.
 int dataTableHeight(const QTableWidget *table, int visibleRows);
 // Fixa a altura para `visibleRows` linhas inteiras e a mantém correta quando o
@@ -235,12 +245,25 @@ public:
     // Filtro/paginação de um list ou table (nullptr nos demais tipos).
     fields::ListPager *pager() const { return m_pager; }
     QLineEdit *filterEdit() const { return m_filter; }
+    // text/textarea com `max_length`: o valor cabe no limite?
+    bool withinLimits() const;
+    // Tabela com ações por linha (§27): reaplica o estado da execução corrente (vinda do modelo da tela).
+    void syncRowActions(const core::KipOpenScreen &open, bool interactive);
+    fields::RowActionsController *rowActions() const;
+    QTableWidget *table() const { return m_table; }
+    fields::ChoiceButtonsField *choiceButtons() const { return m_choices; }
+    fields::TreeChoiceField *treeField() const { return m_treeField; }
+    fields::DiffChoiceField *diffField() const { return m_diff; }
 
 signals:
     // Qualquer mudança de valor (inclusive por setValue()).
     void valueChanged();
     // Mudança feita pelo usuário (é o que dispara `change` nos campos `watch`).
     void userEdited();
+    // Ações de linha da tabela.
+    void rowActionClicked(const QString &row, const QString &action);
+    void rowActionConfirmed();
+    void rowActionCancelled();
 
 private:
     void build(const QJsonValue &initial);
@@ -258,6 +281,9 @@ private:
     QListWidget *m_list = nullptr;        // list
     QTableWidget *m_table = nullptr;      // table
     QVector<QCheckBox *> m_flagBoxes;     // flags
+    fields::ChoiceButtonsField *m_choices = nullptr; // select com style cards/segmented
+    fields::TreeChoiceField *m_treeField = nullptr;  // tree
+    fields::DiffChoiceField *m_diff = nullptr;       // diff
     QLineEdit *m_filter = nullptr;
     fields::ListPager *m_pager = nullptr;
     double m_numberEmpty = 0;             // valor sentinela do spin = vazio

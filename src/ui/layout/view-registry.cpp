@@ -114,10 +114,10 @@ bool ViewRegistry::closable(const QString &id) const
     return found ? found->closable : true;
 }
 
-Zone ViewRegistry::defaultZone(const QString &id) const
+Home ViewRegistry::defaultHome(const QString &id) const
 {
     const auto found = spec(id);
-    return found ? found->defaultZone : Zone::Right;
+    return found ? found->home : Home::Secondary;
 }
 
 LayoutModel::Validator ViewRegistry::validator() const

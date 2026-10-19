@@ -15,13 +15,78 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QPainter>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QFileDialog>
 #include <QColor>
 #include <QSize>
 #include "ui/shared/file-dialogs.h"
 
 namespace kai::ui {
+
+namespace tk = utils::tokens;
+
+GridPreview::GridPreview(QWidget *parent)
+    : QWidget(parent)
+{
+    setObjectName(QStringLiteral("gridPreview"));
+    setMinimumHeight(minimumSizeHint().height());
+}
+
+void GridPreview::setModel(const layout::LayoutModel &model)
+{
+    m_model = model;
+    update();
+}
+
+void GridPreview::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
+    const int cols = m_model.cols();
+    const int rows = m_model.rows();
+    const double radius = qMin<double>(tk::radiusSm(), 6.0);
+
+    // A grade nominal: o que o usuário configurou, célula a célula.
+    QColor faint(tk::mutedFg());
+    faint.setAlpha(110);
+    p.setPen(QPen(faint, 1, Qt::DashLine));
+    p.setBrush(Qt::NoBrush);
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            const QRectF cell(area.x() + area.width() * col / cols, area.y() + area.height() * row / rows,
+                              area.width() / cols, area.height() / rows);
+            p.drawRoundedRect(cell.adjusted(2, 2, -2, -2), radius, radius);
+        }
+    }
+
+    // O que aparece: cada célula com painel, esticada pelo modo de expansão sobre as vazias.
+    const layout::GridPlan plan = m_model.plan();
+    if (plan.empty()) {
+        return;
+    }
+    const bool vertical = plan.expansion == layout::Expansion::Vertical;
+    QColor fill(tk::accent());
+    fill.setAlpha(70);
+    p.setPen(QPen(QColor(tk::accent()), 1));
+    p.setBrush(fill);
+    double offset = 0.0;
+    for (int i = 0; i < plan.stacks.size(); ++i) {
+        const layout::GridStack &stack = plan.stacks.at(i);
+        const double lineSpan = (vertical ? area.width() : area.height()) * plan.lineWeights.at(i);
+        double inner = 0.0;
+        for (int j = 0; j < stack.cells.size(); ++j) {
+            const double span = (vertical ? area.height() : area.width()) * stack.weights.at(j);
+            const QRectF cell = vertical ? QRectF(area.x() + offset, area.y() + inner, lineSpan, span)
+                                         : QRectF(area.x() + inner, area.y() + offset, span, lineSpan);
+            p.drawRoundedRect(cell.adjusted(4, 4, -4, -4), radius, radius);
+            inner += span;
+        }
+        offset += lineSpan;
+    }
+}
 
 LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
     : QWidget(parent)
@@ -187,7 +252,67 @@ LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
 
     layout->addWidget(layoutGroup);
 
+    // --- Grupo: Grade de painéis (colunas × linhas e o modo de expansão das células vazias)
+    auto *gridGroup = new QGroupBox(utils::tr(QStringLiteral("settings.layout.grid.title")), this);
+    auto *gridLayout = new QGridLayout(gridGroup);
+    gridLayout->setContentsMargins(12, 14, 12, 12);
+    gridLayout->setHorizontalSpacing(14);
+    gridLayout->setVerticalSpacing(8);
+    gridLayout->setColumnStretch(0, 1);
+    gridLayout->setColumnStretch(1, 1);
+    const auto addGridField = [gridGroup, gridLayout](int row, int col, const QString &labelKey, QWidget *field) {
+        auto *label = new QLabel(utils::tr(labelKey), gridGroup);
+        label->setProperty("kaiRole", QStringLiteral("caption"));
+        gridLayout->addWidget(label, row * 2, col);
+        gridLayout->addWidget(field, row * 2 + 1, col);
+    };
+    m_gridCols = new QSpinBox(gridGroup);
+    m_gridCols->setObjectName(QStringLiteral("gridCols"));
+    m_gridCols->setRange(1, layout::kMaxGridLines);
+    m_gridCols->setValue(layout::LayoutModel::kDefaultCols);
+    addGridField(0, 0, QStringLiteral("settings.layout.grid.cols"), m_gridCols);
+    m_gridRows = new QSpinBox(gridGroup);
+    m_gridRows->setObjectName(QStringLiteral("gridRows"));
+    m_gridRows->setRange(1, layout::kMaxGridLines);
+    m_gridRows->setValue(layout::LayoutModel::kDefaultRows);
+    addGridField(0, 1, QStringLiteral("settings.layout.grid.rows"), m_gridRows);
+    m_gridExpansion = new QComboBox(gridGroup);
+    m_gridExpansion->setObjectName(QStringLiteral("gridExpansion"));
+    m_gridExpansion->addItem(utils::tr(QStringLiteral("settings.layout.grid.expand.vertical")),
+                             int(layout::Expansion::Vertical));
+    m_gridExpansion->addItem(utils::tr(QStringLiteral("settings.layout.grid.expand.horizontal")),
+                             int(layout::Expansion::Horizontal));
+    addGridField(1, 0, QStringLiteral("settings.layout.grid.expansion"), m_gridExpansion);
+    m_gridPreview = new GridPreview(gridGroup);
+    gridLayout->addWidget(m_gridPreview, 4, 0, 1, 2);
+    layout->addWidget(gridGroup);
+
+    const auto emitGrid = [this]() {
+        if (m_syncingGrid) {
+            return;
+        }
+        const auto expansion = layout::Expansion(m_gridExpansion->currentData().toInt());
+        m_layoutModel.setGrid(m_gridCols->value(), m_gridRows->value(), expansion);
+        m_gridPreview->setModel(m_layoutModel);
+        emit gridChangeRequested(m_gridCols->value(), m_gridRows->value(), int(expansion));
+    };
+    connect(m_gridCols, &QSpinBox::valueChanged, this, emitGrid);
+    connect(m_gridRows, &QSpinBox::valueChanged, this, emitGrid);
+    connect(m_gridExpansion, &QComboBox::currentIndexChanged, this, emitGrid);
+    m_gridPreview->setModel(m_layoutModel);
+
     layout->addStretch();
+}
+
+void LayoutTab::setLayoutModel(const layout::LayoutModel &model)
+{
+    m_layoutModel = model;
+    m_syncingGrid = true;
+    m_gridCols->setValue(model.cols());
+    m_gridRows->setValue(model.rows());
+    m_gridExpansion->setCurrentIndex(m_gridExpansion->findData(int(model.expansion())));
+    m_syncingGrid = false;
+    m_gridPreview->setModel(m_layoutModel);
 }
 
 } // namespace kai::ui

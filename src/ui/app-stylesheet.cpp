@@ -67,6 +67,14 @@ QString themedSwitchSvgPath(bool checked, const QColor &track, const QColor &kno
 
 } // namespace
 
+QString themeStyleSheet(const QString &themeQss)
+{
+    QString qss = themeQss;
+    qss.replace(QStringLiteral("@RADIUS_MD@"), QString::number(tk::radiusMd()) + QStringLiteral("px"));
+    qss.replace(QStringLiteral("@RADIUS_SM@"), QString::number(tk::radiusSm()) + QStringLiteral("px"));
+    return qss + buildModernStylesheet();
+}
+
 QString buildModernStylesheet()
 {
     const QString bg = tk::bg();

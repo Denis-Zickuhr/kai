@@ -622,6 +622,7 @@ DocViewer::DocViewer(QWidget *parent)
     connect(m_pane->editor(), &QPlainTextEdit::cursorPositionChanged, this, [this]() { scheduleStateCapture(); });
     connect(m_pane->editor(), &QPlainTextEdit::textChanged, this, [this]() { scheduleStateCapture(); });
     connect(m_nav, &DocNavBar::recentRequested, this, &DocViewer::showRecentsMenu);
+    connect(m_nav, &DocNavBar::foldersRequested, this, &DocViewer::foldersRequested);
     auto *saveShortcut = new QShortcut(QKeySequence::Save, this);
     saveShortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(saveShortcut, &QShortcut::activated, this, [this]() {
@@ -943,6 +944,11 @@ void DocViewer::leaveEmptyState()
     if (m_stack->currentWidget() == m_emptyPage) {
         m_stack->setCurrentWidget(m_browser);
     }
+}
+
+void DocViewer::setFoldersButtonVisible(bool visible)
+{
+    m_nav->setFoldersVisible(visible);
 }
 
 void DocViewer::clear()
@@ -1884,8 +1890,7 @@ void DocViewer::showNoteActionsMenu(const QPoint &globalPosition)
     QAction *openCopy = menu.addAction(LucideIcons::icon(QStringLiteral("external-link"), accent, 16),
                                        utils::tr(QStringLiteral("ctx.note.open_copy")));
     menu.addSeparator();
-    QAction *copy = menu.addAction(LucideIcons::icon(QStringLiteral("copy"), accent, 16),
-                                   utils::tr(QStringLiteral("ctx.note.copy_content")));
+    menu.addAction(LucideIcons::icon(QStringLiteral("copy"), accent, 16), utils::tr(QStringLiteral("ctx.note.copy_content")));
     QAction *chosen = menu.exec(globalPosition);
     if (!chosen) {
         return;

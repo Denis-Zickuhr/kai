@@ -14,7 +14,7 @@ using namespace kai::ui::layout;
 using kai::core::ConfigManager;
 using kai::core::SettingsData;
 
-// Os painéis (Comandos, Saída) vivem em zonas de um DockHost, divididas por QSplitters redimensionáveis. Aqui: a
+// Os painéis (Comandos, Saída) vivem em células de um DockHost, divididas por QSplitters redimensionáveis. Aqui: a
 // estrutura dos splitters, a migração do antigo `output_position`/`output_splitter_sizes` para o layout flexível e a
 // proporção sobrevivendo a resize, maximizar e recolher.
 class TestMainWindowSplitters : public QObject {
@@ -23,7 +23,7 @@ class TestMainWindowSplitters : public QObject {
 private:
     static LayoutModel classic() { return LayoutModel::preset(LayoutModel::Preset::Classic); }
 
-    // O splitter que divide a zona `zone` dos vizinhos (raiz para as laterais, coluna do miolo para o fundo).
+    // O splitter que divide a célula `zone` das vizinhas (o da pilha, ou o raiz quando ela está sozinha na pilha).
     static QSplitter *splitterOf(DockHost *dock, Zone zone)
     {
         QWidget *widget = dock->zoneWidget(zone);
@@ -79,7 +79,7 @@ private slots:
         terminal->setExpanded(true);
         QTest::qWait(50);
 
-        QSplitter *verticalSplitter = splitterOf(window.dockHost(), Zone::Bottom);
+        QSplitter *verticalSplitter = splitterOf(window.dockHost(), Zone{1, 0});
         QVERIFY(verticalSplitter != nullptr);
         QCOMPARE(verticalSplitter->orientation(), Qt::Vertical);
         QCOMPARE(verticalSplitter->count(), 2);
@@ -92,8 +92,8 @@ private slots:
         window.hide();
     }
 
-    // O antigo `output_position` migra para o layout: esquerda/direita viram a zona lateral, com a Saída lá dentro.
-    void legacyOutputPositionLeftMigratesToTheLeftZone()
+    // O antigo `output_position` migra para o layout: esquerda/direita viram a primeira/última coluna, com a Saída lá dentro.
+    void legacyOutputPositionLeftMigratesToTheFirstColumn()
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
@@ -109,15 +109,15 @@ private slots:
         auto *terminal = window.findChild<TerminalDrawer *>();
         QVERIFY(terminal != nullptr);
         DockHost *dock = window.dockHost();
-        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone::Left));
-        QCOMPARE(dock->zoneOf(view_id::kCommands), std::optional<Zone>(Zone::Center));
-        QSplitter *outer = splitterOf(dock, Zone::Left);
+        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone{0, 0}));
+        QCOMPARE(dock->zoneOf(view_id::kCommands), std::optional<Zone>(Zone{0, 1}));
+        QSplitter *outer = splitterOf(dock, Zone{0, 0});
         QVERIFY(outer != nullptr);
         QCOMPARE(outer->orientation(), Qt::Horizontal);
-        QVERIFY(dock->zoneWidget(Zone::Left)->isAncestorOf(terminal));
+        QVERIFY(dock->zoneWidget(Zone{0, 0})->isAncestorOf(terminal));
     }
 
-    void legacyOutputPositionRightMigratesToTheRightZone()
+    void legacyOutputPositionRightMigratesToTheLastColumn()
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
@@ -133,9 +133,9 @@ private slots:
         auto *terminal = window.findChild<TerminalDrawer *>();
         QVERIFY(terminal != nullptr);
         DockHost *dock = window.dockHost();
-        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone::Right));
-        QVERIFY(dock->zoneWidget(Zone::Right)->isAncestorOf(terminal));
-        QCOMPARE(splitterOf(dock, Zone::Right)->orientation(), Qt::Horizontal);
+        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone{0, 1}));
+        QVERIFY(dock->zoneWidget(Zone{0, 1})->isAncestorOf(terminal));
+        QCOMPARE(splitterOf(dock, Zone{0, 1})->orientation(), Qt::Horizontal);
     }
 
     // O padrão: a lista à esquerda e a Saída à direita, cada uma com a metade da janela e a faixa de abas à mostra.
@@ -152,21 +152,21 @@ private slots:
         auto *terminal = window.findChild<TerminalDrawer *>();
         QVERIFY(terminal != nullptr);
         DockHost *dock = window.dockHost();
-        QCOMPARE(dock->zoneOf(view_id::kCommands), std::optional<Zone>(Zone::Left));
-        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone::Right));
+        QCOMPARE(dock->zoneOf(view_id::kCommands), std::optional<Zone>(Zone{0, 0}));
+        QCOMPARE(dock->zoneOf(view_id::kOutput), std::optional<Zone>(Zone{0, 1}));
         QSplitter *root = dock->rootSplitter();
         QVERIFY(root != nullptr);
         QCOMPARE(root->orientation(), Qt::Horizontal);
         QCOMPARE(root->count(), 2);
-        QVERIFY(root->indexOf(dock->zoneWidget(Zone::Left)) < root->indexOf(dock->zoneWidget(Zone::Right)));
-        QVERIFY(dock->zoneWidget(Zone::Left)->strip()->isVisibleTo(dock->zoneWidget(Zone::Left)));
-        QVERIFY(dock->zoneWidget(Zone::Right)->strip()->isVisibleTo(dock->zoneWidget(Zone::Right)));
+        QVERIFY(root->indexOf(dock->zoneWidget(Zone{0, 0})) < root->indexOf(dock->zoneWidget(Zone{0, 1})));
+        QVERIFY(dock->zoneWidget(Zone{0, 0})->strip()->isVisibleTo(dock->zoneWidget(Zone{0, 0})));
+        QVERIFY(dock->zoneWidget(Zone{0, 1})->strip()->isVisibleTo(dock->zoneWidget(Zone{0, 1})));
         const QList<int> sizes = root->sizes();
         QVERIFY2(qAbs(double(sizes.at(0)) / (sizes.at(0) + sizes.at(1)) - 0.5) < 0.05,
                  qPrintable(QStringLiteral("%1 / %2").arg(sizes.at(0)).arg(sizes.at(1))));
     }
 
-    // O arranjo clássico (a lista no miolo, a Saída embaixo) continua à mão como perspectiva.
+    // O arranjo clássico (a lista em cima, a Saída embaixo: uma coluna, duas linhas) continua à mão como perspectiva.
     void theClassicPerspectiveKeepsTheOutputBelowTheCommands()
     {
         QTemporaryDir tempDir;
@@ -180,11 +180,11 @@ private slots:
         DockHost *dock = window.dockHost();
         dock->applyLayout(classic());
         QTest::qWait(60);
-        QSplitter *outer = splitterOf(dock, Zone::Bottom);
+        QSplitter *outer = splitterOf(dock, Zone{1, 0});
         QVERIFY(outer != nullptr);
         QCOMPARE(outer->orientation(), Qt::Vertical);
         QCOMPARE(outer->count(), 2);
-        QVERIFY(outer->indexOf(dock->zoneWidget(Zone::Center)) < outer->indexOf(dock->zoneWidget(Zone::Bottom)));
+        QVERIFY(outer->indexOf(dock->zoneWidget(Zone{0, 0})) < outer->indexOf(dock->zoneWidget(Zone{1, 0})));
     }
 
     // "O que eu salvei redimensionando fica": o `output_splitter_sizes` antigo vira a proporção inicial (a da lista).
@@ -208,13 +208,14 @@ private slots:
         DockHost *dock = window.dockHost();
         QSplitter *root = dock->rootSplitter();
         QVERIFY(root != nullptr);
-        QVERIFY(qAbs(dock->model().effectiveSize(Zone::Left) - 0.25) < 1e-6);
+        QVERIFY(qAbs(dock->model().lineSize(0) - 0.25) < 1e-6);
         window.findChild<TerminalDrawer *>()->setExpanded(true);
         QTest::qWait(80);
-        // A lista tem uma largura mínima grande: a proporção pedida (25%) fica no modelo, e na tela vale o mínimo dela.
+        // A barra de ações da lista rola em vez de impor uma largura mínima grande: a proporção pedida (25%) vale na tela.
         const QList<int> sizes = root->sizes();
         QCOMPARE(sizes.size(), 2);
-        QCOMPARE(sizes.at(0), dock->zoneWidget(Zone::Left)->minimumSizeHint().width());
+        const double share = double(sizes.at(0)) / (sizes.at(0) + sizes.at(1));
+        QVERIFY2(qAbs(share - 0.25) < 0.02, qPrintable(QString::number(share)));
     }
 
     // Bug relatado: ao maximizar/minimizar/restaurar a janela, a proporção entre a Saída e a lista de comandos se

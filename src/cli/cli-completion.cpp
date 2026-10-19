@@ -57,7 +57,8 @@ QStringList kipCandidates(const QStringList &wordsAfterKip)
         QStringLiteral("hello"), QStringLiteral("prompt"), QStringLiteral("confirm"), QStringLiteral("patch"),
         QStringLiteral("invalid"), QStringLiteral("message"), QStringLiteral("markdown"), QStringLiteral("progress"),
         QStringLiteral("steps"), QStringLiteral("step"), QStringLiteral("table"), QStringLiteral("notify"),
-        QStringLiteral("set-env"), QStringLiteral("done"), QStringLiteral("chip-result"), QStringLiteral("raw"),
+        QStringLiteral("set-env"), QStringLiteral("done"), QStringLiteral("chip-result"), QStringLiteral("diff"),
+        QStringLiteral("kv"), QStringLiteral("stats"), QStringLiteral("code"), QStringLiteral("raw"),
         QStringLiteral("get"), QStringLiteral("--help"),
     };
     if (wordsAfterKip.isEmpty()) {
@@ -77,19 +78,29 @@ QStringList kipCandidates(const QStringList &wordsAfterKip)
         QStringLiteral("--chip-danger"), QStringLiteral("--chip-requires"), QStringLiteral("--chip-confirm"),
         QStringLiteral("--chip-confirm-title"), QStringLiteral("--chip-confirm-text"),
         QStringLiteral("--chip-confirm-label"), QStringLiteral("--chip-cancel-label"), QStringLiteral("--no-chips"),
+        QStringLiteral("--style"), QStringLiteral("--option-icon"), QStringLiteral("--max-length"),
+        QStringLiteral("--nodes-json"), QStringLiteral("--patch"), QStringLiteral("--patch-file"), QStringLiteral("--select"),
+    };
+    const QStringList rowActionOptions = {
+        QStringLiteral("--row-action"), QStringLiteral("--row-action-icon"), QStringLiteral("--row-action-danger"),
+        QStringLiteral("--row-action-description"), QStringLiteral("--row-action-confirm"),
+        QStringLiteral("--row-action-confirm-title"), QStringLiteral("--row-action-confirm-text"),
+        QStringLiteral("--row-action-confirm-label"), QStringLiteral("--row-action-cancel-label"),
     };
     // Depois de `--field`: os tipos de campo.
     if (wordsAfterKip.size() >= 2 && wordsAfterKip.at(wordsAfterKip.size() - 1) == QStringLiteral("--field")) {
         return {QStringLiteral("text"), QStringLiteral("secret"), QStringLiteral("textarea"), QStringLiteral("number"),
                 QStringLiteral("date"), QStringLiteral("select"), QStringLiteral("list"), QStringLiteral("table"),
-                QStringLiteral("filepick"), QStringLiteral("folderpick"), QStringLiteral("flags")};
+                QStringLiteral("filepick"), QStringLiteral("folderpick"), QStringLiteral("flags"), QStringLiteral("tree"),
+                QStringLiteral("diff")};
     }
     if (verb == QStringLiteral("prompt")) {
         return QStringList{QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--submit-label"),
-                           QStringLiteral("--back"), QStringLiteral("--no-cancel")} + fieldOptions;
+                           QStringLiteral("--back"), QStringLiteral("--no-cancel")} + fieldOptions + rowActionOptions;
     }
     if (verb == QStringLiteral("patch")) {
-        return QStringList{QStringLiteral("--id"), QStringLiteral("--seq"), QStringLiteral("--remove")} + fieldOptions;
+        return QStringList{QStringLiteral("--id"), QStringLiteral("--seq"), QStringLiteral("--remove")} + fieldOptions
+            + rowActionOptions;
     }
     if (verb == QStringLiteral("confirm")) {
         return {QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--text"), QStringLiteral("--danger"),
@@ -107,7 +118,29 @@ QStringList kipCandidates(const QStringList &wordsAfterKip)
                 QStringLiteral("--detail")};
     }
     if (verb == QStringLiteral("table")) {
-        return {QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--column"), QStringLiteral("--rows-json")};
+        return QStringList{QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--column"),
+                           QStringLiteral("--rows-json"), QStringLiteral("--row-key")} + rowActionOptions;
+    }
+    if (verb == QStringLiteral("diff")) {
+        return {QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--patch"), QStringLiteral("--patch-file"),
+                QStringLiteral("--left-file"), QStringLiteral("--right-file"), QStringLiteral("--left-text"),
+                QStringLiteral("--right-text"), QStringLiteral("--left-name"), QStringLiteral("--right-name"),
+                QStringLiteral("--language"), QStringLiteral("--view"), QStringLiteral("--context"),
+                QStringLiteral("--ignore-whitespace"), QStringLiteral("--collapse-after")};
+    }
+    if (verb == QStringLiteral("kv")) {
+        return {QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--item"), QStringLiteral("--format"),
+                QStringLiteral("--tone"), QStringLiteral("--copy")};
+    }
+    if (verb == QStringLiteral("stats")) {
+        return {QStringLiteral("--id"), QStringLiteral("--stat"), QStringLiteral("--detail"), QStringLiteral("--tone")};
+    }
+    if (verb == QStringLiteral("code")) {
+        return {QStringLiteral("--id"), QStringLiteral("--title"), QStringLiteral("--language"), QStringLiteral("--file"),
+                QStringLiteral("--highlight"), QStringLiteral("--max-lines"), QStringLiteral("--no-line-numbers")};
+    }
+    if (verb == QStringLiteral("step")) {
+        return {QStringLiteral("--log")};
     }
     if (verb == QStringLiteral("done")) {
         return {QStringLiteral("--title"), QStringLiteral("--text"), QStringLiteral("--level"), QStringLiteral("--action"),
@@ -118,7 +151,7 @@ QStringList kipCandidates(const QStringList &wordsAfterKip)
                 QStringLiteral("error")};
     }
     if (verb == QStringLiteral("progress")) {
-        return {QStringLiteral("--no-cancel")};
+        return {QStringLiteral("--no-cancel"), QStringLiteral("--id")};
     }
     if (verb == QStringLiteral("chip-result")) {
         // `chip-result <chip> <state> [text]`: depois do chip, os estados.

@@ -11,7 +11,11 @@
 class QListWidget;
 class QLineEdit;
 class QPushButton;
+class QBoxLayout;
 class QCheckBox;
+class QDialogButtonBox;
+class QKeyEvent;
+class QTimer;
 
 namespace kai::ui {
 
@@ -42,10 +46,31 @@ public:
                              core::EnvironmentManager *envManager = nullptr,
                              const QVector<core::Folder> &allFolders = {},
                              std::function<QMap<QString, QMap<QString, QString>>()> loadPersisted = nullptr,
-                             std::function<bool(const QMap<QString, QMap<QString, QString>> &)> savePersisted = nullptr);
+                             std::function<bool(const QMap<QString, QMap<QString, QString>> &)> savePersisted = nullptr,
+                             bool embedded = false);
 
     QVector<core::Environment> environments() const { return m_environments; }
     QString activeEnvironmentId() const { return m_activeEnvironmentId; }
+
+    // Como painel do quadro (a tela do painel Variáveis): sem moldura de diálogo nem OK/Cancelar, e cada edição é entregue
+    // sozinha pelo sinal `changed` (depois de uma pausa na digitação), em vez de só ao fechar com OK.
+    void setEmbedded(bool embedded);
+    bool embedded() const { return m_embedded; }
+    // As pastas do Kai (os escopos das variáveis dinâmicas) mudaram.
+    void setFolders(const QVector<core::Folder> &folders);
+    // Recarrega a lista de fora (o ambiente ativo mudou na barra de cima, por exemplo).
+    void setData(const QVector<core::Environment> &environments, const QString &activeEnvironmentId);
+    // Para os testes.
+    QListWidget *packageList() const { return m_list; }
+    QLineEdit *nameField() const { return m_nameField; }
+
+signals:
+    // Só embutido: os pacotes ou o ativo mudaram (environments()/activeEnvironmentId() já refletem a edição).
+    void changed();
+
+protected:
+    void done(int result) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
     void handleSelectionChanged();
@@ -58,6 +83,7 @@ private:
     void setupUi();
     void reloadList();
     void commitCurrentEditor(); // salva nome+vars do pacote em edição no modelo
+    void scheduleChanged();
     int currentIndex() const;
 
     QVector<core::Environment> m_environments;
@@ -77,6 +103,12 @@ private:
     std::function<QMap<QString, QMap<QString, QString>>()> m_loadPersisted;
     std::function<bool(const QMap<QString, QMap<QString, QString>> &)> m_savePersisted;
     DynamicVarsInspectorWidget *m_dynamicVarsInspector = nullptr;
+
+    QBoxLayout *m_topRow = nullptr;
+    bool m_embedded = false;
+    bool m_loadingEditor = false; // preenchendo o editor ao trocar de pacote: não conta como edição
+    QDialogButtonBox *m_buttonBox = nullptr;
+    QTimer *m_changedTimer = nullptr;
 };
 
 } // namespace kai::ui

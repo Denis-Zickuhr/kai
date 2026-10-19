@@ -61,6 +61,18 @@ using namespace kai::engine;
 // primeiro log), mas `read -p` bloqueia esperando stdin sem
 // necessariamente emitir output capturável antes disso. Confirmado via
 // teste de diagnóstico real com ProcessRunner puro antes da correção.
+
+namespace {
+// Foco inteligente ligado: a seleção na árvore leva a Saída e o Documento (o que estes testes conferem).
+void enableSmartFocus()
+{
+    kai::core::ConfigManager config;
+    kai::core::SettingsData settings = config.loadSettings();
+    settings.smartFocus = true;
+    QVERIFY(config.saveSettings(settings));
+}
+} // namespace
+
 class TestOutputPanelUsability : public QObject {
     Q_OBJECT
 
@@ -84,12 +96,17 @@ private slots:
     {
         MainWindow window;
         const auto cards = window.findChildren<QWidget *>(QStringLiteral("panelCard"));
-        QCOMPARE(cards.size(), 2);
+        QCOMPARE(cards.size(), 3); // a lista, a Saída e o Documento
         auto *drawer = window.findChild<TerminalDrawer *>();
         QVERIFY(drawer != nullptr);
         QVERIFY(cards.contains(drawer));
-        QWidget *treeCard = cards.at(0) == drawer ? cards.at(1) : cards.at(0);
-        QVERIFY(treeCard->isAncestorOf(window.findChild<CommandTreeWidget *>()));
+        QWidget *treeCard = nullptr;
+        for (QWidget *card : cards) {
+            if (card != drawer && card->isAncestorOf(window.findChild<CommandTreeWidget *>())) {
+                treeCard = card;
+            }
+        }
+        QVERIFY(treeCard != nullptr);
 
         // O recuo interno das duas molduras vem do raio dos cantos: o canto
         // quadrado dos filhos não pode cobrir o arco da borda.
@@ -203,7 +220,7 @@ private slots:
     {
         MainWindow window;
         window.dockHost()->applyLayout(kai::ui::layout::LayoutModel::preset(kai::ui::layout::LayoutModel::Preset::Classic));
-        QSplitter *splitter = window.dockHost()->midSplitter();
+        QSplitter *splitter = window.dockHost()->stackSplitter(0);
         QVERIFY(splitter != nullptr);
         QCOMPARE(splitter->objectName(), QStringLiteral("outerSplitter"));
         QVERIFY(splitter->count() == 2);
@@ -372,12 +389,8 @@ private slots:
         window.resize(1280, 760);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        {
-            // A lista no miolo e a Saída à direita: há uma coluna de ações ENTRE as duas.
-            kai::ui::layout::LayoutModel arrangement = kai::ui::layout::LayoutModel::defaultLayout();
-            arrangement.placeView(kai::ui::layout::view_id::kCommands, kai::ui::layout::Zone::Center);
-            window.dockHost()->applyLayout(arrangement);
-        }
+        // A lista à esquerda e a Saída à direita (o padrão): há uma coluna de ações ENTRE as duas.
+        window.dockHost()->applyLayout(kai::ui::layout::LayoutModel::defaultLayout());
         QTest::qWait(50);
 
         auto *actionsSplitter = window.findChild<QSplitter *>(QStringLiteral("actionsSplitter"));
@@ -1283,6 +1296,7 @@ private slots:
         ConfigManager manager;
         QVERIFY(manager.saveCommands(data));
 
+        enableSmartFocus();
         MainWindow window;
         auto *drawer = window.findChild<TerminalDrawer *>();
         auto *panel = drawer ? drawer->findChild<OutputPanel *>() : nullptr;
@@ -1358,6 +1372,7 @@ private slots:
         ConfigManager manager;
         QVERIFY(manager.saveCommands(data));
 
+        enableSmartFocus();
         MainWindow window;
         auto *drawer = window.findChild<TerminalDrawer *>();
         auto *tree = window.findChild<CommandTreeWidget *>();

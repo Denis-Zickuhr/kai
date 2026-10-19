@@ -215,11 +215,13 @@ secret-hiding switch); weak tool-calling in small local models
 (`supports_tools` fallback); keys in plain text at rest until **A1**.
 
 ### A12. Flexible panel layout (medium value / high effort) — **implemented** (see [Panels & layout](layout.md))
-The window is a board of movable panels (Commands, Output, Document, Processes, History, Notifications, Variables, AI chat):
-four zones, tab groups, drag between zones, floating windows, maximize, collapse to the side, perspectives, run panels side by
-side and pinned KIP commands. Own light implementation (no docking library). Still open: tying a perspective to a project
-(would be opt-in and off by default), per-monitor layouts, and a free N-way grid (the alternative would be the Qt Advanced
-Docking System).
+The window is a board of movable panels (Commands, Output, Document, Processes, History, Notifications, Variables, AI chat) on
+a **grid of columns × rows** (1–5 each, default 2 × 2) whose empty cells are absorbed by their neighbours (vertical or
+horizontal fill): tab groups, split cells, drag between cells (a floating-window pill included), floating windows, maximize,
+collapse the edge cells into icon strips, perspectives, run panels side by side and pinned KIP commands; in a small window the
+board scrolls instead of squeezing the panels. Own light implementation (no docking library). Still open: tying a perspective
+to a project (would be opt-in and off by default), per-monitor layouts, and cells that span several rows/columns (the
+alternative would be the Qt Advanced Docking System).
 
 ---
 

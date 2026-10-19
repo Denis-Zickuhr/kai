@@ -1,5 +1,6 @@
 #include "core/folder-actions.h"
 #include "core/working-dir.h"
+#include "ui/features/docs/document-panel.h"
 #include "ui/features/docs/note-dialog.h"
 #include "ui/main-window.h"
 
@@ -247,6 +248,7 @@ MainWindow::MainWindow(QWidget *parent)
     utils::TranslationManager::instance().loadLanguage(initialSettings.language);
     m_outputMaxLogSizeChars = qMax(1, initialSettings.outputMaxLogSizeKb) * 1024;
     m_globalActions = initialSettings.globalActions;
+    m_smartFocus = initialSettings.smartFocus;
 
     setupUi();
     setupToolbar();
@@ -280,6 +282,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_mcpBridge = new McpBridge(m_agentHost, this);
     refreshAiAvailability();
     restoreLayoutFromDisk();
+    // Depois do layout (o painel do app precisa estar no quadro) e das conexões abaixo (a sessão precisa achar o painel).
+    QTimer::singleShot(0, this, &MainWindow::autoStartKipPanels);
 
     connect(m_pipeline, &engine::ExecutionPipeline::logMessage, this, &MainWindow::handlePipelineLog);
     connect(m_pipeline, &engine::ExecutionPipeline::pipelineFinished, this, &MainWindow::handlePipelineFinished);
@@ -345,7 +349,16 @@ struct MainWindow::ActionRun {
     QDateTime startedAt;
 };
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // Os painéis de execução morrem com os filhos da janela, DEPOIS dos membros: o aviso de `destroyed` deles mexe em
+    // m_mirrors e na Saída, que a essa altura já não existem.
+    for (const QPointer<RunMirrorPanel> &panel : std::as_const(m_mirrors)) {
+        if (panel) {
+            disconnect(panel, &QObject::destroyed, nullptr, nullptr);
+        }
+    }
+}
 
 void MainWindow::connectPipelineAuxSignals(engine::ExecutionPipeline *pipeline)
 {
@@ -489,13 +502,6 @@ void MainWindow::setupUi()
     connect(m_topBar, &TopUtilityBar::closeRequested, this, &MainWindow::close);
     connect(m_topBar, &TopUtilityBar::moveRequested, this, &MainWindow::handleWindowMoveRequested);
 
-    m_searchBar = new FuzzySearchBar(central);
-    connect(m_searchBar, &FuzzySearchBar::queryChanged, this, &MainWindow::handleFilterQueryChanged);
-    // Busca oculta por padrão (feedback do usuário): aparece e
-    // autofoca ao pressionar o atalho de toggle (Ctrl+F por padrão,
-    // remapeável), controlado por setupActionShortcuts/toggleSearchBar.
-    m_searchBar->setVisible(false);
-
     m_commandTree = new CommandTreeWidget(central);
     {
         // Plano de fundo da aba de comandos (imagem + opacidade), se salvo.
@@ -618,8 +624,6 @@ void MainWindow::setupUi()
             m_configManager.saveCommands(m_commandsData); // sem reloadCommandTree
         }
     });
-    connect(m_searchBar, &FuzzySearchBar::navigateToListRequested, m_commandTree,
-        static_cast<void (CommandTreeWidget::*)()>(&CommandTreeWidget::focusFirstVisibleItem));
     connect(m_commandTree, &CommandTreeWidget::selectionChanged, this,
         [this](const QString &itemId, bool isFolder) {
             if (isNoteId(itemId)) {
@@ -631,12 +635,36 @@ void MainWindow::setupUi()
     // Clicar de novo no item que JÁ está selecionado não emite selectionChanged: se a saída mostra outro comando
     // (um KIP iniciado sem passar pela árvore), o primeiro clique tem que trazer a saída deste.
     connect(m_commandTree, &CommandTreeWidget::commandClicked, this, [this](const QString &commandId) {
+        if (!m_smartFocus) {
+            return;
+        }
         if (commandId != m_connectedTerminalCommandId) {
             handleCommandSelectionChanged(commandId, false);
+        }
+        revealViewQuietly(layout::view_id::kOutput); // já selecionado e com a aba do Documento à frente: volta a Saída
+    });
+    // O mesmo para a pasta (ou nota) já selecionada: o clique traz o Documento de volta à frente.
+    connect(m_commandTree, &CommandTreeWidget::folderClicked, this, [this](const QString &itemId) {
+        if (isNoteId(itemId)) {
+            showDocumentPanel();
+        } else if (!m_smartFocus) {
+            return;
+        } else if (itemId == m_docFolderId) {
+            if (m_documentPanel && m_documentPanel->documentMode()) { // pasta sem nada a mostrar não leva à aba vazia
+                revealViewQuietly(layout::view_id::kDocument);
+            }
+        } else {
+            handleCommandSelectionChanged(itemId, true);
         }
     });
     connect(m_commandTree, &CommandTreeWidget::folderActionActivated, this, &MainWindow::handleFolderActionActivated);
     connect(m_commandTree, &CommandTreeWidget::folderActionContextRequested, this, &MainWindow::showFolderActionMenu);
+    // Sem o foco inteligente, a saída e o documento vêm pelo menu do item (e pelos botões do grupo Execução).
+    m_commandTree->setFocusPredicates([this](const QString &commandId) { return !m_smartFocus && canShowOutput(commandId); },
+                                      [this](const QString &itemId) { return !m_smartFocus && !documentTargetFor(itemId).isEmpty(); });
+    connect(m_commandTree, &CommandTreeWidget::commandOutputRequested, this, &MainWindow::showCommandOutput);
+    connect(m_commandTree, &CommandTreeWidget::documentRequested, this, &MainWindow::showDocumentFor);
+    m_commandTree->setOutputMarksEnabled(!m_smartFocus);
 
     m_actionSidebar = new ActionSidebar(central);
     connect(m_actionSidebar, &ActionSidebar::playSelectedRequested, this, &MainWindow::triggerPlaySelected);
@@ -644,84 +672,34 @@ void MainWindow::setupUi()
     connect(m_actionSidebar, &ActionSidebar::forceStopSelectedRequested, this, &MainWindow::triggerForceStopSelected);
     connect(m_actionSidebar, &ActionSidebar::resetSelectedRequested, this, &MainWindow::triggerResetSelected);
     connect(m_actionSidebar, &ActionSidebar::editBodySelectedRequested, this, &MainWindow::triggerEditBodySelected);
+    connect(m_actionSidebar, &ActionSidebar::showOutputSelectedRequested, this, [this]() {
+        const QString id = m_commandTree->currentSelectionId();
+        if (canShowOutput(id)) {
+            showCommandOutput(id);
+        }
+    });
+    connect(m_actionSidebar, &ActionSidebar::showDocumentSelectedRequested, this,
+            [this]() { showDocumentFor(m_commandTree->currentSelectionId()); });
 
     m_terminalDrawer = new TerminalDrawer(central);
     connect(m_terminalDrawer, &TerminalDrawer::commandEntered, this, &MainWindow::handleTerminalInputEntered);
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentKaiLinkActivated, this, &MainWindow::handleDocKaiLink);
-    // Um documento passou a ser mostrado no painel próprio: ele sobe para a frente da zona dele.
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentModeEntered, this, [this]() {
-        if (m_dock && m_dock->model().isPlaced(layout::view_id::kDocument)) {
-            m_dock->revealView(layout::view_id::kDocument);
-        }
-    });
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentDirectoryFixAutomatically, this,
-            [this](const QString &dir, const QString &suggestion) { fixDocDirectory(true, dir, suggestion); });
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentDirectoryFixManually, this,
-            [this](const QString &dir) { fixDocDirectory(false, dir, QString()); });
-    // Os nomes do autocompletar dos links do Kai no editor de documentos (`kai:run/`, `kai:open/`, `kai:env/`). Os
-    // ambientes vêm do disco: ficam em cache por alguns segundos para a digitação não reler o arquivo a cada tecla.
-    {
-        struct EnvironmentCache {
-            QStringList names;
-            QElapsedTimer age;
-        };
-        auto cache = std::make_shared<EnvironmentCache>();
-        m_terminalDrawer->embeddedPanel()->setDocNameProvider([this, cache](const QString &kind) {
-            QStringList names;
-            if (kind == QLatin1String("commands")) {
-                for (const core::Command &command : std::as_const(m_commandsData.commands)) {
-                    if (!command.name.isEmpty() && !core::isFolderActionCommandId(command.id)) {
-                        names << command.name;
-                    }
-                }
-            } else if (kind == QLatin1String("folders")) {
-                for (const core::Folder &folder : std::as_const(m_commandsData.folders)) {
-                    if (!folder.name.isEmpty()) {
-                        names << folder.name;
-                    }
-                }
-            } else if (kind == QLatin1String("environments")) {
-                if (!cache->age.isValid() || cache->age.elapsed() > 4000) {
-                    QString active;
-                    cache->names = environmentNames(active);
-                    cache->age.restart();
-                }
-                names = cache->names;
-            }
-            return names;
-        });
-    }
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentNewNoteRequested, this, &MainWindow::handleNewNoteRequested);
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentNoteDeleteRequested, this, &MainWindow::handleNoteDeleteRequested);
-    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::documentNoteFileActionRequested, this, &MainWindow::exportNote);
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::saveAsNoteRequested, this,
             [this]() { saveOutputAsNote(m_connectedTerminalCommandId); });
     // A memória do leitor de documentos: onde o usuário parou em cada arquivo, o texto ainda não salvo e os recentes. Lida
     // em segundo plano; ao sair, o que o leitor tem na tela é guardado e o arquivo é gravado.
     m_docStore = new DocSessionStore(m_configManager.docStateFilePath(), this);
     m_docStore->load();
-    m_terminalDrawer->embeddedPanel()->setDocSessionStore(m_docStore);
     connect(m_docStore, &DocSessionStore::draftsChanged, this, &MainWindow::refreshDraftMarks);
     connect(m_docStore, &DocSessionStore::loaded, this, &MainWindow::refreshDraftMarks);
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
-        m_terminalDrawer->embeddedPanel()->captureDocumentState();
+        if (m_documentPanel) {
+            m_documentPanel->captureState();
+        }
         m_docStore->flush();
     });
-    // Notas editadas no leitor: quem grava é o app (notes.json).
-    m_terminalDrawer->embeddedPanel()->setNoteSaver([this](const QString &noteId, const QString &content) {
-        for (core::Note &note : m_notes) {
-            if (note.id == noteId) {
-                note.content = content;
-                return m_configManager.saveNotes(m_notes);
-            }
-        }
-        return false;
-    });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabActivated, this, &MainWindow::activateOutputTab);
-    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::commandsToggleRequested, this,
-            [this]() { setCommandsCollapsed(!m_commandsCollapsed); });
+    m_terminalDrawer->outputTabs()->setQuickRunVisible(true);
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::quickRunRequested, this, &MainWindow::showQuickRun);
-    connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::docsRequested, this, &MainWindow::showDocsMenu);
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabCloseRequested, this, &MainWindow::closeOutputTab);
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabMoved, this, [this](const QString &id, int newIndex) {
         // O usuário arrastou a guia: a ordem da barra passa a valer para a sessão.
@@ -742,7 +720,12 @@ void MainWindow::setupUi()
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabDragFinished, this,
             [this](const QString &id, Qt::DropAction action, const QPoint &globalPos) {
         if (m_dock) {
-            m_dock->endViewDrag(layout::view_id::kRunPrefix + id, action, globalPos);
+            const QString panelId = panelIdForCommand(id);
+            m_dock->endViewDrag(panelId, action, globalPos);
+            // Um app KIP posto num painel vira mini app: abre sozinho com o Kai (dá para desligar no menu do painel).
+            if (panelId.startsWith(layout::view_id::kKipPrefix) && m_dock->model().isPlaced(panelId)) {
+                setKipPanelAutoStart(id, true);
+            }
         }
     });
     // O cartão "aberto em outro lugar" do painel embutido: leva a atenção ao painel fixado do comando.
@@ -911,7 +894,6 @@ void MainWindow::setupUi()
     auto *mainAreaLayout = new QVBoxLayout(m_mainAreaWrapper);
     mainAreaLayout->setContentsMargins(0, 0, 0, 0);
     mainAreaLayout->setSpacing(12);
-    mainAreaLayout->addWidget(m_searchBar);
     mainAreaLayout->addWidget(m_horizontalSplitter, 1);
 
     layout->addWidget(m_topBar);
@@ -954,8 +936,8 @@ void MainWindow::setupUi()
     QTimer::singleShot(300, this, &MainWindow::scheduleAutoRunCommands);
     // Com a interface ociosa, deixa o leitor de documentos pronto: a primeira pasta com documentação abre sem o custo de montá-lo.
     QTimer::singleShot(1500, this, [this]() {
-        if (OutputPanel *panel = m_terminalDrawer->embeddedPanel()) {
-            panel->prepareDocumentViewer();
+        if (m_documentPanel) {
+            m_documentPanel->prepareViewer();
         }
     });
 
@@ -1090,19 +1072,28 @@ void MainWindow::setupToolbar()
     // plano): passa pelo mesmo caminho do botão Parar da árvore.
     connect(m_processListDialog, &ProcessListDialog::stopRequested, this,
             [this](const QString &commandId, bool force) { handleKillCommandRequested(commandId, force); });
-    connect(m_processListDialog, &ProcessListDialog::commandRequested, this,
-            [this](const QString &commandId) {
-                showAndRaise();
-                m_commandTree->selectCommand(commandId);
-            });
+    connect(m_processListDialog, &ProcessListDialog::commandRequested, this, &MainWindow::showCommandInTree);
     // Alimenta a lista com os processos de FOREGROUND (registry do pipeline),
     // além dos de background do ProcessManager. Sem isso, quem roda comandos
     // normais via um diálogo sempre vazio.
-    // Nomes de exibição de TODOS os comandos: o provedor de foreground entrega
-    // apenas ids, e sem o nome a lista mostraria o id cru.
-    for (const core::Command &c : m_commandsData.commands) {
-        m_processListDialog->setCommandName(c.id, c.name);
-    }
+    // Nome, pasta e início de cada linha, resolvidos na hora: os provedores entregam só ids (e os comandos carregam depois
+    // desta tela nascer; as ações de pasta têm ids virtuais).
+    m_processListDialog->setLabelProvider([this](const QString &id) {
+        ProcessListDialog::Label label;
+        QString folderId;
+        if (const auto actionIds = core::parseFolderActionCommandId(id)) {
+            label.name = m_commandsById.value(actionIds->commandId).name;
+            folderId = actionIds->folderId;
+        } else if (const auto it = m_commandsById.constFind(id); it != m_commandsById.constEnd()) {
+            label.name = it->name;
+            folderId = it->folderId;
+        }
+        if (!label.name.isEmpty() && !folderId.isEmpty()) {
+            label.where = folderDisplayName(folderId);
+        }
+        label.startedAt = m_commandTree ? m_commandTree->runStartedAt(id) : QDateTime();
+        return label;
+    });
     m_processListDialog->setForegroundProvider([this]() {
         QList<QPair<QString, qint64>> running;
         for (const QString &id : allPipelineRunningCommandIds()) {
@@ -1347,7 +1338,11 @@ void MainWindow::setupActionShortcuts()
                 && m_terminalDrawer->focusSearch()) {
                 return;
             }
-            toggleSearchBar();
+            if (m_documentPanel && m_documentPanel->isVisible()
+                && m_documentPanel->isAncestorOf(QApplication::focusWidget()) && m_documentPanel->focusSearch()) {
+                return;
+            }
+            showFindPalette();
         }},
         {QStringLiteral("action.context_menu"), [this]() { m_commandTree->openContextMenuForCurrent(); }},
         {QStringLiteral("action.focus_output"), [this]() { toggleOutputFocus(); }},
@@ -1435,29 +1430,6 @@ void MainWindow::setupActionShortcuts()
         utils::firstShortcutFor(settings, QStringLiteral("action.focus_output"))).toString(QKeySequence::NativeText);
     if (m_terminalDrawer) {
         m_terminalDrawer->setInputShortcutHint(focusOutputHint);
-    }
-}
-
-void MainWindow::toggleSearchBar()
-{
-    const bool willShow = !m_searchBar->isVisible();
-    if (m_commandsCollapsed) {
-        // A busca é da lista: traz a lista de volta (e, com a busca já aberta, só devolve o foco a ela).
-        setCommandsCollapsed(false);
-        if (!willShow) {
-            m_searchBar->setFocus();
-            return;
-        }
-    }
-    m_searchBar->setVisible(willShow);
-    if (willShow) {
-        // Ao exibir, autofoca para o usuário já digitar.
-        m_searchBar->setFocus();
-    } else {
-        // Ao ocultar, limpa o filtro para não deixar a árvore filtrada
-        // "invisivelmente" e devolve o foco à árvore.
-        m_searchBar->clear();
-        m_commandTree->focusFirstVisibleItem();
     }
 }
 
@@ -1662,18 +1634,43 @@ void MainWindow::syncPanelBarHeights()
     }
 }
 
-// A zona lateral (esquerda/direita) onde a Saída está ao lado do miolo da lista de comandos, ou nada. É o único arranjo
-// em que existe uma coluna de ações ENTRE a lista e a Saída (ver updateTreeBorderResizeHandles).
-static std::optional<layout::Zone> outputSideBesideCommands(const layout::DockHost *dock)
+// A célula da Saída quando ela está colada à da lista de comandos, lado a lado (vizinhas no mesmo divisor horizontal), e de
+// que lado da lista ela fica. É o único arranjo em que existe uma coluna de ações ENTRE a lista e a Saída (ver
+// updateTreeBorderResizeHandles).
+struct OutputBesideCommands {
+    layout::Zone zone;
+    bool onLeft = false;
+};
+
+static std::optional<OutputBesideCommands> outputSideBesideCommands(const layout::DockHost *dock)
 {
     if (!dock) {
         return std::nullopt;
     }
     const auto output = dock->zoneOf(layout::view_id::kOutput);
     const auto commands = dock->zoneOf(layout::view_id::kCommands);
-    if (output && commands && *commands == layout::Zone::Center
-        && (*output == layout::Zone::Left || *output == layout::Zone::Right)) {
-        return output;
+    if (!output || !commands || *output == *commands || !dock->zoneWidget(*output) || !dock->zoneWidget(*commands)) {
+        return std::nullopt;
+    }
+    const layout::GridPlan &plan = dock->plan();
+    const auto locate = [&plan](layout::Zone zone) -> std::pair<int, int> {
+        for (int s = 0; s < plan.stacks.size(); ++s) {
+            const int c = int(plan.stacks.at(s).cells.indexOf(zone));
+            if (c >= 0) {
+                return {s, c};
+            }
+        }
+        return {-1, -1};
+    };
+    const auto [os, oc] = locate(*output);
+    const auto [cs, cc] = locate(*commands);
+    if (os < 0 || cs < 0) {
+        return std::nullopt;
+    }
+    // Modo vertical: as pilhas são colunas, vizinhas se são consecutivas; horizontal: as células de uma linha.
+    const bool columns = plan.expansion == layout::Expansion::Vertical;
+    if (columns ? std::abs(os - cs) == 1 : (os == cs && std::abs(oc - cc) == 1)) {
+        return OutputBesideCommands{*output, columns ? os < cs : oc < cc};
     }
     return std::nullopt;
 }
@@ -1688,8 +1685,8 @@ void MainWindow::updateTreeBorderResizeHandles()
     const auto side = outputSideBesideCommands(m_dock);
     struct Border { int handleIndex; bool active; };
     const Border borders[] = {
-        {1, side == layout::Zone::Left && !m_leftActionsContainer->isHidden()},
-        {2, side == layout::Zone::Right && !m_sideActionsContainer->isHidden()},
+        {1, side && side->onLeft && !m_leftActionsContainer->isHidden()},
+        {2, side && !side->onLeft && !m_sideActionsContainer->isHidden()},
     };
     for (const Border &border : borders) {
         QSplitterHandle *handle = m_horizontalSplitter->handle(border.handleIndex);
@@ -1717,12 +1714,12 @@ void MainWindow::dragTreeBorder(bool press, int globalX)
     }
     if (press) {
         m_treeDragStartX = globalX;
-        m_treeDragStartWidth = m_dock->zoneWidth(*side);
+        m_treeDragStartWidth = m_dock->zoneWidth(side->zone);
         return;
     }
     // Arrastar a borda para a direita alarga a lateral ESQUERDA (a Saída) ou encolhe a DIREITA (a Saída à direita).
     const int delta = globalX - m_treeDragStartX;
-    m_dock->setZoneWidth(*side, *side == layout::Zone::Left ? m_treeDragStartWidth + delta : m_treeDragStartWidth - delta);
+    m_dock->setZoneWidth(side->zone, side->onLeft ? m_treeDragStartWidth + delta : m_treeDragStartWidth - delta);
 }
 
 void MainWindow::setupLayout()
@@ -1734,14 +1731,14 @@ void MainWindow::setupLayout()
     commands.id = view_id::kCommands;
     commands.titleKey = QStringLiteral("layout.view.commands");
     commands.icon = QStringLiteral("folder-tree");
-    commands.defaultZone = Zone::Left;
+    commands.home = Home::Primary;
     m_viewRegistry->registerView(commands, m_mainAreaWrapper);
 
     ViewSpec output;
     output.id = view_id::kOutput;
     output.titleKey = QStringLiteral("layout.view.output");
     output.icon = QStringLiteral("square-terminal");
-    output.defaultZone = Zone::Right;
+    output.home = Home::Secondary;
     output.minWidth = 220;
     m_viewRegistry->registerView(output, m_terminalDrawer);
     // Largura mínima do painel de Saída: o conteúdo (linhas de log, abas Headers/JSON) foi desenhado supondo uma barra
@@ -1762,9 +1759,8 @@ void MainWindow::setupLayout()
     connect(m_dock, &DockHost::restoreRequested, this, &MainWindow::restoreDefaultLayout);
     connect(m_dock, &DockHost::arrangementChanged, this, [this]() {
         applyDrawerPosition();
-        updateDocumentHost();
+        syncDocumentPlacement();
         updateTreeBorderResizeHandles();
-        updateCommandsToggle();
     });
     connect(m_topBar->viewMenu(), &QMenu::aboutToShow, this,
             [this]() { m_layoutController->populateViewMenu(m_topBar->viewMenu()); });
@@ -1806,36 +1802,106 @@ void MainWindow::restoreLayoutFromDisk()
     }
 }
 
+// O painel Documento: nasce com o app (o leitor em si só é montado no primeiro documento) e é registrado já pronto; o
+// quadro o põe numa zona ou o guarda enquanto estiver fechado.
+QWidget *MainWindow::createDocumentPanel()
+{
+    m_documentPanel = new DocumentPanel;
+    m_documentPanel->setSessionStore(m_docStore);
+    connect(m_documentPanel, &DocumentPanel::documentKaiLinkActivated, this, &MainWindow::handleDocKaiLink);
+    connect(m_documentPanel, &DocumentPanel::documentDirectoryFixAutomatically, this,
+            [this](const QString &dir, const QString &suggestion) { fixDocDirectory(true, dir, suggestion); });
+    connect(m_documentPanel, &DocumentPanel::documentDirectoryFixManually, this,
+            [this](const QString &dir) { fixDocDirectory(false, dir, QString()); });
+    connect(m_documentPanel, &DocumentPanel::documentFoldersRequested, this, &MainWindow::showDocsMenu);
+    connect(m_documentPanel, &DocumentPanel::documentNewNoteRequested, this, &MainWindow::handleNewNoteRequested);
+    connect(m_documentPanel, &DocumentPanel::documentNoteDeleteRequested, this, &MainWindow::handleNoteDeleteRequested);
+    connect(m_documentPanel, &DocumentPanel::documentNoteFileActionRequested, this, &MainWindow::exportNote);
+    // Os nomes do autocompletar dos links do Kai no editor de documentos (`kai:run/`, `kai:open/`, `kai:env/`). Os
+    // ambientes vêm do disco: ficam em cache por alguns segundos para a digitação não reler o arquivo a cada tecla.
+    struct EnvironmentCache {
+        QStringList names;
+        QElapsedTimer age;
+    };
+    auto cache = std::make_shared<EnvironmentCache>();
+    m_documentPanel->setNameProvider([this, cache](const QString &kind) {
+        QStringList names;
+        if (kind == QLatin1String("commands")) {
+            for (const core::Command &command : std::as_const(m_commandsData.commands)) {
+                if (!command.name.isEmpty() && !core::isFolderActionCommandId(command.id)) {
+                    names << command.name;
+                }
+            }
+        } else if (kind == QLatin1String("folders")) {
+            for (const core::Folder &folder : std::as_const(m_commandsData.folders)) {
+                if (!folder.name.isEmpty()) {
+                    names << folder.name;
+                }
+            }
+        } else if (kind == QLatin1String("environments")) {
+            if (!cache->age.isValid() || cache->age.elapsed() > 4000) {
+                QString active;
+                cache->names = environmentNames(active);
+                cache->age.restart();
+            }
+            names = cache->names;
+        }
+        return names;
+    });
+    // Notas editadas no leitor: quem grava é o app (notes.json).
+    m_documentPanel->setNoteSaver([this](const QString &noteId, const QString &content) {
+        for (core::Note &note : m_notes) {
+            if (note.id == noteId) {
+                note.content = content;
+                return m_configManager.saveNotes(m_notes);
+            }
+        }
+        return false;
+    });
+    QWidget *card = layout::wrapInPanelCard(m_documentPanel);
+    card->setParent(m_content);
+    return card;
+}
+
 // Os painéis que antes eram diálogos (processos, histórico, notificações, chat de IA) e o inspetor de variáveis. Cada um é
 // construído sob demanda, na primeira vez que aparece; o conteúdo é o mesmo de antes, só que sem a moldura de diálogo.
 void MainWindow::registerPanelViews()
 {
     using namespace layout;
-    const auto base = [](const QString &id, const char *titleKey, const char *icon, Zone zone) {
+    // A largura que cada painel de formulário precisa para ficar legível: abaixo disso o quadro (e depois o próprio painel)
+    // rola em vez de espremer os botões e os textos.
+    constexpr int kProcessesMinWidth = 300;
+    constexpr int kHistoryMinWidth = 400;
+    constexpr int kNotificationsMinWidth = 400;
+    constexpr int kVariablesMinWidth = 520;
+    constexpr int kAiChatMinWidth = 360;
+    const auto base = [](const QString &id, const char *titleKey, const char *icon, Home home) {
         ViewSpec spec;
         spec.id = id;
         spec.titleKey = QString::fromLatin1(titleKey);
         spec.icon = QString::fromLatin1(icon);
-        spec.defaultZone = zone;
+        spec.home = home;
         return spec;
     };
 
-    // O leitor de documentos (README das pastas, notas) num painel próprio: dá para ler o documento enquanto o comando
-    // roda. Fechado (o padrão), o leitor continua dentro da Saída, como sempre foi.
-    ViewSpec document = base(view_id::kDocument, "layout.view.document", "file-text", Zone::Right);
-    document.factory = []() -> QWidget * { return wrapInPanelCard(nullptr); };
-    m_viewRegistry->registerView(document);
+    // O leitor de documentos (README das pastas, notas): o painel Documento, aba ao lado da Saída no padrão. Segue a
+    // seleção da árvore sem tocar na Saída; arrastado para outra zona, os dois ficam lado a lado.
+    ViewSpec document = base(view_id::kDocument, "layout.view.document", "file-text", Home::Secondary);
+    document.focus = [this]() { m_documentPanel->focusContent(); };
+    m_viewRegistry->registerView(document, createDocumentPanel());
 
-    ViewSpec processes = base(view_id::kProcesses, "layout.view.processes", "activity", Zone::Right);
+    ViewSpec processes = base(view_id::kProcesses, "layout.view.processes", "activity", Home::Secondary);
+    processes.minWidth = kProcessesMinWidth;
     processes.factory = [this]() -> QWidget * {
         m_processListDialog->setEmbedded(true);
-        QWidget *card = wrapInPanelCard(m_processListDialog);
+        QWidget *card = wrapInPanelCard(m_processListDialog, QSize(kProcessesMinWidth, 240));
         m_processListDialog->show(); // tinha sido escondido na criação; agora aparece junto com o cartão
         return card;
     };
     m_viewRegistry->registerView(processes);
 
-    ViewSpec history = base(view_id::kHistory, "layout.view.history", "clock", Zone::Right);
+    ViewSpec history = base(view_id::kHistory, "layout.view.history", "clock", Home::Secondary);
+    history.minWidth = kHistoryMinWidth;
     history.factory = [this]() -> QWidget * {
         auto *panel = new RunHistoryDialog(&m_runHistory, nullptr, true);
         connect(panel, &RunHistoryDialog::rerunRequested, this, [this](const QString &commandId) {
@@ -1846,11 +1912,12 @@ void MainWindow::registerPanelViews()
                     QStringLiteral("Reexecução: comando '%1' não existe mais.").arg(commandId));
             }
         });
-        return wrapInPanelCard(panel);
+        return wrapInPanelCard(panel, QSize(kHistoryMinWidth, 320));
     };
     m_viewRegistry->registerView(history);
 
-    ViewSpec notifications = base(view_id::kNotifications, "layout.view.notifications", "bell", Zone::Right);
+    ViewSpec notifications = base(view_id::kNotifications, "layout.view.notifications", "bell", Home::Secondary);
+    notifications.minWidth = kNotificationsMinWidth;
     notifications.factory = [this]() -> QWidget * {
         auto *panel = new NotificationHistoryDialog(&m_notificationHistory, nullptr, true);
         // "Ir para o comando" só aparece enquanto o comando ainda existe.
@@ -1858,34 +1925,39 @@ void MainWindow::registerPanelViews()
             const auto it = m_commandsById.constFind(commandId);
             return it != m_commandsById.constEnd() ? it->name : QString();
         });
-        connect(panel, &NotificationHistoryDialog::commandRequested, this, [this](const QString &commandId) {
-            m_commandTree->selectCommand(commandId);
-        });
-        return wrapInPanelCard(panel);
+        connect(panel, &NotificationHistoryDialog::commandRequested, this, &MainWindow::showCommandInTree);
+        return wrapInPanelCard(panel, QSize(kNotificationsMinWidth, 240));
     };
     m_viewRegistry->registerView(notifications);
 
-    ViewSpec variables = base(view_id::kVariables, "layout.view.variables", "variable", Zone::Right);
+    // Variáveis: a MESMA tela que o seletor de ambientes da barra de cima abre (os pacotes de variáveis e, na outra aba, as
+    // variáveis dinâmicas), agora como painel: as edições valem sozinhas, sem OK/Cancelar.
+    ViewSpec variables = base(view_id::kVariables, "layout.view.variables", "variable", Home::Secondary);
+    variables.minWidth = kVariablesMinWidth;
     variables.factory = [this]() -> QWidget * {
-        auto *inspector = new DynamicVarsInspectorWidget(
-            m_envManager, m_commandsData.folders,
+        const core::SettingsData settings = m_configManager.loadSettings();
+        m_environmentsPanel = new EnvironmentManagerDialog(
+            settings.environments, settings.activeEnvironmentId, nullptr, &m_envManager, m_commandsData.folders,
             [this]() { return m_configManager.loadPersistedDynamicVars(); },
             [this](const QMap<QString, QMap<QString, QString>> &data) {
                 return m_configManager.savePersistedDynamicVars(data);
-            });
-        inspector->setObjectName(QStringLiteral("variablesInspector"));
-        return wrapInPanelCard(inspector);
+            },
+            true);
+        m_environmentsPanel->setObjectName(QStringLiteral("variablesPanel"));
+        connect(m_environmentsPanel, &EnvironmentManagerDialog::changed, this, &MainWindow::saveEnvironmentsFromPanel);
+        return wrapInPanelCard(m_environmentsPanel, QSize(kVariablesMinWidth, 420));
     };
     m_viewRegistry->registerView(variables);
 
     // O chat de IA só existe com um provedor configurado (sem provedor: nenhum botão, nenhum painel, nenhuma rede).
     m_aiConfigured = m_configManager.loadAiSettings().isConfigured();
-    ViewSpec aiChat = base(view_id::kAiChat, "layout.view.ai_chat", "sparkles", Zone::Right);
+    ViewSpec aiChat = base(view_id::kAiChat, "layout.view.ai_chat", "sparkles", Home::Secondary);
+    aiChat.minWidth = kAiChatMinWidth;
     aiChat.available = [this]() { return m_aiConfigured; };
     aiChat.factory = [this]() -> QWidget * {
         m_aiChat = new AiChatWindow(m_agentHost, nullptr, true);
         m_aiChat->setEmbedded(true);
-        return wrapInPanelCard(m_aiChat);
+        return wrapInPanelCard(m_aiChat, QSize(kAiChatMinWidth, 300));
     };
     m_viewRegistry->registerView(aiChat);
 }
@@ -1908,8 +1980,17 @@ void MainWindow::registerRunViews()
             const auto found = m_commandsById.constFind(commandId);
             return found != m_commandsById.constEnd() ? found->name : commandId;
         };
-        view.icon = kip ? QStringLiteral("sparkles") : QStringLiteral("square-terminal");
-        view.defaultZone = Zone::Right;
+        // O ícone do próprio comando (um app KIP no painel continua com a cara dele); sem um do pool, o padrão.
+        view.icon = LucideIcons::has(it->icon) ? it->icon : kip ? QStringLiteral("sparkles") : QStringLiteral("square-terminal");
+        if (kip) {
+            view.menuExtras = [this, commandId](QMenu *menu) {
+                QAction *autoStart = menu->addAction(utils::tr(QStringLiteral("layout.kip_panel.auto_start")));
+                autoStart->setCheckable(true);
+                autoStart->setChecked(kipPanelAutoStarts(commandId));
+                connect(autoStart, &QAction::toggled, this, [this, commandId](bool on) { setKipPanelAutoStart(commandId, on); });
+            };
+        }
+        view.home = Home::Secondary;
         view.factory = [this, commandId, kip]() -> QWidget * { return createMirrorPanel(commandId, kip); };
         return view;
     };
@@ -1927,19 +2008,84 @@ QWidget *MainWindow::createMirrorPanel(const QString &commandId, bool kip)
     panel->applyBarHeight(embedded->barHeight());
     panel->seed(embedded, m_commandLogs.value(commandId));
     panel->setInitialStatus(executionStatusFor(commandId));
-    if (kip) {
+    // Fixado (`kip:`) ou a guia de um app KIP puxada para um painel (`run:`): o painel é a view KIP da sessão. Uma view
+    // interativa por sessão: enquanto ele existe, a Saída embutida mostra o cartão "rodando em outro painel".
+    const bool kipCommand = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command;
+    if (kipCommand) {
         if (engine::KipSession *session = kipSessionFor(commandId)) {
-            panel->bindKipSession(session);
+            panel->bindKipSession(session, !m_kipAutoStarted.contains(commandId));
         }
         m_terminalDrawer->setKipPinned(commandId, true);
-        // O painel fixado some (fechado, comando apagado): o painel embutido volta a poder mostrar a view. O contexto é a
-        // própria Saída (não a janela): ao fechar o app o painel morre durante a destruição da janela.
+        // O painel some (fechado, comando apagado): se não sobrou outro painel do mesmo comando, a Saída embutida volta a
+        // poder mostrar a view. O contexto é a própria Saída (não a janela): ao fechar o app o painel morre durante a
+        // destruição da janela.
         TerminalDrawer *drawer = m_terminalDrawer;
-        connect(panel, &QObject::destroyed, drawer, [drawer, commandId]() { drawer->setKipPinned(commandId, false); });
+        const QString otherKey = (kip ? layout::view_id::kRunPrefix : layout::view_id::kKipPrefix) + commandId;
+        const QString ownKey = (kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId;
+        connect(panel, &QObject::destroyed, drawer, [this, drawer, commandId, otherKey, ownKey]() {
+            // Durante o `destroyed` o QPointer do mapa ainda aponta para o painel: tira-o antes de perguntar quem sobrou.
+            m_mirrors.remove(ownKey);
+            const auto other = m_mirrors.constFind(otherKey);
+            const bool stillInPanel = other != m_mirrors.constEnd() && other.value();
+            drawer->setKipPinned(commandId, stillInPanel);
+            // Sem painel, o app volta a ser da Saída: a guia reaparece (sem tomar a frente) se há o que mostrar.
+            if (!stillInPanel && (kipSessionFor(commandId) || isCommandRunning(commandId))) {
+                if (!m_outputTabOrder.contains(commandId)) m_outputTabOrder.append(commandId);
+                refreshOutputTabs();
+            }
+        });
+        // Depois do arraste que criou o painel (a barra de guias não pode mudar no meio dele).
+        QTimer::singleShot(0, this, [this, commandId]() { moveKipOutOfOutput(commandId); });
     }
     connect(panel, &RunMirrorPanel::runRequested, this, [this](const QString &id) { handleCommandActivated(id); });
     m_mirrors.insert((kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId, panel);
     return panel;
+}
+
+bool MainWindow::kipLivesInPanel(const QString &commandId) const
+{
+    const auto it = m_commandsById.constFind(commandId);
+    if (it == m_commandsById.constEnd() || !it->kip || it->type != core::CommandType::Command) {
+        return false;
+    }
+    for (const QString &prefix : {layout::view_id::kRunPrefix, layout::view_id::kKipPrefix}) {
+        const auto mirror = m_mirrors.constFind(prefix + commandId);
+        // O painel pode estar no quadro sem ter sido construído ainda (numa faixa recolhida): também conta.
+        if ((mirror != m_mirrors.constEnd() && mirror.value()) || isViewPlaced(prefix + commandId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MainWindow::revealKipPanel(const QString &commandId)
+{
+    for (const QString &prefix : {layout::view_id::kRunPrefix, layout::view_id::kKipPrefix}) {
+        if (isViewPlaced(prefix + commandId)) {
+            revealViewQuietly(prefix + commandId);
+            return;
+        }
+    }
+}
+
+void MainWindow::moveKipOutOfOutput(const QString &commandId)
+{
+    if (!kipLivesInPanel(commandId)) {
+        return;
+    }
+    const int index = m_outputTabOrder.indexOf(commandId);
+    if (index >= 0) {
+        m_outputTabOrder.removeAt(index);
+    }
+    if (m_connectedTerminalCommandId == commandId) {
+        // A Saída mostrava o app: vai para a guia vizinha; sem nenhuma, esvazia.
+        if (m_outputTabOrder.isEmpty()) {
+            clearOutputPanel();
+        } else {
+            reconnectTerminalToCommand(m_outputTabOrder.at(qMin(qMax(index, 0), int(m_outputTabOrder.size()) - 1)));
+        }
+    }
+    refreshOutputTabs();
 }
 
 void MainWindow::forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action)
@@ -1974,7 +2120,11 @@ ExecutionStatus MainWindow::executionStatusFor(const QString &commandId) const
 void MainWindow::openRunPanel(const QString &commandId)
 {
     if (m_layoutController && m_commandsById.contains(commandId)) {
-        m_layoutController->focusView(layout::view_id::kRunPrefix + commandId);
+        const QString panelId = panelIdForCommand(commandId);
+        m_layoutController->focusView(panelId);
+        if (panelId.startsWith(layout::view_id::kKipPrefix)) {
+            setKipPanelAutoStart(commandId, true);
+        }
     }
 }
 
@@ -1982,18 +2132,113 @@ void MainWindow::pinKipPanel(const QString &commandId)
 {
     if (m_layoutController && m_commandsById.contains(commandId)) {
         m_layoutController->focusView(layout::view_id::kKipPrefix + commandId);
+        setKipPanelAutoStart(commandId, true);
     }
 }
 
-// Com o painel Documento no quadro, o leitor mora nele; sem, volta para dentro da Saída.
-void MainWindow::updateDocumentHost()
+QString MainWindow::panelIdForCommand(const QString &commandId) const
 {
-    if (!m_dock || !m_terminalDrawer) {
+    const auto it = m_commandsById.constFind(commandId);
+    const bool kip = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command
+        && !core::isFolderActionCommandId(commandId);
+    return (kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId;
+}
+
+bool MainWindow::kipPanelAutoStarts(const QString &commandId)
+{
+    return m_configManager.loadSettings().kipPanelAutoStart.contains(commandId);
+}
+
+void MainWindow::setKipPanelAutoStart(const QString &commandId, bool on)
+{
+    core::SettingsData settings = m_configManager.loadSettings();
+    if (settings.kipPanelAutoStart.contains(commandId) == on) {
         return;
     }
-    QWidget *host = m_viewRegistry->existingWidget(layout::view_id::kDocument);
-    const bool placed = host && m_dock->model().isPlaced(layout::view_id::kDocument);
-    m_terminalDrawer->embeddedPanel()->setDocumentHost(placed ? host : nullptr);
+    if (on) {
+        settings.kipPanelAutoStart << commandId;
+    } else {
+        settings.kipPanelAutoStart.removeAll(commandId);
+    }
+    m_configManager.saveSettings(settings);
+}
+
+void MainWindow::autoStartKipPanels()
+{
+    const QStringList ids = m_configManager.loadSettings().kipPanelAutoStart;
+    for (const QString &id : ids) {
+        const auto it = m_commandsById.constFind(id);
+        if (it == m_commandsById.constEnd() || !it->kip || it->type != core::CommandType::Command
+            || !isViewPlaced(layout::view_id::kKipPrefix + id) || kipSessionFor(id) || isCommandRunning(id)) {
+            continue;
+        }
+        // Com parâmetros o app precisaria de um formulário antes: não abre uma janela sozinho — fica o cartão "Executar".
+        if (!it->params.isEmpty()) {
+            continue;
+        }
+        utils::Logger::info(kLogTag, QStringLiteral("Abrindo o app KIP '%1' no painel dele (Abrir com o Kai).").arg(id));
+        // Abre em silêncio: o painel fica onde o layout o deixou e o foco continua onde estava.
+        m_autoStartingKip = true;
+        handleCommandActivated(id);
+        m_autoStartingKip = false;
+    }
+}
+
+bool MainWindow::isViewPlaced(const QString &id) const
+{
+    return m_dock && m_dock->model().isPlaced(id);
+}
+
+// Traz um painel à frente da zona dele em resposta a uma seleção na árvore, só se já está no quadro e sem outro painel
+// maximizado: clicar na árvore não reabre o que o usuário fechou nem desfaz o que ele arrumou. Em zona recolhida numa faixa,
+// só troca o painel que já está aberto.
+void MainWindow::revealViewQuietly(const QString &id)
+{
+    if (!isViewPlaced(id)) {
+        return;
+    }
+    // Um painel maximizado (o modo foco da Saída) fica como está: clicar na árvore não desfaz a escolha do usuário.
+    const QString maximized = m_dock->model().maximized();
+    if (!maximized.isEmpty() && maximized != id) {
+        return;
+    }
+    // Numa zona recolhida numa faixa a seleção só TROCA o painel que já está aberto ao lado do conteúdo; faixa fechada não
+    // abre sozinha a cada clique.
+    const auto zone = m_dock->model().zoneOf(id);
+    if (zone && m_dock->model().zone(*zone).collapsed && m_dock->revealedView(*zone).isEmpty()) {
+        return;
+    }
+    m_dock->revealView(id);
+}
+
+// O painel Documento voltou ao quadro (estava fechado): ele pega a seleção de agora, que a árvore não lhe contou enquanto
+// esteve fechado. Fechado, esquece a pasta mostrada.
+void MainWindow::syncDocumentPlacement()
+{
+    const bool placed = isViewPlaced(layout::view_id::kDocument);
+    if (placed == m_documentWasPlaced) {
+        return;
+    }
+    m_documentWasPlaced = placed;
+    if (!placed) {
+        m_docFolderId.clear();
+        m_docFollowMiss.clear();
+        return;
+    }
+    if (!m_commandTree) {
+        return;
+    }
+    const QString id = m_commandTree->currentSelectionId();
+    if (id.isEmpty()) {
+        return;
+    }
+    if (isNoteId(id)) {
+        showNoteView(id, false, false);
+    } else if (m_commandTree->currentSelectionIsFolder()) {
+        showFolderDocumentation(id, DocReveal::Quiet);
+    } else if (!m_commandTree->currentSelectionIsCollection()) {
+        followDocumentToCommand(id);
+    }
 }
 
 void MainWindow::applyDrawerPosition()
@@ -2009,27 +2254,30 @@ void MainWindow::applyDrawerPosition()
     // esconda no momento: recolher a Saída maximizada devolve a lista).
     // Numa zona recolhida numa faixa, o painel abre por cima do conteúdo: também não há para onde recolher.
     if (zone && !model.zone(*zone).collapsed) {
-        const bool center = model.zoneOccupied(Zone::Center);
-        const bool left = model.zoneOccupied(Zone::Left);
-        const bool right = model.zoneOccupied(Zone::Right);
-        const bool bottom = model.zoneOccupied(Zone::Bottom);
-        switch (*zone) {
-        case Zone::Bottom:
-            if (center) {
-                position = DrawerPosition::Bottom;
+        const GridPlan plan = model.plan();
+        const bool columns = plan.expansion == Expansion::Vertical;
+        for (int s = 0; s < plan.stacks.size(); ++s) {
+            const int at = int(plan.stacks.at(s).cells.indexOf(*zone));
+            if (at < 0) {
+                continue;
             }
-            break;
-        case Zone::Left:
-            if (center || bottom || right) {
-                position = DrawerPosition::Left;
+            const int inStack = int(plan.stacks.at(s).cells.size());
+            if (inStack > 1) {
+                // Vizinho na própria pilha: recolhe em direção à borda da pilha mais próxima (a primeira célula para o
+                // começo, as demais para o fim).
+                if (columns) {
+                    position = at == 0 ? DrawerPosition::Top : DrawerPosition::Bottom;
+                } else {
+                    position = at == 0 ? DrawerPosition::Left : DrawerPosition::Right;
+                }
+            } else if (plan.stacks.size() > 1) {
+                // Sozinha na pilha: o vizinho é a pilha ao lado.
+                if (columns) {
+                    position = s == 0 ? DrawerPosition::Left : DrawerPosition::Right;
+                } else {
+                    position = s == 0 ? DrawerPosition::Top : DrawerPosition::Bottom;
+                }
             }
-            break;
-        case Zone::Right:
-            if (center || bottom || left) {
-                position = DrawerPosition::Right;
-            }
-            break;
-        case Zone::Center:
             break;
         }
     }
@@ -2046,13 +2294,11 @@ void MainWindow::showOutputPanel()
     }
 }
 
-// Onde um documento (README, nota) aparece: no painel próprio, se ele está no quadro, senão dentro da Saída.
-void MainWindow::showDocumentTarget()
+// Um pedido explícito do usuário (o ícone de documentos, uma nota): o painel Documento aparece mesmo fechado ou recolhido.
+void MainWindow::showDocumentPanel()
 {
-    if (m_dock && m_dock->model().isPlaced(layout::view_id::kDocument)) {
+    if (m_dock) {
         m_dock->revealView(layout::view_id::kDocument);
-    } else {
-        showOutputPanel();
     }
 }
 
@@ -2087,7 +2333,6 @@ void MainWindow::syncCommandsCollapsed()
     m_commandsCollapsed = collapsed;
     applyDrawerPosition();
     updateTreeBorderResizeHandles();
-    updateCommandsToggle();
     if (changed && !m_restoringUiState) {
         core::SettingsData settings = m_configManager.loadSettings();
         if (settings.commandsCollapsed != m_commandsCollapsed) {
@@ -2140,6 +2385,20 @@ void MainWindow::showQuickRun()
     m_quickRun->openBelow(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
 }
 
+// "Ir para o comando" (painel de processos, notificações): a árvore precisa estar à vista, então o painel Comandos volta
+// (fechado, recolhido numa faixa, atrás de outro maximizado ou com o modo foco ligado) antes de a seleção acontecer.
+void MainWindow::showCommandInTree(const QString &commandId)
+{
+    showAndRaise();
+    if (m_commandsCollapsed) {
+        setCommandsCollapsed(false);
+    }
+    if (m_dock) {
+        m_dock->revealView(layout::view_id::kCommands);
+    }
+    m_commandTree->selectCommand(commandId);
+}
+
 // Seleciona o item na árvore (que abre o que ele é: saída, documentação, nota); com a lista recolhida ela volta antes.
 // `fallback` cobre o que a árvore não alcança (item de outra aba filtrada) e o item que já estava selecionado.
 void MainWindow::revealInTree(const QString &itemId, const std::function<void()> &fallback)
@@ -2147,7 +2406,6 @@ void MainWindow::revealInTree(const QString &itemId, const std::function<void()>
     if (m_commandsCollapsed) {
         setCommandsCollapsed(false);
     }
-    showDocumentTarget();
     if (m_commandTree->currentSelectionId() == itemId || !m_commandTree->selectCommand(itemId)) {
         fallback();
     }
@@ -2167,15 +2425,11 @@ void MainWindow::showCommandPalette()
             case QuickRunPopup::Kind::Folder:
                 revealInTree(id, [this, id]() {
                     m_commandTree->showRootTab(id);
-                    resetDrawerForNonCommand(true);
                     showFolderDocumentation(id);
                 });
                 break;
             case QuickRunPopup::Kind::Note:
-                revealInTree(id, [this, id]() {
-                    resetDrawerForNonCommand(true);
-                    showNoteView(id, false);
-                });
+                revealInTree(id, [this, id]() { showNoteView(id, false); });
                 break;
             case QuickRunPopup::Kind::Environment:
                 handleEnvironmentSelected(id);
@@ -2254,13 +2508,64 @@ void MainWindow::showCommandPalette()
     m_palette->openCentered(this);
 }
 
+// Buscar item (Ctrl+F): a mesma busca da paleta, mas inerte. Escolher leva até o item na árvore e abre o menu de ações
+// dele; nada executa sozinho.
+void MainWindow::showFindPalette()
+{
+    if (!m_findPalette) {
+        m_findPalette = new QuickRunPopup(this);
+        m_findPalette->setObjectName(QStringLiteral("findPalette"));
+        m_findPalette->setPlaceholder(utils::tr(QStringLiteral("find.placeholder")));
+        connect(m_findPalette, &QuickRunPopup::entryChosen, this, [this](QuickRunPopup::Kind, const QString &id) {
+            // Depois que a paleta fechou: o menu não pode nascer dentro do clique dela.
+            QTimer::singleShot(0, this, [this, id]() { revealItemActions(id); });
+        });
+    }
+    using Kind = QuickRunPopup::Kind;
+    QVector<QuickRunPopup::Entry> entries;
+    for (const core::Command &command : m_commandsData.commands) {
+        if (!command.hidden) {
+            entries.append({command.id, command.name, folderPathOf(command.folderId), Kind::Command});
+        }
+    }
+    for (const core::Folder &folder : m_commandsData.folders) {
+        if (!folder.hidden) {
+            entries.append({folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder});
+        }
+    }
+    for (const core::Note &note : m_notes) {
+        if (!note.hidden) {
+            entries.append({note.id, note.name, folderPathOf(note.folderId), Kind::Note});
+        }
+    }
+    m_findPalette->refreshStyle();
+    m_findPalette->setEntries(entries);
+    m_findPalette->openCentered(this);
+}
+
+// Seleciona o item na árvore (com a lista à vista) e abre o menu dele. Uma pasta de primeiro nível é uma aba: só a mostra.
+void MainWindow::revealItemActions(const QString &itemId)
+{
+    if (m_commandsCollapsed) {
+        setCommandsCollapsed(false);
+    }
+    if (m_dock) {
+        m_dock->revealView(layout::view_id::kCommands);
+    }
+    if (!m_commandTree->selectCommand(itemId)) {
+        m_commandTree->showRootTab(itemId);
+        return;
+    }
+    m_commandTree->openContextMenuForCurrent();
+}
+
 void MainWindow::runPaletteAction(const QString &actionId)
 {
     static const QHash<QString, std::function<void(MainWindow *)>> handlers = {
         {QStringLiteral("new_command"), [](MainWindow *w) { w->handleNewCommandRequested(); }},
         {QStringLiteral("new_folder"), [](MainWindow *w) { w->handleNewFolderRequested(); }},
         {QStringLiteral("new_collection"), [](MainWindow *w) { w->handleNewCollectionRequested(); }},
-        {QStringLiteral("search"), [](MainWindow *w) { w->toggleSearchBar(); }},
+        {QStringLiteral("search"), [](MainWindow *w) { w->showFindPalette(); }},
         {QStringLiteral("show_hidden"), [](MainWindow *w) { w->triggerToggleShowHidden(); }},
         {QStringLiteral("running_only"), [](MainWindow *w) { w->triggerToggleRunningOnly(); }},
         {QStringLiteral("expand_all"), [](MainWindow *w) { w->triggerExpandAll(); }},
@@ -2315,40 +2620,15 @@ void MainWindow::recordDocUse(const QString &folderId)
     m_docUsageSaveTimer->start();
 }
 
-// O ícone de documentos: lista as pastas que têm documentação, mais usadas primeiro. Cada FONTE aparece uma vez: uma
-// subpasta que só herda o diretório da pasta pai (ou repete o de outra) não entra; entra a que tem notas próprias ou
-// um diretório próprio com documentos. Procurar documentos toca o disco, então roda numa thread e o menu abre quando
-// ela termina.
-void MainWindow::showDocsMenu()
+// As FONTES de documentação: cada uma aparece uma vez. Uma subpasta que só herda o diretório da pasta pai (ou repete o de
+// outra) não entra; entra a que tem notas próprias ou um diretório próprio com documentos. Procurar documentos toca o
+// disco, então roda numa thread e `done` recebe as que têm o que mostrar.
+void MainWindow::findDocSources(bool includeHidden, std::function<void(const QVector<DocSource> &)> done)
 {
-    struct Candidate {
-        QString id;
-        QString label;
-        QString directory; // só quando a pasta tem diretório PRÓPRIO a verificar
-        bool hasNotes = false;
-    };
-    auto labelOf = [this](const QString &folderId) {
-        QStringList names;
-        QSet<QString> seen;
-        QString current = folderId;
-        while (!current.isEmpty() && !seen.contains(current)) {
-            seen.insert(current);
-            QString parent;
-            for (const core::Folder &f : m_commandsData.folders) {
-                if (f.id == current) {
-                    names.prepend(f.name);
-                    parent = f.parentId.value_or(QString());
-                    break;
-                }
-            }
-            current = parent;
-        }
-        return names.join(QStringLiteral(" › "));
-    };
-    QVector<Candidate> candidates;
+    QVector<DocSource> candidates;
     QSet<QString> seenDirectories;
     for (const core::Folder &folder : m_commandsData.folders) {
-        if (folder.hidden) {
+        if (folder.hidden && !includeHidden) {
             continue;
         }
         const QString directory = QDir::cleanPath(folderDocumentDirectory(folder.id));
@@ -2360,92 +2640,156 @@ void MainWindow::showDocsMenu()
             seenDirectories.insert(directory);
         }
         if (hasNotes || ownDirectory) {
-            candidates.append({folder.id, labelOf(folder.id), ownDirectory ? directory : QString(), hasNotes});
-        }
-    }
-    QStringList directories;
-    for (const Candidate &candidate : std::as_const(candidates)) {
-        if (!candidate.directory.isEmpty()) {
-            directories << candidate.directory;
+            candidates.append({folder.id, ownDirectory ? directory : QString(), hasNotes});
         }
     }
     QPointer<MainWindow> guard(this);
-    QThread *thread = QThread::create([guard, candidates, directories]() {
-        QSet<QString> withDocuments;
-        for (const QString &directory : directories) {
-            if (ui::directoryHasDocuments(directory)) {
-                withDocuments.insert(directory);
+    QThread *thread = QThread::create([guard, candidates, done = std::move(done)]() {
+        QVector<DocSource> listed;
+        for (const DocSource &candidate : candidates) {
+            if (candidate.hasNotes || (!candidate.directory.isEmpty() && ui::directoryHasDocuments(candidate.directory))) {
+                listed.append(candidate);
             }
         }
-        QMetaObject::invokeMethod(guard.data(), [guard, candidates, withDocuments]() {
-            if (!guard) {
-                return;
+        QMetaObject::invokeMethod(guard.data(), [guard, listed, done]() {
+            if (guard) {
+                done(listed);
             }
-            QVector<Candidate> listed;
-            for (const Candidate &candidate : candidates) {
-                if (candidate.hasNotes || withDocuments.contains(candidate.directory)) {
-                    listed.append(candidate);
-                }
-            }
-            // Mais usadas primeiro; empate: ordem alfabética do caminho (a pasta pai fica junto das suas subpastas).
-            std::stable_sort(listed.begin(), listed.end(), [guard](const Candidate &a, const Candidate &b) {
-                const int usageA = guard->m_docUsage.value(a.id);
-                const int usageB = guard->m_docUsage.value(b.id);
-                return usageA != usageB ? usageA > usageB : a.label.compare(b.label, Qt::CaseInsensitive) < 0;
-            });
-            auto *menu = new QMenu(guard);
-            menu->setAttribute(Qt::WA_DeleteOnClose);
-            if (listed.isEmpty()) {
-                menu->addAction(utils::tr(QStringLiteral("output_tabs.docs.empty")))->setEnabled(false);
-            }
-            for (const Candidate &candidate : std::as_const(listed)) {
-                QAction *action = menu->addAction(LucideIcons::icon(QStringLiteral("file-text"), QColor(utils::tokens::mutedFg()), 16),
-                                                  candidate.label);
-                const QString folderId = candidate.id;
-                connect(action, &QAction::triggered, guard.data(), [guard, folderId]() { guard->openFolderDocs(folderId); });
-            }
-            OutputTabsBar *bar = guard->m_terminalDrawer->outputTabs();
-            const QRect anchor = bar->docsRect().isValid() ? bar->docsRect() : bar->rect();
-            menu->popup(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
         }, Qt::QueuedConnection);
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
 }
 
+// O botão de documentos do painel Documento: lista as fontes de documentação, mais usadas primeiro.
+void MainWindow::showDocsMenu(const QPoint &globalPos)
+{
+    findDocSources(false, [this, globalPos](const QVector<DocSource> &sources) {
+        auto labelOf = [this](const QString &folderId) {
+            QStringList names;
+            QSet<QString> seen;
+            QString current = folderId;
+            while (!current.isEmpty() && !seen.contains(current)) {
+                seen.insert(current);
+                QString parent;
+                for (const core::Folder &f : m_commandsData.folders) {
+                    if (f.id == current) {
+                        names.prepend(f.name);
+                        parent = f.parentId.value_or(QString());
+                        break;
+                    }
+                }
+                current = parent;
+            }
+            return names.join(QStringLiteral(" › "));
+        };
+        QVector<QPair<QString, QString>> listed; // id, rótulo
+        for (const DocSource &source : sources) {
+            listed.append({source.folderId, labelOf(source.folderId)});
+        }
+        // Mais usadas primeiro; empate: ordem alfabética do caminho (a pasta pai fica junto das suas subpastas).
+        std::stable_sort(listed.begin(), listed.end(), [this](const auto &a, const auto &b) {
+            const int usageA = m_docUsage.value(a.first);
+            const int usageB = m_docUsage.value(b.first);
+            return usageA != usageB ? usageA > usageB : a.second.compare(b.second, Qt::CaseInsensitive) < 0;
+        });
+        auto *menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        if (listed.isEmpty()) {
+            menu->addAction(utils::tr(QStringLiteral("doc.folders.empty")))->setEnabled(false);
+        }
+        for (const auto &entry : std::as_const(listed)) {
+            QAction *action = menu->addAction(LucideIcons::icon(QStringLiteral("file-text"), QColor(utils::tokens::mutedFg()), 16),
+                                              entry.second);
+            const QString folderId = entry.first;
+            connect(action, &QAction::triggered, this, [this, folderId]() { openFolderDocs(folderId); });
+        }
+        menu->popup(globalPos);
+    });
+}
+
+// As fontes de documentação, para "Abrir documento" (só sem o foco inteligente, que é quando a seleção não o abre).
+void MainWindow::refreshDocSources()
+{
+    const quint64 token = ++m_docSourcesToken;
+    if (m_smartFocus) {
+        m_docSourceFolders.clear();
+        updateFocusActions();
+        return;
+    }
+    findDocSources(true, [this, token](const QVector<DocSource> &sources) {
+        if (token != m_docSourcesToken) {
+            return;
+        }
+        m_docSourceFolders.clear();
+        for (const DocSource &source : sources) {
+            m_docSourceFolders.insert(source.folderId);
+        }
+        updateFocusActions();
+    });
+}
+
+// A pasta cujo documento "Abrir documento" mostra para o item (a pasta, ou a do comando): ela mesma se é uma fonte, ou a
+// ancestral de quem ela herda o diretório. Vazio: nada a mostrar (inclusive um diretório próprio sem documentos).
+QString MainWindow::documentTargetFor(const QString &itemId) const
+{
+    const auto command = m_commandsById.constFind(itemId);
+    QString folderId = command != m_commandsById.constEnd() ? command->folderId : itemId;
+    QSet<QString> seen;
+    while (!folderId.isEmpty() && !seen.contains(folderId)) {
+        seen.insert(folderId);
+        if (m_docSourceFolders.contains(folderId)) {
+            return folderId;
+        }
+        const auto folder = std::find_if(m_commandsData.folders.cbegin(), m_commandsData.folders.cend(),
+                                         [&folderId](const core::Folder &f) { return f.id == folderId; });
+        if (folder == m_commandsData.folders.cend()) {
+            return QString();
+        }
+        const QString parentId = folder->parentId.value_or(QString());
+        if (!parentId.isEmpty()
+            && QDir::cleanPath(folderDocumentDirectory(folderId)) != QDir::cleanPath(folderDocumentDirectory(parentId))) {
+            return QString();
+        }
+        folderId = parentId;
+    }
+    return QString();
+}
+
+void MainWindow::showDocumentFor(const QString &itemId)
+{
+    const QString folderId = documentTargetFor(itemId);
+    if (folderId.isEmpty()) {
+        return;
+    }
+    showDocumentPanel();
+    showFolderDocumentation(folderId);
+}
+
+bool MainWindow::canShowOutput(const QString &commandId) const
+{
+    return m_commandsById.contains(commandId) && (hasOutputToShow(commandId) || m_lastHttpResult.contains(commandId));
+}
+
+// Os botões "Mostrar saída" e "Abrir documento" do grupo Execução acompanham a seleção e o que ela tem a mostrar.
+void MainWindow::updateFocusActions()
+{
+    if (!m_actionSidebar || !m_commandTree) {
+        return;
+    }
+    const QString id = m_commandTree->currentSelectionId();
+    m_actionSidebar->setFocusActions(!m_smartFocus, canShowOutput(id), !documentTargetFor(id).isEmpty());
+}
+
 // Volta à visualização de documentos de uma pasta: seleciona a pasta na árvore (a seleção é quem abre a documentação);
 // sem como selecionar (a aba raiz), abre a documentação direto.
 void MainWindow::openFolderDocs(const QString &folderId)
 {
-    if (!m_terminalDrawer) {
-        return;
-    }
-    showDocumentTarget();
+    showDocumentPanel();
     const bool alreadySelected = m_commandTree->currentSelectionId() == folderId;
-    if (alreadySelected || !m_commandTree->selectCommand(folderId)) {
-        resetDrawerForNonCommand(true);
+    if (alreadySelected || !m_commandTree->selectCommand(folderId) || !m_smartFocus) {
         showFolderDocumentation(folderId);
     }
-}
-
-void MainWindow::updateCommandsToggle()
-{
-    if (!m_terminalDrawer) {
-        return;
-    }
-    // A lista fica em cima quando a Saída está embaixo; ao lado oposto quando a Saída está à esquerda/direita.
-    Qt::Edge edge = Qt::TopEdge;
-    if (m_dock) {
-        const auto zone = m_dock->zoneOf(layout::view_id::kOutput);
-        if (zone == layout::Zone::Left) {
-            edge = Qt::RightEdge;
-        } else if (zone == layout::Zone::Right) {
-            edge = Qt::LeftEdge;
-        }
-    }
-    OutputTabsBar *bar = m_terminalDrawer->outputTabs();
-    bar->setCommandsToggleVisible(true);
-    bar->setCommandsToggleState(m_commandsCollapsed, edge);
 }
 
 void MainWindow::applyEditShortcutOnSelection()
@@ -2703,10 +3047,13 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     // Tema do core + CAMADA MODERNA (mesma especificidade, aplicada depois,
     // então sobrescreve o que precisa): raio, elevação, escala tipográfica,
     // scrollbars slim, seleção com accent. Tudo derivado dos design tokens.
-    setStyleSheet(theme.qss + buildModernStylesheet());
+    setStyleSheet(themeStyleSheet(theme.qss));
     // Backdrop nativo (Mica/Acrylic no Win11) quando o modo "material
     // líquido" está ligado nos efeitos.
     applyWindowBackdrop(this);
+    if (m_dock) {
+        m_dock->refreshFloatingStyle();
+    }
     m_terminalDrawer->applyThemeVariables(theme.variables);
     if (m_processListDialog) {
         m_processListDialog->applyThemeVariables(theme.variables);
@@ -2753,9 +3100,9 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
 void MainWindow::loadConfig()
 {
     m_commandsData = m_configManager.loadCommands();
+    m_docUsage = m_configManager.loadDocUsage();
     m_collections = m_configManager.loadCollections();
     m_notes = m_configManager.loadNotes();
-    m_docUsage = m_configManager.loadDocUsage();
     core::bindPendingCollectionReferences(m_commandsData.commands, m_collections);
     // Reschedule CRON timers após carregar comandos
     m_cronScheduler.reschedule(m_commandsData.commands);
@@ -3031,7 +3378,7 @@ bool MainWindow::hasOutputToShow(const QString &commandId) const
 
 void MainWindow::ensureOutputTab(const QString &commandId)
 {
-    if (commandId.isEmpty() || !m_commandsById.contains(commandId)) {
+    if (commandId.isEmpty() || !m_commandsById.contains(commandId) || kipLivesInPanel(commandId)) {
         return;
     }
     if (!m_outputTabOrder.contains(commandId)) {
@@ -3044,6 +3391,10 @@ void MainWindow::refreshOutputTabs()
 {
     if (!m_terminalDrawer) {
         return;
+    }
+    updateFocusActions(); // "Mostrar saída" acompanha o que tem saída
+    if (m_commandTree) {
+        m_commandTree->setShownCommand(m_connectedTerminalCommandId); // a marca "na Saída" na linha do comando
     }
     // A saída que está na tela sempre tem guia (um comando em segundo plano que volta a falar depois de a guia ser
     // fechada, por exemplo), mas um comando selecionado que nunca rodou não ganha uma.
@@ -3061,6 +3412,7 @@ void MainWindow::refreshOutputTabs()
         }
     }
 
+    m_outputTabOrder.removeIf([this](const QString &id) { return kipLivesInPanel(id); });
     QVector<OutputTabInfo> tabs;
     for (const QString &id : std::as_const(m_outputTabOrder)) {
         const auto cmdIt = m_commandsById.constFind(id);
@@ -3099,12 +3451,27 @@ void MainWindow::activateOutputTab(const QString &tabId)
     if (!m_commandsById.contains(commandId)) {
         return;
     }
+    // Sem o foco inteligente a guia não mexe na árvore: só a Saída troca (e o comando ganha a marca de "na Saída").
+    if (!m_smartFocus) {
+        if (m_connectedTerminalCommandId != commandId) {
+            reconnectTerminalToCommand(commandId);
+        }
+        if (core::parseFolderActionCommandId(commandId)) {
+            m_commandTree->setFocusedAction(commandId);
+        }
+        revealViewQuietly(layout::view_id::kOutput);
+        refreshOutputTabs();
+        return;
+    }
     if (const auto actionIds = core::parseFolderActionCommandId(commandId)) {
-        // Ação de pasta: leva a árvore até a pasta (a aba raiz certa), que é selecionada — selecionar uma pasta limpa a
-        // saída, por isso a saída da ação é reconectada DEPOIS, e o ícone da ação ganha o foco.
+        // Ação de pasta: leva a árvore até a pasta (a aba raiz certa), que é selecionada — a seleção da pasta traz o
+        // documento dela; a saída da ação é reconectada DEPOIS e passa à frente, e o ícone da ação ganha o foco.
         m_commandTree->selectCommand(actionIds->folderId);
-        reconnectTerminalToCommand(commandId);
+        if (m_connectedTerminalCommandId != commandId) {
+            reconnectTerminalToCommand(commandId);
+        }
         m_commandTree->setFocusedAction(commandId);
+        revealViewQuietly(layout::view_id::kOutput);
         return;
     }
     // Seleciona o comando na árvore (trocando a aba raiz, se for de outro projeto). Se ele já era o item atual, ou
@@ -3113,6 +3480,22 @@ void MainWindow::activateOutputTab(const QString &tabId)
     if (!selected || m_connectedTerminalCommandId != commandId) {
         reconnectTerminalToCommand(commandId);
     }
+    revealViewQuietly(layout::view_id::kOutput);
+}
+
+// "Mostrar saída" (botão do grupo Execução ou menu do item): conecta a Saída ao comando (ou mostra o painel do app KIP),
+// sem executar nem selecionar.
+void MainWindow::showCommandOutput(const QString &commandId)
+{
+    if (kipLivesInPanel(commandId)) {
+        revealKipPanel(commandId);
+        return;
+    }
+    if (m_connectedTerminalCommandId != commandId) {
+        reconnectTerminalToCommand(commandId);
+    }
+    revealViewQuietly(layout::view_id::kOutput);
+    refreshOutputTabs();
 }
 
 void MainWindow::closeOutputTab(const QString &tabId)
@@ -3439,12 +3822,15 @@ void MainWindow::applyAppearanceSettings()
 
     // Re-aplica a folha (os tokens mudaram) e o backdrop da janela.
     if (m_themeManager && m_themeManager->hasTheme()) {
-        setStyleSheet(m_themeManager->currentTheme().qss + buildModernStylesheet());
+        setStyleSheet(themeStyleSheet(m_themeManager->currentTheme().qss));
     } else {
         setStyleSheet(buildModernStylesheet());
     }
     applyWindowBackdrop(this);
     applyElevation(m_terminalDrawer, 1);
+    if (m_dock) {
+        m_dock->refreshFloatingStyle();
+    }
 
     // Cards do output panel e do diálogo de processos só recalculam o QSS
     // (incluindo gradiente) dentro de applyThemeVariables() — não pegam o
@@ -3458,6 +3844,9 @@ void MainWindow::applyAppearanceSettings()
         if (m_processListDialog) {
             m_processListDialog->applyThemeVariables(m_themeManager->currentTheme().variables);
         }
+    }
+    if (m_documentPanel) {
+        m_documentPanel->refreshStyle();
     }
 
     // Os containers de posicionamento (upper/bottom/left/side) têm seu
@@ -3510,6 +3899,8 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
 {
     // A guia em foco acompanha a saída mostrada, qualquer que seja o ramo abaixo.
     const auto syncTabs = qScopeGuard([this]() { refreshOutputTabs(); });
+    // Uma seleção nova cancela o "documento acompanha o comando" que ainda estiver sendo conferido em segundo plano.
+    ++m_docFollowToken;
 
     // Atualiza as row actions da sidebar conforme a linha selecionada
     // (habilitar play/stop/force-stop/reset/edit/delete só quando a
@@ -3543,11 +3934,16 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
         }
     }
     m_actionSidebar->setRowContext(hasSelection, isCommand, isRunning, hasFailed, isHttp);
+    updateFocusActions();
     if (m_itemActionsBar) {
         m_itemActionsBar->setRowContext(hasSelection);
     }
     if (m_expandCollapseBar) {
         m_expandCollapseBar->setSelectedHidden(hasSelection && isHidden);
+    }
+    // Sem o foco inteligente, navegar só muda o alvo das ações: a Saída e o Documento ficam no que já mostram.
+    if (!m_smartFocus) {
+        return;
     }
 
     // Terminal por-comando: a caixa da Saída permanece sempre visível no
@@ -3562,11 +3958,28 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     // quando o comando conectado NÃO estava mais rodando, então uma
     // pasta selecionada continuava mostrando a saída de um comando ativo
     // por baixo dela).
-    if (itemId.isEmpty() || isFolder) {
-        resetDrawerForNonCommand(isFolder); // a documentação anterior só sai quando a nova (ou a falta dela) estiver decidida
-        showFolderDocumentation(isFolder ? itemId : QString());
+    // Pasta com documentação (ou nota): o documento vai para o painel Documento e a Saída segue mostrando a última execução.
+    // Pasta sem nada a mostrar, ou nada selecionado: a Saída volta a ficar ociosa (pasta não exibe saída de comando).
+    if (itemId.isEmpty()) {
+        resetDrawerForNonCommand();
+        showFolderDocumentation(QString());
         return;
     }
+    if (isFolder) {
+        if (!isNoteId(itemId) && !showFolderDocumentation(itemId)) { // a nota é mostrada por handleNoteSelected
+            resetDrawerForNonCommand();
+        }
+        return;
+    }
+    // App KIP com painel próprio: selecionar mostra o painel; a Saída não se conecta a ele.
+    if (kipLivesInPanel(itemId)) {
+        followDocumentToCommand(itemId);
+        revealKipPanel(itemId);
+        return;
+    }
+    // Um comando é da Saída: ela passa à frente do Documento (que, por trás, acompanha a pasta do comando).
+    revealViewQuietly(layout::view_id::kOutput);
+    followDocumentToCommand(itemId);
 
     const bool hasLog = m_commandLogs.contains(itemId) && !m_commandLogs.value(itemId).isEmpty();
     const bool isTracked = m_processManager->isTracked(itemId);
@@ -3620,11 +4033,11 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     }
 }
 
-// A Saída fica ociosa e sem comando conectado (seleção de pasta, nota ou nada).
-void MainWindow::resetDrawerForNonCommand(bool keepDocument)
+// A Saída fica ociosa e sem comando conectado (nada selecionado).
+void MainWindow::resetDrawerForNonCommand()
 {
     m_terminalDrawer->clearKip();
-    m_terminalDrawer->clear(keepDocument);
+    m_terminalDrawer->clear();
     m_terminalDrawer->setCommandName(QString());
     m_terminalDrawer->setExecutionStatus(ExecutionStatus::Idle);
     m_terminalDrawer->setInputEnabled(false);
@@ -3696,7 +4109,7 @@ void MainWindow::fixDocDirectory(bool automatic, const QString &directory, const
     const QString ownerId = m_commandsData.folders.at(ownerIndex).id;
     if (!automatic) {
         handleEditRequested(ownerId, true);
-        showFolderDocumentation(shownId);
+        showFolderDocumentation(shownId, DocReveal::Quiet);
         return;
     }
     // O que o dono tem a mais que o diretório mostrado (subpastas relativas) tem o mesmo tamanho no caminho sugerido.
@@ -3708,33 +4121,32 @@ void MainWindow::fixDocDirectory(bool automatic, const QString &directory, const
     }
     m_commandsData.folders[ownerIndex].workingDir = suggestion.left(suggestion.size() - (shownDir.size() - ownerDir.size()));
     persistCommands();
-    showFolderDocumentation(shownId);
+    showFolderDocumentation(shownId, DocReveal::Quiet);
 }
 
 void MainWindow::refreshDocNotes()
 {
-    OutputPanel *panel = m_terminalDrawer ? m_terminalDrawer->embeddedPanel() : nullptr;
-    if (panel && !m_docFolderId.isEmpty()) {
-        panel->updateDocumentNotes(docNotesFor(m_docFolderId), true);
+    if (m_documentPanel && !m_docFolderId.isEmpty()) {
+        m_documentPanel->updateNotes(docNotesFor(m_docFolderId), true);
     }
 }
 
-void MainWindow::showFolderDocumentation(const QString &folderId)
+// O painel Documento passa a mostrar a documentação de `folderId` (README do diretório, senão o primeiro documento, senão a
+// primeira nota; vazio: o estado vazio). Painel fechado: nada é carregado (ao reabrir, syncDocumentPlacement põe o que a
+// seleção pede). `Reveal` traz o painel à frente da zona dele quando há o que mostrar; `Quiet` só atualiza. Devolve se o
+// painel assumiu a pasta (tem documento, nota ou o atalho de criar o README para mostrar).
+bool MainWindow::showFolderDocumentation(const QString &folderId, DocReveal reveal)
 {
-    OutputPanel *panel = m_terminalDrawer->embeddedPanel();
-    if (!panel) {
+    m_docFollowMiss.clear();
+    DocumentPanel *panel = m_documentPanel;
+    if (!panel || !isViewPlaced(layout::view_id::kDocument)) {
         m_docFolderId.clear();
-        return;
-    }
-    // Selecionar um comando (sem pasta) não tira o documento do painel próprio: ele segue lá, para ser lido enquanto o
-    // comando roda.
-    if (folderId.isEmpty() && panel->documentExternal()) {
-        return;
+        return false;
     }
     m_docFolderId.clear();
     if (folderId.isEmpty()) {
         panel->clearDocument();
-        return;
+        return false;
     }
     const core::Folder *folder = nullptr;
     for (const core::Folder &f : m_commandsData.folders) {
@@ -3745,24 +4157,16 @@ void MainWindow::showFolderDocumentation(const QString &folderId)
     }
     if (!folder) {
         panel->clearDocument();
-        return;
+        return false;
     }
     m_docFolderId = folderId;
-    panel->setDocumentScope(folderId);
-    recordDocUse(folderId);
+    panel->setScope(folderId);
+    if (reveal == DocReveal::Reveal) {
+        recordDocUse(folderId);
+    }
 
-    auto expand = [this](QString path) {
-        path = m_envManager.interpolate(path.trimmed());
-        if (path.contains(QStringLiteral("{{"))) {
-            return QString();
-        }
-        if (path == QLatin1String("~") || path.startsWith(QStringLiteral("~/"))) {
-            path = QDir::homePath() + path.mid(1);
-        }
-        return path;
-    };
-    const QString workingDir = expand(core::effectiveFolderWorkingDir(folder->id, m_commandsData.folders));
-    const bool hasWorkingDir = !workingDir.isEmpty() && QDir::isAbsolutePath(workingDir);
+    const QString workingDir = folderDocumentDirectory(folderId);
+    const bool hasWorkingDir = !workingDir.isEmpty();
 
     // As notas da pasta aparecem no explorador; sem README, a primeira nota abre no lugar.
     const QVector<DocNote> notes = docNotesFor(folderId);
@@ -3772,7 +4176,63 @@ void MainWindow::showFolderDocumentation(const QString &folderId)
         panel->showNote(notes.first().id, notes, QString(), folder->name, false);
     } else {
         panel->clearDocument(); // nada a mostrar: o documento da pasta anterior não pode ficar
+        return false;
     }
+    if (reveal == DocReveal::Reveal) {
+        revealViewQuietly(layout::view_id::kDocument);
+    }
+    return true;
+}
+
+// Um comando foi selecionado: o painel Documento passa a mostrar a documentação da pasta dele, mas só se a pasta tem
+// mesmo o que mostrar (um documento no diretório ou notas). Do contrário o que se lê fica onde está, e nada pisca. Nunca
+// interrompe uma edição, nem passa à frente da Saída.
+void MainWindow::followDocumentToCommand(const QString &commandId)
+{
+    if (!m_documentPanel || !isViewPlaced(layout::view_id::kDocument) || m_documentPanel->editing()) {
+        return;
+    }
+    const auto found = m_commandsById.constFind(commandId);
+    if (found == m_commandsById.constEnd() || found->folderId.isEmpty()) {
+        return;
+    }
+    const QString folderId = found->folderId;
+    if (folderId == m_docFolderId || folderId == m_docFollowMiss) {
+        return;
+    }
+    const quint64 token = ++m_docFollowToken;
+    const auto apply = [this, folderId, token](bool hasDocuments) {
+        if (token != m_docFollowToken) {
+            return; // outra seleção chegou enquanto o disco era conferido
+        }
+        if (!hasDocuments) {
+            m_docFollowMiss = folderId;
+            return;
+        }
+        if (m_documentPanel && !m_documentPanel->editing()) {
+            showFolderDocumentation(folderId, DocReveal::Quiet);
+        }
+    };
+    const QString directory = folderDocumentDirectory(folderId);
+    if (!docNotesFor(folderId).isEmpty()) {
+        apply(true);
+        return;
+    }
+    if (directory.isEmpty()) {
+        apply(false);
+        return;
+    }
+    QPointer<MainWindow> guard(this);
+    QThread *thread = QThread::create([guard, directory, apply]() {
+        const bool hasDocuments = ui::directoryHasDocuments(directory);
+        QMetaObject::invokeMethod(guard.data(), [guard, apply, hasDocuments]() {
+            if (guard) {
+                apply(hasDocuments);
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 // ------------------------------------------------------------------------------------------------------------- notas
@@ -3987,18 +4447,22 @@ void MainWindow::handleNoteActivated(const QString &noteId)
     showNoteView(noteId, true);
 }
 
-void MainWindow::showNoteView(const QString &noteId, bool startEditing)
+// A nota só tem este painel para ser lida: selecioná-la abre o painel Documento, mesmo fechado (`reveal` falso = só carrega).
+void MainWindow::showNoteView(const QString &noteId, bool startEditing, bool reveal)
 {
-    OutputPanel *panel = m_terminalDrawer->embeddedPanel();
+    DocumentPanel *panel = m_documentPanel;
     const auto it = std::find_if(m_notes.constBegin(), m_notes.constEnd(), [&noteId](const core::Note &n) { return n.id == noteId; });
     if (!panel || it == m_notes.constEnd()) {
         return;
+    }
+    if (reveal) {
+        showDocumentPanel();
     }
     if (m_connectedTerminalCommandId == noteId) {
         m_connectedTerminalCommandId.clear();
     }
     m_docFolderId = it->folderId;
-    panel->setDocumentScope(it->folderId);
+    panel->setScope(it->folderId);
     QString label = it->folderId;
     for (const core::Folder &f : m_commandsData.folders) {
         if (f.id == it->folderId) {
@@ -4159,6 +4623,7 @@ void MainWindow::updateRunningCommandStatus()
             }
         }
         m_actionSidebar->setRowContext(hasSelection, isCommand, isRunning, hasFailed, isHttp);
+        updateFocusActions();
         if (m_itemActionsBar) {
             m_itemActionsBar->setRowContext(hasSelection);
         }
@@ -4196,12 +4661,10 @@ void MainWindow::reloadCommandTree()
     rebuildActionCommands();
     m_commandTree->setGlobalActions(m_globalActions);
     m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+    refreshDocSources();
     // O painel de variáveis, se já foi aberto, acompanha as pastas.
-    if (m_viewRegistry) {
-        if (auto *variables = qobject_cast<DynamicVarsInspectorWidget *>(
-                m_viewRegistry->existingWidget(layout::view_id::kVariables))) {
-            variables->setFolders(m_commandsData.folders);
-        }
+    if (m_environmentsPanel) {
+        m_environmentsPanel->setFolders(m_commandsData.folders);
     }
     // Os painéis de um comando acompanham o nome dele e saem quando ele é apagado.
     if (m_dock) {
@@ -4317,11 +4780,6 @@ void MainWindow::centerOnActiveScreen()
     move(target);
 }
 
-void MainWindow::handleFilterQueryChanged(const QString &query)
-{
-    m_commandTree->setFilterQuery(query);
-}
-
 void MainWindow::handleCommandActivated(const QString &commandId)
 {
     const auto it = m_commandsById.constFind(commandId);
@@ -4347,7 +4805,11 @@ void MainWindow::handleCommandActivated(const QString &commandId)
     // execuções depois que o processo já terminou/foi parado.
     if (m_processManager->isTracked(commandId)
         && m_processManager->statusOf(commandId) == engine::ProcessStatus::Running) {
-        reconnectTerminalToCommand(commandId);
+        if (kipLivesInPanel(commandId)) {
+            revealKipPanel(commandId); // o app já está aberto no painel dele
+        } else {
+            reconnectTerminalToCommand(commandId);
+        }
         return;
     }
 
@@ -4722,7 +5184,9 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     } else {
         m_silentRunIds.remove(command.id);
     }
-    const bool quiet = m_quietRun && (command.hidden || silent) && !command.kip;
+    // App KIP com painel próprio: a execução é do painel; a Saída padrão fica como está.
+    const bool inPanel = kipLivesInPanel(command.id);
+    const bool quiet = (m_quietRun && (command.hidden || silent) && !command.kip) || inPanel;
     if (quiet) {
         m_quietRunIds.insert(command.id);
     } else {
@@ -4776,6 +5240,14 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     updateRunningCommandStatus();
     if (!quiet) {
         prepareDrawerForRun(command);
+    } else if (inPanel) {
+        forEachMirror(command.id, [](RunMirrorPanel *panel) { panel->beginRun(); });
+        if (m_autoStartingKip) {
+            m_kipAutoStarted.insert(command.id);
+        } else {
+            m_kipAutoStarted.remove(command.id);
+            revealKipPanel(command.id);
+        }
     }
     // SEM autofoco (feedback do usuário: rodar um comando não deve roubar o
     // foco de onde o usuário estava — árvore, busca, etc.). O campo de
@@ -5416,8 +5888,6 @@ void MainWindow::startFolderAction(const core::Command &command, const QMap<QStr
         if (!owned) {
             return;
         }
-        const auto it = m_commandsById.constFind(commandId);
-        m_processListDialog->setCommandName(commandId, it != m_commandsById.constEnd() ? it->name : commandId);
         m_processManager->track(commandId, std::move(owned));
         m_processListDialog->refreshProcessList();
         updateRunningCommandStatus();
@@ -5441,8 +5911,13 @@ void MainWindow::startFolderAction(const core::Command &command, const QMap<QStr
     m_failedCommandIds.remove(actionId);
     m_commandLogs[actionId].clear();
     m_openedLastLinkForRun.remove(actionId);
-    m_connectedTerminalCommandId = actionId;
-    prepareDrawerForRun(command);
+    if (kipLivesInPanel(actionId)) {
+        forEachMirror(actionId, [](RunMirrorPanel *panel) { panel->beginRun(); });
+        revealKipPanel(actionId);
+    } else {
+        m_connectedTerminalCommandId = actionId;
+        prepareDrawerForRun(command);
+    }
     m_commandTree->setFocusedAction(actionId);
     updateRunningCommandStatus();
 
@@ -5552,10 +6027,6 @@ void MainWindow::handleBackgroundProcessStarted(const QString &commandId, engine
     if (!ownedRunner) {
         return;
     }
-
-    const auto it = m_commandsById.constFind(commandId);
-    const QString displayName = (it != m_commandsById.constEnd()) ? it.value().name : commandId;
-    m_processListDialog->setCommandName(commandId, displayName);
 
     m_processManager->track(commandId, std::move(ownedRunner));
     m_processListDialog->refreshProcessList();
@@ -7984,6 +8455,12 @@ void MainWindow::handleSettingsRequested()
         [this]() { persistCommands(); }, [this]() { persistCollections(); }, this);
     // O layout dos painéis não depende do OK/Cancelar: restaurar vale na hora (e dá para continuar editando).
     connect(&dialog, &SettingsDialog::restoreLayoutRequested, this, &MainWindow::restoreDefaultLayout);
+    // A grade (colunas, linhas, expansão) também vale na hora.
+    if (m_dock) {
+        dialog.setLayoutModel(m_dock->model());
+        connect(&dialog, &SettingsDialog::gridChangeRequested, this,
+                [this](int cols, int rows, int expansion) { m_dock->setGrid(cols, rows, layout::Expansion(expansion)); });
+    }
 
     if (dialog.exec() != QDialog::Accepted) {
         return;
@@ -7996,6 +8473,10 @@ void MainWindow::handleSettingsRequested()
         return;
     }
     m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
+    m_smartFocus = newSettings.smartFocus;
+    refreshDocSources();
+    m_commandTree->setOutputMarksEnabled(!m_smartFocus);
+    m_commandTree->refreshRowMarks();
     // Perfis de IA: ficam no ai.json (chaves de API), nunca no settings.json.
     if (dialog.aiSettingsChanged()) {
         if (!m_configManager.saveAiSettings(dialog.buildAiSettings())) {
@@ -8114,6 +8595,11 @@ void MainWindow::applyActiveEnvironment()
     }
     m_envManager.setGlobalVars(vars);
     refreshEnvironmentSelector();
+    refreshDocSources(); // o diretório da documentação pode depender das variáveis
+    // O ativo mudou por outro caminho (a barra de cima, a importação): o painel Variáveis acompanha.
+    if (m_environmentsPanel && !m_savingEnvironmentsFromPanel) {
+        m_environmentsPanel->setData(settings.environments, settings.activeEnvironmentId);
+    }
 }
 
 void MainWindow::refreshAiAvailability()
@@ -8184,37 +8670,50 @@ QStringList MainWindow::availableDynamicVarNames() const
     return names;
 }
 
+// A tela de gestão dos ambientes é o painel Variáveis: o seletor da barra de cima só o traz para a frente.
 void MainWindow::handleManageEnvironmentsRequested()
 {
-    core::SettingsData settings = m_configManager.loadSettings();
-    EnvironmentManagerDialog dialog(settings.environments, settings.activeEnvironmentId, this,
-        &m_envManager, m_commandsData.folders,
-        [this]() { return m_configManager.loadPersistedDynamicVars(); },
-        [this](const QMap<QString, QMap<QString, QString>> &data) { return m_configManager.savePersistedDynamicVars(data); });
-    if (dialog.exec() != QDialog::Accepted) {
+    showAndRaise();
+    if (m_layoutController) {
+        m_layoutController->focusView(layout::view_id::kVariables);
+    }
+    if (m_environmentsPanel) {
+        const core::SettingsData settings = m_configManager.loadSettings();
+        m_environmentsPanel->setData(settings.environments, settings.activeEnvironmentId);
+    }
+}
+
+// O painel Variáveis entregou uma edição: grava e aplica (o mesmo caminho que o antigo diálogo seguia ao dar OK).
+void MainWindow::saveEnvironmentsFromPanel()
+{
+    if (!m_environmentsPanel) {
         return;
     }
-    settings.environments = dialog.environments();
-    settings.activeEnvironmentId = dialog.activeEnvironmentId();
+    core::SettingsData settings = m_configManager.loadSettings();
+    settings.environments = m_environmentsPanel->environments();
+    settings.activeEnvironmentId = m_environmentsPanel->activeEnvironmentId();
     if (!m_configManager.saveSettings(settings)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("env.manage.title")),
             utils::tr(QStringLiteral("mainwindow.error.save_environments")));
         return;
     }
+    m_savingEnvironmentsFromPanel = true;
     applyActiveEnvironment();
-    utils::Logger::info(kLogTag, QStringLiteral("Environments atualizados via tela de gestão."));
+    m_savingEnvironmentsFromPanel = false;
+    utils::Logger::info(kLogTag, QStringLiteral("Environments atualizados pelo painel Variáveis."));
 }
 
 // --- KIP ------------------------------------------------------------------
 
 void MainWindow::handleKipSessionStarted(const QString &commandId, engine::KipSession *session)
 {
-    m_terminalDrawer->bindKipSession(commandId, session);
-    // O comando KIP fixado num painel próprio ganha a view da sessão que começou.
-    const auto pinned = m_mirrors.constFind(layout::view_id::kKipPrefix + commandId);
-    if (pinned != m_mirrors.constEnd() && pinned.value()) {
-        pinned.value()->bindKipSession(session);
+    // Com painel próprio, a sessão é só do painel: a Saída padrão nem a recebe.
+    if (!kipLivesInPanel(commandId)) {
+        m_terminalDrawer->bindKipSession(commandId, session);
     }
+    // O painel do comando (fixado ou a guia puxada para um painel) ganha a view da sessão que começou.
+    const bool takeFocus = !m_kipAutoStarted.contains(commandId);
+    forEachMirror(commandId, [session, takeFocus](RunMirrorPanel *panel) { panel->bindKipSession(session, takeFocus); });
     const auto it = m_commandsById.constFind(commandId);
     const bool wantsWindow = (it != m_commandsById.constEnd() && it->kipOpenInWindow)
         || m_kipOpenWindowFor.contains(commandId);

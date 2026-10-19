@@ -1,5 +1,5 @@
-// Tela de Processos (ProcessListDialog): lista com estado/PID/tipo, filtro
-// Em execução/Todos, ações (parar, forçar, ir para o comando), painel de log
+// Tela de Processos (ProcessListDialog): lista compacta com estado/nome/tempo, filtro
+// Em execução/Todos, ações na linha e no menu (parar, forçar, ir para o comando), painel de log
 // desligado por ora — e o menu "Processos" fora da barra do topo (o acesso é
 // pela barra inferior; o histórico de execuções foi para o menu Arquivo).
 
@@ -44,39 +44,103 @@ private:
     }
 
 private slots:
-    void listsAForegroundProcessAndEmitsStopAndGoTo()
+    // Uma linha por processo com o nome do comando; as ações ficam na linha (parar, "mais ações") e no menu dela.
+    void listsAForegroundProcessAndActsFromTheRow()
     {
         ProcessManager manager;
         ProcessListDialog dialog(&manager);
         dialog.setForegroundProvider([]() { return oneForeground(); });
-        dialog.setCommandName(QStringLiteral("c1"), QStringLiteral("Alpha"));
-        dialog.refreshProcessList();
+        dialog.setLabelProvider([](const QString &id) {
+            ProcessListDialog::Label label;
+            if (id == QStringLiteral("c1")) {
+                label.name = QStringLiteral("Alpha");
+                label.where = QStringLiteral("Tools");
+            }
+            return label;
+        });
+        dialog.resize(480, 300);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
 
         auto *list = dialog.findChild<QListWidget *>(QStringLiteral("processList"));
-        auto *stop = dialog.findChild<QPushButton *>(QStringLiteral("processStop"));
-        auto *force = dialog.findChild<QPushButton *>(QStringLiteral("processForceStop"));
-        auto *goTo = dialog.findChild<QPushButton *>(QStringLiteral("processGoTo"));
-        auto *copyPid = dialog.findChild<QPushButton *>(QStringLiteral("processCopyPid"));
-        QVERIFY(list && stop && force && goTo && copyPid);
+        QVERIFY(list != nullptr);
         QCOMPARE(rowCount(list), 1);
-
-        // Nada selecionado: nenhuma ação.
-        QVERIFY(!stop->isEnabled() && !force->isEnabled() && !goTo->isEnabled() && !copyPid->isEnabled());
-
-        list->setCurrentRow(0);
-        QVERIFY(stop->isEnabled() && force->isEnabled() && goTo->isEnabled() && copyPid->isEnabled());
+        QCOMPARE(list->item(0)->text(), QStringLiteral("Alpha"));
+        // a barra de botões embaixo saiu: as ações moram na linha
+        QVERIFY(dialog.findChild<QPushButton *>(QStringLiteral("processStop")) == nullptr);
 
         QSignalSpy stopSpy(&dialog, &ProcessListDialog::stopRequested);
         QSignalSpy goSpy(&dialog, &ProcessListDialog::commandRequested);
-        stop->click();
-        force->click();
-        goTo->click();
-        QCOMPARE(stopSpy.count(), 2);
+        const QRect stopRect = dialog.actionRect(QStringLiteral("c1"), ProcessListDialog::RowAction::Stop);
+        QVERIFY(!stopRect.isEmpty());
+        QVERIFY(list->visualItemRect(list->item(0)).contains(stopRect));
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, stopRect.center());
+        QCOMPARE(stopSpy.count(), 1);
         QCOMPARE(stopSpy.at(0).at(0).toString(), QStringLiteral("c1"));
         QCOMPARE(stopSpy.at(0).at(1).toBool(), false);
+
+        std::unique_ptr<QMenu> menu(dialog.createActionsMenu(QStringLiteral("c1"), nullptr));
+        QStringList texts;
+        for (QAction *action : menu->actions()) {
+            if (!action->isSeparator()) {
+                texts << action->text();
+            }
+        }
+        QCOMPARE(texts, (QStringList{kai::utils::tr(QStringLiteral("processes.action.stop")),
+                                     kai::utils::tr(QStringLiteral("processes.action.force")),
+                                     kai::utils::tr(QStringLiteral("processes.action.go_to")),
+                                     kai::utils::tr(QStringLiteral("processes.action.copy_pid"))}));
+        for (QAction *action : menu->actions()) {
+            if (action->text() == kai::utils::tr(QStringLiteral("processes.action.force"))
+                || action->text() == kai::utils::tr(QStringLiteral("processes.action.go_to"))) {
+                action->trigger();
+            }
+            if (action->text() == kai::utils::tr(QStringLiteral("processes.action.copy_pid"))) {
+                QVERIFY(action->isEnabled()); // tem PID
+            }
+        }
+        QCOMPARE(stopSpy.count(), 2);
         QCOMPARE(stopSpy.at(1).at(1).toBool(), true);
         QCOMPARE(goSpy.count(), 1);
         QCOMPARE(goSpy.at(0).at(0).toString(), QStringLiteral("c1"));
+
+        // duplo clique na linha (fora dos botões) vai para o comando
+        const QPoint rowPoint(30, list->visualItemRect(list->item(0)).center().y());
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, rowPoint);
+        QTest::mouseDClick(list->viewport(), Qt::LeftButton, {}, rowPoint);
+        QCOMPARE(goSpy.count(), 2);
+
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            dialog.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/process-dialog.png"));
+        }
+    }
+
+    // Sem nome conhecido a linha cai no id; um processo que já terminou não tem o botão parar.
+    void unknownIdsFallBackAndFinishedRowsCannotStop()
+    {
+        ProcessManager manager;
+        auto runner = std::make_unique<ProcessRunner>();
+        ProcessRunner *raw = runner.get();
+        manager.track(QStringLiteral("c_done"), std::move(runner));
+        QCoreApplication::processEvents();
+        raw->start(QStringLiteral("exit 0"), QString(), {});
+        QTRY_VERIFY_WITH_TIMEOUT(manager.statusOf(QStringLiteral("c_done")) != ProcessStatus::Running, 5000);
+
+        ProcessListDialog dialog(&manager);
+        dialog.resize(480, 300);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        const auto buttons = dialog.findChildren<QToolButton *>(QStringLiteral("processFilterButton"));
+        buttons.at(1)->click(); // Todos
+        auto *list = dialog.findChild<QListWidget *>(QStringLiteral("processList"));
+        QCOMPARE(rowCount(list), 1);
+        QCOMPARE(list->item(list->count() - 1)->text(), QStringLiteral("c_done"));
+        QVERIFY(dialog.actionRect(QStringLiteral("c_done"), ProcessListDialog::RowAction::Stop).isEmpty());
+        QVERIFY(!dialog.actionRect(QStringLiteral("c_done"), ProcessListDialog::RowAction::More).isEmpty());
+        std::unique_ptr<QMenu> menu(dialog.createActionsMenu(QStringLiteral("c_done"), nullptr));
+        for (QAction *action : menu->actions()) {
+            QVERIFY(action->text() != kai::utils::tr(QStringLiteral("processes.action.stop")));
+        }
     }
 
     void filterAndSummaryCoverFinishedProcesses()

@@ -67,6 +67,9 @@ public:
     // O botão "abrir em janela própria" do cabeçalho (some na própria janela destacada).
     void setDetachable(bool detachable);
     QToolButton *detachButton() const { return m_detach; }
+    // Desligado: as telas da sessão não puxam o foco do teclado enquanto ele estiver fora da view (o app aberto sozinho
+    // no boot). Volta a valer a cada sessão nova.
+    void setAutoFocus(bool enabled) { m_autoFocus = enabled; }
 
 signals:
     // O usuário pediu para abrir esta view numa janela própria.
@@ -101,7 +104,8 @@ private:
     void refreshFooter(const core::KipScreenState &s);
     void rebuildPromptCard(const core::KipOpenScreen &open);
     void syncFields(const core::KipOpenScreen &open);
-    void syncChips(const core::KipOpenScreen &open);
+    void syncChips(const core::KipScreenState &s);
+    void wireBlock(KipBlockWidget *block);
     void placeFields(const core::KipOpenScreen &open);
     FieldSlot makeFieldSlot(const core::KipField &field, const QJsonValue &value);
     void installSubmitFilter(QWidget *root);
@@ -149,6 +153,7 @@ private:
 
     // Prompt/confirm atual
     quint64 m_promptSerial = 0;
+    bool m_autoFocus = true;
     QWidget *m_promptCard = nullptr;
     QLabel *m_promptMessage = nullptr;
     QWidget *m_promptWorking = nullptr;

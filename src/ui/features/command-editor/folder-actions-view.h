@@ -49,6 +49,9 @@ struct FolderActionIcon {
 class FolderActionsView : public QStyledItemDelegate {
     Q_OBJECT
 public:
+    // Comando com saída para mostrar (Available) e o que está na Saída agora (Shown).
+    enum class OutputMark { None, Available, Shown };
+
     struct Provider {
         // id da pasta de uma linha (vazio = a linha não é uma pasta)
         std::function<QString(const QTreeWidgetItem *)> folderIdOf;
@@ -57,6 +60,8 @@ public:
         // A ação já rodou (há saída guardada pra carregar)?
         std::function<bool(const QString &virtualId)> hasOutput;
         std::function<QString()> focusedId;
+        // Linhas de COMANDO: a marca da saída no fim da coluna (só uma indicação, não um botão).
+        std::function<OutputMark(const QTreeWidgetItem *)> outputMarkOf;
     };
 
     FolderActionsView(QTreeWidget *tree, Provider provider);
@@ -104,6 +109,7 @@ protected:
 
 private:
     QRect cellRectFor(const QTreeWidgetItem *item) const;
+    static void paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark);
     void paintIcon(QPainter *painter, const QRect &box, const FolderActionIcon &icon, bool running,
                    bool focused, bool hovered, bool hasOutput) const;
     // Posição que abre um menu (o grupo ou o expansor): `iconName` com `fallbackName` se não existir.

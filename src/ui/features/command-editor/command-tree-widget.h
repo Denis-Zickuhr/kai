@@ -100,6 +100,21 @@ public:
     // clique faz no ícone (carrega em vez de rodar).
     void setActionsWithOutput(const QSet<QString> &virtualIds);
     QString focusedAction() const { return m_focusedActionId; }
+    // Sem o foco inteligente, o menu do item oferece "Mostrar saída" (comando com saída) e "Abrir documento" (item com
+    // documentação): quem responde é o MainWindow. Sem predicado, nenhum dos dois aparece.
+    void setFocusPredicates(std::function<bool(const QString &commandId)> hasOutput,
+                            std::function<bool(const QString &itemId)> hasDocument)
+    {
+        m_commandHasOutput = std::move(hasOutput);
+        m_itemHasDocument = std::move(hasDocument);
+    }
+    // O comando que está na Saída (marca em destaque na linha dele; os outros com saída ganham a marca discreta).
+    void setShownCommand(const QString &commandId);
+    QString shownCommand() const { return m_shownCommandId; }
+    // Redesenha as marcas (o que elas dizem mudou fora da árvore, como o foco inteligente).
+    void refreshRowMarks() { refreshActionViews(); }
+    // Com as marcas ligadas (sem o foco inteligente) a coluna de status ganha o espaço delas, ao lado do tempo.
+    void setOutputMarksEnabled(bool enabled);
 
     // Bug real reportado: "ao re-rodar um comando via double click ou
     // enter, esse tempo não reseta". Causa: setRunningCommandIds() só
@@ -111,6 +126,8 @@ public:
     // contando da primeira vez. Chamado pelo MainWindow no exato instante
     // (síncrono) em que uma execução começa — não depende de poll.
     void resetRunTimer(const QString &commandId);
+    // Quando a execução em curso começou (inválido: não está rodando). O mesmo relógio do tempo na linha.
+    QDateTime runStartedAt(const QString &commandId) const { return m_runStartedAt.value(commandId); }
 
     // TEMPO DE EXECUÇÃO: formata a duração no padrão pedido pelo usuário —
     // exibe o próximo token só quando ele é alcançado:
@@ -217,6 +234,9 @@ signals:
     void folderActionActivated(const QString &commandId, const QString &folderId);
     // Botão direito num ícone de ação.
     void folderActionContextRequested(const QString &commandId, const QString &folderId, const QPoint &globalPos);
+    // Menu do item: mostrar a saída do comando / o documento do item (sem executar nem selecionar).
+    void commandOutputRequested(const QString &commandId);
+    void documentRequested(const QString &itemId);
     // "Sincronizar com o arquivo" (kai.yml) de uma pasta-projeto.
     // `kaiToFile` true = Kai -> Arquivo; false = Arquivo -> Kai.
     void projectSyncRequested(const QString &folderId, bool kaiToFile);
@@ -248,6 +268,9 @@ signals:
     // A saída pode estar mostrando outro comando mesmo com este selecionado (um KIP iniciado pela busca ou por um
     // atalho, por exemplo): quem ouve reconecta a saída se for o caso.
     void commandClicked(const QString &commandId);
+    // Idem para uma PASTA (ou nota): clicar nela de novo, já selecionada, não emite selectionChanged, mas o painel dela
+    // (Documento) precisa voltar à frente.
+    void folderClicked(const QString &itemId);
     void killRequested(const QString &commandId);
     void playRequested(const QString &commandId);
 
@@ -354,6 +377,10 @@ private:
     void refreshSyncMarks();
     QString m_focusedActionId;
     QSet<QString> m_actionsWithOutput;
+    std::function<bool(const QString &)> m_commandHasOutput;
+    std::function<bool(const QString &)> m_itemHasDocument;
+    QString m_shownCommandId;
+    bool m_outputMarks = false;
     QMap<QString, core::Command> m_commandIndex; // id -> comando, pra montar as ações sem varrer a lista a cada pintura
     bool m_rebuilding = false;                   // rebuildTabs em curso: restaurar a seleção não desfoca
     QVector<FolderActionIcon> folderActionIcons(const QString &folderId) const;

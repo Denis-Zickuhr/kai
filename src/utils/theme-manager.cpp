@@ -171,8 +171,15 @@ QString ThemeManager::resolveExpressions(const QString &input, const QMap<QStrin
     return result;
 }
 
-QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QMap<QString, QString> &components) const
+QString ThemeManager::buildQss(const QMap<QString, QString> &themeVariables, const QMap<QString, QString> &components) const
 {
+    // Os cantos seguem a preferência do usuário (Configurações → Aparência → Cantos), não o que o arquivo do tema declara:
+    // este módulo não conhece os tokens (é do núcleo, sem widgets), então as regras base saem com `@RADIUS_MD@` e
+    // `@RADIUS_SM@` e a interface os troca pelo raio escolhido ao aplicar (ver themeStyleSheet em ui/app-stylesheet.h).
+    QMap<QString, QString> variables = themeVariables;
+    variables.insert(QStringLiteral("border_radius"), QStringLiteral("@RADIUS_MD@"));
+    variables.insert(QStringLiteral("input_radius"), QStringLiteral("@RADIUS_MD@"));
+
     QString qss;
 
     // Regras base derivadas diretamente das variáveis (fallback para
@@ -296,7 +303,7 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         // focar, o campo embutido ganha um fundo sólido (bg) e uma seleção
         // de texto com o acento, garantindo legibilidade sobre a zebra.
         "QTableWidget QLineEdit:focus { background: %8; selection-background-color: %5; "
-        "selection-color: %6; border: 1px solid %5; border-radius: 4px; }\n")
+        "selection-color: %6; border: 1px solid %5; border-radius: @RADIUS_SM@; }\n")
         .arg(variables.value(QStringLiteral("font_size"), QStringLiteral("12pt")),
              variables.value(QStringLiteral("sel_bg"), QStringLiteral("#44475a")),
              variables.value(QStringLiteral("alt_bg"), QStringLiteral("#21222c")),
@@ -331,7 +338,7 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
     // reportado: "bordas brancas feias").
     qss += QStringLiteral(
         "QMainWindow { background-color: %1; }\n"
-        "QWidget#rootContainer { background-color: %1; border-radius: 8px; border: 1px solid %1; }\n"
+        "QWidget#rootContainer { background-color: %1; border-radius: @RADIUS_MD@; border: 1px solid %1; }\n"
         // Diálogos NÃO usam a decoração do sistema: ganham a moldura própria do
         // Kai (ver ui/shared/dialog-frame.h — barra de título, borda e raio),
         // com a borda/raio em app-stylesheet.cpp. Aqui só o fundo do tema.
@@ -371,7 +378,7 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
         // cantos arredondados, título em destaque na cor de acento e
         // padding interno generoso. Sem borda dura — o contraste de fundo
         // já separa os blocos visualmente.
-        "QGroupBox { background-color: %1; border: none; border-radius: 8px; "
+        "QGroupBox { background-color: %1; border: none; border-radius: @RADIUS_MD@; "
         "margin-top: 14px; padding: 14px 12px 12px 12px; font-weight: 600; }\n"
         "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; "
         "left: 12px; top: 2px; padding: 0px 4px; color: %4; font-size: 10pt; }\n")
@@ -471,30 +478,30 @@ QString ThemeManager::buildQss(const QMap<QString, QString> &variables, const QM
 
         qss += QStringLiteral(
             // Campos e botões mais altos, espaçosos e arredondados.
-            "QLineEdit, QComboBox { min-height: 30px; padding: 9px 12px; border-radius: 8px; "
+            "QLineEdit, QComboBox { min-height: 30px; padding: 9px 12px; border-radius: @RADIUS_MD@; "
             "border: 1px solid %4; background-color: %1; selection-background-color: %6; selection-color: %7; }\n"
             "QLineEdit:hover, QComboBox:hover { border: 1px solid %5; }\n"
             "QLineEdit:focus, QComboBox:focus { border: 1px solid %5; }\n"
-            "QPlainTextEdit, QTextEdit { border-radius: 8px; padding: 10px; border: 1px solid %4; background-color: %1; }\n"
-            "QPushButton { min-height: 30px; padding: 9px 18px; border-radius: 8px; "
+            "QPlainTextEdit, QTextEdit { border-radius: @RADIUS_MD@; padding: 10px; border: 1px solid %4; background-color: %1; }\n"
+            "QPushButton { min-height: 30px; padding: 9px 18px; border-radius: @RADIUS_MD@; "
             "background-color: %2; border: 1px solid %4; font-weight: 600; }\n"
             "QPushButton:hover { background-color: %4; border: 1px solid %5; }\n"
             "QPushButton:pressed { background-color: %5; }\n"
             "QPushButton:default { background-color: %5; color: %7; border: 1px solid %5; }\n"
-            "QToolButton { min-height: 30px; padding: 7px; border-radius: 8px; }\n"
+            "QToolButton { min-height: 30px; padding: 7px; border-radius: @RADIUS_MD@; }\n"
             "QToolButton:hover { background-color: %4; }\n"
             // Seta do combo com área confortável.
             "QComboBox::drop-down { border: none; width: 26px; }\n"
             // POPUP do QComboBox: fundo do tema, item alto, selecionado com
             // acento — elimina o fundo branco nativo e alinha o texto.
             "QComboBox QAbstractItemView { background-color: %2; color: %3; "
-            "border: 1px solid %5; border-radius: 8px; padding: 4px; outline: none; "
+            "border: 1px solid %5; border-radius: @RADIUS_MD@; padding: 4px; outline: none; "
             "selection-background-color: %6; selection-color: %7; }\n"
-            "QComboBox QAbstractItemView::item { min-height: 28px; padding: 6px 10px; border-radius: 6px; }\n"
+            "QComboBox QAbstractItemView::item { min-height: 28px; padding: 6px 10px; border-radius: @RADIUS_SM@; }\n"
             // POPUP do QCompleter (busca): é uma QListView flutuante; sem
             // esta regra vem branca com o texto colado na borda.
             "QCompleter QAbstractItemView, QListView#completerPopup { background-color: %2; color: %3; "
-            "border: 1px solid %5; border-radius: 8px; padding: 4px; outline: none; "
+            "border: 1px solid %5; border-radius: @RADIUS_MD@; padding: 4px; outline: none; "
             "selection-background-color: %6; selection-color: %7; }\n"
             // Espaçamento geral um pouco mais generoso.
             "QCheckBox { spacing: 10px; padding: 5px; }\n"

@@ -23,12 +23,14 @@ public:
     QCheckBox *autostartField() const { return m_autostartField; }
     QSpinBox *gracefulStopTimeoutField() const { return m_gracefulStopTimeoutField; }
     QSpinBox *outputMaxLogSizeField() const { return m_outputMaxLogSizeField; }
+    QCheckBox *smartFocusField() const { return m_smartFocusField; }
 
 private:
     QComboBox *m_languageField = nullptr;
     QCheckBox *m_autostartField = nullptr;
     QSpinBox *m_gracefulStopTimeoutField = nullptr;
     QSpinBox *m_outputMaxLogSizeField = nullptr;
+    QCheckBox *m_smartFocusField = nullptr;
 };
 
 } // namespace kai::ui

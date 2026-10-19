@@ -118,6 +118,8 @@ public:
     QStringList recentEntries() const;
     // Abre o menu de recentes (o relógio da barra de cima).
     void showRecentsMenu(const QPoint &globalPosition);
+    // O botão das pastas com documentação (no começo da barra): desligado por padrão; só o painel Documento do app o liga.
+    void setFoldersButtonVisible(bool visible);
 
     // --- Edição (o lápis ao lado da lupa) ---------------------------------------------------------------------------
     // O que fazer com alterações não salvas ao sair do arquivo (ou descartar).
@@ -176,6 +178,8 @@ public:
     QVector<DocCrumb> breadcrumbs() const { return m_crumbs; }
 
 signals:
+    // O botão das pastas foi clicado: quem escuta abre o menu na posição global dada.
+    void foldersRequested(const QPoint &globalPosition);
     // Um documento foi mostrado (ou o erro de abri-lo, quando o arquivo foi pedido explicitamente).
     void loaded(const QString &file);
     // Nada a mostrar: a pasta não existe (ou o arquivo achado não abriu) (openFolderReadme). `suggestion` = um caminho

@@ -87,17 +87,19 @@ private slots:
         auto *drawer = window.findChild<TerminalDrawer *>();
         QWidget *document = window.viewRegistry()->existingWidget(view_id::kDocument);
         QVERIFY(tabbed(drawer)); // o padrão mostra a faixa de abas em toda zona: o cartão cola nela
+        // Começa com a Saída sozinha na zona (o Documento, que no padrão é aba dela, vai para baixo).
+        dock->moveView(view_id::kDocument, Zone{1, 1});
         dock->setEditMode(false);
         QVERIFY(!tabbed(drawer)); // sem a faixa (zona de um painel só), o cartão é inteiro
         dock->setEditMode(true);
         QVERIFY(tabbed(drawer));
         dock->setEditMode(false);
-        dock->moveView(view_id::kDocument, Zone::Right); // dois painéis na zona: a faixa aparece sozinha
+        dock->moveView(view_id::kDocument, Zone{0, 1}); // dois painéis na zona: a faixa aparece sozinha
         document = window.viewRegistry()->existingWidget(view_id::kDocument);
         QVERIFY(tabbed(drawer));
         QVERIFY(tabbed(document));
         // Sai da zona de abas: volta a ter a moldura inteira.
-        dock->moveView(view_id::kDocument, Zone::Bottom);
+        dock->moveView(view_id::kDocument, Zone{1, 1});
         QVERIFY(!tabbed(drawer));
         QVERIFY(!tabbed(document));
         // A lista de comandos também cola (a árvore e as colunas de ações).
@@ -156,9 +158,9 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.activateWindow();
         DockHost *dock = window.dockHost();
-        dock->moveView(view_id::kDocument, Zone::Right);
+        dock->revealView(view_id::kDocument); // no padrão é aba da Saída: fica à frente dela
         QTest::qWait(60);
-        ViewZone *right = dock->zoneWidget(Zone::Right);
+        ViewZone *right = dock->zoneWidget(Zone{0, 1});
         ZoneTabStrip *strip = right->strip();
         QCOMPARE(strip->activeId(), view_id::kDocument);
         QTest::mouseClick(strip, Qt::LeftButton, Qt::NoModifier, strip->tabRect(0).center());
@@ -169,7 +171,7 @@ private slots:
         QVERIFY(!window.viewRegistry()->existingWidget(view_id::kDocument)->isVisible());
 
         // O foco do teclado decide qual zona leva o destaque forte.
-        ViewZone *center = dock->zoneWidget(Zone::Left); // a zona da lista
+        ViewZone *center = dock->zoneWidget(Zone{0, 0}); // a zona da lista
         QVERIFY(center != nullptr);
         window.layoutController()->focusView(view_id::kCommands);
         QTRY_VERIFY(center->strip()->zoneFocused());
@@ -244,7 +246,7 @@ private slots:
 
         shot(window, tag + QStringLiteral("1-default"));
 
-        dock->moveView(view_id::kDocument, Zone::Right);
+        dock->moveView(view_id::kDocument, Zone{0, 1});
         shot(window, tag + QStringLiteral("2-output-document-tabs"));
 
         dock->restoreDefault();
@@ -260,21 +262,22 @@ private slots:
 
         // Faixas laterais: a Saída recolhida à direita e aberta ao lado da lista.
         dock->restoreDefault();
-        dock->setZoneCollapsed(Zone::Right, true);
+        dock->setZoneCollapsed(Zone{0, 1}, true);
         shot(window, tag + QStringLiteral("7-right-rail"));
         dock->revealView(view_id::kOutput);
         shot(window, tag + QStringLiteral("8-right-overlay"));
         dock->hideRevealed();
 
-        // Faixa de baixo.
+        // Faixa de baixo (no modo horizontal as linhas são as pilhas: a de baixo recolhe para a borda de baixo).
         dock->restoreDefault();
-        dock->moveView(view_id::kHistory, Zone::Bottom);
-        dock->setZoneCollapsed(Zone::Bottom, true);
+        dock->setGrid(2, 2, Expansion::Horizontal);
+        dock->moveView(view_id::kHistory, Zone{1, 1});
+        dock->setZoneCollapsed(Zone{1, 1}, true);
         dock->revealView(view_id::kHistory);
         shot(window, tag + QStringLiteral("9-bottom-overlay"));
         dock->hideRevealed();
 
-        // Os alvos de soltar durante um arrasto (esquerda e direita cheias, centro e fundo vazios).
+        // Os alvos de soltar durante um arrasto (a grade inteira: as células cheias e as vazias).
         dock->restoreDefault();
         dock->beginViewDrag();
         shot(window, tag + QStringLiteral("10-drag-targets"));
@@ -282,8 +285,8 @@ private slots:
 
         // Lista numa faixa à esquerda, Saída e Documento em abas à direita.
         dock->restoreDefault();
-        dock->moveView(view_id::kDocument, Zone::Right);
-        dock->setZoneCollapsed(Zone::Left, true);
+        dock->moveView(view_id::kDocument, Zone{0, 1});
+        dock->setZoneCollapsed(Zone{0, 0}, true);
         shot(window, tag + QStringLiteral("11-left-rail"));
     }
 };

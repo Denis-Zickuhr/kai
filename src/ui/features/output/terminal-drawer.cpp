@@ -409,6 +409,8 @@ void TerminalDrawer::updateToggleIcon()
         iconName = m_expanded ? QStringLiteral("chevron-left") : QStringLiteral("chevron-right");
     } else if (m_position == DrawerPosition::Right) {
         iconName = m_expanded ? QStringLiteral("chevron-right") : QStringLiteral("chevron-left");
+    } else if (m_position == DrawerPosition::Top) {
+        iconName = m_expanded ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down");
     } else {
         iconName = m_expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up");
     }
@@ -416,7 +418,7 @@ void TerminalDrawer::updateToggleIcon()
     // No miolo da janela não há para onde recolher: nenhum dos dois botões aparece.
     const bool collapsible = m_position != DrawerPosition::Center;
     m_toggleButton->setVisible(collapsible);
-    // O mesmo botão no fim da barra de guias: o cabeçalho da Saída (onde está o de cima) some nos modos documento, KIP e
+    // O mesmo botão no fim da barra de guias: o cabeçalho da Saída (onde está o de cima) some nos modos KIP e
     // "sem execução". Expandida, o ícone aponta para onde a Saída recolhe.
     m_tabsBar->setOutputToggle(collapsible && !m_headerShown, iconName);
 }
@@ -462,14 +464,9 @@ void TerminalDrawer::flushPendingOutput()
     }
 }
 
-void TerminalDrawer::clear(bool keepDocument)
+void TerminalDrawer::clear()
 {
     m_pendingChunks.clear();
-    // Com o leitor num painel próprio, trocar de seleção não derruba o documento: ele fica ali para ser lido enquanto o
-    // comando roda (a Saída é que muda).
-    if (!keepDocument && !m_panel->documentExternal()) {
-        m_panel->clearDocument();
-    }
     m_panel->clearAll();
     // NÃO limpa a janela destacada: ela é um monitor FIXO do comando de origem
     // e deve preservar o histórico quando a seleção muda.

@@ -1,4 +1,6 @@
 #include <QTest>
+#include <QApplication>
+#include <QMenu>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -15,6 +17,7 @@
 #include "ui/features/kip/kip-details-drawer.h"
 #include "ui/features/kip/kip-result-card.h"
 #include "ui/features/kip/kip-view.h"
+#include "ui/features/docs/document-panel.h"
 #include "ui/features/output/output-panel.h"
 #include "ui/features/output/output-tabs-bar.h"
 #include "ui/features/output/run-mirror-panel.h"
@@ -58,6 +61,18 @@ core::Command kipCommand(const QString &id, const QString &name, const QString &
 
 // A fiação da feature KIP no MainWindow, de ponta a ponta com processos reais:
 // painel de saída em modo KIP, respostas lembradas, janela própria, `kai -g`.
+
+namespace {
+// Foco inteligente ligado: a seleção na árvore leva a Saída e o Documento (o que estes testes conferem).
+void enableSmartFocus()
+{
+    kai::core::ConfigManager config;
+    kai::core::SettingsData settings = config.loadSettings();
+    settings.smartFocus = true;
+    QVERIFY(config.saveSettings(settings));
+}
+} // namespace
+
 class TestKipMainWindow : public QObject {
     Q_OBJECT
 
@@ -150,21 +165,23 @@ private slots:
         data.commands = {kipCommand(QStringLiteral("deploy"), QStringLiteral("Deploy"), QStringLiteral("happy.sh"))};
         QVERIFY(config.saveCommands(data));
 
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
         auto *tree = window.findChild<CommandTreeWidget *>();
         OutputPanel *panel = drawer->embeddedPanel();
+        DocumentPanel *docs = window.documentPanel();
         QVERIFY(tree->selectCommand(QStringLiteral("f1")));
-        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
+        QTRY_VERIFY_WITH_TIMEOUT(docs->documentMode(), 4000);
 
         activate(window, QStringLiteral("deploy"));
         QTRY_VERIFY_WITH_TIMEOUT(drawer->kipMode(), 8000);
-        QVERIFY(!panel->documentMode());
+        QVERIFY(docs->documentMode()); // o documento segue no painel dele; só passa para trás da Saída
         KipView *view = panel->kipView();
         QVERIFY(view);
-        QTRY_VERIFY_WITH_TIMEOUT(view->isVisible(), 3000); // a página do corpo é a da view, não a do documento
-        QVERIFY(!panel->docViewer()->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(view->isVisible(), 3000);
+        QVERIFY(!docs->docViewer()->isVisible());
         QTRY_VERIFY_WITH_TIMEOUT(view->session()->screen().awaitingInput(), 8000);
         // Termina o app antes de destruir a janela (um processo vivo na hora de fechar é outro assunto).
         auto *session = view->session();
@@ -315,26 +332,27 @@ private slots:
         data.commands = {c};
         QVERIFY(config.saveCommands(data));
 
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
         auto *tree = window.findChild<CommandTreeWidget *>();
         OutputPanel *panel = drawer->embeddedPanel();
+        DocumentPanel *docs = window.documentPanel();
         activate(window, QStringLiteral("win"));
         QTRY_VERIFY_WITH_TIMEOUT(drawer->hasDetachedWindow(), 8000);
         QTRY_VERIFY_WITH_TIMEOUT(drawer->detachedPanel()->kipSession()->screen().awaitingInput(), 8000);
 
         QVERIFY(tree->selectCommand(QStringLiteral("win"))); // o comando em foco; depois sai dele para a pasta
         QVERIFY(tree->selectCommand(QStringLiteral("f1")));
-        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
-        QVERIFY(!panel->kipMode());
+        QTRY_VERIFY_WITH_TIMEOUT(docs->documentMode(), 4000);
+        QVERIFY(panel->kipMode()); // a Saída segue com o que mostrava (o cartão da janela própria)
         QVERIFY(drawer->hasDetachedWindow()); // a janela do KIP segue lá, com o processo vivo
         QVERIFY(drawer->detachedPanel()->kipMode());
 
         // Voltar ao comando traz o KIP de volta ao painel principal (a janela está aberta: placeholder).
         QVERIFY(tree->selectCommand(QStringLiteral("win")));
         QTRY_VERIFY_WITH_TIMEOUT(panel->kipMode(), 4000);
-        QVERIFY(!panel->documentMode());
 
         drawer->detachedPanel()->kipSession()->cancel();
         QTRY_VERIFY_WITH_TIMEOUT(drawer->detachedPanel()->kipSession()->isTerminal(), 8000);
@@ -367,11 +385,13 @@ private slots:
         data.commands = {kipCommand(QStringLiteral("quick"), QStringLiteral("Quick"), QStringLiteral("quick.sh"))};
         QVERIFY(config.saveCommands(data));
 
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
         auto *tree = window.findChild<CommandTreeWidget *>();
         OutputPanel *panel = drawer->embeddedPanel();
+        DocumentPanel *docs = window.documentPanel();
         activate(window, QStringLiteral("quick"));
         QTRY_VERIFY_WITH_TIMEOUT(drawer->kipMode(), 8000);
         QTRY_VERIFY_WITH_TIMEOUT(panel->kipSession()->isTerminal(), 8000);
@@ -380,14 +400,13 @@ private slots:
         QVERIFY(drawer->hasDetachedWindow());
         QVERIFY(tree->selectCommand(QStringLiteral("quick")));
         QVERIFY(tree->selectCommand(QStringLiteral("f1")));
-        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
+        QTRY_VERIFY_WITH_TIMEOUT(docs->documentMode(), 4000);
         QVERIFY(tree->selectCommand(QStringLiteral("quick")));
-        QTRY_VERIFY_WITH_TIMEOUT(!panel->documentMode(), 4000);
         QVERIFY(tree->selectCommand(QStringLiteral("f1")));
-        QTRY_VERIFY_WITH_TIMEOUT(panel->documentMode(), 4000);
+        QTRY_VERIFY_WITH_TIMEOUT(docs->documentMode(), 4000);
         drawer->detachedPanel()->window()->close();
         QTRY_VERIFY(!drawer->hasDetachedWindow());
-        QVERIFY(panel->documentMode()); // fechar a janela do KIP não tira a documentação da tela
+        QVERIFY(docs->documentMode()); // fechar a janela do KIP não tira a documentação da tela
         QVERIFY(tree->selectCommand(QStringLiteral("quick")));
         QTRY_VERIFY_WITH_TIMEOUT(panel->kipMode(), 4000);
     }
@@ -797,6 +816,7 @@ private slots:
         plain.type = core::CommandType::Command;
         plain.command = QStringLiteral("echo hi");
         seed({kipCommand(QStringLiteral("k"), QStringLiteral("Kip"), QStringLiteral("cancel-polite.sh")), plain});
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
@@ -826,6 +846,7 @@ private slots:
         dev.type = core::CommandType::Command;
         dev.command = QStringLiteral("echo dev-up; sleep 6");
         seed({kipCommand(QStringLiteral("k"), QStringLiteral("Kip"), QStringLiteral("cancel-polite.sh")), dev});
+        enableSmartFocus();
         MainWindow window;
         window.show();
         auto *drawer = window.findChild<TerminalDrawer *>();
@@ -891,7 +912,7 @@ private slots:
         emit tree->pinAsPanelRequested(QStringLiteral("deploy"));
         QTest::qWait(80);
         layout::DockHost *dock = window.dockHost();
-        QCOMPARE(dock->zoneOf(QStringLiteral("kip:deploy")), std::optional<layout::Zone>(layout::Zone::Right));
+        QCOMPARE(dock->zoneOf(QStringLiteral("kip:deploy")), std::optional<layout::Zone>(layout::Zone{0, 1}));
         auto *panel = window.findChild<RunMirrorPanel *>();
         QVERIFY(panel != nullptr);
         QCOMPARE(panel->kind(), RunMirrorPanel::Kind::Kip);
@@ -909,8 +930,9 @@ private slots:
         QVERIFY(view != nullptr);
         QVERIFY(view->session() != nullptr);
         QTRY_VERIFY_WITH_TIMEOUT(view->session()->screen().awaitingInput(), 8000);
-        // Uma view interativa por sessão: a Saída embutida cede o lugar a um cartão.
-        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->kipDetachedPlaceholder(), 4000);
+        // O app vive no painel: a Saída padrão não ganha guia dele nem se conecta à sessão.
+        QVERIFY(!drawer->outputTabs()->hasTab(QStringLiteral("deploy")));
+        QVERIFY(drawer->embeddedPanel()->kipView() == nullptr || drawer->embeddedPanel()->kipView()->session() != view->session());
 
         auto *session = view->session();
         session->setFieldValue(QStringLiteral("env"), QStringLiteral("prod"));
@@ -921,11 +943,72 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(session->isTerminal(), 8000);
         QCOMPARE(session->state(), core::KipSessionState::Finished);
 
-        // Fechar o painel devolve a view à Saída.
+        // Fechar o painel devolve o app à Saída: a guia volta.
         dock->closeView(QStringLiteral("kip:deploy"));
         QTest::qWait(80);
         QVERIFY(!dock->model().isPlaced(QStringLiteral("kip:deploy")));
         QVERIFY(!drawer->embeddedPanel()->kipDetachedPlaceholder());
+        QVERIFY(drawer->outputTabs()->hasTab(QStringLiteral("deploy")));
+    }
+
+    // Bug: a guia da Saída de um app KIP puxada para um painel (`run:<id>`) mostrava só o log, não a view KIP. E depois:
+    // "Executar de novo" reabria o app na Saída padrão, onde ele ficava inacessível (só o cartão "aberto em outro
+    // lugar"). Com painel, o app vive SÓ nele — como uma aba do app —, e a Saída não ganha guia nem se conecta a ele.
+    void aKipRunTabOpenedAsAPanelLivesOnlyThere()
+    {
+        core::Command plain;
+        plain.id = QStringLiteral("plain");
+        plain.folderId = QStringLiteral("f1");
+        plain.name = QStringLiteral("Plain");
+        plain.type = core::CommandType::Command;
+        plain.command = QStringLiteral("echo plain-out");
+        seed({kipCommand(QStringLiteral("deploy"), QStringLiteral("Deploy"), QStringLiteral("happy.sh")), plain});
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        activate(window, QStringLiteral("plain"));
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->plainOutput().contains(QStringLiteral("plain-out")), 8000);
+        activate(window, QStringLiteral("deploy"));
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->kipMode(), 8000);
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->kipView()->session()->screen().awaitingInput(), 8000);
+
+        window.layoutController()->focusView(QStringLiteral("run:deploy"));
+        QTest::qWait(80);
+        auto *mirror = window.findChild<RunMirrorPanel *>();
+        QVERIFY(mirror != nullptr);
+        QCOMPARE(mirror->kind(), RunMirrorPanel::Kind::Run);
+        QVERIFY(mirror->output()->kipMode());
+        KipView *view = mirror->output()->kipView();
+        QVERIFY(view != nullptr && view->session() != nullptr);
+        QVERIFY(view->session()->screen().awaitingInput());
+        // A guia do app saiu da Saída, que voltou para a vizinha.
+        QTRY_VERIFY_WITH_TIMEOUT(!drawer->outputTabs()->hasTab(QStringLiteral("deploy")), 4000);
+        QVERIFY(drawer->outputTabs()->hasTab(QStringLiteral("plain")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("plain"));
+
+        auto *session = view->session();
+        session->setFieldValue(QStringLiteral("env"), QStringLiteral("dev"));
+        QVERIFY(session->submit());
+        QTRY_VERIFY_WITH_TIMEOUT(session->screen().openScreen() && session->screen().openScreen()->id == QStringLiteral("sure")
+                                     && session->screen().awaitingInput(), 8000);
+        QVERIFY(session->confirm(true));
+        QTRY_VERIFY_WITH_TIMEOUT(session->isTerminal(), 8000);
+
+        // "Executar de novo" (pelo painel ou pela árvore): a execução nova é do painel; a Saída fica onde estava.
+        emit mirror->runRequested(QStringLiteral("deploy"));
+        QTRY_VERIFY_WITH_TIMEOUT(mirror->output()->kipView()->session() != session
+                                     && mirror->output()->kipView()->session()->screen().awaitingInput(), 8000);
+        QVERIFY(!drawer->outputTabs()->hasTab(QStringLiteral("deploy")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("plain"));
+        QVERIFY(!drawer->embeddedPanel()->kipMode());
+
+        // Fechar o painel devolve a guia à Saída, sem tomar a frente.
+        window.dockHost()->closeView(QStringLiteral("run:deploy"));
+        QTest::qWait(80);
+        QVERIFY(drawer->outputTabs()->hasTab(QStringLiteral("deploy")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("plain"));
     }
 
     void onlyKipCommandsCanBePinnedAndTheyComeBackWithoutRunning()
@@ -949,7 +1032,7 @@ private slots:
             QVERIFY(window.dockHost()->model().isPlaced(QStringLiteral("kip:deploy")));
             window.layoutController()->flush();
         }
-        // O painel fixado é permanente: volta no próximo Kai, mas NUNCA roda sozinho.
+        // O painel fixado é permanente: volta no próximo Kai. Sem "Abrir com o Kai" ligado, não roda sozinho.
         MainWindow again;
         again.resize(1300, 800);
         again.show();
@@ -960,6 +1043,72 @@ private slots:
         QVERIFY(panel->showsIdleCard());
         QTest::qWait(300);
         QVERIFY(again.findChild<TerminalDrawer *>()->outputTabs()->tabs().isEmpty());
+    }
+
+    // Um app KIP posto num painel pelo usuário vira mini app: o ícone do comando, volta ao reiniciar e abre sozinho na tela
+    // inicial dele (inerte: espera o usuário), sem guia na Saída. "Abrir com o Kai" (menu do painel) desliga isso.
+    void aKipAppPutInAPanelBecomesAMiniAppThatOpensWithKai()
+    {
+        core::Command app = kipCommand(QStringLiteral("deploy"), QStringLiteral("Deploy"), QStringLiteral("happy.sh"));
+        app.icon = QStringLiteral("rocket");
+        seed({app});
+        {
+            MainWindow window;
+            window.resize(1300, 800);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QVERIFY(QMetaObject::invokeMethod(&window, "openRunPanel", Qt::DirectConnection, Q_ARG(QString, QStringLiteral("deploy"))));
+            QTest::qWait(80);
+            QVERIFY(window.dockHost()->model().isPlaced(QStringLiteral("kip:deploy"))); // mini app, não espelho
+            QVERIFY(!window.dockHost()->model().isPlaced(QStringLiteral("run:deploy")));
+            QCOMPARE(window.viewRegistry()->icon(QStringLiteral("kip:deploy")), QStringLiteral("rocket"));
+            window.layoutController()->flush();
+        }
+        QVERIFY(core::ConfigManager().loadSettings().kipPanelAutoStart.contains(QStringLiteral("deploy")));
+        {
+            MainWindow again;
+            again.resize(1300, 800);
+            again.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&again));
+            auto *panel = again.findChild<RunMirrorPanel *>();
+            QVERIFY(panel != nullptr);
+            // abriu sozinho, na tela inicial do app, no painel — e a Saída não ganhou guia
+            QTRY_VERIFY_WITH_TIMEOUT(panel->output()->kipMode() && panel->output()->kipView()->session()->screen().awaitingInput(), 8000);
+            QVERIFY(!panel->showsIdleCard());
+            // aberto sozinho, não rouba o foco do teclado (bug: o formulário do app pegava o foco a cada boot)
+            QVERIFY(QTest::qWaitForWindowActive(&again));
+            QTest::qWait(100);
+            QWidget *focused = QApplication::focusWidget();
+            QVERIFY2(!focused || !panel->isAncestorOf(focused), qPrintable(focused ? focused->objectName() : QString()));
+            if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+                panel->grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/kip-panel-footer.png"));
+                panel->output()->kipView()->details()->setExpanded(true);
+                QTest::qWait(50);
+                panel->grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/kip-panel-details-open.png"));
+                panel->output()->kipView()->details()->setExpanded(false);
+            }
+            auto *drawer = again.findChild<TerminalDrawer *>();
+            QVERIFY(!drawer->outputTabs()->hasTab(QStringLiteral("deploy")));
+            QVERIFY(!drawer->embeddedPanel()->kipMode());
+            // desliga pelo menu do painel
+            const auto spec = again.viewRegistry()->spec(QStringLiteral("kip:deploy"));
+            QVERIFY(spec && spec->menuExtras);
+            QMenu menu;
+            spec->menuExtras(&menu);
+            QAction *autoStart = menu.actions().value(0);
+            QVERIFY(autoStart && autoStart->isCheckable() && autoStart->isChecked());
+            autoStart->setChecked(false);
+            again.layoutController()->flush();
+        }
+        QVERIFY(!core::ConfigManager().loadSettings().kipPanelAutoStart.contains(QStringLiteral("deploy")));
+        MainWindow third;
+        third.resize(1300, 800);
+        third.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&third));
+        auto *panel = third.findChild<RunMirrorPanel *>();
+        QVERIFY(panel != nullptr);
+        QTest::qWait(300);
+        QVERIFY(panel->showsIdleCard()); // desligado: o cartão "Executar"
     }
 };
 

@@ -4,6 +4,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace kai::core {
 
 // Resultado de uma invocação do helper `kai kip` (spec 11 §16).
@@ -20,7 +22,9 @@ struct KipCliResult {
 // Núcleo PURO e offline de `kai kip`: formata mensagens KIP a partir de argv e
 // extrai valores de uma resposta. `args` = tudo depois de "kip"
 // (["hello", "--title", "Deploy"]). Não toca em IPC, processo, app ou config.
-KipCliResult runKipCli(const QStringList &args);
+// `stdinReader`: quem lê o stdin quando uma opção pede "-" (`--patch -`, `--file -`); vazio = o stdin do processo.
+using KipStdinReader = std::function<QByteArray()>;
+KipCliResult runKipCli(const QStringList &args, const KipStdinReader &stdinReader = {});
 
 // Texto de ajuda (traduzido) do helper.
 QString kipCliHelpText();

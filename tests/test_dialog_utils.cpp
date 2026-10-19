@@ -298,7 +298,7 @@ private slots:
             commands << c;
         }
         kai::ui::CommandEditorDialog dialog(folder.id, commands, {folder}, nullptr);
-        dialog.setStyleSheet(themes.currentTheme().qss + kai::ui::buildModernStylesheet());
+        dialog.setStyleSheet(kai::ui::themeStyleSheet(themes.currentTheme().qss));
         dialog.resize(900, 700);
         dialog.show();
         QVERIFY(QTest::qWaitForWindowExposed(&dialog));

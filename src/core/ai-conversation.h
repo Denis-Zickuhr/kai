@@ -11,6 +11,9 @@ struct AiToolCall {
     QString id;
     QString name;
     QJsonObject arguments;
+    // Campos do provedor que precisam voltar na próxima requisição, intactos (o Gemini manda a `thought_signature` em
+    // `extra_content` e rejeita o histórico sem ela). Vazio nos demais.
+    QJsonObject extra{};
 };
 
 struct AiToolResult {

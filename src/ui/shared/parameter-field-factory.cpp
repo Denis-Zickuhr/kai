@@ -1,6 +1,9 @@
 #include "ui/shared/parameter-field-factory.h"
 
+#include "ui/shared/data-table-widget.h"
 #include "ui/shared/date-picker-dialog.h"
+#include "ui/shared/diff-view.h"
+#include "ui/shared/kip-extra-fields.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/inline-code-field.h"
 #include "ui/shared/lucide-icons.h"
@@ -37,6 +40,7 @@
 #include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -209,78 +213,6 @@ void browseInto(QWidget *dialogParent, QLineEdit *target, const QString &initial
     }
 }
 
-// Tabela de dados: Ctrl+C e o menu de contexto copiam a célula atual (§11).
-class DataTableWidget : public QTableWidget {
-public:
-    using QTableWidget::QTableWidget;
-
-    // Altura que mostra `rows` linhas inteiras. É recalculada quando o tema é
-    // aplicado e ao exibir: na criação o header ainda não tem o padding do QSS
-    // e parece bem menor do que será, o que roubava linhas da tabela.
-    void fitVisibleRows(int rows)
-    {
-        m_visibleRows = rows;
-        refit();
-    }
-
-protected:
-    bool event(QEvent *e) override
-    {
-        const bool handled = QTableWidget::event(e);
-        if (e->type() == QEvent::StyleChange || e->type() == QEvent::Polish
-            || e->type() == QEvent::Show || e->type() == QEvent::FontChange) {
-            refit();
-        }
-        return handled;
-    }
-
-    void keyPressEvent(QKeyEvent *event) override
-    {
-        if (event->matches(QKeySequence::Copy)) {
-            copyCurrentCell();
-            return;
-        }
-        QTableWidget::keyPressEvent(event);
-    }
-
-    void contextMenuEvent(QContextMenuEvent *event) override
-    {
-        QTableWidgetItem *item = itemAt(event->pos());
-        if (!item) {
-            return;
-        }
-        setCurrentItem(item);
-        QMenu menu(this);
-        QAction *copy = menu.addAction(
-            LucideIcons::icon(QStringLiteral("copy"), QColor(tk::mutedFg()), 16),
-            utils::tr(QStringLiteral("kip.table.copy_cell")));
-        if (menu.exec(event->globalPos()) == copy) {
-            copyCurrentCell();
-        }
-    }
-
-private:
-    void refit()
-    {
-        if (m_visibleRows <= 0) {
-            return;
-        }
-        const int h = horizontalHeader()->sizeHint().height()
-            + m_visibleRows * verticalHeader()->defaultSectionSize() + 2 * frameWidth() + 4;
-        if (h != height() || h != minimumHeight() || h != maximumHeight()) {
-            setFixedHeight(h);
-        }
-    }
-
-    void copyCurrentCell()
-    {
-        if (QTableWidgetItem *item = currentItem()) {
-            QApplication::clipboard()->setText(item->text());
-        }
-    }
-
-    int m_visibleRows = 0;
-};
 
 } // namespace
 
@@ -948,21 +880,50 @@ DatePickField makeDatePickField(QWidget *parent, const QString &initialText, con
 // ---------------------------------------------------------------- tabela / flags
 
 QTableWidget *makeDataTable(QWidget *parent, const QVector<core::KipColumn> &columns, const QJsonArray &rows,
-                            const QString &rowKey, DataTableMode mode)
+                            const QString &rowKey, DataTableMode mode, const QVector<core::KipChip> &rowActions)
 {
-    auto *table = new DataTableWidget(rows.size(), columns.size(), parent);
+    const bool withActions = !rowActions.isEmpty();
+    const int dataColumns = columns.size();
+    auto *table = new DataTableWidget(rows.size(), dataColumns + (withActions ? 1 : 0), parent);
+    const auto cellText = [](const core::KipColumn &column, const QJsonValue &value) {
+        return column.format == QLatin1String("badge") ? core::kipBadgeText(value) : core::kipCellText(value);
+    };
     QList<TableColumnSpec> specs;
-    for (int c = 0; c < columns.size(); ++c) {
-        // Largura inicial pelo conteúdo (limitada); a última coluna estica.
-        const QFontMetrics fm(table->font());
-        int width = fm.horizontalAdvance(columns.at(c).label) + 2 * tk::space(5);
+    QStringList formats;
+    bool anyFormat = withActions;
+    for (int c = 0; c < dataColumns; ++c) {
+        const core::KipColumn &column = columns.at(c);
+        // Largura inicial pelo conteúdo (limitada); a última coluna estica. Colunas mono medem na fonte mono.
+        const bool mono = column.format == QLatin1String("mono") || column.format == QLatin1String("copy");
+        const QFontMetrics fm(mono ? tk::monoFont(qMax(8, tk::fontSizePt() - 1)) : table->font());
+        const int extra = column.format == QLatin1String("badge") ? 30 : column.format == QLatin1String("copy") ? 28 : 0;
+        int width = QFontMetrics(table->font()).horizontalAdvance(column.label) + 2 * tk::space(5);
         for (const QJsonValue &r : rows) {
-            width = qMax(width, fm.horizontalAdvance(core::kipCellText(r.toObject().value(columns.at(c).key)))
-                                    + 2 * tk::space(5));
+            width = qMax(width, fm.horizontalAdvance(cellText(column, r.toObject().value(column.key))) + 2 * tk::space(5) + extra);
         }
-        specs.append({columns.at(c).label, qBound(80, width, 300), c == columns.size() - 1});
+        specs.append({column.label, qBound(80, width, 300), c == dataColumns - 1});
+        formats << column.format;
+        anyFormat = anyFormat || !column.format.isEmpty();
+    }
+    if (withActions) {
+        specs.append({QString(), RowActionsController::columnWidthFor(rowActions.size()), false});
+        formats << QString();
     }
     configureTable(table, specs);
+    table->setColumnFormats(formats);
+    if (anyFormat) {
+        table->setItemDelegate(new DataCellDelegate(table));
+        table->viewport()->setAttribute(Qt::WA_Hover, true);
+        table->setMouseTracking(true);
+    }
+    if (withActions) {
+        // A coluna de ações tem largura fixa; quem estica é a última coluna de dados.
+        QHeaderView *header = table->horizontalHeader();
+        header->setStretchLastSection(false);
+        header->setSectionResizeMode(dataColumns - 1, QHeaderView::Stretch);
+        header->setSectionResizeMode(dataColumns, QHeaderView::Fixed);
+        header->resizeSection(dataColumns, RowActionsController::columnWidthFor(rowActions.size()));
+    }
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setAlternatingRowColors(false);
     table->setWordWrap(false);
@@ -975,15 +936,37 @@ QTableWidget *makeDataTable(QWidget *parent, const QVector<core::KipColumn> &col
     for (int r = 0; r < rows.size(); ++r) {
         const QJsonObject row = rows.at(r).toObject();
         const QString key = core::kipCellText(row.value(rowKey));
-        for (int c = 0; c < columns.size(); ++c) {
-            auto *item = new QTableWidgetItem(core::kipCellText(row.value(columns.at(c).key)));
+        for (int c = 0; c < dataColumns; ++c) {
+            const core::KipColumn &column = columns.at(c);
+            const QJsonValue value = row.value(column.key);
+            auto *item = new QTableWidgetItem(cellText(column, value));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-            item->setData(Qt::UserRole, key);
+            item->setData(kRowKeyRole, key);
             item->setToolTip(item->text());
+            if (column.format == QLatin1String("badge")) {
+                QString tone;
+                core::kipBadgeText(value, &tone);
+                item->setData(kBadgeToneRole, tone);
+            }
             table->setItem(r, c, item);
         }
+        if (withActions) {
+            auto *item = new QTableWidgetItem();
+            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            item->setData(kRowKeyRole, key);
+            item->setData(kRowActionsRole, core::kipRowActionIds(row, rowActions));
+            table->setItem(r, dataColumns, item);
+        }
+    }
+    if (withActions) {
+        new RowActionsController(table, dataColumns, rowActions);
     }
     return table;
+}
+
+RowActionsController *rowActionsOf(const QTableWidget *table)
+{
+    return table ? table->findChild<RowActionsController *>(QString(), Qt::FindDirectChildrenOnly) : nullptr;
 }
 
 QStringList selectedRowKeys(const QTableWidget *table)
@@ -1044,7 +1027,8 @@ TableChoiceField makeTableChoice(QWidget *parent, const core::KipField &field, b
         vbox->addWidget(filter);
     }
     QTableWidget *table = makeDataTable(container, field.columns, field.rows, field.rowKey,
-                                        field.multiple ? DataTableMode::SelectRows : DataTableMode::SelectRow);
+                                        field.multiple ? DataTableMode::SelectRows : DataTableMode::SelectRow,
+                                        field.rowActions);
     const int visibleRows = pageSize > 0 ? qBound(1, pageSize, qMax(1, field.rows.size())) : qBound(3, field.rows.size(), 7);
     fitDataTableHeight(table, visibleRows);
     auto *pager = new ListPager(
@@ -1156,6 +1140,9 @@ void KipFieldEditor::build(const QJsonValue &initial)
     switch (m_field.type) {
     case core::KipFieldType::Text:
         m_line = fields::makeTextField(host, lineText(), placeholder);
+        if (m_field.maxLength > 0) {
+            m_line->setMaxLength(m_field.maxLength);
+        }
         m_widget = m_focus = m_line;
         break;
     case core::KipFieldType::Secret:
@@ -1184,6 +1171,13 @@ void KipFieldEditor::build(const QJsonValue &initial)
     }
     case core::KipFieldType::Select: {
         const QString initialText = initial.isString() ? initial.toString() : QString();
+        if (!m_field.style.isEmpty()) {
+            m_choices = new fields::ChoiceButtonsField(m_field.options, m_field.style == QLatin1String("segmented"),
+                                                       initialText, host);
+            m_widget = m_choices;
+            m_focus = m_choices->focusTarget();
+            break;
+        }
         m_combo = fields::makeOptionalSelectCombo(host, choiceOptions(m_field), QStringLiteral("—"), initialText);
         m_widget = m_focus = m_combo;
         break;
@@ -1211,8 +1205,23 @@ void KipFieldEditor::build(const QJsonValue &initial)
         m_pager = built.pager;
         m_widget = built.container;
         m_focus = m_table;
+        if (fields::RowActionsController *actions = fields::rowActionsOf(m_table)) {
+            connect(actions, &fields::RowActionsController::actionClicked, this, &KipFieldEditor::rowActionClicked);
+            connect(actions, &fields::RowActionsController::confirmed, this, &KipFieldEditor::rowActionConfirmed);
+            connect(actions, &fields::RowActionsController::cancelled, this, &KipFieldEditor::rowActionCancelled);
+        }
         break;
     }
+    case core::KipFieldType::Tree:
+        m_treeField = new fields::TreeChoiceField(m_field, initial, host);
+        m_widget = m_treeField;
+        m_focus = m_treeField->tree();
+        break;
+    case core::KipFieldType::Diff:
+        m_diff = new fields::DiffChoiceField(m_field, initial, host);
+        m_widget = m_diff;
+        m_focus = m_diff->view();
+        break;
     case core::KipFieldType::Filepick:
     case core::KipFieldType::Folderpick: {
         const bool folder = m_field.type == core::KipFieldType::Folderpick;
@@ -1258,6 +1267,9 @@ void KipFieldEditor::build(const QJsonValue &initial)
     for (QCheckBox *box : m_flagBoxes) {
         connect(box, &QCheckBox::toggled, this, touch);
     }
+    if (m_choices) connect(m_choices, &fields::ChoiceButtonsField::valueChanged, this, touch);
+    if (m_treeField) connect(m_treeField, &fields::TreeChoiceField::valueChanged, this, touch);
+    if (m_diff) connect(m_diff, &fields::DiffChoiceField::valueChanged, this, touch);
 }
 
 void KipFieldEditor::notify(bool fromUser)
@@ -1325,7 +1337,14 @@ QJsonValue KipFieldEditor::value() const
         return QJsonObject{{"start", fields::isoDateText(m_field.dateMode, start)},
                            {"end", fields::isoDateText(m_field.dateMode, end)}};
     }
+    case core::KipFieldType::Tree:
+        return m_treeField->value();
+    case core::KipFieldType::Diff:
+        return m_diff->value();
     case core::KipFieldType::Select: {
+        if (m_choices) {
+            return m_choices->value();
+        }
         // Combo editável: o texto pode ser algo digitado. Resolve para uma
         // opção real (rótulo exato, depois valor exato); texto que não bate com
         // nenhuma opção é "sem escolha" — o programa nunca recebe lixo digitado.
@@ -1410,10 +1429,20 @@ void KipFieldEditor::setValue(const QJsonValue &value)
         break;
     }
     case core::KipFieldType::Select: {
+        if (m_choices) {
+            m_choices->setValue(value.toString());
+            break;
+        }
         int idx = m_combo->findData(value.toString());
         m_combo->setCurrentIndex(idx >= 0 ? idx : 0);
         break;
     }
+    case core::KipFieldType::Tree:
+        m_treeField->setValue(value);
+        break;
+    case core::KipFieldType::Diff:
+        m_diff->setValue(value);
+        break;
     case core::KipFieldType::List: {
         const QStringList wanted = stringList(value);
         if (m_field.multiple) {
@@ -1463,6 +1492,8 @@ bool KipFieldEditor::isFilled() const
         return !v.toString().isEmpty();
     case core::KipFieldType::List:
     case core::KipFieldType::Table:
+    case core::KipFieldType::Tree:
+    case core::KipFieldType::Diff:
         return v.isArray() ? !v.toArray().isEmpty() : !v.toString().isEmpty();
     case core::KipFieldType::Flags: {
         const QJsonObject o = v.toObject();
@@ -1477,9 +1508,52 @@ bool KipFieldEditor::isFilled() const
 
 void KipFieldEditor::setReadOnly(bool readOnly)
 {
+    if (m_diff) {
+        // O diff continua rolável e legível; só as caixas travam.
+        m_diff->setInteractive(!readOnly);
+        return;
+    }
     if (m_widget) {
         m_widget->setEnabled(!readOnly);
     }
+}
+
+bool KipFieldEditor::withinLimits() const
+{
+    if (m_field.maxLength <= 0
+        || (m_field.type != core::KipFieldType::Text && m_field.type != core::KipFieldType::Textarea)) {
+        return true;
+    }
+    return value().toString().size() <= m_field.maxLength;
+}
+
+fields::RowActionsController *KipFieldEditor::rowActions() const
+{
+    return fields::rowActionsOf(m_table);
+}
+
+void KipFieldEditor::syncRowActions(const core::KipOpenScreen &open, bool interactive)
+{
+    fields::RowActionsController *actions = rowActions();
+    if (!actions) {
+        return;
+    }
+    using Phase = fields::RowActionsController::Phase;
+    QString row;
+    QString action;
+    Phase phase = Phase::None;
+    if (open.chipRun && open.chipRun->rowAction && open.chipRun->field == m_field.name) {
+        row = open.chipRun->row;
+        action = open.chipRun->chipId;
+        switch (open.chipRun->phase) {
+        case core::KipChipRun::Phase::Confirming: phase = Phase::Confirming; break;
+        case core::KipChipRun::Phase::Running: phase = Phase::Running; break;
+        case core::KipChipRun::Phase::Success: phase = Phase::Success; break;
+        case core::KipChipRun::Phase::Error: phase = Phase::Error; break;
+        }
+    }
+    const bool busy = open.chipRun && open.chipRun->busy();
+    actions->sync(row, action, phase, interactive && !open.locked && !open.changePending && !busy);
 }
 
 } // namespace kai::ui

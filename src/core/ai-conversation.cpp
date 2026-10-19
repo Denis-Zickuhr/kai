@@ -87,9 +87,11 @@ QJsonObject AiMessage::toJson() const
     if (!toolCalls.isEmpty()) {
         QJsonArray arr;
         for (const AiToolCall &c : toolCalls) {
-            arr.append(QJsonObject{{QStringLiteral("id"), c.id},
-                                   {QStringLiteral("name"), c.name},
-                                   {QStringLiteral("arguments"), c.arguments}});
+            QJsonObject call{{QStringLiteral("id"), c.id},
+                             {QStringLiteral("name"), c.name},
+                             {QStringLiteral("arguments"), c.arguments}};
+            if (!c.extra.isEmpty()) call[QStringLiteral("extra")] = c.extra;
+            arr.append(call);
         }
         o[QStringLiteral("tool_calls")] = arr;
     }
@@ -121,7 +123,7 @@ AiMessage AiMessage::fromJson(const QJsonObject &obj)
     for (const QJsonValue &v : obj.value(QStringLiteral("tool_calls")).toArray()) {
         const QJsonObject c = v.toObject();
         m.toolCalls.append(AiToolCall{c.value(QStringLiteral("id")).toString(), c.value(QStringLiteral("name")).toString(),
-                            c.value(QStringLiteral("arguments")).toObject()});
+                            c.value(QStringLiteral("arguments")).toObject(), c.value(QStringLiteral("extra")).toObject()});
     }
     for (const QJsonValue &v : obj.value(QStringLiteral("tool_results")).toArray()) {
         const QJsonObject r = v.toObject();

@@ -12,7 +12,6 @@
 #include "ui/features/output/http-wait-view.h"
 #include "ui/features/docs/doc-text-tools.h"
 #include "ui/shared/json-syntax-highlighter.h"
-#include "ui/features/docs/doc-viewer.h"
 #include "ui/features/kip/kip-view.h"
 #include "engine/kip-session.h"
 #include "utils/design-tokens.h"
@@ -1268,9 +1267,6 @@ void OutputPanel::applyThemeVariables(const QMap<QString, QString> &variables)
         m_kipView->setSession(m_kipSession);
         updateBodyStackPage();
     }
-    if (m_docViewer) {
-        m_docViewer->refreshStyle();
-    }
     // Cartões da aba Requisição/Headers (pedido do usuário: "a aba de
     // configuração não usa o mesmo tema... fundos de gradiente" — aqui é a
     // contraparte no painel de saída: estes 4 widgets só recalculavam seu
@@ -1769,7 +1765,7 @@ void OutputPanel::updateHeaderVisibility()
     // caminho para reabrir o painel.
     if (m_header) {
         // Também some na página "sem execução" (nada para o cabeçalho mostrar), com a Saída aberta.
-        const bool visible = !((m_kipMode || docInBody() || m_emptyPageShown) && m_bodyVisible);
+        const bool visible = !((m_kipMode || m_emptyPageShown) && m_bodyVisible);
         m_header->setVisible(visible);
         if (visible != m_headerShown) {
             m_headerShown = visible;
@@ -1843,14 +1839,12 @@ void OutputPanel::updateBodyStackPage()
     const bool inputEnabled = m_inputField && m_inputField->isEnabled();
     const bool showEmpty = !m_interactiveMode && !m_skipped && m_status == OutputStatus::Idle
         && !hasContent && !inputEnabled;
-    m_emptyPageShown = !m_kipMode && !docInBody() && showEmpty;
+    m_emptyPageShown = !m_kipMode && showEmpty;
     updateHeaderVisibility();
     if (m_kipMode) {
         // KIP: a view (ou o cartão da janela destacada) tem prioridade sobre
         // qualquer outra página do corpo.
         m_bodyStack->setCurrentIndex(m_kipDetachedPlaceholder ? 5 : 4);
-    } else if (docInBody()) {
-        m_bodyStack->setCurrentWidget(m_docViewer);
     } else if (m_interactiveMode) {
         m_bodyStack->setCurrentIndex(1);
     } else if (m_skipped) {
@@ -1864,7 +1858,7 @@ void OutputPanel::updateBodyStackPage()
     // na gaveta de detalhes da view, não aqui).
     for (QToolButton *button : {m_clearButton, m_copyOutputButton, m_exportButton, m_saveNoteButton}) {
         if (button) {
-            button->setEnabled(hasContent && !m_kipMode && !docInBody());
+            button->setEnabled(hasContent && !m_kipMode);
         }
     }
 }
@@ -2444,9 +2438,6 @@ void OutputPanel::showFieldFilterMenu()
 
 bool OutputPanel::focusSearch()
 {
-    if (docInBody()) {
-        return m_docViewer->focusSearch(); // a documentação da pasta tem a própria busca
-    }
     if (m_interactiveMode || m_skipped) {
         return false;
     }
@@ -2597,232 +2588,6 @@ void OutputPanel::setKipDetachedPlaceholder(bool detached)
 {
     m_kipDetachedPlaceholder = detached;
     updateBodyStackPage();
-}
-
-void OutputPanel::enterDocMode()
-{
-    const bool was = m_docMode;
-    m_docMode = true;
-    if (!was && m_docHost) {
-        emit documentModeEntered();
-    }
-}
-
-void OutputPanel::setDocumentHost(QWidget *host)
-{
-    if (m_docHost == host) {
-        return;
-    }
-    QWidget *previous = m_docHost;
-    m_docHost = host;
-    if (host) {
-        ensureDocViewer(); // o painel nunca fica em branco
-    }
-    if (m_docViewer) {
-        if (previous && previous->layout()) {
-            previous->layout()->removeWidget(m_docViewer);
-        } else {
-            m_bodyStack->removeWidget(m_docViewer);
-        }
-        if (host && host->layout()) {
-            host->layout()->addWidget(m_docViewer);
-        } else {
-            m_bodyStack->addWidget(m_docViewer);
-        }
-        m_docViewer->show();
-    }
-    updateBodyStackPage();
-}
-
-DocViewer *OutputPanel::ensureDocViewer()
-{
-    if (m_docViewer) {
-        return m_docViewer;
-    }
-    m_docViewer = new DocViewer(this);
-    if (m_docHost && m_docHost->layout()) {
-        m_docHost->layout()->addWidget(m_docViewer);
-    } else {
-        m_bodyStack->addWidget(m_docViewer);
-    }
-    connect(m_docViewer, &DocViewer::kaiLinkActivated, this, &OutputPanel::documentKaiLinkActivated);
-    connect(m_docViewer, &DocViewer::fixDirectoryAutomatically, this, &OutputPanel::documentDirectoryFixAutomatically);
-    connect(m_docViewer, &DocViewer::fixDirectoryManually, this, &OutputPanel::documentDirectoryFixManually);
-    connect(m_docViewer, &DocViewer::newNoteRequested, this, &OutputPanel::documentNewNoteRequested);
-    connect(m_docViewer, &DocViewer::noteDeleteRequested, this, &OutputPanel::documentNoteDeleteRequested);
-    connect(m_docViewer, &DocViewer::noteFileActionRequested, this, &OutputPanel::documentNoteFileActionRequested);
-    m_docViewer->setNoteSaver(m_noteSaver);
-    m_docViewer->setNameProvider(m_docNameProvider);
-    m_docViewer->setSessionStore(m_docStore);
-    m_docViewer->setScope(m_docScope);
-    return m_docViewer;
-}
-
-void OutputPanel::setDocSessionStore(DocSessionStore *store)
-{
-    m_docStore = store;
-    if (m_docViewer) {
-        m_docViewer->setSessionStore(store);
-    }
-}
-
-void OutputPanel::prepareDocumentViewer()
-{
-    ensureDocViewer();
-}
-
-void OutputPanel::setDocumentScope(const QString &scope)
-{
-    m_docScope = scope;
-    if (m_docViewer) {
-        m_docViewer->setScope(scope);
-    }
-}
-
-void OutputPanel::captureDocumentState()
-{
-    if (m_docViewer) {
-        m_docViewer->captureState();
-    }
-}
-
-void OutputPanel::setDocNameProvider(std::function<QStringList(const QString &)> provider)
-{
-    m_docNameProvider = std::move(provider);
-    if (m_docViewer) {
-        m_docViewer->setNameProvider(m_docNameProvider);
-    }
-}
-
-void OutputPanel::setNoteSaver(std::function<bool(const QString &, const QString &)> saver)
-{
-    m_noteSaver = std::move(saver);
-    if (m_docViewer) {
-        m_docViewer->setNoteSaver(m_noteSaver);
-    }
-}
-
-void OutputPanel::showDocument(const QString &file, const QString &label, const QVector<DocNote> &notes, bool notesEnabled)
-{
-    beginDocumentRequest();
-    DocViewer *viewer = ensureDocViewer();
-    viewer->setNotes(notes, notesEnabled);
-    // Um arquivo pedido explicitamente sempre entra no modo: se não abrir, o leitor mostra o motivo.
-    enterDocMode();
-    viewer->openFile(file, label);
-    updateBodyStackPage();
-}
-
-void OutputPanel::showFolderReadme(const QString &directory, const QString &label, const QVector<DocNote> &notes,
-                                   bool notesEnabled)
-{
-    beginDocumentRequest();
-    const int request = m_docRequest;
-    DocViewer *viewer = ensureDocViewer();
-    viewer->setNotes(notes, notesEnabled);
-    // Sem nenhum documento o modo nem chega a ligar (nada pisca na tela); com documento, liga quando o texto chega. Sem
-    // documento mas com notas, a primeira nota abre no lugar; pasta vazia e sem notas mostra o atalho "criar README.md".
-    auto *context = new QObject(viewer);
-    const QString probeKey = QDir::cleanPath(directory);
-    // Já se sabe que esta pasta tem o que mostrar (visita anterior): o leitor entra na hora, em branco, em vez de a
-    // Saída vazia aparecer por alguns milissegundos até o arquivo ser lido (se a procura falhar, ele sai).
-    if (!m_docMode && m_docProbe.value(probeKey, false)) {
-        enterDocMode();
-        updateBodyStackPage();
-    }
-    // O documento achado começa a ser montado: o leitor entra já (com o indicador de carregamento), sem esperar o fim.
-    connect(viewer, &DocViewer::rendering, context, [this, request, probeKey]() {
-        if (request == m_docRequest) {
-            m_docProbe.insert(probeKey, true);
-            enterDocMode();
-            updateBodyStackPage();
-        }
-    });
-    connect(viewer, &DocViewer::loaded, context, [this, request, context, probeKey]() {
-        context->deleteLater();
-        if (request == m_docRequest) {
-            m_docProbe.insert(probeKey, true);
-            enterDocMode();
-            updateBodyStackPage();
-        }
-    });
-    connect(viewer, &DocViewer::unavailable, context, [this, request, context, notes, directory, label, probeKey](const QString &dir, const QString &suggestion) {
-        context->deleteLater();
-        if (request != m_docRequest) {
-            return;
-        }
-        m_docProbe.insert(probeKey, !notes.isEmpty());
-        if (!notes.isEmpty()) {
-            enterDocMode();
-            m_docViewer->openNoteInFolder(notes.first().id, directory, label, false);
-            updateBodyStackPage();
-            return;
-        }
-        // O caminho da pasta não existe: em vez de deixar a Saída vazia, a tela diz isso e oferece corrigir.
-        m_docProbe.insert(probeKey, true);
-        enterDocMode();
-        m_docViewer->showMissingDirectory(directory, label, suggestion);
-        updateBodyStackPage();
-        emit documentUnavailable(dir);
-    });
-    connect(viewer, &DocViewer::folderEmpty, context, [this, request, context, notes, directory, label, probeKey]() {
-        context->deleteLater();
-        if (request != m_docRequest) {
-            return;
-        }
-        m_docProbe.insert(probeKey, true); // com notas ou com o atalho "criar README.md", a pasta mostra o leitor
-        enterDocMode();
-        if (!notes.isEmpty()) {
-            m_docViewer->openNoteInFolder(notes.first().id, directory, label, false);
-        } else {
-            m_docViewer->showCreateReadme(directory, label);
-        }
-        updateBodyStackPage();
-    });
-    viewer->openFolderReadme(directory, label);
-}
-
-void OutputPanel::showNote(const QString &noteId, const QVector<DocNote> &notes, const QString &directory,
-                           const QString &label, bool startEditing)
-{
-    beginDocumentRequest();
-    DocViewer *viewer = ensureDocViewer();
-    viewer->setNotes(notes, true);
-    enterDocMode();
-    viewer->openNoteInFolder(noteId, directory, label, startEditing);
-    updateBodyStackPage();
-}
-
-void OutputPanel::updateDocumentNotes(const QVector<DocNote> &notes, bool notesEnabled)
-{
-    if (m_docViewer && m_docMode) {
-        m_docViewer->setNotes(notes, notesEnabled);
-    }
-}
-
-// Começa um pedido de documento novo SEM derrubar o que está na tela: trocar de pasta com documentação não pode passar
-// pelo "estado vazio" da Saída enquanto o arquivo novo é lido (era o flip visual). Com edição em andamento, o caminho
-// completo (clearDocument) é o que pergunta sobre alterações não salvas.
-void OutputPanel::beginDocumentRequest()
-{
-    if (m_docViewer && m_docViewer->editing()) {
-        clearDocument();
-        return;
-    }
-    ++m_docRequest;
-}
-
-void OutputPanel::clearDocument()
-{
-    ++m_docRequest;
-    if (!m_docViewer) {
-        return;
-    }
-    m_docViewer->clear();
-    if (m_docMode) {
-        m_docMode = false;
-        updateBodyStackPage();
-    }
 }
 
 void OutputPanel::setCommandId(const QString &id)

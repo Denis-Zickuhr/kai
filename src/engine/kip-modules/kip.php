@@ -110,6 +110,7 @@ class Kip
     {
         $onChange = $callbacks['onChange'] ?? null;
         $onChip = $callbacks['onChip'] ?? null;
+        $onRowAction = $callbacks['onRowAction'] ?? null;
         $validate = $callbacks['validate'] ?? null;
         for (;;) {
             $msg = self::read();
@@ -133,10 +134,12 @@ class Kip
                 $reply = $onChange ? $onChange($msg['field'] ?? null, $msg['values'] ?? []) : null;
                 $patch = self::isPatch($reply) ? $reply : ['fields' => $reply ?: []];
                 self::send('patch', array_merge(['id' => $id, 'seq' => $msg['seq'] ?? null], $patch));
-            } elseif ($kind === 'chip' && $onChip) {
+            } elseif ($kind === 'chip' && ($onChip || ($onRowAction && array_key_exists('row', $msg)))) {
                 $chip = $msg['chip'] ?? null;
                 try {
-                    $result = $onChip($chip, $msg['values'] ?? []);
+                    $result = array_key_exists('row', $msg) && $onRowAction
+                        ? $onRowAction($chip, $msg['row'], $msg['values'] ?? [])
+                        : $onChip($chip, $msg['values'] ?? []);
                     $result = is_string($result) ? ['text' => $result] : (is_array($result) ? $result : []);
                     if (!isset($result['state'])) {
                         $result['state'] = 'success';
@@ -152,7 +155,7 @@ class Kip
     private static function split($options)
     {
         $callbacks = [];
-        foreach (['onChange', 'onChip', 'validate'] as $name) {
+        foreach (['onChange', 'onChip', 'onRowAction', 'validate'] as $name) {
             if (isset($options[$name])) {
                 $callbacks[$name] = $options[$name];
             }
@@ -165,6 +168,7 @@ class Kip
     // options: id, title, description, submit_label, back, cancellable, remember, chips,
     //          onChange($field, $values) -> fields to patch (a `watch` field changed),
     //          onChip($chip, $values) -> text or [state, title, text] for a chip,
+    //          onRowAction($action, $row, $values) -> the same, for a table row action (`row_actions`),
     //          validate($values) -> [field => message] to keep the form open.
     public static function prompt($fields, $options = [])
     {
@@ -214,10 +218,40 @@ class Kip
         self::send('steps', ['id' => $id, 'title' => $title, 'items' => $items]);
     }
 
-    // $state: pending | running | success | error | skipped
-    public static function step($stepsId, $id, $state, $detail = null)
+    // $state: pending | running | success | error | skipped (null keeps it); $log: lines to append.
+    public static function step($stepsId, $id, $state = null, $detail = null, $log = null)
     {
-        self::send('step', ['steps' => $stepsId, 'id' => $id, 'state' => $state, 'detail' => $detail]);
+        self::send('step', ['steps' => $stepsId, 'id' => $id, 'state' => $state, 'detail' => $detail, 'log' => $log]);
+    }
+
+    // A diff block: ['patch' => '<git diff output>'] or ['left' => ..., 'right' => ...] (text or ['name', 'text']).
+    // options: id, title, language, view (unified|split), context, ignore_whitespace, collapse_after.
+    public static function diff($options)
+    {
+        foreach (['left', 'right'] as $side) {
+            if (isset($options[$side]) && is_string($options[$side])) {
+                $options[$side] = ['text' => $options[$side]];
+            }
+        }
+        self::send('diff', $options);
+    }
+
+    // $items: [['key' => 'Version', 'value' => '1.4.0', 'format' => 'mono', 'copy' => true], ...]
+    public static function kv($items, $options = [])
+    {
+        self::send('kv', array_merge($options, ['items' => $items]));
+    }
+
+    // $items: [['label' => 'Tests', 'value' => '412', 'detail' => 'all passed', 'tone' => 'success'], ...]
+    public static function stats($items, $options = [])
+    {
+        self::send('stats', array_merge($options, ['items' => $items]));
+    }
+
+    // options: id, title, language, highlight => [4, 5], max_lines, line_numbers.
+    public static function code($text, $options = [])
+    {
+        self::send('code', array_merge($options, ['text' => $text]));
     }
 
     // $columns: ['name', ...] or [['key' => 'name', 'label' => 'Name'], ...]

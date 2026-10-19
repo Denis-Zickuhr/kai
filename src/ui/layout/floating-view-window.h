@@ -11,13 +11,17 @@ class QVBoxLayout;
 namespace kai::ui::layout {
 
 // A janela solta de um painel (flutuante): a moldura própria do app (sem a decoração do sistema, igual à Saída destacada)
-// com o painel dentro e dois botões — devolver ao quadro e fixar no topo. É filha da janela principal, então esconder o
-// Kai esconde as flutuantes, e elas só voltam junto com ele: nunca aparecem sozinhas.
+// com o painel dentro e dois botões — devolver ao quadro e fixar no topo. Não tem dono (uma janela com dono anda em grupo
+// com ele no Windows e trazia o Kai todo para a frente a cada clique): quem esconde as flutuantes junto com o Kai é o
+// DockHost, e elas só voltam com ele: nunca aparecem sozinhas.
 class FloatingViewWindow : public kai::ui::AppWindowFrame {
     Q_OBJECT
 
 public:
-    FloatingViewWindow(const QString &viewId, const QString &title, QWidget *parent);
+    // `styleSource`: a janela de onde o stylesheet (tema) é copiado; a flutuante não é filha dela.
+    FloatingViewWindow(const QString &viewId, const QString &title, QWidget *styleSource);
+    // Refaz a cópia do stylesheet (o tema ou a aparência mudaram).
+    void syncStyleFrom(const QWidget *source);
 
     QString viewId() const { return m_viewId; }
     void setContent(QWidget *content);

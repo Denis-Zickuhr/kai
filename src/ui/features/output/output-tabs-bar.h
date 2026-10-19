@@ -57,19 +57,13 @@ public:
     // Uma nova execução começou: o cronômetro da guia volta a zero.
     void noteRunStarted(const QString &id);
 
-    // Chevron no começo da barra que recolhe/abre a lista de comandos (foco na saída e nos programas ativos). Fica
-    // escondido até o dono ligar. `commandsEdge` = de que lado da barra a lista está (aponta o chevron para lá).
-    void setCommandsToggleVisible(bool visible);
-    void setCommandsToggleState(bool collapsed, Qt::Edge commandsEdge);
-    bool commandsToggleVisible() const { return m_toggleVisible; }
-    QRect toggleRect() const;
-    // Ao lado do chevron: o "+" (busca/execução rápida de comandos) e, depois dele, o ícone de documentos (menu para
-    // voltar à documentação de uma pasta). Os dois aparecem sempre que o chevron aparece.
+    // O "+" no começo da barra (busca/execução rápida de comandos). Escondido até o dono ligar.
+    void setQuickRunVisible(bool visible);
+    bool quickRunVisible() const { return m_quickRunVisible; }
     QRect quickRunRect() const;
-    QRect docsRect() const;
 
-    // Botão no fim da barra que recolhe/abre a Saída inteira (o chevron do cabeçalho da Saída some nos modos documento,
-    // KIP e "sem execução", que escondem o cabeçalho). `iconName` aponta para onde a Saída recolhe. Escondido por padrão.
+    // Botão no fim da barra que recolhe/abre a Saída inteira (o chevron do cabeçalho da Saída some nos modos KIP e
+    // "sem execução", que escondem o cabeçalho). `iconName` aponta para onde a Saída recolhe. Escondido por padrão.
     void setOutputToggle(bool visible, const QString &iconName);
     QRect outputToggleRect() const;
 
@@ -95,9 +89,7 @@ signals:
     void tabActivated(const QString &id);
     void tabCloseRequested(const QString &id);
     void tabContextRequested(const QString &id, const QPoint &globalPos);
-    void commandsToggleRequested();
     void quickRunRequested();
-    void docsRequested();
     void outputToggleRequested();
     // O usuário arrastou uma guia para outra posição (índice final na barra).
     void tabMoved(const QString &id, int newIndex);
@@ -154,15 +146,9 @@ private:
     bool m_hoverOverflow = false;
     bool m_pressedOverflow = false;
     bool m_allowed = true;
-    bool m_toggleVisible = false;
-    bool m_toggleCollapsed = false;
-    Qt::Edge m_commandsEdge = Qt::TopEdge;
-    bool m_hoverToggle = false;
-    bool m_pressedToggle = false;
+    bool m_quickRunVisible = false;
     bool m_hoverQuickRun = false;
     bool m_pressedQuickRun = false;
-    bool m_hoverDocs = false;
-    bool m_pressedDocs = false;
     bool m_outputToggleVisible = false;
     QString m_outputToggleIcon = QStringLiteral("chevron-down");
     bool m_hoverOutputToggle = false;

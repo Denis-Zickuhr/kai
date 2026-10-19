@@ -639,7 +639,9 @@ inline CenterReference *centerReferenceHolder(QWidget *dialog)
 
 inline void moveCenteredOnParent(QWidget *dialog)
 {
-    if (!dialog) {
+    // Um diálogo embutido num painel (sem moldura de janela) é posicionado pelo layout/área de rolagem do painel: centralizá-lo
+    // o deslocava dentro do cartão a cada vez que o quadro o mostrava de novo.
+    if (!dialog || !dialog->isWindow()) {
         return;
     }
     CenterReference *holder = centerReferenceHolder(dialog);
@@ -651,6 +653,9 @@ inline void moveCenteredOnParent(QWidget *dialog)
 // centraliza; o ajuste logo depois do Show reaproveita a mesma escolha.
 inline void centerDialogOnShow(QWidget *dialog)
 {
+    if (!dialog || !dialog->isWindow()) {
+        return;
+    }
     CenterReference *holder = centerReferenceHolder(dialog);
     holder->window = centerReferenceFor(dialog, QApplication::activeWindow());
     moveCenteredOnParent(dialog);

@@ -194,5 +194,163 @@ commands:
     name: "18. External script file (modules found on disk)"
     type: "command"
     working_dir: "{{PROJECT_PATH}}"
+  - command: |-
+      import runpy
+      runpy.run_path('git-review.py', run_name='__main__')
+    description: "Round-2 components: a branches table with row actions (sync, PR, delete with inline confirm), a diff, a commit form that picks hunks, step output and several bars, then stats / kv / code — fake data."
+    icon: "git-pull-request"
+    kip: true
+    language: "python"
+    name: "19. Git review (diff, row actions, results)"
+    type: "command"
+  - command: |-
+      dir=$(mktemp -d)
+      printf '{\n  "service": "billing-api",\n  "replicas": 2,\n  "memory": "512Mi",\n  "log_level": "debug"\n}\n' > "$dir/staging.json"
+      printf '{\n  "service": "billing-api",\n  "replicas": 6,\n  "memory": "1Gi",\n  "log_level": "warn"\n}\n' > "$dir/production.json"
+      kip hello --title "Compare configs"
+      kip diff --title "staging × production" --left-file "$dir/staging.json" --left-name staging.json \
+          --right-file "$dir/production.json" --right-name production.json --language json
+      rm -rf "$dir"
+      kip done --title "Compared" --text "3 lines differ."
+    description: "Comparing two files with the injected `kip`: it reads them where the script runs and Kai shows the diff side by side (Kai itself never reads the files)."
+    icon: "file-diff"
+    kip: true
+    name: "20. Compare two files (`kip diff`)"
+    type: "command"
+  - command: |-
+      import runpy
+      runpy.run_path('diff-viewer.py', run_name='__main__')
+    description: "The diff block: pick a commit (table with copy / badge / muted cells) and see its diff — several files, a rename, a binary, a new file, changed words highlighted. Switch unified / side by side: Kai remembers it."
+    icon: "file-diff"
+    kip: true
+    language: "python"
+    name: "21. Commit viewer (diff block)"
+    type: "command"
+  - command: |-
+      import kip
+
+      LEFT = '{\n  "service": "billing-api",\n  "replicas": 2,\n  "memory": "512Mi",\n  "log_level": "debug",\n  "flags": {\n    "new_checkout": false\n  }\n}'
+      RIGHT = '{\n      "service":   "billing-api",\n  "replicas": 6,\n  "memory": "1Gi",\n  "log_level": "warn",\n  "flags": {\n    "new_checkout": true\n  }\n}'
+
+      values = kip.prompt([
+          {"name": "left", "type": "textarea", "label": "Left", "default": LEFT},
+          {"name": "right", "type": "textarea", "label": "Right", "default": RIGHT},
+          {"name": "view", "type": "select", "label": "View", "style": "segmented", "default": "split",
+           "options": [{"value": "split", "label": "Side by side"}, {"value": "unified", "label": "Unified"}]},
+          {"name": "opts", "type": "flags", "label": "Options",
+           "options": [{"name": "ws", "label": "Ignore whitespace"}, {"name": "json", "label": "Color as JSON", "default": True}]},
+      ], id="texts", title="Compare two texts", submit_label="Compare", remember=False)
+
+      kip.diff(title="Left × right", left={"name": "left", "text": values["left"]},
+               right={"name": "right", "text": values["right"]}, view=values["view"],
+               ignore_whitespace=values["opts"]["ws"], language="json" if values["opts"]["json"] else "text")
+      kip.done(title="Compared", text="Run again to change the texts. Tick Ignore whitespace and the re-indented line stops counting.")
+    description: "Compare two texts typed in a form (left / right): Kai diffs them, folds the equal lines and highlights the changed words. Options: view, ignore whitespace."
+    icon: "columns-2"
+    kip: true
+    language: "python"
+    name: "22. Compare two texts (diff left / right)"
+    type: "command"
+  - command: |-
+      import runpy
+      runpy.run_path('deploy-history.py', run_name='__main__')
+    description: "Row actions on a table BLOCK: Logs answers in the box under the screen; Roll back asks inside the row, then repaints the table. Rolled-back deploys only offer Logs (`_actions`)."
+    icon: "rotate-ccw"
+    kip: true
+    language: "python"
+    name: "23. Deploy history (row actions on a table block)"
+    type: "command"
+  - command: |-
+      kip hello --title "Release summary" --version "1.4.0"
+      kip stats --stat Tests 412 --detail "all passed · 3 skipped" --tone success \
+          --stat Artifacts 4 --detail "38.2 MB in total" \
+          --stat Duration "3m 12s" --detail "41 s more than last time" --tone warning
+      kip kv --title "Release" --item Version 1.4.0 --format mono --copy \
+          --item Commit 9da9e13 --format mono --copy \
+          --item Channel stable --tone success \
+          --item Page https://example.com/releases/1.4.0 --format link
+      kip code --title "CHANGELOG.md" --language markdown --max-lines 6 --highlight 3,4 \
+          "## 1.4.0" "" "- KIP: diff block and diff field" "- KIP: row actions, kv, stats and code" \
+          "- KIP: cards, segmented, tree, step output" "- Faster startup" "- Fixes in the HTTP client" "- Docs"
+      kip done --title "Release 1.4.0 published" --text "A result screen built only from stats, kv and code." \
+          --action copy:"Copy version":1.4.0
+    description: "A result screen made of stats (big numbers), kv (copy on hover, badge, link) and code (copy, highlighted lines, Show all) — written with the injected `kip` function."
+    icon: "gauge"
+    kip: true
+    name: "24. Release summary (stats, kv, code)"
+    type: "command"
+  - command: |-
+      import kip
+
+      values = kip.prompt([
+          {"name": "strategy", "type": "select", "label": "How to integrate", "style": "cards", "required": True,
+           "options": [
+               {"value": "merge", "label": "Merge", "description": "Keeps the branch history", "icon": "git-merge"},
+               {"value": "squash", "label": "Squash", "description": "One commit on main", "icon": "layers"},
+               {"value": "rebase", "label": "Rebase", "description": "Linear history", "icon": "git-commit-horizontal"}]},
+          {"name": "after", "type": "select", "label": "Then", "style": "segmented", "default": "delete",
+           "options": [{"value": "delete", "label": "Delete branch"}, {"value": "keep", "label": "Keep"}]},
+          {"name": "tests", "type": "tree", "label": "Run the tests of", "multiple": True, "default": ["src/auth"],
+           "nodes": [
+               {"id": "src", "expanded": True, "children": [
+                   {"id": "src/auth", "label": "auth", "badge": {"text": "M", "tone": "warning"}},
+                   {"id": "src/api", "label": "api", "badge": {"text": "M", "tone": "warning"}},
+                   {"id": "src/ui", "label": "ui"}]},
+               {"id": "config", "badge": {"text": "M", "tone": "warning"}},
+               {"id": "docs", "badge": {"text": "A", "tone": "success"}}]},
+      ], id="land", title="Land feat/login", submit_label="Land", remember=False)
+
+      kip.kv([
+          {"key": "Strategy", "value": values["strategy"], "format": "mono"},
+          {"key": "Then", "value": values["after"], "format": "mono"},
+          {"key": "Tests of", "value": ", ".join(values["tests"]) or "—"},
+      ], title="You chose")
+      kip.done(title="Landed (demo)", text="Nothing was merged: this only shows the new choice fields.")
+    description: "Choice fields: a select as cards (icon, description, ✓) and as a segmented control, and a tree with tri-state boxes and badges. The answers come back as plain values."
+    icon: "list-tree"
+    kip: true
+    language: "python"
+    name: "25. Choices (cards, segmented, tree)"
+    type: "command"
+  - command: |-
+      import runpy
+      runpy.run_path('partial-commit.py', run_name='__main__')
+    description: "The diff FIELD: tick the hunks that go into the commit (Space toggles, Enter opens a hunk), a message with a 72-character counter; the program rebuilds the patch with only those hunks."
+    icon: "git-commit-horizontal"
+    kip: true
+    language: "python"
+    name: "26. Partial commit (pick hunks)"
+    type: "command"
+  - command: |-
+      kip hello --title "Build" --version "1.4.0"
+      kip steps --id b --title "Build" --item deps Dependencies --item compile Compiling \
+          --item lint "Lint (optional)" --item pack "Package"
+      kip step b deps running; sleep 0.3; kip step b deps success "0.8 s"
+      kip step b compile running
+      i=1
+      while [ "$i" -le 12 ]; do
+          kip step b compile --log "[$i/12] Building CXX object src/core/file$i.cpp.o"
+          sleep 0.15; i=$((i + 1))
+      done
+      kip step b compile success "12 objects"
+      kip step b lint running
+      kip step b lint --log "src/ui/view.cpp:42: warning: unused variable 'x'"
+      kip step b lint error "1 warning" --log "lint failed (optional step, the build goes on)"
+      kip step b pack running
+      for pct in 0 15 35 60 80 100; do
+          kip progress "$pct" "kai-1.4.0-linux-x64.tar.gz" --id linux
+          kip progress "$((pct * 3 / 4))" "kai-1.4.0-windows-x64.zip" --id windows
+          kip progress null "checksums.txt" --id sums
+          sleep 0.3
+      done
+      kip progress 100 "kai-1.4.0-windows-x64.zip" --id windows
+      kip progress 100 "checksums.txt" --id sums
+      kip step b pack success "3 artifacts"
+      kip done --title "Built with a warning" --level warning --text "Open the chevron of a step to see its output."
+    description: "Step output and several bars: each `step --log` line goes into a collapsed output under the step (it opens by itself when the step fails); `progress --id` stacks one bar per artifact."
+    icon: "hammer"
+    kip: true
+    name: "27. Build (step output, several bars)"
+    type: "command"
 icon: "wand-sparkles"
 project_name: "Kai KIP Demos"

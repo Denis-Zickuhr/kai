@@ -91,6 +91,15 @@ GeneralTab::GeneralTab(const core::SettingsData &currentSettings, QWidget *paren
     outputLayout->addWidget(logSizeLabel);
     outputLayout->addWidget(m_outputMaxLogSizeField);
 
+    m_smartFocusField = new QCheckBox(utils::tr(QStringLiteral("settings.smart_focus.label")), outputGroup);
+    m_smartFocusField->setObjectName(QStringLiteral("smartFocusField"));
+    m_smartFocusField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_smartFocusField->setChecked(currentSettings.smartFocus);
+    outputLayout->addSpacing(8);
+    outputLayout->addWidget(m_smartFocusField);
+    outputLayout->addWidget(layout_helpers::makeHintBanner(outputGroup,
+        utils::tr(QStringLiteral("settings.smart_focus.hint"))));
+
     layout->addWidget(outputGroup);
 
     layout->addStretch();

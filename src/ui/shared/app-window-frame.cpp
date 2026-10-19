@@ -193,6 +193,12 @@ bool AppWindowFrame::event(QEvent *event)
         refreshWindowControlIcon(m_maximize, WindowControl::Maximize, isMaximized());
         updateShape();
         break;
+    case QEvent::WindowDeactivate:
+    case QEvent::Leave:
+        // O cursor de borda é do app inteiro (override): perder a ativação ou o ponteiro sair da janela com ele ligado o
+        // deixava preso em qualquer outra janela do Kai.
+        clearResizeCursor();
+        break;
     default:
         break;
     }
@@ -243,6 +249,13 @@ void AppWindowFrame::clearResizeCursor()
 
 bool AppWindowFrame::eventFilter(QObject *watched, QEvent *event)
 {
+    if (m_resizeCursorActive && event->type() == QEvent::MouseMove) {
+        // O ponteiro foi para um widget de outra janela (ou esta não está mais ativa): o cursor de borda não vale mais.
+        const auto *under = qobject_cast<QWidget *>(watched);
+        if (!under || under->window() != this || !isActiveWindow()) {
+            clearResizeCursor();
+        }
+    }
     if (isMaximized() || isFullScreen() || !isActiveWindow()
         || (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress)) {
         return QWidget::eventFilter(watched, event);

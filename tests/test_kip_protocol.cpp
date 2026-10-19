@@ -473,8 +473,8 @@ private slots:
         sel.type = KipFieldType::Select;
         sel.label = QStringLiteral("Environment");
         sel.required = true;
-        sel.options = {{QStringLiteral("dev"), QStringLiteral("dev"), {}},
-                       {QStringLiteral("prod"), QStringLiteral("Production"), QStringLiteral("careful")}};
+        sel.options = {{QStringLiteral("dev"), QStringLiteral("dev"), {}, {}},
+                       {QStringLiteral("prod"), QStringLiteral("Production"), QStringLiteral("careful"), {}}};
         sel.defaultValue = QStringLiteral("dev");
         sel.watch = true;
         KipField flags;
@@ -513,11 +513,11 @@ private slots:
 
         KipSteps steps;
         steps.id = QStringLiteral("s");
-        steps.items = {{QStringLiteral("a"), QStringLiteral("A"), KipStepState::Running, QStringLiteral("d")}};
+        steps.items = {{QStringLiteral("a"), QStringLiteral("A"), KipStepState::Running, QStringLiteral("d"), {}}};
 
         KipTable table;
         table.id = QStringLiteral("t");
-        table.columns = {{QStringLiteral("a"), QStringLiteral("A")}};
+        table.columns = {{QStringLiteral("a"), QStringLiteral("A"), {}}};
         table.rows = QJsonArray{QJsonObject{{"a", "1"}}};
 
         const QVector<KipMessage> messages = {
@@ -530,8 +530,8 @@ private slots:
             KipChipResult{{}, QStringLiteral("ctx"), KipChipState::Running, {}, {}},
             KipInvalid{QStringLiteral("p1"), {{QStringLiteral("env"), QStringLiteral("bad")}}, QStringLiteral("m")},
             KipMessageBlock{KipLevel::Error, QStringLiteral("t")}, KipMarkdown{QStringLiteral("# h")},
-            KipProgress{42.0, QStringLiteral("l"), true}, KipProgress{std::nullopt, {}, std::nullopt}, steps,
-            KipStep{QStringLiteral("s"), QStringLiteral("a"), KipStepState::Success, QStringLiteral("ok")}, table,
+            KipProgress{42.0, QStringLiteral("l"), true, {}}, KipProgress{std::nullopt, {}, std::nullopt, {}}, steps,
+            KipStep{QStringLiteral("s"), QStringLiteral("a"), KipStepState::Success, QStringLiteral("ok"), {}}, table,
             KipNotify{QStringLiteral("t"), QStringLiteral("x"), KipLevel::Warning},
             KipSetEnv{QStringLiteral("A"), QStringLiteral("b")}, done};
 
@@ -693,7 +693,7 @@ private slots:
 
         KipField sel;
         sel.type = KipFieldType::Select;
-        sel.options = {{QStringLiteral("x"), QStringLiteral("x"), {}}};
+        sel.options = {{QStringLiteral("x"), QStringLiteral("x"), {}, {}}};
         sel.defaultValue = QStringLiteral("x");
         QCOMPARE(kipInitialValue(sel), QJsonValue(QStringLiteral("x")));
         sel.defaultValue = QStringLiteral("gone");
@@ -713,7 +713,7 @@ private slots:
 
         KipField sel;
         sel.type = KipFieldType::Select;
-        sel.options = {{QStringLiteral("a"), QStringLiteral("a"), {}}};
+        sel.options = {{QStringLiteral("a"), QStringLiteral("a"), {}, {}}};
         QVERIFY(kipIsValueValid(sel, QStringLiteral("a")));
         QVERIFY(kipIsValueValid(sel, QString()));
         QVERIFY(!kipIsValueValid(sel, QStringLiteral("b")));
@@ -733,7 +733,7 @@ private slots:
         KipField list;
         list.type = KipFieldType::List;
         list.multiple = true;
-        list.options = {{QStringLiteral("a"), QStringLiteral("a"), {}}, {QStringLiteral("b"), QStringLiteral("b"), {}}};
+        list.options = {{QStringLiteral("a"), QStringLiteral("a"), {}, {}}, {QStringLiteral("b"), QStringLiteral("b"), {}, {}}};
         QVERIFY(kipIsValueValid(list, QJsonArray{QStringLiteral("a"), QStringLiteral("b")}));
         QVERIFY(!kipIsValueValid(list, QJsonArray{QStringLiteral("c")}));
         QVERIFY(!kipIsValueValid(list, QStringLiteral("a")));
@@ -743,7 +743,7 @@ private slots:
     {
         KipField sel;
         sel.type = KipFieldType::Select;
-        sel.options = {{QStringLiteral("p"), QStringLiteral("Production"), {}}};
+        sel.options = {{QStringLiteral("p"), QStringLiteral("Production"), {}, {}}};
         QCOMPARE(kipDisplayValue(sel, QStringLiteral("p")), QStringLiteral("Production"));
 
         KipField secret;
@@ -753,7 +753,7 @@ private slots:
 
         KipField table;
         table.type = KipFieldType::Table;
-        table.columns = {{QStringLiteral("name"), QStringLiteral("Name")}};
+        table.columns = {{QStringLiteral("name"), QStringLiteral("Name"), {}}};
         table.rows = QJsonArray{QJsonObject{{"id", "b3"}, {"name", "backup-3.sql"}}};
         QCOMPARE(kipDisplayValue(table, QStringLiteral("b3")), QStringLiteral("backup-3.sql"));
 
@@ -794,6 +794,275 @@ private slots:
         const QString big(kKipMaxLineBytes + 10, QLatin1Char('x'));
         QCOMPARE(buf.feed(big + QStringLiteral("\nok\n")), QStringList{QStringLiteral("ok")});
         QVERIFY(!buf.takeDiagnostics().isEmpty());
+    }
+
+    // ---- rodada 2 (§27) ----
+    void roundTwoMessagesRoundTrip()
+    {
+        KipField cards;
+        cards.name = QStringLiteral("strategy");
+        cards.type = KipFieldType::Select;
+        cards.style = QStringLiteral("cards");
+        KipOption merge;
+        merge.value = QStringLiteral("merge");
+        merge.label = QStringLiteral("Merge");
+        merge.description = QStringLiteral("Keeps history");
+        merge.icon = QStringLiteral("git-merge");
+        KipOption squash;
+        squash.value = QStringLiteral("squash");
+        squash.label = QStringLiteral("squash");
+        cards.options = {merge, squash};
+
+        KipField message;
+        message.name = QStringLiteral("msg");
+        message.type = KipFieldType::Textarea;
+        message.maxLength = 72;
+
+        KipField tree;
+        tree.name = QStringLiteral("paths");
+        tree.type = KipFieldType::Tree;
+        tree.multiple = true;
+        tree.searchable = true;
+        KipTreeNode auth;
+        auth.id = QStringLiteral("src/auth");
+        auth.label = QStringLiteral("auth");
+        auth.badge = QStringLiteral("M");
+        auth.badgeTone = QStringLiteral("warning");
+        KipTreeNode src;
+        src.id = QStringLiteral("src");
+        src.label = QStringLiteral("src");
+        src.icon = QStringLiteral("folder");
+        src.expanded = true;
+        src.children = {auth};
+        tree.nodes = {src};
+
+        KipField hunks;
+        hunks.name = QStringLiteral("hunks");
+        hunks.type = KipFieldType::Diff;
+        hunks.patch = QStringLiteral("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b");
+        hunks.select = QStringLiteral("files");
+
+        KipChip del;
+        del.id = QStringLiteral("delete");
+        del.label = QStringLiteral("Delete");
+        del.icon = QStringLiteral("trash-2");
+        del.danger = true;
+        del.confirm = KipChipConfirm{{}, QStringLiteral("Gone for good."), QStringLiteral("Delete"), QStringLiteral("Keep")};
+        KipField branches;
+        branches.name = QStringLiteral("branch");
+        branches.type = KipFieldType::Table;
+        branches.rowKey = QStringLiteral("name");
+        branches.columns = {{QStringLiteral("name"), QStringLiteral("Branch"), QStringLiteral("mono")},
+                            {QStringLiteral("state"), QStringLiteral("State"), QStringLiteral("badge")}};
+        branches.rows = QJsonArray{QJsonObject{{"name", "main"}, {"state", QJsonObject{{"text", "default"}, {"tone", "info"}}}}};
+        branches.rowActions = {del};
+
+        KipPrompt prompt;
+        prompt.id = QStringLiteral("p");
+        prompt.fields = {cards, message, tree, hunks, branches};
+
+        KipTable table;
+        table.id = QStringLiteral("t");
+        table.columns = {{QStringLiteral("n"), QStringLiteral("N"), QStringLiteral("number")}};
+        table.rows = QJsonArray{QJsonObject{{"k", "1"}, {"n", 3}}};
+        table.rowKey = QStringLiteral("k");
+        table.rowActions = {del};
+
+        KipDiff patch;
+        patch.id = QStringLiteral("wc");
+        patch.title = QStringLiteral("Changes");
+        patch.patch = hunks.patch;
+        patch.view = QStringLiteral("split");
+        patch.collapseAfter = 5;
+        KipDiff sides;
+        sides.left = KipDiffSide{QStringLiteral("a.json"), QStringLiteral("{}")};
+        sides.right = KipDiffSide{QStringLiteral("b.json"), QStringLiteral("{\"a\":1}")};
+        sides.language = QStringLiteral("json");
+        sides.context = 0;
+        sides.ignoreWhitespace = true;
+        sides.truncated = true;
+
+        KipKv kv;
+        kv.id = QStringLiteral("kv");
+        kv.items = {{QStringLiteral("Version"), QStringLiteral("1.4.0"), QStringLiteral("mono"), true},
+                    {QStringLiteral("Channel"), QJsonObject{{"text", "stable"}, {"tone", "success"}}, QStringLiteral("badge"), false},
+                    {QStringLiteral("Page"), QStringLiteral("https://example.com"), QStringLiteral("link"), false}};
+        KipStats stats;
+        stats.items = {{QStringLiteral("Tests"), QStringLiteral("412"), QStringLiteral("all"), QStringLiteral("success")}};
+        KipCode code;
+        code.title = QStringLiteral("kai.yml");
+        code.language = QStringLiteral("yaml");
+        code.text = QStringLiteral("a: 1\nb: 2");
+        code.highlight = {2};
+        code.maxLines = 8;
+        code.lineNumbers = false;
+
+        KipStep logOnly;
+        logOnly.steps = QStringLiteral("s");
+        logOnly.id = QStringLiteral("a");
+        logOnly.log = QStringLiteral("line 1\nline 2");
+        KipProgress bar;
+        bar.id = QStringLiteral("linux");
+        bar.value = 72;
+        bar.label = QStringLiteral("linux.tar.gz");
+
+        const QVector<KipMessage> messages = {prompt, table, patch, sides, kv, stats, code, logOnly, bar};
+        for (const KipMessage &m : messages) {
+            const QByteArray line = kipSerializeMessage(m);
+            const KipParseResult r = parseKipLine(QString::fromUtf8(line.chopped(1)));
+            QVERIFY2(r.kind == KipParseResult::Kind::Message, qPrintable(QString::fromUtf8(line)));
+            QVERIFY2(r.diagnostics.isEmpty(), qPrintable(r.diagnostics.join(';')));
+            QCOMPARE(kipMessageToJson(*r.message), kipMessageToJson(m));
+        }
+    }
+
+    void aDiffNeedsAPatchOrBothSides()
+    {
+        QCOMPARE(parse("{\"kip\":1,\"type\":\"diff\",\"left\":{\"text\":\"a\"}}").kind, KipParseResult::Kind::Invalid);
+        const KipParseResult both = parse(
+            "{\"kip\":1,\"type\":\"diff\",\"patch\":\"x\",\"left\":{\"text\":\"a\"},\"right\":{\"text\":\"b\"}}");
+        QCOMPARE(both.kind, KipParseResult::Kind::Message);
+        QVERIFY(!both.diagnostics.isEmpty());
+        QVERIFY(!as<KipDiff>(both).left);
+        QCOMPARE(as<KipDiff>(both).patch, QStringLiteral("x"));
+        const KipParseResult badView = parse("{\"kip\":1,\"type\":\"diff\",\"patch\":\"\",\"view\":\"3d\"}");
+        QVERIFY(as<KipDiff>(badView).view.isEmpty());
+        QVERIFY(!badView.diagnostics.isEmpty());
+    }
+
+    void bigTextsAreCutAtALineBoundary()
+    {
+        QString patch;
+        const QString line = QStringLiteral("+") + QString(99, QLatin1Char('x')) + QLatin1Char('\n');
+        while (patch.size() < kKipMaxBigTextBytes + 5000) patch += line;
+        QJsonObject o{{"kip", 1}, {"type", "diff"}, {"patch", patch}};
+        const KipParseResult r = parseKipLine(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+        const KipDiff &d = as<KipDiff>(r);
+        QVERIFY(d.truncated);
+        QVERIFY(d.patch.toUtf8().size() <= kKipMaxBigTextBytes);
+        QVERIFY(d.patch.endsWith(QLatin1Char('\n')));
+        QVERIFY(!r.diagnostics.isEmpty());
+    }
+
+    void kvLinksAreHttpOnly()
+    {
+        const KipParseResult r = parse(
+            "{\"kip\":1,\"type\":\"kv\",\"items\":[{\"key\":\"a\",\"value\":\"file:///etc/passwd\",\"format\":\"link\"},"
+            "{\"key\":\"b\",\"value\":\"x\",\"format\":\"sparkles\"},{\"key\":\"c\",\"value\":{\"text\":\"ok\",\"tone\":\"pink\"},\"format\":\"badge\"}]}");
+        const KipKv &kv = as<KipKv>(r);
+        QCOMPARE(kv.items.size(), 3);
+        QVERIFY(kv.items.at(0).format.isEmpty());
+        QVERIFY(kv.items.at(1).format.isEmpty());
+        QCOMPARE(kv.items.at(2).value.toObject().value("text").toString(), QStringLiteral("ok"));
+        QVERIFY(!kv.items.at(2).value.toObject().contains("tone")); // tom desconhecido sai
+        QCOMPARE(r.diagnostics.size(), 3);
+    }
+
+    void rowActionsOfABlockTableNeedATableId()
+    {
+        const KipParseResult r = parse(
+            "{\"kip\":1,\"type\":\"table\",\"columns\":[\"a\"],\"rows\":[],\"row_actions\":[{\"id\":\"x\"}]}");
+        QVERIFY(as<KipTable>(r).rowActions.isEmpty());
+        QVERIFY(!r.diagnostics.isEmpty());
+    }
+
+    void rowActionsAreCappedAndIgnoreRequires()
+    {
+        QString actions;
+        for (int i = 0; i < kKipMaxRowActions + 3; ++i) {
+            actions += QStringLiteral("%1{\"id\":\"a%2\",\"requires\":[\"x\"]}").arg(i ? QStringLiteral(",") : QString()).arg(i);
+        }
+        const QString json = QStringLiteral("{\"kip\":1,\"type\":\"table\",\"id\":\"t\",\"columns\":[\"a\"],\"rows\":[],\"row_actions\":[%1]}").arg(actions);
+        const KipParseResult r = parseKipLine(json);
+        QCOMPARE(as<KipTable>(r).rowActions.size(), kKipMaxRowActions);
+        QVERIFY(as<KipTable>(r).rowActions.first().requiresFields.isEmpty());
+    }
+
+    void allowedRowActionsFollowTheRowList()
+    {
+        KipChip a, b;
+        a.id = QStringLiteral("sync");
+        b.id = QStringLiteral("delete");
+        QCOMPARE(kipRowActionIds(QJsonObject{{"name", "x"}}, {a, b}), QStringList({QStringLiteral("sync"), QStringLiteral("delete")}));
+        QCOMPARE(kipRowActionIds(QJsonObject{{"_actions", QJsonArray{"sync"}}}, {a, b}), QStringList{QStringLiteral("sync")});
+        QCOMPARE(kipRowActionIds(QJsonObject{{"_actions", QJsonArray{}}}, {a, b}), QStringList{});
+    }
+
+    void aRowActionIsAChipWithItsRow()
+    {
+        const QJsonObject o = QJsonDocument::fromJson(
+            kipSerializeRowAction(QStringLiteral("p"), QStringLiteral("delete"), QStringLiteral("branch"), QString(),
+                                  QStringLiteral("feat/x"), QJsonObject{{"q", "1"}})).object();
+        QCOMPARE(o.value("type").toString(), QStringLiteral("chip"));
+        QCOMPARE(o.value("chip").toString(), QStringLiteral("delete"));
+        QCOMPARE(o.value("field").toString(), QStringLiteral("branch"));
+        QVERIFY(!o.contains("table"));
+        QCOMPARE(o.value("row").toString(), QStringLiteral("feat/x"));
+    }
+
+    void aStepWithOnlyALogKeepsTheState()
+    {
+        const KipParseResult logResult = parse("{\"kip\":1,\"type\":\"step\",\"steps\":\"s\",\"id\":\"a\",\"log\":\"x\"}");
+        const KipStep &onlyLog = as<KipStep>(logResult);
+        QVERIFY(!onlyLog.state);
+        QVERIFY(!onlyLog.detail);
+        QCOMPARE(onlyLog.log, QStringLiteral("x"));
+        // o comportamento antigo: um step vazio volta a pendente
+        const KipParseResult emptyResult = parse("{\"kip\":1,\"type\":\"step\",\"steps\":\"s\",\"id\":\"a\"}");
+        const KipStep &empty = as<KipStep>(emptyResult);
+        QCOMPARE(*empty.state, KipStepState::Pending);
+    }
+
+    void unknownColumnFormatsBecomeText()
+    {
+        const KipParseResult r = parse("{\"kip\":1,\"type\":\"table\",\"columns\":[{\"key\":\"a\",\"format\":\"comic\"}],\"rows\":[]}");
+        QVERIFY(as<KipTable>(r).columns.first().format.isEmpty());
+        QVERIFY(!r.diagnostics.isEmpty());
+    }
+
+    void treeFieldValues()
+    {
+        const KipParseResult r = parse(
+            "{\"kip\":1,\"type\":\"prompt\",\"id\":\"p\",\"fields\":[{\"name\":\"t\",\"type\":\"tree\",\"multiple\":true,"
+            "\"default\":[\"src/auth\",\"nope\"],\"nodes\":[{\"id\":\"src\",\"children\":[{\"id\":\"src/auth\",\"label\":\"auth\"},"
+            "{\"id\":\"src/api\"},{\"id\":\"src\"}]},\"docs\",{\"label\":\"no id\"}]}]}");
+        const KipField &f = as<KipPrompt>(r).fields.first();
+        QCOMPARE(kipTreeNodeIds(f.nodes), QStringList({QStringLiteral("src"), QStringLiteral("src/auth"), QStringLiteral("src/api"),
+                                                      QStringLiteral("docs")}));
+        QCOMPARE(kipInitialValue(f), QJsonValue(QJsonArray{"src/auth"}));
+        QVERIFY(kipIsValueValid(f, QJsonArray{"docs", "src"}));
+        QVERIFY(!kipIsValueValid(f, QJsonArray{"nope"}));
+        QCOMPARE(kipDisplayValue(f, QJsonArray{"src/auth", "docs"}), QStringLiteral("auth, docs"));
+        QCOMPARE(kipEmptyValue(f), QJsonValue(QJsonArray()));
+        QCOMPARE(r.diagnostics.size(), 2); // id repetido e nó sem id
+    }
+
+    void diffFieldValues()
+    {
+        KipField f;
+        f.name = QStringLiteral("h");
+        f.type = KipFieldType::Diff;
+        f.patch = QStringLiteral("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n-c\n+d\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-e\n+f\n");
+        QCOMPARE(kipDiffFieldIds(f), QStringList({QStringLiteral("x@0"), QStringLiteral("x@1"), QStringLiteral("y@0")}));
+        QCOMPARE(kipInitialValue(f).toArray().size(), 3);
+        f.defaultValue = QStringLiteral("none");
+        QCOMPARE(kipInitialValue(f), QJsonValue(QJsonArray()));
+        f.defaultValue = QJsonArray{"x@1", "zzz"};
+        QCOMPARE(kipInitialValue(f), QJsonValue(QJsonArray{"x@1"}));
+        QVERIFY(kipIsValueValid(f, QJsonArray{"y@0"}));
+        QVERIFY(!kipIsValueValid(f, QJsonArray{"y@7"}));
+        f.select = QStringLiteral("files");
+        QCOMPARE(kipDiffFieldIds(f), QStringList({QStringLiteral("x"), QStringLiteral("y")}));
+    }
+
+    void maxLengthLimitsTheValue()
+    {
+        KipField f;
+        f.name = QStringLiteral("m");
+        f.type = KipFieldType::Text;
+        f.maxLength = 3;
+        QVERIFY(kipIsValueValid(f, QStringLiteral("abc")));
+        QVERIFY(!kipIsValueValid(f, QStringLiteral("abcd")));
     }
 };
 

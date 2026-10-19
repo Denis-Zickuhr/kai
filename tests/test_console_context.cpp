@@ -26,6 +26,19 @@ private slots:
         QVERIFY(&cliOut() != &cliErr());
     }
 
+    // `kai.com` (o shim de console) é o pai direto do kai.exe: a origem WSL tem de ser reconhecida pelo ancestral seguinte.
+    void wslInteropIsRecognisedThroughTheConsoleShim()
+    {
+        QVERIFY(ancestorsAreWslInterop({QStringLiteral("wsl.exe")}));
+        QVERIFY(ancestorsAreWslInterop({QStringLiteral("wslhost.exe")}));
+        QVERIFY(ancestorsAreWslInterop({QStringLiteral("kai.com"), QStringLiteral("wslhost.exe")}));
+        QVERIFY(ancestorsAreWslInterop({QStringLiteral("kai.com"), QStringLiteral("kai.exe"), QStringLiteral("wsl.exe")}));
+        QVERIFY(!ancestorsAreWslInterop({}));
+        QVERIFY(!ancestorsAreWslInterop({QStringLiteral("kai.com")}));
+        QVERIFY(!ancestorsAreWslInterop({QStringLiteral("kai.com"), QStringLiteral("powershell.exe"), QStringLiteral("wsl.exe")}));
+        QVERIFY(!ancestorsAreWslInterop({QStringLiteral("cmd.exe"), QStringLiteral("wsl.exe")})); // o mais próximo manda
+    }
+
 #ifndef Q_OS_WIN
     void redirectedOutputKeepsAccentsAsUtf8()
     {

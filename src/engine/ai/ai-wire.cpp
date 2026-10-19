@@ -231,11 +231,14 @@ QJsonObject openAiBody(const AiRequest &req)
             if (!m.toolCalls.isEmpty()) {
                 QJsonArray calls;
                 for (const AiToolCall &c : m.toolCalls) {
-                    calls.append(QJsonObject{{QStringLiteral("id"), c.id},
-                                             {QStringLiteral("type"), QStringLiteral("function")},
-                                             {QStringLiteral("function"),
-                                              QJsonObject{{QStringLiteral("name"), c.name},
-                                                          {QStringLiteral("arguments"), compactJson(c.arguments)}}}});
+                    QJsonObject call{{QStringLiteral("id"), c.id},
+                                     {QStringLiteral("type"), QStringLiteral("function")},
+                                     {QStringLiteral("function"),
+                                      QJsonObject{{QStringLiteral("name"), c.name},
+                                                  {QStringLiteral("arguments"), compactJson(c.arguments)}}}};
+                    // O que o provedor mandou junto da chamada (Gemini: thought_signature) volta como veio.
+                    if (!c.extra.isEmpty()) call[QStringLiteral("extra_content")] = c.extra;
+                    calls.append(call);
                 }
                 o[QStringLiteral("tool_calls")] = calls;
             }
@@ -325,7 +328,8 @@ bool parseOpenAiResponse(const QByteArray &bytes, AiTurn &turn, AiError &error)
         if (id.isEmpty()) id = QStringLiteral("call_%1").arg(n);
         ++n;
         turn.toolCalls.append(AiToolCall{id, fn.value(QStringLiteral("name")).toString(),
-                               argumentsFromText(fn.value(QStringLiteral("arguments")).toString())});
+                               argumentsFromText(fn.value(QStringLiteral("arguments")).toString()),
+                               c.value(QStringLiteral("extra_content")).toObject()});
     }
     turn.stopReason = openAiStop(choice.value(QStringLiteral("finish_reason")).toString());
     if (!turn.toolCalls.isEmpty()) {
@@ -462,6 +466,7 @@ protected:
             Call &call = m_calls[index];
             const QJsonObject fn = c.value(QStringLiteral("function")).toObject();
             if (call.id.isEmpty()) call.id = c.value(QStringLiteral("id")).toString();
+            if (c.contains(QStringLiteral("extra_content"))) call.extra = c.value(QStringLiteral("extra_content")).toObject();
             const QString name = fn.value(QStringLiteral("name")).toString();
             if (!name.isEmpty()) {
                 call.name += name;
@@ -484,7 +489,7 @@ protected:
         for (auto it = m_calls.cbegin(); it != m_calls.cend(); ++it) {
             QString id = it->id;
             if (id.isEmpty()) id = QStringLiteral("call_%1").arg(it.key());
-            m_turn.toolCalls.append(AiToolCall{id, it->name, argumentsFromText(it->args)});
+            m_turn.toolCalls.append(AiToolCall{id, it->name, argumentsFromText(it->args), it->extra});
         }
         m_calls.clear();
         if (!m_turn.toolCalls.isEmpty()) {
@@ -497,6 +502,7 @@ private:
         QString id;
         QString name;
         QString args;
+        QJsonObject extra;
         bool announced = false;
     };
     QMap<int, Call> m_calls;
@@ -628,13 +634,17 @@ QStringList parseModelList(const QByteArray &body)
     if (!ok) {
         return ids;
     }
+    // O Gemini lista "models/gemini-...", mas o chat espera o nome sem o prefixo.
+    const auto bare = [](QString id) {
+        return id.startsWith(QLatin1String("models/")) ? id.mid(7) : id;
+    };
     for (const QJsonValue &v : root.value(QStringLiteral("data")).toArray()) {
-        const QString id = v.toObject().value(QStringLiteral("id")).toString();
+        const QString id = bare(v.toObject().value(QStringLiteral("id")).toString());
         if (!id.isEmpty()) ids << id;
     }
     for (const QJsonValue &v : root.value(QStringLiteral("models")).toArray()) {
         const QJsonObject o = v.toObject();
-        const QString id = o.value(QStringLiteral("id")).toString(o.value(QStringLiteral("name")).toString());
+        const QString id = bare(o.value(QStringLiteral("id")).toString(o.value(QStringLiteral("name")).toString()));
         if (!id.isEmpty()) ids << id;
     }
     ids.removeDuplicates();

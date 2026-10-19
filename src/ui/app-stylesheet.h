@@ -21,6 +21,10 @@ namespace kai::ui {
 // QSS moderno completo, derivado dos tokens ativos.
 QString buildModernStylesheet();
 
+// A folha completa de um tema: o QSS do núcleo (`theme.qss`, que ainda traz `@RADIUS_MD@`/`@RADIUS_SM@` no lugar dos raios) com
+// os cantos da preferência do usuário (tokens) no lugar, mais a camada moderna. É o que vai para `setStyleSheet`.
+QString themeStyleSheet(const QString &themeQss);
+
 // Aplica sombra (elevação) num painel/diálogo, se o efeito estiver ligado.
 // Nível 1 = painel embutido, 2 = popover, 3 = diálogo modal.
 void applyElevation(QWidget *widget, int level = 1);

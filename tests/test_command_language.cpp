@@ -494,6 +494,72 @@ private slots:
         QVERIFY2(out.contains(QStringLiteral("\"default\":\"XY\"")), qPrintable(out));
     }
 
+    // Rodada 2 (§27): diff/kv/stats/code saem como mensagens, e uma ação de linha (um `chip` com `row`) vai para o
+    // callback de ação de linha com a chave da linha.
+    void kipModuleSpeaksTheRoundTwoComponents_data()
+    {
+        QTest::addColumn<int>("language");
+        QTest::addColumn<QString>("code");
+        QTest::newRow("python") << int(CommandLanguage::Python) << QStringLiteral(
+            "import kip\n"
+            "kip.diff(left={'name': 'a.txt', 'text': 'x'}, right='y', view='split')\n"
+            "kip.kv([{'key': 'Version', 'value': '1.4.0', 'copy': True}])\n"
+            "kip.stats([{'label': 'Tests', 'value': '412'}])\n"
+            "kip.code('a: 1', language='yaml', highlight=[1])\n"
+            "kip.step('b', 'c', log='line')\n"
+            "kip.prompt([{'name': 'branch', 'type': 'table', 'columns': ['name'], 'rows': [{'name': 'feat'}],"
+            " 'row_key': 'name', 'row_actions': [{'id': 'delete'}]}], id='p',"
+            " on_row_action=lambda action, row, values: 'did ' + action + ' on ' + row)\n");
+        QTest::newRow("node") << int(CommandLanguage::Node) << QStringLiteral(
+            "kip.diff({ left: { name: 'a.txt', text: 'x' }, right: 'y', view: 'split' });\n"
+            "kip.kv([{ key: 'Version', value: '1.4.0', copy: true }]);\n"
+            "kip.stats([{ label: 'Tests', value: '412' }]);\n"
+            "kip.code('a: 1', { language: 'yaml', highlight: [1] });\n"
+            "kip.step('b', 'c', undefined, undefined, 'line');\n"
+            "await kip.prompt([{ name: 'branch', type: 'table', columns: ['name'], rows: [{ name: 'feat' }],"
+            " row_key: 'name', row_actions: [{ id: 'delete' }] }],"
+            " { id: 'p', onRowAction: (action, row) => 'did ' + action + ' on ' + row });\n");
+        QTest::newRow("php") << int(CommandLanguage::Php) << QStringLiteral(
+            "Kip::diff(['left' => ['name' => 'a.txt', 'text' => 'x'], 'right' => 'y', 'view' => 'split']);\n"
+            "Kip::kv([['key' => 'Version', 'value' => '1.4.0', 'copy' => true]]);\n"
+            "Kip::stats([['label' => 'Tests', 'value' => '412']]);\n"
+            "Kip::code('a: 1', ['language' => 'yaml', 'highlight' => [1]]);\n"
+            "Kip::step('b', 'c', null, null, 'line');\n"
+            "Kip::prompt([['name' => 'branch', 'type' => 'table', 'columns' => ['name'], 'rows' => [['name' => 'feat']],"
+            " 'row_key' => 'name', 'row_actions' => [['id' => 'delete']]]],"
+            " ['id' => 'p', 'onRowAction' => function ($action, $row) { return 'did ' . $action . ' on ' . $row; }]);\n");
+    }
+
+    void kipModuleSpeaksTheRoundTwoComponents()
+    {
+        QFETCH(int, language);
+        QFETCH(QString, code);
+        const auto lang = CommandLanguage(language);
+        REQUIRE_INTERPRETER(lang);
+        QProcess process;
+        process.start(QStringLiteral("/bin/sh"),
+                      {QStringLiteral("-c"), buildInterpreterCommandLine(lang, interpreterFor(lang), code, true)});
+        QVERIFY(process.waitForStarted());
+        QVERIFY(process.waitForReadyRead(10000));
+        process.write("{\"kip\":1,\"type\":\"chip\",\"id\":\"p\",\"chip\":\"delete\",\"field\":\"branch\",\"row\":\"feat\",\"values\":{}}\n");
+        process.write("{\"kip\":1,\"type\":\"response\",\"id\":\"p\",\"values\":{\"branch\":\"\"}}\n");
+        QVERIFY(process.waitForFinished(10000));
+        QCOMPARE(process.exitCode(), 0);
+        QStringList types;
+        QString chipText;
+        for (const QByteArray &line : process.readAllStandardOutput().split('\n')) {
+            const KipParseResult parsed = parseKipLine(QString::fromUtf8(line));
+            if (parsed.kind != KipParseResult::Kind::Message) continue;
+            types << parsed.type;
+            if (const auto *result = std::get_if<KipChipResult>(&*parsed.message)) chipText = result->text;
+            if (const auto *step = std::get_if<KipStep>(&*parsed.message)) QVERIFY(!step->state); // sem estado: só log
+        }
+        for (const char *t : {"diff", "kv", "stats", "code", "step", "prompt", "chip_result"}) {
+            QVERIFY2(types.contains(QString::fromLatin1(t)), qPrintable(types.join(',')));
+        }
+        QCOMPARE(chipText, QStringLiteral("did delete on feat"));
+    }
+
     // ---- pipeline ----
     void pipelineKeepsBracesAndDeliversVariablesThroughTheEnvironment()
     {

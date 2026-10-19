@@ -42,15 +42,6 @@ namespace kai::ui {
 using layout_helpers::wrapWithLabel;
 using layout_helpers::makeSurfaceCard;
 
-namespace {
-// Ícone pequeno de documento (Lucide "file-text") para o botão "Formatar
-// JSON" (feedback do usuário: reduzir para ícone pequeno, sem texto).
-QIcon documentIcon()
-{
-    return LucideIcons::icon(QStringLiteral("file-text"), QColor(utils::tokens::mutedFg()), 16);
-}
-}
-
 // ABA 1 "Geral" (pedido do usuário): Tipo/Perfil no TOPO, depois
 // Comando/corpo (cmd ou http, conforme o tipo), depois Dados de exibição
 // (nome/pasta/ícone/etc) — ordem invertida da anterior, onde Identificação

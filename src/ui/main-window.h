@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/features/docs/doc-note.h"
 #include <QJsonArray>
 #include <QMainWindow>
 #include <QSystemTrayIcon>
@@ -30,7 +31,6 @@
 #include <QPointer>
 #include <QTimer>
 #include "ui/shared/action-group-container.h"
-#include "ui/shared/fuzzy-search.h"
 #include "ui/features/output/terminal-drawer.h"
 #include "ui/features/collections/import-selection-dialog.h"
 #include "ui/features/collections/project-selector.h"
@@ -65,6 +65,8 @@ class McpBridge;
 class QuickRunPopup;
 class RunMirrorPanel;
 class DocSessionStore;
+class DocumentPanel;
+class EnvironmentManagerDialog;
 class ParameterFormDialog;
 
 // Janela principal do Kai: usa a titlebar NATIVA do sistema operacional
@@ -144,6 +146,8 @@ public:
     layout::DockHost *dockHost() const { return m_dock; }
     layout::ViewRegistry *viewRegistry() const { return m_viewRegistry; }
     layout::LayoutController *layoutController() const { return m_layoutController; }
+    // O painel Documento (README e notas da pasta): para os testes.
+    DocumentPanel *documentPanel() const { return m_documentPanel; }
 
     // true se o ícone de bandeja foi registrado com sucesso. Usado por
     // outras decisões (notificações, "ocultar ao rodar" só faz sentido
@@ -222,9 +226,11 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
+    // Põe a saída de um comando num painel próprio: um app KIP vira mini app (`kip:`), o resto um espelho (`run:`).
+    void openRunPanel(const QString &commandId);
+    void pinKipPanel(const QString &commandId);
     // Ação "Sincronizar com o arquivo" do menu da pasta-projeto (ver abaixo).
     void startProjectSync(const QString &folderId, bool kaiToFile);
-    void handleFilterQueryChanged(const QString &query);
     void handleCommandActivated(const QString &commandId);
     void handlePipelineLog(const QString &commandId, const QString &text, bool isError);
     void handlePipelineFinished(const engine::PipelineResult &result);
@@ -267,15 +273,15 @@ private slots:
     void handleNoteActivated(const QString &noteId);
     void handleNoteSelected(const QString &noteId);
     void persistNotes();
-    void showNoteView(const QString &noteId, bool startEditing);
+    void showNoteView(const QString &noteId, bool startEditing, bool reveal = true);
     QVector<DocNote> docNotesFor(const QString &folderId) const;
     QString folderDocumentDirectory(const QString &folderId) const;
-    // O ícone de documentos da barra de guias: menu com as pastas que têm documentação, mais usadas primeiro.
-    void showDocsMenu();
+    // O botão das pastas do painel Documento: menu com as pastas que têm documentação, mais usadas primeiro.
+    void showDocsMenu(const QPoint &globalPos);
     void openFolderDocs(const QString &folderId);
     void recordDocUse(const QString &folderId);
     void refreshDocNotes();
-    void resetDrawerForNonCommand(bool keepDocument = false);
+    void resetDrawerForNonCommand();
     bool isNoteId(const QString &id) const;
     void handleCollectionEditRequested(const QString &collectionId);
     void handleCollectionDuplicateRequested(const QString &collectionId);
@@ -301,6 +307,7 @@ private slots:
     // topo e abrir a tela de gestão (criar/editar/excluir).
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
+    void saveEnvironmentsFromPanel();
     void handleRunHistoryRequested();
     void handleNotificationHistoryRequested();
     void handleLogsRequested();
@@ -391,16 +398,30 @@ private:
     // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
     QWidget *createMirrorPanel(const QString &commandId, bool kip);
     void forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action);
+    // Um app KIP aberto num painel próprio (`run:`/`kip:`) vive SÓ ali, como uma aba do app: a Saída padrão não ganha
+    // guia dele, não se conecta a ele ao rodar nem ao selecionar. Fechar o painel devolve a guia à Saída.
+    bool kipLivesInPanel(const QString &commandId) const;
+    // O id do painel de um comando: um app KIP vira mini app (`kip:`, volta ao reiniciar); o resto, espelho (`run:`).
+    QString panelIdForCommand(const QString &commandId) const;
+    // "Abrir com o Kai" do painel de um app KIP (preferência pessoal, SettingsData::kipPanelAutoStart).
+    bool kipPanelAutoStarts(const QString &commandId);
+    void setKipPanelAutoStart(const QString &commandId, bool on);
+    // Ao iniciar: roda os apps KIP com painel e "Abrir com o Kai" ligado (inertes: esperam o usuário na tela inicial).
+    void autoStartKipPanels();
+    void revealKipPanel(const QString &commandId);
+    void moveKipOutOfOutput(const QString &commandId);
     void setMirrorStatus(const QString &commandId, ExecutionStatus status);
     ExecutionStatus executionStatusFor(const QString &commandId) const;
-    void openRunPanel(const QString &commandId);
-    void pinKipPanel(const QString &commandId);
-    void updateDocumentHost();
+    // O painel Documento: criado com o app, registrado como um painel qualquer do quadro.
+    QWidget *createDocumentPanel();
+    bool isViewPlaced(const QString &id) const;
+    void revealViewQuietly(const QString &id);
+    void syncDocumentPlacement();
     // A Saída descobre pela zona onde está o eixo do colapso (altura embaixo, largura nas laterais, nenhum no miolo).
     void applyDrawerPosition();
     // Traz a Saída à tela (reabre se estava fechada). Chamado quando o usuário pede algo que ela mostra.
     void showOutputPanel();
-    void showDocumentTarget();
+    void showDocumentPanel();
     void restoreDefaultLayout();
     // Iguala a altura das barras horizontais de ação e do cabeçalho/rodapé da
     // Saída (a maior altura real entre elas), em qualquer densidade.
@@ -462,7 +483,6 @@ private:
     void showEyeEasterEgg();
 
     void quitApplication();
-    void toggleSearchBar();
     // Foca/desfoca o painel de Saída (só quando há saída ativa): alterna o
     // foco entre o campo de entrada da Saída e a árvore de comandos.
     void toggleOutputFocus();
@@ -520,28 +540,59 @@ private:
     void startFolderAction(const core::Command &command, const QMap<QString, QString> &paramValues);
     void handleActionFinished(const QString &actionId, const engine::PipelineResult &result);
     void handleFolderActionActivated(const QString &commandId, const QString &folderId);
-    // Documentação da pasta selecionada (README do diretório, ou o primeiro documento que houver) na área de Saída.
-    void showFolderDocumentation(const QString &folderId);
+    // Documentação da pasta (README do diretório, ou o primeiro documento que houver) no painel Documento. `Reveal` (a pasta
+    // foi selecionada) também traz o painel à frente; `Quiet` só atualiza o que ele mostra.
+    enum class DocReveal { Reveal, Quiet };
+    bool showFolderDocumentation(const QString &folderId, DocReveal reveal = DocReveal::Reveal);
+    // O painel Documento acompanha a pasta do comando selecionado, se ela tem documentação.
+    void followDocumentToCommand(const QString &commandId);
     void setCommandsCollapsed(bool collapsed);
     // Reflete o painel maximizado no DockHost (a Saída maximizada é o modo foco) no flag, no chevron e nas configurações.
     void syncCommandsCollapsed();
-    void updateCommandsToggle();
     void showQuickRun();
     QuickRunPopup *m_quickRun = nullptr;
     // Ctrl+K: a mesma janelinha do "+", mas com comandos, pastas, notas, ambientes e ações.
     void showCommandPalette();
     void runPaletteAction(const QString &actionId);
     void revealInTree(const QString &itemId, const std::function<void()> &fallback);
+    void showCommandInTree(const QString &commandId);
     QString folderPathOf(const QString &folderId) const;
     QuickRunPopup *m_palette = nullptr;
-    QMap<QString, int> m_docUsage; // id da pasta -> vezes que a documentação dela foi aberta (doc-usage.json)
-    QTimer *m_docUsageSaveTimer = nullptr;
-    bool m_docUsageSaving = false;
+    void showFindPalette();
+    void revealItemActions(const QString &itemId);
+    QuickRunPopup *m_findPalette = nullptr; // Buscar item (Ctrl+F): inerte, leva ao item e às ações dele
     bool m_restoringUiState = false; // restaurando o recolhido da sessão anterior: não regrava
     void handleDocKaiLink(const QString &action, const QString &target);
     // Tela "caminho não encontrado" da documentação: acerta (automatic) ou abre o editor da pasta que define o diretório.
     void fixDocDirectory(bool automatic, const QString &directory, const QString &suggestion);
     QString m_docFolderId;
+    QMap<QString, int> m_docUsage; // id da pasta -> vezes que a documentação dela foi aberta (doc-usage.json)
+    QTimer *m_docUsageSaveTimer = nullptr;
+    bool m_docUsageSaving = false;
+    DocumentPanel *m_documentPanel = nullptr;
+    // O painel Variáveis (a tela de ambientes embutida) e o aviso de que a gravação veio dele (não recarregar a lista).
+    QPointer<EnvironmentManagerDialog> m_environmentsPanel;
+    bool m_savingEnvironmentsFromPanel = false;
+    bool m_documentWasPlaced = false;
+    // Pasta de um comando selecionado que não tem documentação (não se confere o disco de novo a cada clique) e a "senha" do
+    // pedido em andamento (uma seleção nova o invalida).
+    QString m_docFollowMiss;
+    quint64 m_docFollowToken = 0;
+    // Uma fonte de documentação (ver findDocSources).
+    struct DocSource {
+        QString folderId;
+        QString directory; // só quando a pasta tem diretório PRÓPRIO a verificar
+        bool hasNotes = false;
+    };
+    void findDocSources(bool includeHidden, std::function<void(const QVector<DocSource> &)> done);
+    void refreshDocSources();
+    QString documentTargetFor(const QString &itemId) const;
+    void showDocumentFor(const QString &itemId);
+    bool canShowOutput(const QString &commandId) const;
+    void updateFocusActions();
+    QSet<QString> m_docSourceFolders; // fontes de documentação (refreshDocSources)
+    bool m_smartFocus = false; // Configurações → Foco inteligente (desligado: a Saída e o Documento só vêm quando pedidos)
+    quint64 m_docSourcesToken = 0;
     // A memória do leitor de documentos (posições, rascunhos, recentes) e as marcas de "não salvo" na árvore de comandos.
     DocSessionStore *m_docStore = nullptr;
     void refreshDraftMarks();
@@ -571,6 +622,7 @@ private:
     void ensureOutputTab(const QString &commandId);
     void refreshOutputTabs();
     void activateOutputTab(const QString &commandId);
+    void showCommandOutput(const QString &commandId);
     void closeOutputTab(const QString &commandId);
     void showOutputTabMenu(const QString &commandId, const QPoint &globalPos);
     void cycleOutputTab(int direction);
@@ -665,6 +717,9 @@ private:
     // Comandos KIP cuja view deve abrir na janela própria quando a sessão nascer
     // (`kai -gw`, mesmo mecanismo do `kip_window`).
     QSet<QString> m_kipOpenWindowFor;
+    // Apps KIP abertos sozinhos no boot ("Abrir com o Kai") cuja sessão ainda é essa: não vêm à frente nem pegam o foco.
+    QSet<QString> m_kipAutoStarted;
+    bool m_autoStartingKip = false;
     // Geração da sessão KIP por comando: o fechamento automático da janela (kip_auto_close)
     // só vale para a sessão que o agendou, não para uma re-execução que veio depois.
     QHash<QString, int> m_kipAutoCloseGeneration;
@@ -744,7 +799,6 @@ private:
     utils::ThemeManager *m_themeManager = nullptr;
 
     TopUtilityBar *m_topBar = nullptr;
-    FuzzySearchBar *m_searchBar = nullptr;
     // Os 3 grupos de ações (Item/Exibição/Execução — pedido do usuário: cada
     // um posicionável independentemente via Settings). São widgets "soltos"
     // até applyActionGroupPlacement() reparentá-los num dos dois

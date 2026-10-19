@@ -21,6 +21,8 @@ QString lucideNameFor(ActionIconShape shape)
     case ActionIconShape::ForceStop:  return QStringLiteral("octagon-x");
     case ActionIconShape::Reset:      return QStringLiteral("rotate-ccw");
     case ActionIconShape::EditBody:   return QStringLiteral("braces");
+    case ActionIconShape::ShowOutput: return QStringLiteral("monitor");
+    case ActionIconShape::ShowDocument: return QStringLiteral("file-text");
     }
     return QString();
 }
@@ -82,9 +84,17 @@ void ActionSidebar::setupUi()
     m_editBodyButton = makeButton(ActionIconShape::EditBody, accent, utils::tr(QStringLiteral("sidebar.edit_body")));
     connect(m_editBodyButton, &QToolButton::clicked, this, &ActionSidebar::editBodySelectedRequested);
 
+    m_showOutputButton = makeButton(ActionIconShape::ShowOutput, accent, utils::tr(QStringLiteral("sidebar.show_output")));
+    connect(m_showOutputButton, &QToolButton::clicked, this, &ActionSidebar::showOutputSelectedRequested);
+    m_showDocumentButton = makeButton(ActionIconShape::ShowDocument, accent,
+                                      utils::tr(QStringLiteral("sidebar.show_document")));
+    connect(m_showDocumentButton, &QToolButton::clicked, this, &ActionSidebar::showDocumentSelectedRequested);
+
     m_neutralButtons = {
         {m_resetButton, ActionIconShape::Reset},
         {m_editBodyButton, ActionIconShape::EditBody},
+        {m_showOutputButton, ActionIconShape::ShowOutput},
+        {m_showDocumentButton, ActionIconShape::ShowDocument},
     };
 
     m_layout->addWidget(m_playButton);
@@ -92,9 +102,20 @@ void ActionSidebar::setupUi()
     m_layout->addWidget(m_forceStopButton);
     m_layout->addWidget(m_resetButton);
     m_layout->addWidget(m_editBodyButton);
+    m_layout->addWidget(m_showOutputButton);
+    m_layout->addWidget(m_showDocumentButton);
     m_layout->addStretch();
 
     setRowContext(false, false, false, false);
+    setFocusActions(false, false, false);
+}
+
+void ActionSidebar::setFocusActions(bool visible, bool canShowOutput, bool canShowDocument)
+{
+    m_showOutputButton->setVisible(visible);
+    m_showDocumentButton->setVisible(visible);
+    m_showOutputButton->setEnabled(canShowOutput);
+    m_showDocumentButton->setEnabled(canShowDocument);
 }
 
 void ActionSidebar::setOrientation(Qt::Orientation orientation)

@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QPoint>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QString>
 #include <QWidget>
@@ -107,6 +108,17 @@ public:
     Zone zone() const { return m_zone; }
     // Mostra `ids` (na ordem) com `active` na frente. `stripAlways` força a faixa mesmo com um painel só.
     void setViews(const QStringList &ids, const QString &active, bool stripAlways);
+    // Modo dividir: mostra todos os painéis da zona ao mesmo tempo (cada um numa caixa com cabeçalho), em vez de abas.
+    // Vale a partir do próximo setViews; só tem efeito com mais de um painel.
+    void setSplitMode(bool split) { m_wantSplit = split; }
+    bool splitActive() const { return m_splitter != nullptr; }
+    // O painel `id` está à vista nesta zona? (a aba da frente; no modo dividir, todos)
+    bool showsView(const QString &id) const;
+    // Posição de inserção (0..n) de um painel solto em `pos` (coordenadas da zona) SE o ponteiro está numa faixa/cabeçalho
+    // de painel; -1 quando não está.
+    int dropIndexAt(const QPoint &pos) const;
+    // As caixas do modo dividir (cabeçalhos), para os testes.
+    QList<ZoneTabStrip *> sectionHeaders() const;
     // Esconde a faixa de abas mesmo com vários painéis (a zona aberta a partir de uma faixa lateral: os ícones da faixa já trocam de painel).
     void setStripSuppressed(bool suppressed) { m_stripSuppressed = suppressed; }
     // Devolve os widgets dos painéis a `newParent` (escondidos), esvaziando a zona antes de ela ser descartada.
@@ -116,9 +128,15 @@ public:
     ZoneTabStrip *strip() const { return m_strip; }
     QWidget *currentWidget() const { return m_stack->currentWidget(); }
     void setBarHeight(int height);
-    void setZoneFocused(bool focused) { m_strip->setZoneFocused(focused); }
+    void setZoneFocused(bool focused);
     // Reaplica o tamanho máximo que o painel da frente pede (a Saída recolhida).
     void syncConstraints();
+    // O que o conteúdo pede de altura nunca é piso: a zona pode ser encolhida até quase só a faixa de abas (o conteúdo
+    // que sobra é cortado). Sem isso, a Saída com uma resposta HTTP, ou o painel de Variáveis, travavam o divisor.
+    QSize minimumSizeHint() const override;
+
+    // Para os testes: as caixas do modo dividir estão empilhadas (e não lado a lado)?
+    bool splitStacked() const { return m_splitter && m_splitter->orientation() == Qt::Vertical; }
 
 signals:
     void viewActivated(const QString &id);
@@ -130,9 +148,13 @@ signals:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void rebuildStrip(const QString &active);
+    void applySplit();
+    void updateSplitOrientation();
+    void clearSplit();
     // Faixa visível = o painel da frente cola nela (sem a borda de cima, cantos de cima retos).
     void applyGlue();
 
@@ -144,6 +166,18 @@ private:
     bool m_syncing = false;
     bool m_regluePending = false;
     bool m_stripSuppressed = false;
+    bool m_wantSplit = false;
+    bool m_zoneFocused = false;
+    int m_barHeight = 30;
+    // O modo dividir: o divisor com uma caixa por painel (cabeçalho + o próprio painel).
+    QSplitter *m_splitter = nullptr;
+    struct Section {
+        QWidget *box = nullptr;
+        ZoneTabStrip *header = nullptr;
+        QWidget *content = nullptr;
+        QString id;
+    };
+    QList<Section> m_sections;
 };
 
 } // namespace kai::ui::layout

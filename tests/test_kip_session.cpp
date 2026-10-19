@@ -648,6 +648,58 @@ private slots:
         QCOMPARE(h.session.state(), KipSessionState::Finished);
         QVERIFY(!h.session.logText().contains(QStringLiteral("\"type\":\"response\"")));
     }
+
+    // ---- ações por linha e a escolha do diff (§27) ----
+    void rowActionsTravelAsChipsWithTheirRow()
+    {
+        Harness h;
+        QSignalSpy finished(&h.session, &KipSession::finished);
+        h.run(QStringLiteral("row-actions.sh"));
+        QTRY_VERIFY_WITH_TIMEOUT(h.awaiting(QStringLiteral("pick")), kWait);
+
+        QVERIFY(!h.session.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("delete")));
+        QVERIFY(h.session.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("feat"), QStringLiteral("delete")));
+        QCOMPARE(h.session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Confirming);
+        QTest::qWait(150);
+        QVERIFY(h.received().isEmpty()); // nada sai antes da confirmação
+        QVERIFY(h.session.confirmChip());
+        QTRY_COMPARE_WITH_TIMEOUT(h.session.screen().openScreen()->chipRun->phase, KipChipRun::Phase::Success, kWait);
+        // o patch espontâneo tirou a linha apagada
+        QCOMPARE(h.session.screen().openScreen()->fieldNamed(QStringLiteral("branch"))->rows.size(), 1);
+
+        const QVector<QJsonObject> got = h.received();
+        QCOMPARE(got.size(), 1);
+        QCOMPARE(got.at(0).value("type").toString(), QStringLiteral("chip"));
+        QCOMPARE(got.at(0).value("chip").toString(), QStringLiteral("delete"));
+        QCOMPARE(got.at(0).value("field").toString(), QStringLiteral("branch"));
+        QCOMPARE(got.at(0).value("row").toString(), QStringLiteral("feat"));
+
+        h.session.dismissChip();
+        QVERIFY(h.session.submit());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kWait);
+    }
+
+    void theDiffViewChoiceIsReportedToBeRemembered()
+    {
+        ProcessRunner runner;
+        KipSession session(&runner);
+        QSignalSpy remembered(&session, &KipSession::answersRemembered);
+        session.setDiffViewPreference(QStringLiteral("split"));
+        QCOMPARE(remembered.count(), 1);
+        QCOMPARE(remembered.at(0).at(0).toJsonObject().value("diff_view").toString(), QStringLiteral("split"));
+        session.setDiffViewPreference(QStringLiteral("split")); // sem mudança, sem sinal
+        QCOMPARE(remembered.count(), 1);
+    }
+
+    void aRepeatedHelloWithoutTitleKeepsTheTitle()
+    {
+        ProcessRunner runner;
+        KipSession session(&runner);
+        session.handleOutput(QStringLiteral("{\"kip\":1,\"type\":\"hello\",\"title\":\"Deploy\"}\n"), false);
+        session.handleOutput(QStringLiteral("{\"kip\":1,\"type\":\"hello\"}\n"), false);
+        QCOMPARE(session.screen().title(), QStringLiteral("Deploy"));
+        QVERIFY(session.state() != KipSessionState::ProtocolError);
+    }
 };
 
 QTEST_MAIN(TestKipSession)

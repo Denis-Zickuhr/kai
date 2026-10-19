@@ -83,10 +83,14 @@ newer than Kai speaks, is a protocol error.
 | `invalid` | `id`, `errors{field: msg}`, `message?` | Keeps prompt `id` open and shows errors. |
 | `message` | `level` (`info` `success` `warning` `error`), `text` | Status card. |
 | `markdown` | `text` | Rendered Markdown (http/https links only, no remote images). |
-| `progress` | `value` (0–100 or `null`), `label?`, `cancellable?` | Progress bar; the next `progress` updates it. |
+| `progress` | `value` (0–100 or `null`), `label?`, `cancellable?`, `id?` | Progress bar; the next `progress` with the same `id` updates it. Several `id`s = several bars, stacked. |
 | `steps` | `id`, `title?`, `items[]` of `{id, label, state?, detail?}` | Checklist. |
-| `step` | `steps`, `id`, `state`, `detail?` | Updates one item. States: `pending` `running` `success` `error` `skipped`. |
-| `table` | `id?`, `title?`, `columns[]` of `{key,label}`, `rows[]` | Read-only table (select a cell, Ctrl+C). |
+| `step` | `steps`, `id`, `state?`, `detail?`, `log?` | Updates one item. States: `pending` `running` `success` `error` `skipped`. `log` appends lines to the item's output (§5.5); without `state`/`detail` they stay as they were. |
+| `table` | `id?`, `title?`, `columns[]` of `{key,label,format?}`, `rows[]`, `row_key?`, `row_actions?[]` | Read-only table (select a cell, Ctrl+C). Cell formats and row actions: §5.2. |
+| `diff` | `id?`, `title?`, `patch` **or** `left`+`right` (`{name?, text}`), `language?`, `view?`, `context?`, `ignore_whitespace?`, `collapse_after?` | A diff: the output of `git diff`, or two texts compared by Kai (§5.3). |
+| `kv` | `id?`, `title?`, `items[]` of `{key, value, format?, copy?}` | Label/value pairs (§5.4). |
+| `stats` | `id?`, `items[]` of `{label, value, detail?, tone?}` | Up to 8 big numbers, 4 per row (§5.4). |
+| `code` | `id?`, `title?`, `language?`, `text`, `highlight?[]`, `max_lines?`, `line_numbers?` | A code/config snippet with line numbers and a copy button (§5.4). |
 | `notify` | `title`, `text?`, `level?` | System notification (respects Kai's notification settings). |
 | `set_env` | `name`, `value` | Exports a dynamic variable — see §7. |
 | `chip_result` | `chip`, `state?`, `title?`, `text?`, `id?` | Progress/outcome of a running chip (§5.1). |
@@ -94,8 +98,10 @@ newer than Kai speaks, is a protocol error.
 
 Rules: unknown `type`s are ignored (logged); a `response`/`patch`/`invalid`
 for an id that isn't open is ignored; a new `prompt` replaces the open
-one. Limits: 100 fields per prompt, 5000 options, 1000 table rows, 200
-checklist items, 64 KiB per text.
+one. A `diff`, `kv`, `stats` or `code` with the `id` of one already on the screen replaces it. Limits: 100 fields per
+prompt, 5000 options, 1000 table rows, 200 checklist items, 64 KiB per text — 512 KiB for a diff patch, each diff side
+and a code text (cut at the last whole line, with a "truncated" note) — 5000 tree nodes, 8 row actions, 200 `kv`
+items, 8 `stats` and the last 200 lines of each step log.
 
 ### Result actions
 
@@ -115,6 +121,7 @@ checklist items, 64 KiB per text.
 | `change` | `id`, `seq`, `field`, `values{}` | A `watch` field changed. |
 | `back` | `id` | The user pressed Back. |
 | `chip` | `id`, `chip`, `values{}` | The user ran a chip (§5.1). The prompt stays open. |
+| `chip` (row action) | `id`, `chip`, `field` **or** `table`, `row`, `values{}` | The user ran a row action (§5.2) on row key `row` of table field `field` (or table block `table`). |
 | `cancel` | — | The user pressed Cancel. Exit promptly; after 3 s Kai stops the process. |
 
 ## 5. Fields
@@ -124,19 +131,21 @@ Common attributes: `name` (required, unique), `label`, `description`,
 
 | `type` | Extra attributes | Value in `response.values` |
 |---|---|---|
-| `text` | — | string |
+| `text` | `max_length` | string |
 | `secret` | — (masked, never remembered, hidden in the inspector) | string |
-| `textarea` | — | string |
+| `textarea` | `max_length` (a "41 / 72" counter; over the limit, Submit stays off) | string |
 | `number` | `min`, `max`, `step`, `decimals` | number or `null` |
 | `date` | `mode` (`date` `time` `datetime`), `range` | ISO string; with `range`: `{start, end}` |
-| `select` | `options[]` | string |
+| `select` | `options[]`, `style` (`cards` \| `segmented`; default: a dropdown) | string |
 | `list` | `options[]`, `multiple`, `searchable`, `page_size` | string, or array with `multiple` |
-| `table` | `columns[]`, `rows[]`, `row_key` (default `id`), `multiple`, `searchable`, `page_size` | the row key, or array |
+| `table` | `columns[]`, `rows[]`, `row_key` (default `id`), `multiple`, `searchable`, `page_size`, `row_actions` (§5.2) | the row key, or array |
+| `tree` | `nodes[]` of `{id, label?, icon?, badge?, expanded?, children?[]}`, `multiple`, `searchable` | the node id, or (with `multiple`) the checked ids |
+| `diff` | `patch`, `select` (`hunks` \| `files`), `default` (`all` \| `none` \| ids) | the chosen ids: `"path@n"` per hunk, or `"path"` (§5.3) |
 | `filepick` | `filter`, `initial_dir`, `path_format` | string |
 | `folderpick` | `initial_dir`, `path_format` | string |
 | `flags` | `options[]` of `{name,label,description?,default}` | `{name: bool, ...}` |
 
-`options` accepts plain strings or `{value, label?, description?}`. A field
+`options` accepts plain strings or `{value, label?, description?, icon?}` (`icon` shows on `cards`). A field
 left empty is sent as its empty value (`""`, `[]`, `false` per flag,
 `null`). `required` is checked by Kai before Submit; everything else is
 yours to check — answer with `invalid`.
@@ -184,6 +193,83 @@ Answer with as many `chip_result` messages as you like — `{"type":"chip_result
 while working, then `success` or `error` with a Markdown `text` (and optionally a `title`). An `error` does not end
 the session. One chip runs at a time; the box stays until the user closes it or the screen changes.
 
+### 5.2 Tables: cell formats and row actions
+
+Each column may say how its cells look with `format`: `mono` (ids, hashes, paths), `muted`, `number` (right-aligned),
+`badge` (the cell value is `{"text": "merged", "tone": "success"}` or a plain string) and `copy` (mono, with a copy icon
+on hover). Tones: `neutral` `info` `success` `warning` `error` `accent`. Unknown formats show as text.
+
+**Row actions** are chips tied to a row: icons on the right of each row (they show on hover, on the selected row and
+while running; also in the row's right-click menu, which the keyboard reaches with the Menu key). Up to 3 icons, the
+rest go to "…".
+
+```json
+{"name":"branch","type":"table","row_key":"name",
+ "columns":[{"key":"name","label":"Branch","format":"mono"},{"key":"state","label":"State","format":"badge"}],
+ "rows":[{"name":"main","state":{"text":"default","tone":"info"},"_actions":["sync"]},
+         {"name":"feat/login","state":"merged"}],
+ "row_actions":[{"id":"sync","label":"Sync","icon":"refresh-cw"},
+                {"id":"delete","label":"Delete","icon":"trash-2","danger":true,
+                 "confirm":{"text":"The local branch is gone for good.","confirm_label":"Delete","cancel_label":"Keep"}}]}
+```
+
+- A row action has the keys of a chip (`id`, `label`, `description`, `icon`, `danger`, `confirm`) — `requires` does not
+  apply, the row is the requirement.
+- `_actions` in a row lists which actions that row allows (above: `main` cannot be deleted). Without it, all of them.
+- With `confirm`, the row itself turns into "Delete feat/login? … [Keep] [Delete]" — focus on Keep, Enter never
+  confirms by accident. Nothing is sent before the confirmation.
+- Running: the icon becomes a spinner and the other actions wait (one at a time, chips included). Kai sends
+  `{"type":"chip","id":"pick","chip":"delete","field":"branch","row":"feat/login","values":{…}}` (`table` instead of
+  `field` for a table *block*); answer with `chip_result` exactly as for a chip. On success the row flashes green; a
+  `text` shows in the box under the fields. To change the table (remove the deleted row), send a `patch` without `seq`.
+- On a table **block** the actions need the table `id`, and they only work while a prompt is open (that is when the
+  program reads Kai's messages).
+
+### 5.3 Diffs and comparing files
+
+`diff` shows changes: send the output of `git diff` / `diff -u` as `patch` (many files, renames, new/deleted and binary
+files), or two whole texts as `left` and `right` and Kai compares them.
+
+```json
+{"kip":1,"type":"diff","id":"wc","title":"Uncommitted changes","patch":"diff --git a/x b/x\n..."}
+{"kip":1,"type":"diff","title":"staging × production","left":{"name":"staging.json","text":"…"},
+ "right":{"name":"production.json","text":"…"},"language":"json","context":3}
+```
+
+- Changed words inside a changed line are highlighted; JSON, YAML, XML and Markdown get syntax colors (`language`, or
+  the file extension).
+- **Unified or side by side** is the user's choice, kept per command (with the remembered answers). `view` is only the
+  default for a command the user never switched; two texts default to side by side.
+- Two texts: equal stretches longer than `2 × context` (default 3) fold into "⋯ 31 unchanged lines" (click to open);
+  `context: -1` shows everything; `ignore_whitespace` compares the lines without spaces. ↑ ↓ (or F7 / Shift+F7) walk the
+  changes.
+- More than `collapse_after` files (default 3) start collapsed. Right-click copies a line or a path.
+- Kai never reads files for a diff: your program (or the helper, §6) sends the text. That keeps WSL, containers and SSH
+  working and keeps the protocol from reading arbitrary files.
+
+**As a field** (`type: "diff"`), the same view gets checkboxes: per hunk (`select: "hunks"`) or per file (`"files"`).
+The answer is the list of ids that stayed checked — `"src/auth/session.ts@0"` is the first hunk of that file — and your
+program builds the patch (for a partial commit: `git apply --cached` with the chosen hunks). Everything starts checked
+(`default: "none"` starts empty). Space toggles the row under the cursor, Enter opens or closes it. A diff field is never
+remembered between runs.
+
+### 5.4 Result blocks: `kv`, `stats`, `code`
+
+- **`kv`**: `items[]` of `{key, value, format?, copy?}`; `format`: `mono`, `muted`, `badge` (value `{text, tone}`) or
+  `link` (http/https only — anything else shows as text). `copy: true` shows a copy button on hover.
+- **`stats`**: `items[]` of `{label, value, detail?, tone?}` — big numbers, up to 4 per row; `tone` colors the dot of the
+  detail.
+- **`code`**: `text`, `title?`, `language?`, `highlight?` (line numbers), `max_lines?` (longer code collapses with "Show
+  all (42 lines)"), `line_numbers?` (default `true`). A copy button copies the whole text.
+
+All three stay on the result screen, like tables and Markdown.
+
+### 5.5 Step output and several bars
+
+`step` with `log` appends lines to that item's output (the last 200 are kept). An item with output gets a chevron;
+the output is collapsed by default and opens by itself when the step fails. `progress` with `id` gives one bar per id
+(stacked, compact; a bar at 100 turns green) — without `id` it is the single bar of before.
+
 ## 6. The `kai kip` helper
 
 Writing JSON from bash is painful, so `kai kip` formats it for you. It is
@@ -213,10 +299,14 @@ kai kip done --title "Deployed" --action open_url:"Open":https://example.com
 | `invalid` | `--id ID [--error field=message]… [--message TEXT]` |
 | `message` | `[info\|success\|warning\|error] TEXT` |
 | `markdown` | `TEXT` or `--file PATH` |
-| `progress` | `<0-100\|null> [label] [--no-cancel]` |
+| `progress` | `<0-100\|null> [label] [--no-cancel] [--id ID]` |
 | `steps` | `--id ID [--title T] --item ID [label] [--state S] [--detail D] …` |
-| `step` | `<steps-id> <item-id> <state> [detail]` |
-| `table` | `[--id ID] [--title T] --column key:label … --rows-json '[…]'` |
+| `step` | `<steps-id> <item-id> [<state> [detail]] [--log TEXT]` (the state may be left out with `--log`) |
+| `table` | `[--id ID] [--title T] --column key:label[:format] … --rows-json '[…]' [--row-key K] [--row-action …]` |
+| `diff` | `[--id ID] [--title T] --patch TEXT\|- \| --patch-file PATH\|- \| --left-file A --right-file B` (or `--left-text`/`--right-text`), `[--left-name N] [--right-name N] [--language L] [--view unified\|split] [--context N] [--ignore-whitespace] [--collapse-after N]` |
+| `kv` | `[--id ID] [--title T] --item KEY VALUE [--format F] [--tone T] [--copy] …` |
+| `stats` | `[--id ID] --stat LABEL VALUE [--detail D] [--tone T] …` |
+| `code` | `[--id ID] [--title T] [--language L] TEXT… \| --file PATH\|- [--highlight 4,5] [--max-lines N] [--no-line-numbers]` |
 | `notify` | `TITLE [TEXT] [--level L]` |
 | `set-env` | `NAME VALUE` |
 | `done` | `[--title T] [--text X] [--level L] [--action type:label:value]…` |
@@ -229,13 +319,31 @@ kai kip done --title "Deployed" --action open_url:"Open":https://example.com
 `--watch`, `--no-remember`, `--options a,b,c`, `--option value:label[:description]`,
 `--multiple`, `--flag name:label[:default]`, `--min/--max/--step/--decimals`,
 `--mode`, `--range`, `--filter`, `--initial-dir`, `--path-format`,
-`--column key:label`, `--row-key K`, `--rows-json '[…]'`, `--search`, `--no-search`, `--page-size N`.
+`--column key:label[:format]`, `--row-key K`, `--rows-json '[…]'`, `--search`, `--no-search`, `--page-size N`,
+`--style cards|segmented` and `--option-icon NAME` (select; the icon goes to the last option), `--max-length N`
+(text/textarea), `--nodes-json '[…]'` (tree), `--patch TEXT|-`, `--patch-file PATH|-` and `--select files|hunks` (diff).
 Before the first `--field`, `--description` and `--no-remember` belong to
 the prompt.
 
 **Chip options** (`prompt` and `patch`): `--chip ID [label]` starts a chip; `--chip-description T`,
 `--chip-icon NAME`, `--chip-danger`, `--chip-requires f1,f2`, `--chip-confirm`, `--chip-confirm-title T`,
 `--chip-confirm-text T`, `--chip-confirm-label L` and `--chip-cancel-label L` apply to the last chip.
+
+**Row actions** (a `table` field in `prompt`/`patch`, or the `table` verb): `--row-action ID [label]` starts one;
+`--row-action-icon NAME`, `--row-action-danger`, `--row-action-description T`, `--row-action-confirm`,
+`--row-action-confirm-title T`, `--row-action-confirm-text T`, `--row-action-confirm-label L` and
+`--row-action-cancel-label L` apply to the last one.
+
+**Reading text.** `--patch -`, `--patch-file -` and `--file -` read stdin; `--patch-file`, `--left-file`, `--right-file`
+and `--file` read files where the script runs. The final newline is dropped and anything above 512 KiB is cut at the
+last whole line (`truncated` is set). Read stdin only from a pipe — `git diff | kai kip diff --patch -` — never on its
+own: a KIP program's stdin is Kai's channel.
+
+```bash
+git diff --staged | kai kip diff --title "Staged" --patch -
+kai kip diff --left-file config/staging.json --right-file config/production.json --view split
+kai kip kv --item Version 1.4.0 --format mono --copy --item Channel stable --tone success
+```
 
 **`get` paths** are dot-separated (`values.opts.dry`, `values.tags.0`).
 Strings print raw, numbers and booleans as JSON literals, arrays one item
@@ -293,15 +401,18 @@ Kip::done('Deployed to ' . $values['env']);
 | `kip.confirm(text, id=, danger=, ...)` | `await kip.confirm(text, {id, danger, ...})` | `Kip::confirm($text, ['id' => , 'danger' => , ...])` | Yes/no → `True`/`False`. |
 | `kip.message(text, level="info")`, `kip.markdown(text)` | `kip.message(text, level)`, `kip.markdown(text)` | `Kip::message($text, $level)`, `Kip::markdown($text)` | Status card / Markdown. |
 | `kip.progress(value, label)` | `kip.progress(value, label)` | `Kip::progress($value, $label)` | `value` 0–100 or `None`/`null`. |
-| `kip.steps(id, items)`, `kip.step(steps_id, id, state, detail)` | `kip.steps(id, items)`, `kip.step(stepsId, id, state, detail)` | `Kip::steps($id, $items)`, `Kip::step($stepsId, $id, $state, $detail)` | Checklist. |
-| `kip.table(columns, rows)` | `kip.table(columns, rows, {id, title})` | `Kip::table($columns, $rows, ['id' => , 'title' => ])` | Read-only table. |
+| `kip.steps(id, items)`, `kip.step(steps_id, id, state, detail, log=)` | `kip.steps(id, items)`, `kip.step(stepsId, id, state, detail, log)` | `Kip::steps($id, $items)`, `Kip::step($stepsId, $id, $state, $detail, $log)` | Checklist; `state` may be `None`/`undefined`/`null` to only append `log`. |
+| `kip.table(columns, rows, id=, title=, row_key=, row_actions=)` | `kip.table(columns, rows, {id, title, row_key, row_actions})` | `Kip::table($columns, $rows, ['id' => , 'title' => , ...])` | Read-only table (§5.2). |
+| `kip.diff(patch=)` or `kip.diff(left=, right=, ...)` | `kip.diff({patch})` or `kip.diff({left, right, ...})` | `Kip::diff(['patch' => ])` or `Kip::diff(['left' => , 'right' => , ...])` | A diff (§5.3). `left`/`right`: a text or `{name, text}`. |
+| `kip.kv(items)`, `kip.stats(items)`, `kip.code(text, language=, ...)` | `kip.kv(items)`, `kip.stats(items)`, `kip.code(text, {...})` | `Kip::kv($items)`, `Kip::stats($items)`, `Kip::code($text, [...])` | Result blocks (§5.4). |
 | `kip.notify(...)`, `kip.set_env(name, value)` | `kip.notify(...)`, `kip.setEnv(name, value)` | `Kip::notify(...)`, `Kip::setEnv($name, $value)` | Notification / exported variable (§7). |
 | `kip.done(title=, text=, level=, actions=)` | `kip.done({title, text, level, actions})` | `Kip::done($title, $text, $level, $actions)` or `Kip::done([...])` | Result screen. |
 | `kip.send(type, **fields)`, `kip.log(...)` | `kip.send(type, fields)`, `kip.log(...)` | `Kip::send($type, $fields)`, `Kip::log(...)` | Any message / a line for **Details → Log**. |
 
 - `validate(values)` returns `{field: message}` to keep the form open (Kai gets an `invalid`); `on_change(field,
   values)` returns the fields to patch (the `seq` is echoed for you); `on_chip(chip, values)` returns a text or
-  `{state, title, text}` (an exception becomes an `error` result).
+  `{state, title, text}` (an exception becomes an `error` result); `on_row_action(action, row, values)` /
+  `onRowAction` does the same for a row action (§5.2) and gets the row key.
 - **Cancel** exits the process with code 130. **Back** raises `kip.Back` (Python) / rejects with `kip.Back` (Node) /
   throws `KipBack` (PHP).
 - Node code runs inside an async function, so top-level `await` works.
@@ -335,7 +446,9 @@ kip done --title "Deployed to $target"
 
 - It is a normal native command: `{{VAR}}` is replaced as always. The shell is bash (sh where there is no bash).
 - Verbs: `hello prompt confirm patch invalid message markdown progress steps step table notify set-env done
-  chip-result`, plus `raw` and `get` (§6). `hello` is sent for you if the script does not.
+  chip-result diff kv stats code`, plus `raw` and `get` (§6). `hello` is sent for you if the script does not.
+- `git diff | kip diff --patch -` works: the `kip` of a pipe runs in a subshell, which sends one more `hello` without a
+  title — Kai ignores it.
 - `kip recv` reads the next line from Kai into `$KIP_MSG`; **Cancel** (or a closed stdin) exits with code 130.
 - `kip get '<json>' <path>` extracts a value (`values.env`, `items.0.id`); it exits 2 when the path is missing.
 
@@ -372,11 +485,11 @@ message. The value is available immediately to other commands as
 - Footer: **Back** (when the program allows it), **Cancel run**, **Submit**.
   Enter submits; a `danger` confirm focuses the decline button so Enter
   never confirms by accident.
-- **Details** (collapsed by default): *Log* (stderr and non-protocol
+- **Details** (collapsed by default, on the left of the buttons row): *Log* (stderr and non-protocol
   stdout) and *Protocol* (every message in both directions, `←` from the
   program, `→` from Kai, secrets masked).
 - Failure, cancellation, unsupported and protocol-error states are full
-  cards with the details open and a **Run again** button.
+  cards with a **Run again** button; all but cancellation open the details.
 - With `kip_window`, the view lives in its own window and the panel shows
   "Open elsewhere"; closing the window brings it back.
 - **Pin as panel** (right click the command): the KIP command becomes a permanent [panel](layout.md#pinning-a-kip-command) of the window, with a **Run** card until it runs. The Output shows the same card while the pinned panel exists.

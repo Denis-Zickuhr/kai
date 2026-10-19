@@ -827,6 +827,17 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         provider.isRunning = [this](const QString &virtualId) { return m_runningCommandIds.contains(virtualId); };
         provider.hasOutput = [this](const QString &virtualId) { return m_actionsWithOutput.contains(virtualId); };
         provider.focusedId = [this]() { return m_focusedActionId; };
+        provider.outputMarkOf = [this](const QTreeWidgetItem *item) {
+            using Mark = FolderActionsView::OutputMark;
+            if (!m_outputMarks || !item->data(0, kIsCommandRole).toBool() || !m_commandHasOutput) {
+                return Mark::None;
+            }
+            const QString id = item->data(0, kCommandIdRole).toString();
+            if (!m_commandHasOutput(id)) {
+                return Mark::None;
+            }
+            return id == m_shownCommandId ? Mark::Shown : Mark::Available;
+        };
         auto *actionsView = new FolderActionsView(tree, std::move(provider));
         connect(actionsView, &FolderActionsView::activated, this, &CommandTreeWidget::folderActionActivated);
         connect(actionsView, &FolderActionsView::contextRequested, this,
@@ -874,8 +885,13 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
 
     connect(tree, &QTreeWidget::itemActivated, this, &CommandTreeWidget::handleItemActivated);
     connect(tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
-        if (item && !m_rebuilding && item->data(0, kIsCommandRole).toBool()) {
+        if (!item || m_rebuilding) {
+            return;
+        }
+        if (item->data(0, kIsCommandRole).toBool()) {
             emit commandClicked(item->data(0, kCommandIdRole).toString());
+        } else if (!item->data(0, kIsCollectionRole).toBool()) {
+            emit folderClicked(item->data(0, kCommandIdRole).toString());
         }
     });
     connect(tree, &QTreeWidget::customContextMenuRequested,
@@ -1586,6 +1602,18 @@ void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &glo
                 resetAction = addIconAction(&menu, QStringLiteral("rotate-ccw"), accent,
                                             utils::tr(QStringLiteral("tree.reset")));
                 resetAction->setEnabled(running || m_failedCommandIds.contains(itemId));
+            }
+            QAction *showOutputAction = nullptr;
+            QAction *showDocumentAction = nullptr;
+            if (isCommand && m_commandHasOutput && m_commandHasOutput(itemId)) {
+                showOutputAction = addIconAction(&menu, QStringLiteral("square-terminal"), accent,
+                                                 utils::tr(QStringLiteral("ctx.show_output")));
+            }
+            if (m_itemHasDocument && m_itemHasDocument(itemId)) {
+                showDocumentAction = addIconAction(&menu, QStringLiteral("file-text"), accent,
+                                                   utils::tr(QStringLiteral("ctx.show_document")));
+            }
+            if (!menu.actions().isEmpty()) {
                 menu.addSeparator();
             }
 
@@ -1635,6 +1663,8 @@ void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &glo
             else if (chosen == stopAction) emit killRequested(itemId);
             else if (chosen == forceAction) emit forceStopRequested(itemId);
             else if (chosen == resetAction) emit resetRequested(itemId);
+            else if (showOutputAction && chosen == showOutputAction) emit commandOutputRequested(itemId);
+            else if (showDocumentAction && chosen == showDocumentAction) emit documentRequested(itemId);
             else if (chosen == editAction) emit editRequested(itemId, !isCommand);
             else if (chosen == duplicateAction) emit duplicateRequested(itemId, !isCommand);
             else if (chosen == exportAction) emit exportRequested(itemId, !isCommand);
@@ -2406,6 +2436,24 @@ void CommandTreeWidget::setActionsWithOutput(const QSet<QString> &virtualIds)
     refreshActionViews();
 }
 
+void CommandTreeWidget::setOutputMarksEnabled(bool enabled)
+{
+    if (m_outputMarks == enabled) {
+        return;
+    }
+    m_outputMarks = enabled;
+    refreshActionViews();
+}
+
+void CommandTreeWidget::setShownCommand(const QString &commandId)
+{
+    if (m_shownCommandId == commandId) {
+        return;
+    }
+    m_shownCommandId = commandId;
+    refreshActionViews();
+}
+
 void CommandTreeWidget::refreshActionViews()
 {
     // Os ícones de ação dividem a coluna de status/tempo com o play dos comandos (linha de
@@ -2418,7 +2466,8 @@ void CommandTreeWidget::refreshActionViews()
     }
     const int width = FolderActionsView::columnWidthFor(most);
     for (QTreeWidget *tree : std::as_const(m_treesByRootId)) {
-        const int target = std::max(width, statusColumnBaseWidth(tree));
+        const int markWidth = m_outputMarks ? FolderActionsView::kMargin + FolderActionsView::kBox : 0;
+        const int target = std::max(width, statusColumnBaseWidth(tree) + markWidth);
         if (tree->columnWidth(FolderActionsView::kActionsColumn) != target) {
             tree->setColumnWidth(FolderActionsView::kActionsColumn, target);
         }

@@ -179,6 +179,12 @@ void KipSession::handleStdoutLine(const QString &line)
     if (parsed.kind == core::KipParseResult::Kind::Unknown || !parsed.message) {
         return; // já registrado acima (aviso + inspetor)
     }
+    if (const auto *hello = std::get_if<core::KipHello>(&*parsed.message); hello && hello->title.isEmpty()) {
+        // Um hello repetido sem título (o helper `kip` num subshell, ex.: `git diff | kip diff --patch -`) não
+        // apaga o título que o programa já deu.
+        diagnostic(utils::tr(QStringLiteral("kip.diag.extra_hello")));
+        return;
+    }
     if (!note.isEmpty() && std::holds_alternative<core::KipPatch>(*parsed.message)) {
         return; // patch com seq velho: ignorado
     }
@@ -364,6 +370,33 @@ bool KipSession::confirmChip()
     return true;
 }
 
+bool KipSession::startRowAction(const QString &field, const QString &table, const QString &row, const QString &action)
+{
+    switch (m_screen.startRowAction(field, table, row, action)) {
+    case core::KipScreenState::ChipStart::Rejected:
+        return false;
+    case core::KipScreenState::ChipStart::NeedsConfirmation:
+        emit screenChanged();
+        return true;
+    case core::KipScreenState::ChipStart::Send:
+        sendChipRequest();
+        return true;
+    }
+    return false;
+}
+
+void KipSession::setDiffViewPreference(const QString &view)
+{
+    if (m_screen.diffViewPreference() == view) {
+        return;
+    }
+    m_screen.setDiffViewPreference(view);
+    const QJsonObject remembered = m_screen.takeCommittedRemembered();
+    if (!remembered.isEmpty()) {
+        emit answersRemembered(remembered);
+    }
+}
+
 void KipSession::dismissChip()
 {
     if (m_screen.dismissChip()) {
@@ -378,11 +411,17 @@ void KipSession::sendChipRequest()
         return;
     }
     const QString id = open->id;
-    const QString chip = open->chipRun->chipId;
+    const core::KipChipRun run = *open->chipRun;
     const QVector<core::KipField> fields = open->fields;
     const QJsonObject values = m_screen.currentValues();
-    sendLine(core::kipSerializeChip(id, chip, values),
-             core::kipSerializeChip(id, chip, core::kipRedactValues(values, fields)));
+    if (run.rowAction) {
+        sendLine(core::kipSerializeRowAction(id, run.chipId, run.field, run.table, run.row, values),
+                 core::kipSerializeRowAction(id, run.chipId, run.field, run.table, run.row,
+                                             core::kipRedactValues(values, fields)));
+    } else {
+        sendLine(core::kipSerializeChip(id, run.chipId, values),
+                 core::kipSerializeChip(id, run.chipId, core::kipRedactValues(values, fields)));
+    }
     emit screenChanged();
 }
 

@@ -570,6 +570,140 @@ private slots:
         QVERIFY(kipIsTerminalState(KipSessionState::Finished));
         QCOMPARE(kipSessionStateToString(KipSessionState::ProtocolError), QStringLiteral("protocol_error"));
     }
+
+    // ---- rodada 2 (§27) ----
+    void roundTwoBlocksWithTheSameIdAreReplaced()
+    {
+        KipScreenState s;
+        s.apply(msg("{\"kip\":1,\"type\":\"diff\",\"id\":\"d\",\"patch\":\"a\"}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"kv\",\"id\":\"k\",\"items\":[{\"key\":\"a\",\"value\":\"1\"}]}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"diff\",\"id\":\"d\",\"patch\":\"b\"}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"kv\",\"id\":\"k\",\"items\":[]}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"code\",\"text\":\"x\"}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"code\",\"text\":\"y\"}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"stats\",\"id\":\"s\",\"items\":[]}"));
+        QCOMPARE(s.blocks().size(), 5);
+        QCOMPARE(std::get<KipDiff>(s.blocks().at(0)).patch, QStringLiteral("b"));
+        QVERIFY(std::get<KipKv>(s.blocks().at(1)).items.isEmpty());
+        // `done` mantém o resultado (diff, kv, code…) na tela
+        s.apply(msg("{\"kip\":1,\"type\":\"done\"}"));
+        QCOMPARE(s.blocks().size(), 5);
+    }
+
+    void progressBarsAreKeptPerId()
+    {
+        KipScreenState s;
+        s.apply(msg("{\"kip\":1,\"type\":\"progress\",\"value\":10}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"progress\",\"id\":\"a\",\"value\":20}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"progress\",\"id\":\"b\",\"value\":30}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"progress\",\"id\":\"a\",\"value\":90}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"progress\",\"value\":50}"));
+        QCOMPARE(s.blocks().size(), 3);
+        QCOMPARE(*std::get<KipProgress>(s.blocks().at(0)).value, 50.0);
+        QCOMPARE(*std::get<KipProgress>(s.blocks().at(1)).value, 90.0);
+        s.apply(msg("{\"kip\":1,\"type\":\"done\"}"));
+        QVERIFY(s.blocks().isEmpty()); // progresso é transitório, todas as barras saem
+    }
+
+    void stepLogsAppendAndKeepTheLastLines()
+    {
+        KipScreenState s;
+        s.apply(msg("{\"kip\":1,\"type\":\"steps\",\"id\":\"b\",\"items\":[{\"id\":\"c\",\"label\":\"Compile\",\"state\":\"running\",\"detail\":\"d\"}]}"));
+        s.apply(msg("{\"kip\":1,\"type\":\"step\",\"steps\":\"b\",\"id\":\"c\",\"log\":\"one\\ntwo\\n\"}"));
+        const KipStepItem &item = std::get<KipSteps>(s.blocks().first()).items.first();
+        QCOMPARE(item.log, QStringList({QStringLiteral("one"), QStringLiteral("two")}));
+        QCOMPARE(item.state, KipStepState::Running); // só log: o estado e o detalhe ficam
+        QCOMPARE(item.detail, QStringLiteral("d"));
+        for (int i = 0; i < kKipMaxStepLogLines + 10; ++i) {
+            s.apply(msg("{\"kip\":1,\"type\":\"step\",\"steps\":\"b\",\"id\":\"c\",\"log\":\"x\"}"));
+        }
+        s.apply(msg("{\"kip\":1,\"type\":\"step\",\"steps\":\"b\",\"id\":\"c\",\"state\":\"error\",\"log\":\"last\"}"));
+        const KipStepItem &after = std::get<KipSteps>(s.blocks().first()).items.first();
+        QCOMPARE(after.log.size(), kKipMaxStepLogLines);
+        QCOMPARE(after.log.last(), QStringLiteral("last"));
+        QCOMPARE(after.state, KipStepState::Error);
+    }
+
+    void rowActionsFollowTheChipRules()
+    {
+        KipScreenState s;
+        s.apply(msg("{\"kip\":1,\"type\":\"prompt\",\"id\":\"p\",\"fields\":[{\"name\":\"branch\",\"type\":\"table\",\"row_key\":\"name\","
+                    "\"columns\":[\"name\"],\"rows\":[{\"name\":\"main\",\"_actions\":[\"sync\"]},{\"name\":\"feat\"}],"
+                    "\"row_actions\":[{\"id\":\"sync\"},{\"id\":\"delete\",\"danger\":true,\"confirm\":{\"text\":\"Sure?\"}}]}],"
+                    "\"chips\":[{\"id\":\"ctx\"}]}"));
+        // `main` não pode ser apagada; linha ou ação que não existem também não
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("delete")),
+                 KipScreenState::ChipStart::Rejected);
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("nope"), QStringLiteral("sync")),
+                 KipScreenState::ChipStart::Rejected);
+        QCOMPARE(s.startRowAction(QStringLiteral("other"), {}, QStringLiteral("main"), QStringLiteral("sync")),
+                 KipScreenState::ChipStart::Rejected);
+
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("feat"), QStringLiteral("delete")),
+                 KipScreenState::ChipStart::NeedsConfirmation);
+        const KipChipRun &run = *s.openScreen()->chipRun;
+        QVERIFY(run.rowAction);
+        QCOMPARE(run.field, QStringLiteral("branch"));
+        QCOMPARE(run.row, QStringLiteral("feat"));
+        QVERIFY(s.runningChipDefinition());
+        QVERIFY(s.runningChipDefinition()->danger);
+        // uma por vez: nem outra ação de linha nem um chip começam agora
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("sync")),
+                 KipScreenState::ChipStart::Rejected);
+        QCOMPARE(s.startChip(QStringLiteral("ctx")), KipScreenState::ChipStart::Rejected);
+        QVERIFY(s.confirmChip());
+        QVERIFY(s.apply(msg("{\"kip\":1,\"type\":\"chip_result\",\"chip\":\"delete\",\"state\":\"success\",\"text\":\"gone\"}")).changed);
+        QCOMPARE(s.openScreen()->chipRun->phase, KipChipRun::Phase::Success);
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("sync")),
+                 KipScreenState::ChipStart::Send);
+
+        s.dismissChip();
+        s.submit();
+        QCOMPARE(s.startRowAction(QStringLiteral("branch"), {}, QStringLiteral("main"), QStringLiteral("sync")),
+                 KipScreenState::ChipStart::Rejected); // travado
+    }
+
+    void rowActionsOnABlockTable()
+    {
+        KipScreenState s;
+        s.apply(msg("{\"kip\":1,\"type\":\"table\",\"id\":\"deploys\",\"columns\":[\"id\"],\"rows\":[{\"id\":\"42\"}],"
+                    "\"row_actions\":[{\"id\":\"rollback\"}]}"));
+        // sem prompt aberto o programa não está lendo: nada roda
+        QCOMPARE(s.startRowAction({}, QStringLiteral("deploys"), QStringLiteral("42"), QStringLiteral("rollback")),
+                 KipScreenState::ChipStart::Rejected);
+        s.apply(msg("{\"kip\":1,\"type\":\"prompt\",\"id\":\"p\",\"fields\":[]}"));
+        // a tabela veio antes do prompt: é parte da mesma tela
+        QCOMPARE(s.startRowAction({}, QStringLiteral("deploys"), QStringLiteral("42"), QStringLiteral("rollback")),
+                 KipScreenState::ChipStart::Send);
+        QCOMPARE(s.openScreen()->chipRun->table, QStringLiteral("deploys"));
+        QVERIFY(s.openScreen()->chipRun->field.isEmpty());
+    }
+
+    void theDiffViewChoiceIsRememberedApartFromAnswers()
+    {
+        KipScreenState s;
+        QVERIFY(s.diffViewPreference().isEmpty());
+        s.setDiffViewPreference(QStringLiteral("split"));
+        s.setDiffViewPreference(QStringLiteral("sideways")); // ignorado
+        QCOMPARE(s.diffViewPreference(), QStringLiteral("split"));
+        const QJsonObject committed = s.takeCommittedRemembered();
+        QCOMPARE(committed.value("diff_view").toString(), QStringLiteral("split"));
+        KipScreenState next;
+        next.setRemembered(committed);
+        QCOMPARE(next.diffViewPreference(), QStringLiteral("split"));
+    }
+
+    void diffSelectionsAreNeverRemembered()
+    {
+        KipScreenState s;
+        s.setRemembered(QJsonObject{{"p/h", QJsonArray{}}});
+        s.apply(msg("{\"kip\":1,\"type\":\"prompt\",\"id\":\"p\",\"fields\":[{\"name\":\"h\",\"type\":\"diff\","
+                    "\"patch\":\"--- a/x\\n+++ b/x\\n@@ -1 +1 @@\\n-a\\n+b\\n\"}]}"));
+        QCOMPARE(s.openScreen()->values.value("h"), QJsonValue(QJsonArray{"x@0"})); // o padrão, não o lembrado
+        QVERIFY(s.submit());
+        s.apply(msg("{\"kip\":1,\"type\":\"message\",\"text\":\"next\"}"));
+        QVERIFY(!s.takeCommittedRemembered().contains("p/h"));
+    }
 };
 
 QTEST_MAIN(TestKipScreenState)

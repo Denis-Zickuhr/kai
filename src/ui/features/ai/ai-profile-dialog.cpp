@@ -45,6 +45,8 @@ struct Preset {
 constexpr Preset kPresets[] = {
     {"anthropic", "ai.profile.preset.anthropic", AiWireFormat::Anthropic, "", true},
     {"openai", "ai.profile.preset.openai", AiWireFormat::OpenAiCompatible, "", true},
+    {"gemini", "ai.profile.preset.gemini", AiWireFormat::OpenAiCompatible,
+     "https://generativelanguage.googleapis.com/v1beta/openai", true},
     {"ollama", "ai.profile.preset.ollama", AiWireFormat::OpenAiCompatible, "http://localhost:11434/v1", true},
     {"lmstudio", "ai.profile.preset.lmstudio", AiWireFormat::OpenAiCompatible, "http://localhost:1234/v1", true},
     {"openrouter", "ai.profile.preset.openrouter", AiWireFormat::OpenAiCompatible, "https://openrouter.ai/api/v1", true},

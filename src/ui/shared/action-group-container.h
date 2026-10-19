@@ -58,6 +58,10 @@ public:
     // MainWindow::applyActionGroupPlacement().
     int contentWidth() const;
 
+    // Barra horizontal: pede o que os ícones precisam, mas cabe em qualquer largura (rola em vez de cortar).
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
 private:
     QWidget *createSeparator();
 
@@ -80,6 +84,9 @@ private:
     // próprio sizeHint e ancorado no topo (ver construtor); nullptr na
     // orientação Horizontal, onde `this` já hospeda os botões direto.
     QWidget *m_pill{nullptr};
+    // Orientação Horizontal: os grupos vivem num widget dentro de um QScrollArea que rola na horizontal quando a barra fica
+    // estreita demais para os ícones (rolar em vez de cortar). nullptr na Vertical.
+    QWidget *m_flat{nullptr};
 };
 
 } // namespace kai::ui

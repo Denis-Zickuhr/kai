@@ -350,6 +350,47 @@ private slots:
         QVERIFY(!parseResponse(AiWireFormat::OpenAiCompatible, R"({"error":{"message":"boom"}})", t, e));
     }
 
+    // Gemini (endpoint compatível): a `thought_signature` vem em `extra_content` da chamada e precisa voltar no histórico,
+    // senão o próximo passo da conversa dá 400 ("function call is missing a thought_signature").
+    void geminiThoughtSignatureSurvivesTheRoundTrip()
+    {
+        const QByteArray signature = "{\"google\":{\"thought_signature\":\"SIG123\"}}";
+        const QJsonObject extra = QJsonDocument::fromJson(signature).object();
+
+        // Sem streaming.
+        const QByteArray body = "{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"c\",\"type\":\"function\","
+            "\"extra_content\":" + signature + ",\"function\":{\"name\":\"x\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
+        AiTurn plain;
+        AiError e;
+        QVERIFY(parseResponse(AiWireFormat::OpenAiCompatible, body, plain, e));
+        QCOMPARE(plain.toolCalls.first().extra, extra);
+
+        // Com streaming (a assinatura chega no primeiro fragmento da chamada).
+        auto d = AiStreamDecoder::create(AiWireFormat::OpenAiCompatible, {});
+        d->feed("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c\",\"extra_content\":" + signature
+                + ",\"function\":{\"name\":\"x\",\"arguments\":\"{\"}}]}}]}\n\n"
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}\n\n");
+        d->finish();
+        QCOMPARE(d->turn().toolCalls.first().extra, extra);
+
+        // O histórico devolve a assinatura junto da chamada.
+        AiRequest r;
+        r.profile = profile(AiWireFormat::OpenAiCompatible);
+        r.tools << spec();
+        AiMessage assistant = assistantWithCall(QStringLiteral("c"), QStringLiteral("x"), {});
+        assistant.toolCalls[0].extra = extra;
+        r.messages << user(QStringLiteral("oi")) << assistant << toolResult(QStringLiteral("c"), QStringLiteral("[]"));
+        const QJsonArray msgs = buildRequestBody(r).value(QStringLiteral("messages")).toArray();
+        const QJsonObject call = msgs.at(1).toObject().value(QStringLiteral("tool_calls")).toArray().first().toObject();
+        QCOMPARE(call.value(QStringLiteral("extra_content")).toObject(), extra);
+
+        // E ela sobrevive ao salvar e reabrir a conversa.
+        QCOMPARE(AiMessage::fromJson(assistant.toJson()).toolCalls.first().extra, extra);
+        // Provedores sem assinatura não ganham campo nenhum.
+        AiMessage bare = assistantWithCall(QStringLiteral("c"), QStringLiteral("x"), {});
+        QVERIFY(!AiMessage::fromJson(bare.toJson()).toolCalls.first().extra.contains(QStringLiteral("google")));
+    }
+
     // -------------------------------------------------------------- comuns
     void sanitizeFillsUnansweredCallsAndDropsOrphanResults()
     {
@@ -397,6 +438,7 @@ private slots:
     {
         QCOMPARE(parseModelList(R"({"data":[{"id":"b"},{"id":"a"},{"id":"a"}]})"), (QStringList{"a", "b"}));
         QCOMPARE(parseModelList(R"({"models":[{"name":"llama3"}]})"), QStringList{"llama3"});
+        QCOMPARE(parseModelList(R"({"data":[{"id":"models/gemini-2.5-flash"}]})"), QStringList{"gemini-2.5-flash"});
         QVERIFY(parseModelList("garbage").isEmpty());
     }
 };

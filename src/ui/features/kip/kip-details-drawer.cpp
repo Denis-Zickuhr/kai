@@ -7,7 +7,9 @@
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QStackedWidget>
-#include <QTabBar>
+#include <QButtonGroup>
+#include <QFrame>
+#include <QHBoxLayout>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QToolButton>
@@ -61,6 +63,11 @@ KipDetailsDrawer::KipDetailsDrawer(QWidget *parent)
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(tk::space(1));
 
+    // Linha do botão: "Detalhes" e, aberto, o seletor Log | Protocolo ao lado (quem hospeda pode levar os dois para a
+    // linha dos botões dele).
+    auto *bar = new QHBoxLayout();
+    bar->setContentsMargins(0, 0, 0, 0);
+    bar->setSpacing(tk::space(2));
     m_toggle = new QToolButton(this);
     m_toggle->setObjectName(QStringLiteral("kipDetailsToggle"));
     m_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -68,18 +75,36 @@ KipDetailsDrawer::KipDetailsDrawer(QWidget *parent)
     m_toggle->setCursor(Qt::PointingHandCursor);
     m_toggle->setAutoRaise(true);
     connect(m_toggle, &QToolButton::clicked, this, [this]() { setExpanded(!m_expanded); });
-    root->addWidget(m_toggle, 0, Qt::AlignLeft);
+    bar->addWidget(m_toggle);
+
+    m_switch = new QFrame(this);
+    m_switch->setObjectName(QStringLiteral("kipDetailsSwitch"));
+    auto *switchLayout = new QHBoxLayout(m_switch);
+    switchLayout->setContentsMargins(2, 2, 2, 2);
+    switchLayout->setSpacing(2);
+    auto *pages = new QButtonGroup(m_switch);
+    pages->setExclusive(true);
+    for (const QString &key : {QStringLiteral("kip.details.log"), QStringLiteral("kip.details.protocol")}) {
+        auto *button = new QToolButton(m_switch);
+        button->setObjectName(QStringLiteral("kipDetailsPage"));
+        button->setText(utils::tr(key));
+        button->setCheckable(true);
+        button->setCursor(Qt::PointingHandCursor);
+        pages->addButton(button, int(m_pageButtons.size()));
+        m_pageButtons.append(button);
+        switchLayout->addWidget(button);
+    }
+    m_pageButtons.first()->setChecked(true);
+    m_switch->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_switch->setVisible(false);
+    bar->addWidget(m_switch, 0, Qt::AlignVCenter);
+    bar->addStretch(1);
+    root->addLayout(bar);
 
     m_body = new QWidget(this);
     auto *bodyLayout = new QVBoxLayout(m_body);
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(0);
-    m_tabs = new QTabBar(m_body);
-    m_tabs->setExpanding(false);
-    m_tabs->setDrawBase(false);
-    m_tabs->addTab(utils::tr(QStringLiteral("kip.details.log")));
-    m_tabs->addTab(utils::tr(QStringLiteral("kip.details.protocol")));
-    bodyLayout->addWidget(m_tabs);
     m_pages = new QStackedWidget(m_body);
     m_log = makeMonoView(m_pages);
     m_log->setPlaceholderText(utils::tr(QStringLiteral("kip.details.empty")));
@@ -88,7 +113,7 @@ KipDetailsDrawer::KipDetailsDrawer(QWidget *parent)
     m_pages->addWidget(m_log);
     m_pages->addWidget(m_protocol);
     bodyLayout->addWidget(m_pages);
-    connect(m_tabs, &QTabBar::currentChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    connect(pages, &QButtonGroup::idClicked, m_pages, &QStackedWidget::setCurrentIndex);
     root->addWidget(m_body);
 
     m_body->setVisible(false);
@@ -100,9 +125,23 @@ void KipDetailsDrawer::applyStyle()
     m_toggle->setIcon(LucideIcons::icon(m_expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-right"),
                                         QColor(tk::mutedFg()), 16));
     m_toggle->setStyleSheet(QStringLiteral(
-        "QToolButton#kipDetailsToggle { color: %1; border: none; padding: %2px %3px; border-radius: %4px; }"
+        "QToolButton#kipDetailsToggle { color: %1; background: transparent; border: none; padding: %2px %3px;"
+        " border-radius: %4px; }"
         "QToolButton#kipDetailsToggle:hover { background-color: %5; }")
         .arg(tk::mutedFg()).arg(tk::space(1)).arg(tk::space(2)).arg(tk::radiusSm()).arg(tk::hoverBg()));
+    // Seletor Log | Protocolo: o segmentado pequeno do app (o mesmo do filtro de Processos), não uma barra de abas.
+    m_switch->setStyleSheet(QStringLiteral(
+        "QFrame#kipDetailsSwitch { background-color: %1; border: 1px solid %2; border-radius: %3px; }"
+        "QToolButton#kipDetailsPage { background: transparent; border: none; color: %4; padding: 1px %5px;"
+        " border-radius: %6px; font-size: %7pt; min-height: 0px; }"
+        "QToolButton#kipDetailsPage:checked { background-color: %8; color: %9; font-weight: 600; }")
+        .arg(tk::surface(), tk::borderColor())
+        .arg(tk::radiusMd())
+        .arg(tk::mutedFg())
+        .arg(tk::space(2))
+        .arg(qMax(0, tk::radiusMd() - 3))
+        .arg(tk::fontSizeSmallPt())
+        .arg(tk::selBg(), tk::fg()));
     const QString viewStyle = QStringLiteral(
         "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3; border-radius: %4px; padding: %5px; }")
         .arg(tk::terminalBg(), tk::terminalFg(), tk::borderColor()).arg(tk::radiusMd()).arg(tk::space(2));
@@ -117,6 +156,7 @@ void KipDetailsDrawer::setExpanded(bool expanded)
     }
     m_expanded = expanded;
     m_body->setVisible(expanded);
+    m_switch->setVisible(expanded);
     applyStyle();
     emit expandedChanged(expanded);
 }

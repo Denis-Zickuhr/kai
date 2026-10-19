@@ -4,6 +4,7 @@
 #include "core/dotenv.h"
 #include "utils/translation-manager.h"
 
+#include <QBoxLayout>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QListWidget>
@@ -22,6 +23,8 @@
 #include <QAbstractItemView>
 #include <QStyle>
 #include <QStackedWidget>
+#include <QKeyEvent>
+#include <QTimer>
 
 #include "ui/shared/key-value-editor-widget.h"
 #include "ui/features/environments/dynamic-vars-inspector-widget.h"
@@ -124,7 +127,8 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
                                                    core::EnvironmentManager *envManager,
                                                    const QVector<core::Folder> &allFolders,
                                                    std::function<QMap<QString, QMap<QString, QString>>()> loadPersisted,
-                                                   std::function<bool(const QMap<QString, QMap<QString, QString>> &)> savePersisted)
+                                                   std::function<bool(const QMap<QString, QMap<QString, QString>> &)> savePersisted,
+                                                   bool embedded)
     : QDialog(parent)
     , m_environments(environments)
     , m_activeEnvironmentId(activeEnvironmentId)
@@ -133,6 +137,9 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
     , m_loadPersisted(std::move(loadPersisted))
     , m_savePersisted(std::move(savePersisted))
 {
+    if (embedded) {
+        setWindowFlags(Qt::Widget);
+    }
     setWindowTitle(utils::tr(QStringLiteral("env.manage.title")));
     setupUi();
     reloadList();
@@ -144,8 +151,96 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
         }
         m_list->setCurrentRow(sel);
     }
+    if (embedded) {
+        setEmbedded(true);
+        return;
+    }
     resize(760, 500);
     centerOnParent(this);
+}
+
+void EnvironmentManagerDialog::setEmbedded(bool embedded)
+{
+    m_embedded = embedded;
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    setProperty("kaiEmbedded", embedded);
+    if (m_buttonBox) {
+        m_buttonBox->setVisible(!embedded);
+    }
+    // Num painel (meia janela, uma lateral) o nome e o interruptor "ativo" empilham em vez de brigar por largura, e a
+    // lista de pacotes fica mais estreita.
+    if (m_topRow) {
+        m_topRow->setDirection(embedded ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    }
+    if (m_list) {
+        m_list->setMinimumWidth(embedded ? 170 : 240);
+    }
+}
+
+void EnvironmentManagerDialog::done(int result)
+{
+    if (!m_embedded) {
+        QDialog::done(result);
+    }
+}
+
+// Esc fecha um diálogo, mas não um painel do quadro.
+void EnvironmentManagerDialog::keyPressEvent(QKeyEvent *event)
+{
+    if (m_embedded && event->key() == Qt::Key_Escape) {
+        event->ignore();
+        return;
+    }
+    QDialog::keyPressEvent(event);
+}
+
+// Embutido: entrega as edições sozinha, depois de uma pausa (digitar um nome não grava a cada letra).
+void EnvironmentManagerDialog::scheduleChanged()
+{
+    if (!m_embedded || m_loadingEditor) {
+        return;
+    }
+    if (!m_changedTimer) {
+        m_changedTimer = new QTimer(this);
+        m_changedTimer->setSingleShot(true);
+        m_changedTimer->setInterval(500);
+        connect(m_changedTimer, &QTimer::timeout, this, [this]() {
+            commitCurrentEditor();
+            reloadList(); // nomes e contagens dos cartões acompanham
+            emit changed();
+        });
+    }
+    m_changedTimer->start();
+}
+
+void EnvironmentManagerDialog::setFolders(const QVector<core::Folder> &folders)
+{
+    m_allFolders = folders;
+    if (m_dynamicVarsInspector) {
+        m_dynamicVarsInspector->setFolders(folders);
+    }
+}
+
+void EnvironmentManagerDialog::setData(const QVector<core::Environment> &environments, const QString &activeEnvironmentId)
+{
+    if (m_changedTimer) {
+        m_changedTimer->stop();
+    }
+    m_environments = environments;
+    m_activeEnvironmentId = activeEnvironmentId;
+    m_editingIndex = -1;
+    reloadList();
+    int sel = 0;
+    for (int i = 0; i < m_environments.size(); ++i) {
+        if (m_environments.at(i).id == m_activeEnvironmentId) {
+            sel = i;
+            break;
+        }
+    }
+    if (m_list->count() > 0) {
+        m_list->setCurrentRow(sel);
+    }
+    handleSelectionChanged();
 }
 
 void EnvironmentManagerDialog::setupUi()
@@ -280,7 +375,8 @@ void EnvironmentManagerDialog::setupUi()
     auto *rightCol = new QVBoxLayout();
     rightCol->setSpacing(tk::space(3));
 
-    auto *topRow = new QHBoxLayout();
+    m_topRow = new QBoxLayout(QBoxLayout::LeftToRight);
+    auto *topRow = m_topRow;
     m_nameField = new QLineEdit(this);
     topRow->addWidget(layout_helpers::wrapWithLabel(this, utils::tr(QStringLiteral("env.field.name")), m_nameField), 1);
 
@@ -356,14 +452,16 @@ void EnvironmentManagerDialog::setupUi()
     body->addLayout(rightCol, 1);
 
     // --- Rodapé: OK/Cancelar ---
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    stripDialogButtonIcons(buttonBox);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
+    m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    stripDialogButtonIcons(m_buttonBox);
+    connect(m_buttonBox, &QDialogButtonBox::accepted, this, [this]() {
         commitCurrentEditor();
         accept();
     });
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    outer->addWidget(buttonBox);
+    connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    outer->addWidget(m_buttonBox);
+    connect(m_nameField, &QLineEdit::textEdited, this, [this]() { scheduleChanged(); });
+    connect(m_varsEditor, &KeyValueEditorWidget::changed, this, [this]() { scheduleChanged(); });
 }
 
 int EnvironmentManagerDialog::currentIndex() const
@@ -451,8 +549,10 @@ void EnvironmentManagerDialog::handleSelectionChanged()
     m_varsEditor->setEnabled(true);
     m_activeToggle->setEnabled(true);
     const core::Environment &e = m_environments.at(index);
+    m_loadingEditor = true;
     m_nameField->setText(e.name);
     m_varsEditor->setValuesWithSecrets(e.vars, e.secretKeys);
+    m_loadingEditor = false;
     {
         const QSignalBlocker blocker(m_activeToggle);
         m_activeToggle->setChecked(e.id == m_activeEnvironmentId);
@@ -470,6 +570,7 @@ void EnvironmentManagerDialog::handleNewEnvironment()
     m_list->setCurrentRow(m_environments.size() - 1);
     m_nameField->setFocus();
     m_nameField->selectAll();
+    scheduleChanged();
 }
 
 void EnvironmentManagerDialog::handleDuplicateEnvironment()
@@ -485,6 +586,7 @@ void EnvironmentManagerDialog::handleDuplicateEnvironment()
     m_environments.insert(index + 1, copy);
     reloadList();
     m_list->setCurrentRow(index + 1);
+    scheduleChanged();
 }
 
 void EnvironmentManagerDialog::handleDeleteEnvironment()
@@ -513,6 +615,7 @@ void EnvironmentManagerDialog::handleDeleteEnvironment()
     }
     reloadList();
     m_list->setCurrentRow(qMin(index, m_environments.size() - 1));
+    scheduleChanged();
 }
 
 void EnvironmentManagerDialog::handleActiveToggled(bool checked)
@@ -525,6 +628,7 @@ void EnvironmentManagerDialog::handleActiveToggled(bool checked)
     if (checked) {
         m_activeEnvironmentId = id;
         reloadList(); // atualiza bolinha/pill "ATIVO" dos outros cartões
+        scheduleChanged();
     } else if (id == m_activeEnvironmentId) {
         // Não dá pra ficar sem NENHUM ativo — precisa ativar outro pacote
         // em vez de simplesmente desligar este. Reverte o toggle.

@@ -47,7 +47,7 @@ public:
     // --- teclado
     // O painel que tem o foco agora (ou o da frente da primeira zona, se o foco está fora de todos).
     QString focusedViewId() const;
-    // Os painéis visíveis, na ordem em que Alt+1..9 os numera: esquerda, centro, direita, embaixo, flutuantes.
+    // Os painéis visíveis, na ordem em que Alt+1..9 os numera: as pilhas da esquerda para a direita (ou de cima para baixo), flutuantes.
     QStringList visibleViewOrder() const;
     void focusView(const QString &id);
     void focusPanelNumber(int number);

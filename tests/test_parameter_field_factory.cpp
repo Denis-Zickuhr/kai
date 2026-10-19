@@ -32,7 +32,7 @@ KipField field(KipFieldType type, const QString &name = QStringLiteral("f"))
 
 KipOption opt(const QString &value, const QString &label = QString(), const QString &description = QString())
 {
-    return {value, label.isEmpty() ? value : label, description};
+    return {value, label.isEmpty() ? value : label, description, {}};
 }
 
 QVector<KipOption> manyOptions(int n)
@@ -54,7 +54,7 @@ QJsonArray manyRows(int n)
 
 QVector<KipColumn> columns()
 {
-    return {{QStringLiteral("name"), QStringLiteral("Name")}, {QStringLiteral("size"), QStringLiteral("Size")}};
+    return {{QStringLiteral("name"), QStringLiteral("Name"), {}}, {QStringLiteral("size"), QStringLiteral("Size"), {}}};
 }
 
 // Constrói o editor dentro de um pai vivo (o teste segura o pai).
@@ -433,7 +433,7 @@ private slots:
     void tableEditorUsesACustomRowKey()
     {
         KipField f = field(KipFieldType::Table);
-        f.columns = {{QStringLiteral("name"), QStringLiteral("Name")}};
+        f.columns = {{QStringLiteral("name"), QStringLiteral("Name"), {}}};
         f.rowKey = QStringLiteral("name");
         f.rows = QJsonArray{QJsonObject{{"name", "alpha"}}, QJsonObject{{"name", "beta"}}};
         Built b(f);

@@ -1,5 +1,6 @@
 #include "core/kip-protocol.h"
 
+#include "core/unified-diff.h"
 #include "utils/translation-manager.h"
 
 #include <QDate>
@@ -36,6 +37,33 @@ QString clampText(const QString &text, const Ctx &ctx)
         --cut; // não parte um caractere multi-byte ao meio
     }
     ctx.warn(utils::tr(QStringLiteral("kip.diag.text_truncated")).arg(kKipMaxTextBytes));
+    return QString::fromUtf8(utf8.left(cut));
+}
+
+// Texto grande (patch, código): até kKipMaxBigTextBytes, cortado na última quebra de linha que cabe.
+QString bigText(const QJsonObject &obj, const char *key, bool *truncated, const Ctx &ctx)
+{
+    const QJsonValue v = obj.value(QLatin1String(key));
+    if (!v.isString()) {
+        return QString();
+    }
+    const QString text = v.toString();
+    if (static_cast<qint64>(text.size()) * 3 <= kKipMaxBigTextBytes) {
+        return text;
+    }
+    const QByteArray utf8 = text.toUtf8();
+    if (utf8.size() <= kKipMaxBigTextBytes) {
+        return text;
+    }
+    int cut = utf8.lastIndexOf('\n', kKipMaxBigTextBytes - 1);
+    if (cut <= 0) {
+        cut = kKipMaxBigTextBytes;
+        while (cut > 0 && (static_cast<unsigned char>(utf8.at(cut)) & 0xC0) == 0x80) --cut;
+    } else {
+        ++cut; // mantém a quebra
+    }
+    *truncated = true;
+    ctx.warn(utils::tr(QStringLiteral("kip.diag.big_text_truncated")).arg(QLatin1String(key)).arg(kKipMaxBigTextBytes));
     return QString::fromUtf8(utf8.left(cut));
 }
 
@@ -97,6 +125,11 @@ QVector<KipColumn> parseColumns(const QJsonValue &v, const Ctx &ctx)
             const QJsonObject o = item.toObject();
             column.key = lenientString(o.value(QStringLiteral("key")), ctx);
             column.label = str(o, "label", ctx);
+            column.format = str(o, "format", ctx);
+            if (!kipIsColumnFormat(column.format)) {
+                ctx.warn(utils::tr(QStringLiteral("kip.diag.column_unknown_format")).arg(column.key, column.format));
+                column.format.clear();
+            }
         } else {
             continue;
         }
@@ -143,6 +176,7 @@ QVector<KipOption> parseOptions(const QJsonValue &v, const Ctx &ctx)
             option.value = lenientString(o.value(QStringLiteral("value")), ctx);
             option.label = str(o, "label", ctx);
             option.description = str(o, "description", ctx);
+            option.icon = str(o, "icon", ctx);
         } else if (item.isString() || item.isDouble() || item.isBool()) {
             option.value = lenientString(item, ctx);
         } else {
@@ -207,6 +241,79 @@ void parseListView(const QJsonObject &o, KipField &f, const Ctx &ctx)
     }
 }
 
+QVector<KipChip> parseChips(const QJsonValue &value, const Ctx &ctx);
+
+// `row_actions` de uma tabela: os mesmos chips, no máximo kKipMaxRowActions.
+QVector<KipChip> parseRowActions(const QJsonValue &value, const Ctx &ctx)
+{
+    QVector<KipChip> actions = parseChips(value, ctx);
+    if (actions.size() > kKipMaxRowActions) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.row_actions_truncated")).arg(kKipMaxRowActions));
+        actions.resize(kKipMaxRowActions);
+    }
+    for (KipChip &a : actions) {
+        a.requiresFields.clear(); // a linha é o requisito
+    }
+    return actions;
+}
+
+// Badge de um nó/valor: texto simples ou {text, tone}.
+void parseBadge(const QJsonValue &v, QString *text, QString *tone, const Ctx &ctx)
+{
+    if (v.isObject()) {
+        const QJsonObject o = v.toObject();
+        *text = lenientString(o.value(QStringLiteral("text")), ctx);
+        *tone = str(o, "tone", ctx);
+    } else {
+        *text = lenientString(v, ctx);
+    }
+    if (!tone->isEmpty() && !kipIsTone(*tone)) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.unknown_tone")).arg(*tone));
+        tone->clear();
+    }
+}
+
+QVector<KipTreeNode> parseTreeNodes(const QJsonValue &v, int depth, int *count, QSet<QString> *ids, const Ctx &ctx)
+{
+    QVector<KipTreeNode> nodes;
+    if (depth > kKipMaxTreeDepth) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.tree_too_deep")).arg(kKipMaxTreeDepth));
+        return nodes;
+    }
+    for (const QJsonValue &item : v.toArray()) {
+        if (*count >= kKipMaxTreeNodes) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.tree_truncated")).arg(kKipMaxTreeNodes));
+            break;
+        }
+        KipTreeNode node;
+        QJsonObject o;
+        if (item.isObject()) {
+            o = item.toObject();
+            node.id = lenientString(o.value(QStringLiteral("id")), ctx);
+        } else {
+            node.id = lenientString(item, ctx);
+        }
+        if (node.id.isEmpty()) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.tree_node_without_id")));
+            continue;
+        }
+        if (ids->contains(node.id)) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.tree_node_duplicate")).arg(node.id));
+            continue;
+        }
+        ids->insert(node.id);
+        ++*count;
+        node.label = str(o, "label", ctx);
+        if (node.label.isEmpty()) node.label = node.id;
+        node.icon = str(o, "icon", ctx);
+        parseBadge(o.value(QStringLiteral("badge")), &node.badge, &node.badgeTone, ctx);
+        node.expanded = boolOr(o, "expanded", false);
+        node.children = parseTreeNodes(o.value(QStringLiteral("children")), depth + 1, count, ids, ctx);
+        nodes.append(node);
+    }
+    return nodes;
+}
+
 std::optional<KipField> parseField(const QJsonValue &v, const Ctx &ctx)
 {
     if (!v.isObject()) {
@@ -263,9 +370,17 @@ std::optional<KipField> parseField(const QJsonValue &v, const Ctx &ctx)
         f.range = boolOr(o, "range", false);
         break;
     }
-    case KipFieldType::Select:
+    case KipFieldType::Select: {
         f.options = parseOptions(o.value(QStringLiteral("options")), ctx);
+        const QString style = str(o, "style", ctx);
+        if (style.isEmpty() || style == QLatin1String("dropdown") || style == QLatin1String("cards")
+            || style == QLatin1String("segmented")) {
+            f.style = style == QLatin1String("dropdown") ? QString() : style;
+        } else {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.field_invalid_style")).arg(f.name, style));
+        }
         break;
+    }
     case KipFieldType::List:
         f.options = parseOptions(o.value(QStringLiteral("options")), ctx);
         f.multiple = boolOr(o, "multiple", false);
@@ -279,6 +394,26 @@ std::optional<KipField> parseField(const QJsonValue &v, const Ctx &ctx)
         const QString rowKey = str(o, "row_key", ctx);
         if (!rowKey.isEmpty()) {
             f.rowKey = rowKey;
+        }
+        f.rowActions = parseRowActions(o.value(QStringLiteral("row_actions")), ctx);
+        break;
+    }
+    case KipFieldType::Tree: {
+        int count = 0;
+        QSet<QString> ids;
+        f.nodes = parseTreeNodes(o.value(QStringLiteral("nodes")), 1, &count, &ids, ctx);
+        f.multiple = boolOr(o, "multiple", false);
+        f.searchable = optBool(o, "searchable");
+        break;
+    }
+    case KipFieldType::Diff: {
+        f.patch = bigText(o, "patch", &f.truncated, ctx);
+        f.truncated = f.truncated || boolOr(o, "truncated", false);
+        const QString select = str(o, "select", ctx);
+        if (select.isEmpty() || select == QLatin1String("hunks") || select == QLatin1String("files")) {
+            f.select = select.isEmpty() ? QStringLiteral("hunks") : select;
+        } else {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.field_invalid_select")).arg(f.name, select));
         }
         break;
     }
@@ -299,8 +434,14 @@ std::optional<KipField> parseField(const QJsonValue &v, const Ctx &ctx)
         f.flags = parseFlags(o.value(QStringLiteral("options")), ctx);
         break;
     case KipFieldType::Text:
+    case KipFieldType::Textarea: {
+        const QJsonValue max = o.value(QStringLiteral("max_length"));
+        if (max.isDouble() && max.toInt() > 0) {
+            f.maxLength = max.toInt();
+        }
+        break;
+    }
     case KipFieldType::Secret:
-    case KipFieldType::Textarea:
         break;
     }
     return f;
@@ -535,6 +676,7 @@ std::optional<KipMessage> parseProgress(const QJsonObject &o, const Ctx &ctx)
     }
     m.label = str(o, "label", ctx);
     m.cancellable = optBool(o, "cancellable");
+    m.id = lenientString(o.value(QStringLiteral("id")), ctx);
     return m;
 }
 
@@ -588,8 +730,16 @@ std::optional<KipMessage> parseStep(const QJsonObject &o, const Ctx &ctx)
         ctx.warn(utils::tr(QStringLiteral("kip.diag.step_without_ids")));
         return std::nullopt;
     }
-    m.state = parseStepState(o, ctx);
-    m.detail = str(o, "detail", ctx);
+    if (o.contains(QStringLiteral("state"))) {
+        m.state = parseStepState(o, ctx);
+    }
+    if (o.contains(QStringLiteral("detail"))) {
+        m.detail = str(o, "detail", ctx);
+    }
+    m.log = str(o, "log", ctx);
+    if (!m.state && !m.detail && m.log.isEmpty()) {
+        m.state = KipStepState::Pending; // `step` sem nada: o comportamento antigo (volta a pendente)
+    }
     return m;
 }
 
@@ -600,6 +750,141 @@ std::optional<KipMessage> parseTable(const QJsonObject &o, const Ctx &ctx)
     m.title = str(o, "title", ctx);
     m.columns = parseColumns(o.value(QStringLiteral("columns")), ctx);
     m.rows = parseRows(o.value(QStringLiteral("rows")), ctx);
+    const QString rowKey = str(o, "row_key", ctx);
+    if (!rowKey.isEmpty()) {
+        m.rowKey = rowKey;
+    }
+    m.rowActions = parseRowActions(o.value(QStringLiteral("row_actions")), ctx);
+    if (!m.rowActions.isEmpty() && m.id.isEmpty()) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.row_actions_need_table_id")));
+        m.rowActions.clear();
+    }
+    return m;
+}
+
+std::optional<KipMessage> parseDiff(const QJsonObject &o, const Ctx &ctx)
+{
+    KipDiff m;
+    m.id = lenientString(o.value(QStringLiteral("id")), ctx);
+    m.title = str(o, "title", ctx);
+    m.patch = bigText(o, "patch", &m.truncated, ctx);
+    const auto side = [&](const char *key) -> std::optional<KipDiffSide> {
+        const QJsonValue v = o.value(QLatin1String(key));
+        if (!v.isObject()) return std::nullopt;
+        const QJsonObject so = v.toObject();
+        KipDiffSide sd;
+        sd.name = str(so, "name", ctx);
+        sd.text = bigText(so, "text", &m.truncated, ctx);
+        return sd;
+    };
+    m.left = side("left");
+    m.right = side("right");
+    if (!o.contains(QStringLiteral("patch")) && (!m.left || !m.right)) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.diff_without_content")));
+        return std::nullopt;
+    }
+    if (o.contains(QStringLiteral("patch")) && (m.left || m.right)) {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.diff_patch_and_sides")));
+        m.left.reset();
+        m.right.reset();
+    }
+    m.language = str(o, "language", ctx).toLower();
+    const QString view = str(o, "view", ctx);
+    if (view.isEmpty() || view == QLatin1String("unified") || view == QLatin1String("split")) {
+        m.view = view;
+    } else {
+        ctx.warn(utils::tr(QStringLiteral("kip.diag.diff_invalid_view")).arg(view));
+    }
+    if (o.value(QStringLiteral("context")).isDouble()) {
+        m.context = qBound(-1, o.value(QStringLiteral("context")).toInt(), 1000);
+    }
+    m.ignoreWhitespace = boolOr(o, "ignore_whitespace", false);
+    if (o.value(QStringLiteral("collapse_after")).isDouble()) {
+        m.collapseAfter = qMax(0, o.value(QStringLiteral("collapse_after")).toInt());
+    }
+    m.truncated = m.truncated || boolOr(o, "truncated", false);
+    return m;
+}
+
+std::optional<KipMessage> parseKv(const QJsonObject &o, const Ctx &ctx)
+{
+    KipKv m;
+    m.id = lenientString(o.value(QStringLiteral("id")), ctx);
+    m.title = str(o, "title", ctx);
+    for (const QJsonValue &item : o.value(QStringLiteral("items")).toArray()) {
+        if (!item.isObject()) continue;
+        const QJsonObject io = item.toObject();
+        if (m.items.size() >= kKipMaxKvItems) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.kv_truncated")).arg(kKipMaxKvItems));
+            break;
+        }
+        KipKvItem kv;
+        kv.key = lenientString(io.value(QStringLiteral("key")), ctx);
+        kv.format = str(io, "format", ctx);
+        if (!kv.format.isEmpty() && kv.format != QLatin1String("mono") && kv.format != QLatin1String("muted")
+            && kv.format != QLatin1String("badge") && kv.format != QLatin1String("link")) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.kv_unknown_format")).arg(kv.key, kv.format));
+            kv.format.clear();
+        }
+        const QJsonValue value = io.value(QStringLiteral("value"));
+        if (kv.format == QLatin1String("badge") && value.isObject()) {
+            QString text, tone;
+            parseBadge(value, &text, &tone, ctx);
+            QJsonObject badge{{QStringLiteral("text"), text}};
+            if (!tone.isEmpty()) badge[QStringLiteral("tone")] = tone;
+            kv.value = badge;
+        } else {
+            kv.value = lenientString(value, ctx);
+        }
+        if (kv.format == QLatin1String("link") && !kipIsSafeHttpUrl(kv.value.toString())) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.action_url_rejected")));
+            kv.format.clear(); // vira texto: só http(s) vira link (§17)
+        }
+        kv.copy = boolOr(io, "copy", false);
+        m.items.append(kv);
+    }
+    return m;
+}
+
+std::optional<KipMessage> parseStats(const QJsonObject &o, const Ctx &ctx)
+{
+    KipStats m;
+    m.id = lenientString(o.value(QStringLiteral("id")), ctx);
+    for (const QJsonValue &item : o.value(QStringLiteral("items")).toArray()) {
+        if (!item.isObject()) continue;
+        if (m.items.size() >= kKipMaxStats) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.stats_truncated")).arg(kKipMaxStats));
+            break;
+        }
+        const QJsonObject io = item.toObject();
+        KipStatItem stat;
+        stat.label = str(io, "label", ctx);
+        stat.value = lenientString(io.value(QStringLiteral("value")), ctx);
+        stat.detail = str(io, "detail", ctx);
+        stat.tone = str(io, "tone", ctx);
+        if (!stat.tone.isEmpty() && !kipIsTone(stat.tone)) {
+            ctx.warn(utils::tr(QStringLiteral("kip.diag.unknown_tone")).arg(stat.tone));
+            stat.tone.clear();
+        }
+        m.items.append(stat);
+    }
+    return m;
+}
+
+std::optional<KipMessage> parseCode(const QJsonObject &o, const Ctx &ctx)
+{
+    KipCode m;
+    m.id = lenientString(o.value(QStringLiteral("id")), ctx);
+    m.title = str(o, "title", ctx);
+    m.language = str(o, "language", ctx).toLower();
+    m.text = bigText(o, "text", &m.truncated, ctx);
+    for (const QJsonValue &n : o.value(QStringLiteral("highlight")).toArray()) {
+        if (n.isDouble() && n.toInt() > 0) m.highlight.append(n.toInt());
+    }
+    if (o.value(QStringLiteral("max_lines")).isDouble()) {
+        m.maxLines = qMax(0, o.value(QStringLiteral("max_lines")).toInt());
+    }
+    m.lineNumbers = boolOr(o, "line_numbers", true);
     return m;
 }
 
@@ -716,6 +1001,9 @@ QJsonArray columnsToJson(const QVector<KipColumn> &columns)
         if (c.label != c.key) {
             o[QStringLiteral("label")] = c.label;
         }
+        if (!c.format.isEmpty()) {
+            o[QStringLiteral("format")] = c.format;
+        }
         arr.append(o);
     }
     return arr;
@@ -750,6 +1038,28 @@ QJsonArray chipsToJson(const QVector<KipChip> &chips)
     QJsonArray arr;
     for (const KipChip &c : chips) {
         arr.append(c.toJson());
+    }
+    return arr;
+}
+
+QJsonArray treeToJson(const QVector<KipTreeNode> &nodes)
+{
+    QJsonArray arr;
+    for (const KipTreeNode &n : nodes) {
+        QJsonObject o;
+        o[QStringLiteral("id")] = n.id;
+        if (n.label != n.id) o[QStringLiteral("label")] = n.label;
+        putIf(o, "icon", n.icon);
+        if (!n.badge.isEmpty()) {
+            if (n.badgeTone.isEmpty()) {
+                o[QStringLiteral("badge")] = n.badge;
+            } else {
+                o[QStringLiteral("badge")] = QJsonObject{{QStringLiteral("text"), n.badge}, {QStringLiteral("tone"), n.badgeTone}};
+            }
+        }
+        if (n.expanded) o[QStringLiteral("expanded")] = true;
+        if (!n.children.isEmpty()) o[QStringLiteral("children")] = treeToJson(n.children);
+        arr.append(o);
     }
     return arr;
 }
@@ -841,6 +1151,7 @@ QJsonObject toJsonVisitor(const KipProgress &m)
     o[QStringLiteral("value")] = m.value ? QJsonValue(*m.value) : QJsonValue(QJsonValue::Null);
     putIf(o, "label", m.label);
     if (m.cancellable) o[QStringLiteral("cancellable")] = *m.cancellable;
+    putIf(o, "id", m.id);
     return o;
 }
 
@@ -867,8 +1178,9 @@ QJsonObject toJsonVisitor(const KipStep &m)
     QJsonObject o = envelope("step");
     o[QStringLiteral("steps")] = m.steps;
     o[QStringLiteral("id")] = m.id;
-    o[QStringLiteral("state")] = kipStepStateToString(m.state);
-    putIf(o, "detail", m.detail);
+    if (m.state) o[QStringLiteral("state")] = kipStepStateToString(*m.state);
+    if (m.detail) o[QStringLiteral("detail")] = *m.detail;
+    putIf(o, "log", m.log);
     return o;
 }
 
@@ -879,6 +1191,87 @@ QJsonObject toJsonVisitor(const KipTable &m)
     putIf(o, "title", m.title);
     o[QStringLiteral("columns")] = columnsToJson(m.columns);
     o[QStringLiteral("rows")] = m.rows;
+    if (m.rowKey != QLatin1String("id")) o[QStringLiteral("row_key")] = m.rowKey;
+    if (!m.rowActions.isEmpty()) o[QStringLiteral("row_actions")] = chipsToJson(m.rowActions);
+    return o;
+}
+
+QJsonObject toJsonVisitor(const KipDiff &m)
+{
+    QJsonObject o = envelope("diff");
+    putIf(o, "id", m.id);
+    putIf(o, "title", m.title);
+    if (m.left && m.right) {
+        const auto side = [](const KipDiffSide &sd) {
+            QJsonObject so;
+            putIf(so, "name", sd.name);
+            so[QStringLiteral("text")] = sd.text;
+            return so;
+        };
+        o[QStringLiteral("left")] = side(*m.left);
+        o[QStringLiteral("right")] = side(*m.right);
+    } else {
+        o[QStringLiteral("patch")] = m.patch;
+    }
+    putIf(o, "language", m.language);
+    putIf(o, "view", m.view);
+    if (m.context != 3) o[QStringLiteral("context")] = m.context;
+    if (m.ignoreWhitespace) o[QStringLiteral("ignore_whitespace")] = true;
+    if (m.collapseAfter != 3) o[QStringLiteral("collapse_after")] = m.collapseAfter;
+    if (m.truncated) o[QStringLiteral("truncated")] = true;
+    return o;
+}
+
+QJsonObject toJsonVisitor(const KipKv &m)
+{
+    QJsonObject o = envelope("kv");
+    putIf(o, "id", m.id);
+    putIf(o, "title", m.title);
+    QJsonArray items;
+    for (const KipKvItem &kv : m.items) {
+        QJsonObject io;
+        io[QStringLiteral("key")] = kv.key;
+        io[QStringLiteral("value")] = kv.value;
+        putIf(io, "format", kv.format);
+        if (kv.copy) io[QStringLiteral("copy")] = true;
+        items.append(io);
+    }
+    o[QStringLiteral("items")] = items;
+    return o;
+}
+
+QJsonObject toJsonVisitor(const KipStats &m)
+{
+    QJsonObject o = envelope("stats");
+    putIf(o, "id", m.id);
+    QJsonArray items;
+    for (const KipStatItem &st : m.items) {
+        QJsonObject io;
+        io[QStringLiteral("label")] = st.label;
+        io[QStringLiteral("value")] = st.value;
+        putIf(io, "detail", st.detail);
+        putIf(io, "tone", st.tone);
+        items.append(io);
+    }
+    o[QStringLiteral("items")] = items;
+    return o;
+}
+
+QJsonObject toJsonVisitor(const KipCode &m)
+{
+    QJsonObject o = envelope("code");
+    putIf(o, "id", m.id);
+    putIf(o, "title", m.title);
+    putIf(o, "language", m.language);
+    o[QStringLiteral("text")] = m.text;
+    if (!m.highlight.isEmpty()) {
+        QJsonArray lines;
+        for (int n : m.highlight) lines.append(n);
+        o[QStringLiteral("highlight")] = lines;
+    }
+    if (m.maxLines > 0) o[QStringLiteral("max_lines")] = m.maxLines;
+    if (!m.lineNumbers) o[QStringLiteral("line_numbers")] = false;
+    if (m.truncated) o[QStringLiteral("truncated")] = true;
     return o;
 }
 
@@ -1009,6 +1402,24 @@ QString tableRowLabel(const KipField &field, const QString &key)
     return key;
 }
 
+QString treeNodeLabel(const QVector<KipTreeNode> &nodes, const QString &id)
+{
+    for (const KipTreeNode &n : nodes) {
+        if (n.id == id) return n.label;
+        const QString inner = treeNodeLabel(n.children, id);
+        if (inner != id) return inner;
+    }
+    return id;
+}
+
+void collectTreeIds(const QVector<KipTreeNode> &nodes, QStringList *out)
+{
+    for (const KipTreeNode &n : nodes) {
+        out->append(n.id);
+        collectTreeIds(n.children, out);
+    }
+}
+
 QString optionLabel(const KipField &field, const QString &value)
 {
     for (const KipOption &o : field.options) {
@@ -1037,6 +1448,8 @@ QString kipFieldTypeToString(KipFieldType type)
     case KipFieldType::Filepick: return QStringLiteral("filepick");
     case KipFieldType::Folderpick: return QStringLiteral("folderpick");
     case KipFieldType::Flags: return QStringLiteral("flags");
+    case KipFieldType::Tree: return QStringLiteral("tree");
+    case KipFieldType::Diff: return QStringLiteral("diff");
     }
     return QStringLiteral("text");
 }
@@ -1046,7 +1459,8 @@ KipFieldType kipFieldTypeFromString(const QString &value, bool *known)
     static const QVector<KipFieldType> all = {
         KipFieldType::Text, KipFieldType::Secret, KipFieldType::Textarea, KipFieldType::Number,
         KipFieldType::Date, KipFieldType::Select, KipFieldType::List, KipFieldType::Table,
-        KipFieldType::Filepick, KipFieldType::Folderpick, KipFieldType::Flags};
+        KipFieldType::Filepick, KipFieldType::Folderpick, KipFieldType::Flags, KipFieldType::Tree,
+        KipFieldType::Diff};
     for (KipFieldType t : all) {
         if (value == kipFieldTypeToString(t)) {
             if (known) *known = true;
@@ -1181,17 +1595,19 @@ QJsonObject KipField::toJson() const
     case KipFieldType::List: {
         QJsonArray opts;
         for (const KipOption &op : options) {
-            if (op.label == op.value && op.description.isEmpty()) {
+            if (op.label == op.value && op.description.isEmpty() && op.icon.isEmpty()) {
                 opts.append(op.value);
             } else {
                 QJsonObject oo;
                 oo[QStringLiteral("value")] = op.value;
                 if (op.label != op.value) oo[QStringLiteral("label")] = op.label;
                 putIf(oo, "description", op.description);
+                putIf(oo, "icon", op.icon);
                 opts.append(oo);
             }
         }
         o[QStringLiteral("options")] = opts;
+        if (type == KipFieldType::Select) putIf(o, "style", style);
         if (type == KipFieldType::List && multiple) o[QStringLiteral("multiple")] = true;
         if (type == KipFieldType::List) listViewToJson(o);
         break;
@@ -1202,6 +1618,17 @@ QJsonObject KipField::toJson() const
         if (rowKey != QLatin1String("id")) o[QStringLiteral("row_key")] = rowKey;
         if (multiple) o[QStringLiteral("multiple")] = true;
         listViewToJson(o);
+        if (!rowActions.isEmpty()) o[QStringLiteral("row_actions")] = chipsToJson(rowActions);
+        break;
+    case KipFieldType::Tree:
+        o[QStringLiteral("nodes")] = treeToJson(nodes);
+        if (multiple) o[QStringLiteral("multiple")] = true;
+        if (searchable) o[QStringLiteral("searchable")] = *searchable;
+        break;
+    case KipFieldType::Diff:
+        o[QStringLiteral("patch")] = patch;
+        if (select != QLatin1String("hunks")) o[QStringLiteral("select")] = select;
+        if (truncated) o[QStringLiteral("truncated")] = true;
         break;
     case KipFieldType::Filepick:
     case KipFieldType::Folderpick:
@@ -1223,8 +1650,10 @@ QJsonObject KipField::toJson() const
         break;
     }
     case KipFieldType::Text:
-    case KipFieldType::Secret:
     case KipFieldType::Textarea:
+        if (maxLength > 0) o[QStringLiteral("max_length")] = maxLength;
+        break;
+    case KipFieldType::Secret:
         break;
     }
     return o;
@@ -1286,6 +1715,10 @@ KipParseResult parseKipLine(const QString &rawLine)
     else if (t == QLatin1String("set_env")) message = parseSetEnv(obj, ctx);
     else if (t == QLatin1String("done")) message = parseDone(obj, ctx);
     else if (t == QLatin1String("chip_result")) message = parseChipResult(obj, ctx);
+    else if (t == QLatin1String("diff")) message = parseDiff(obj, ctx);
+    else if (t == QLatin1String("kv")) message = parseKv(obj, ctx);
+    else if (t == QLatin1String("stats")) message = parseStats(obj, ctx);
+    else if (t == QLatin1String("code")) message = parseCode(obj, ctx);
     else {
         result.kind = KipParseResult::Kind::Unknown;
         ctx.warn(utils::tr(QStringLiteral("kip.diag.unknown_type")).arg(t));
@@ -1347,6 +1780,19 @@ QByteArray kipSerializeChip(const QString &id, const QString &chip, const QJsonO
     return compactLine(o);
 }
 
+QByteArray kipSerializeRowAction(const QString &id, const QString &action, const QString &field, const QString &table,
+                                 const QString &row, const QJsonObject &values)
+{
+    QJsonObject o = envelope("chip");
+    o[QStringLiteral("id")] = id;
+    o[QStringLiteral("chip")] = action;
+    if (!field.isEmpty()) o[QStringLiteral("field")] = field;
+    if (!table.isEmpty()) o[QStringLiteral("table")] = table;
+    o[QStringLiteral("row")] = row;
+    o[QStringLiteral("values")] = values;
+    return compactLine(o);
+}
+
 QByteArray kipSerializeBack(const QString &id)
 {
     QJsonObject o = envelope("back");
@@ -1387,7 +1833,10 @@ QJsonValue kipEmptyValue(const KipField &field)
         return QJsonValue(QJsonValue::Null);
     case KipFieldType::List:
     case KipFieldType::Table:
+    case KipFieldType::Tree:
         return field.multiple ? QJsonValue(QJsonArray()) : QJsonValue(QString());
+    case KipFieldType::Diff:
+        return QJsonArray();
     case KipFieldType::Flags: {
         QJsonObject o;
         for (const KipFlagOption &f : field.flags) {
@@ -1402,6 +1851,18 @@ QJsonValue kipEmptyValue(const KipField &field)
 QJsonValue kipInitialValue(const KipField &field)
 {
     const QJsonValue def = field.defaultValue;
+    if (field.type == KipFieldType::Diff) {
+        // Padrão "all": tudo marcado; "none": nada; ou a lista de ids.
+        const QStringList ids = kipDiffFieldIds(field);
+        if (def.isUndefined() || def.isNull() || def.toString() == QLatin1String("all")) {
+            return QJsonArray::fromStringList(ids);
+        }
+        QJsonArray valid;
+        for (const QJsonValue &v : def.toArray()) {
+            if (v.isString() && ids.contains(v.toString())) valid.append(v);
+        }
+        return valid;
+    }
     if (def.isUndefined() || def.isNull()) {
         if (field.type == KipFieldType::Flags) {
             QJsonObject o;
@@ -1428,8 +1889,11 @@ QJsonValue kipInitialValue(const KipField &field)
         return (def.isString() || def.isObject()) && kipIsValueValid(field, def) ? def : QJsonValue(QJsonValue::Null);
     case KipFieldType::Select:
         return def.isString() && kipIsValueValid(field, def) ? def : QJsonValue(QString());
+    case KipFieldType::Diff:
+        break; // tratado acima
     case KipFieldType::List:
-    case KipFieldType::Table: {
+    case KipFieldType::Table:
+    case KipFieldType::Tree: {
         if (field.multiple) {
             QJsonArray arr;
             if (def.isArray()) arr = def.toArray();
@@ -1461,8 +1925,9 @@ bool kipIsValueValid(const KipField &field, const QJsonValue &value)
 {
     switch (field.type) {
     case KipFieldType::Text:
-    case KipFieldType::Secret:
     case KipFieldType::Textarea:
+        return value.isString() && (field.maxLength <= 0 || value.toString().size() <= field.maxLength);
+    case KipFieldType::Secret:
     case KipFieldType::Filepick:
     case KipFieldType::Folderpick:
         return value.isString();
@@ -1487,9 +1952,20 @@ bool kipIsValueValid(const KipField &field, const QJsonValue &value)
     }
     case KipFieldType::Select:
         return value.isString() && (value.toString().isEmpty() || optionExists(field, value.toString()));
+    case KipFieldType::Diff: {
+        if (!value.isArray()) return false;
+        const QStringList ids = kipDiffFieldIds(field);
+        for (const QJsonValue &v : value.toArray()) {
+            if (!v.isString() || !ids.contains(v.toString())) return false;
+        }
+        return true;
+    }
     case KipFieldType::List:
-    case KipFieldType::Table: {
-        const auto exists = [&field](const QString &key) {
+    case KipFieldType::Table:
+    case KipFieldType::Tree: {
+        const QStringList treeIds = field.type == KipFieldType::Tree ? kipTreeNodeIds(field.nodes) : QStringList();
+        const auto exists = [&field, &treeIds](const QString &key) {
+            if (field.type == KipFieldType::Tree) return treeIds.contains(key);
             return field.type == KipFieldType::List ? optionExists(field, key) : rowKeyExists(field, key);
         };
         if (field.multiple) {
@@ -1535,9 +2011,18 @@ QString kipDisplayValue(const KipField &field, const QJsonValue &value)
         return QString();
     case KipFieldType::Select:
         return value.isString() ? elide(optionLabel(field, value.toString())) : QString();
+    case KipFieldType::Diff: {
+        if (!value.isArray()) return QString();
+        return utils::tr(field.select == QLatin1String("files") ? QStringLiteral("kip.summary.diff_files")
+                                                                 : QStringLiteral("kip.summary.diff_hunks"))
+            .arg(value.toArray().size())
+            .arg(kipDiffFieldIds(field).size());
+    }
     case KipFieldType::List:
-    case KipFieldType::Table: {
+    case KipFieldType::Table:
+    case KipFieldType::Tree: {
         const auto labelFor = [&field](const QString &key) {
+            if (field.type == KipFieldType::Tree) return treeNodeLabel(field.nodes, key);
             return field.type == KipFieldType::List ? optionLabel(field, key) : tableRowLabel(field, key);
         };
         if (value.isArray()) {
@@ -1576,6 +2061,76 @@ QString kipCellText(const QJsonValue &value)
         break;
     }
     return QString();
+}
+
+QString kipBadgeText(const QJsonValue &value, QString *tone)
+{
+    if (value.isObject()) {
+        const QJsonObject o = value.toObject();
+        if (tone) {
+            const QString t = o.value(QStringLiteral("tone")).toString();
+            *tone = kipIsTone(t) ? t : QString();
+        }
+        return kipCellText(o.value(QStringLiteral("text")));
+    }
+    if (tone) tone->clear();
+    return kipCellText(value);
+}
+
+bool kipIsTone(const QString &tone)
+{
+    static const QStringList tones = {QStringLiteral("neutral"), QStringLiteral("info"), QStringLiteral("success"),
+                                      QStringLiteral("warning"), QStringLiteral("error"), QStringLiteral("accent")};
+    return tones.contains(tone);
+}
+
+bool kipIsColumnFormat(const QString &format)
+{
+    static const QStringList formats = {QString(), QStringLiteral("text"), QStringLiteral("mono"), QStringLiteral("muted"),
+                                        QStringLiteral("number"), QStringLiteral("badge"), QStringLiteral("copy")};
+    return formats.contains(format);
+}
+
+QString kipRowKey(const QJsonObject &row, const QString &rowKey)
+{
+    const QJsonValue v = row.value(rowKey);
+    if (v.isString()) return v.toString();
+    if (v.isDouble()) return QString::number(v.toDouble(), 'g', 15);
+    return QString();
+}
+
+QStringList kipRowActionIds(const QJsonObject &row, const QVector<KipChip> &actions)
+{
+    QStringList ids;
+    const QJsonValue allowed = row.value(QStringLiteral("_actions"));
+    for (const KipChip &a : actions) {
+        if (!allowed.isArray() || allowed.toArray().contains(QJsonValue(a.id))) {
+            ids << a.id;
+        }
+    }
+    return ids;
+}
+
+QStringList kipDiffFieldIds(const KipField &field)
+{
+    QStringList ids;
+    for (const DiffFile &file : parseUnifiedDiff(field.patch)) {
+        if (field.select == QLatin1String("files")) {
+            ids << file.path();
+            continue;
+        }
+        for (int i = 0; i < file.hunks.size(); ++i) {
+            ids << file.hunkId(i);
+        }
+    }
+    return ids;
+}
+
+QStringList kipTreeNodeIds(const QVector<KipTreeNode> &nodes)
+{
+    QStringList ids;
+    collectTreeIds(nodes, &ids);
+    return ids;
 }
 
 bool kipIsSafeHttpUrl(const QString &url)

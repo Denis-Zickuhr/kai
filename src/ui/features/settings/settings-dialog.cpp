@@ -93,6 +93,7 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     connect(m_appearanceTab, &AppearanceTab::importThemeClicked, this, &SettingsDialog::handleImportThemeClicked);
     m_layoutTab = new LayoutTab(currentSettings);
     connect(m_layoutTab, &LayoutTab::restoreLayoutRequested, this, &SettingsDialog::restoreLayoutRequested);
+    connect(m_layoutTab, &LayoutTab::gridChangeRequested, this, &SettingsDialog::gridChangeRequested);
     m_shortcutsTab = new ShortcutsTab(currentSettings);
     m_terminalsTab = new TerminalsTab(currentSettings);
     m_notificationsTab = new NotificationsTab(currentSettings);
@@ -303,6 +304,11 @@ bool SettingsDialog::aiSettingsChanged() const
     return m_aiTab->settings().toJson(true) != m_originalAi.toJson(true);
 }
 
+void SettingsDialog::setLayoutModel(const layout::LayoutModel &model)
+{
+    m_layoutTab->setLayoutModel(model);
+}
+
 core::SettingsData SettingsDialog::buildSettings() const
 {
     core::SettingsData settings;
@@ -357,6 +363,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.commandEditMode = m_originalSettings.commandEditMode;
     settings.language = m_generalTab->languageField()->currentData().toString();
     settings.autostart = m_generalTab->autostartField()->isChecked();
+    settings.smartFocus = m_generalTab->smartFocusField()->isChecked();
     settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
     // Campos NÃO editados neste diálogo são preservados do estado original
     // (feedback do usuário: as env globais foram para os Environments; não

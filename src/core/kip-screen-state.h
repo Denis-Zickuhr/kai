@@ -55,7 +55,8 @@ struct KipTerminalInfo {
 };
 
 // Blocos de exibição de uma tela, na ordem de chegada.
-using KipBlock = std::variant<KipMessageBlock, KipMarkdown, KipProgress, KipSteps, KipTable>;
+using KipBlock = std::variant<KipMessageBlock, KipMarkdown, KipProgress, KipSteps, KipTable, KipDiff, KipKv, KipStats,
+                              KipCode>;
 
 // Execução de um chip na caixa sob os chips (§21). A tela só guarda UMA por vez.
 struct KipChipRun {
@@ -64,6 +65,11 @@ struct KipChipRun {
     Phase phase = Phase::Running;
     QString title; // vazio = o rótulo do chip
     QString text;  // Markdown; vazio enquanto não houver saída
+    // Ação de linha (§27): de que tabela (`field` do prompt ou `table` de um bloco) e de que linha.
+    bool rowAction = false;
+    QString field;
+    QString table;
+    QString row;
     bool finished() const { return phase == Phase::Success || phase == Phase::Error; }
     bool busy() const { return phase == Phase::Confirming || phase == Phase::Running; }
 };
@@ -177,6 +183,11 @@ public:
 
     // ---- chips (§21) ----
     enum class ChipStart { Rejected, NeedsConfirmation, Send };
+    // Ação de linha (§27) numa tabela: `field` (campo table do prompt aberto) OU `table` (id de um bloco table). Mesmas
+    // regras de um chip: uma execução por vez, só com o prompt aberto e destravado, e só ações permitidas na linha.
+    ChipStart startRowAction(const QString &field, const QString &table, const QString &row, const QString &action);
+    // A definição da ação/chip da execução corrente (nullptr se não houver).
+    const KipChip *runningChipDefinition() const;
     // O usuário clicou no chip. Rejected: não existe, requisitos não atendidos,
     // tela travada ou já há uma execução em curso. NeedsConfirmation: a caixa
     // passa a perguntar; Send: a execução começou e o chamador manda `chip`.
@@ -193,6 +204,11 @@ public:
     // pelos próximos prompts da mesma sessão.
     QJsonObject takeCommittedRemembered();
 
+    // ---- preferência de exibição do diff (lembrada por comando junto das respostas) ----
+    // "unified" | "split" | "" (sem escolha: vale a sugestão do programa).
+    QString diffViewPreference() const;
+    void setDiffViewPreference(const QString &view);
+
     // ---- leitura para a view ----
     const std::optional<KipOpenScreen> &openScreen() const { return m_open; }
     const QVector<KipBlock> &blocks() const { return m_blocks; }
@@ -208,6 +224,7 @@ private:
     void dropProgress();
     void commitPendingAnswer();
     void addBlock(const KipBlock &block);
+    void applyStep(const KipStep &step, ApplyResult &result);
     ApplyResult applyPatch(const KipPatch &patch);
     void applyChipResult(const KipChipResult &result, ApplyResult &out);
     void applyInvalid(const KipInvalid &invalid, ApplyResult &result);

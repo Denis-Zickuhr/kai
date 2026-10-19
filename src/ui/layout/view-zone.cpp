@@ -24,6 +24,10 @@ namespace kai::ui::layout {
 namespace tk = kai::utils::tokens;
 
 namespace {
+void setCardGlue(QWidget *root, bool glued); // definida mais abaixo
+} // namespace
+
+namespace {
 constexpr int kTabPadding = 10;
 constexpr int kIconSize = 14;
 constexpr int kGap = 6;
@@ -371,11 +375,25 @@ ViewZone::ViewZone(Zone zone, ViewRegistry *registry, QWidget *parent)
 
 void ViewZone::setBarHeight(int height)
 {
+    m_barHeight = height;
     m_strip->setBarHeight(height);
+    for (const Section &section : std::as_const(m_sections)) {
+        section.header->setBarHeight(height);
+    }
+}
+
+void ViewZone::setZoneFocused(bool focused)
+{
+    m_zoneFocused = focused;
+    m_strip->setZoneFocused(focused);
+    for (const Section &section : std::as_const(m_sections)) {
+        section.header->setZoneFocused(focused);
+    }
 }
 
 void ViewZone::setViews(const QStringList &ids, const QString &active, bool stripAlways)
 {
+    clearSplit(); // os painéis voltam à pilha; o modo dividir é refeito no fim (applySplit)
     m_ids = ids;
     for (const QString &id : ids) {
         QWidget *widget = m_registry->widget(id);
@@ -390,14 +408,145 @@ void ViewZone::setViews(const QStringList &ids, const QString &active, bool stri
         m_stack->setCurrentWidget(front);
         front->show();
     }
+    applySplit();
     syncConstraints();
+}
+
+// O modo dividir: cada painel da zona numa caixa (cabeçalho com o nome + o painel), todas à vista. Numa célula estreita as
+// caixas se empilham; numa larga ficam lado a lado (o formato da célula decide, e acompanha o redimensionamento).
+void ViewZone::applySplit()
+{
+    if (!m_wantSplit || m_ids.size() < 2 || m_stripSuppressed) {
+        return;
+    }
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->setObjectName(QStringLiteral("zoneSplitter"));
+    m_splitter->setChildrenCollapsible(false);
+    static_cast<QVBoxLayout *>(layout())->addWidget(m_splitter, 1);
+    for (const QString &id : std::as_const(m_ids)) {
+        QWidget *content = m_registry->existingWidget(id);
+        if (!content) {
+            continue;
+        }
+        m_stack->removeWidget(content);
+        auto *box = new QWidget(m_splitter);
+        box->setObjectName(QStringLiteral("zoneSection"));
+        auto *vbox = new QVBoxLayout(box);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        vbox->setSpacing(0);
+        auto *header = new ZoneTabStrip(box);
+        header->setBarHeight(m_barHeight);
+        header->setZoneFocused(m_zoneFocused);
+        header->setTabs({{id, m_registry->title(id), m_registry->icon(id), false}}, id);
+        connect(header, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
+        connect(header, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);
+        connect(header, &ZoneTabStrip::dragStarted, this, &ViewZone::dragStarted);
+        connect(header, &ZoneTabStrip::dragFinished, this, &ViewZone::dragFinished);
+        vbox->addWidget(header);
+        content->setParent(box);
+        vbox->addWidget(content, 1);
+        content->show();
+        setCardGlue(content, true);
+        m_splitter->addWidget(box);
+        m_sections.append({box, header, content, id});
+    }
+    QList<int> sizes;
+    for (int i = 0; i < m_splitter->count(); ++i) {
+        sizes << 1000;
+        m_splitter->setStretchFactor(i, 1);
+    }
+    m_splitter->setSizes(sizes);
+    m_strip->hide();
+    m_stack->hide();
+    updateSplitOrientation();
+}
+
+// Larga o bastante: lado a lado; estreita: empilhadas. A faixa entre as duas medidas evita que a orientação fique piscando
+// quando a célula tem quase o formato de um quadrado.
+void ViewZone::updateSplitOrientation()
+{
+    if (!m_splitter || width() <= 0 || height() <= 0) {
+        return;
+    }
+    const bool horizontal = m_splitter->orientation() == Qt::Horizontal;
+    const bool wide = width() >= int(height() * 1.3);
+    const bool narrow = width() < height();
+    if (horizontal && narrow) {
+        m_splitter->setOrientation(Qt::Vertical);
+    } else if (!horizontal && wide) {
+        m_splitter->setOrientation(Qt::Horizontal);
+    }
+}
+
+void ViewZone::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateSplitOrientation();
+}
+
+// Desfaz o modo dividir: os painéis voltam à pilha da zona (que reaparece com a faixa de abas).
+void ViewZone::clearSplit()
+{
+    if (!m_splitter) {
+        return;
+    }
+    for (const Section &section : std::as_const(m_sections)) {
+        if (section.content) {
+            section.box->layout()->removeWidget(section.content);
+            setCardGlue(section.content, false);
+            section.content->hide();
+            m_stack->addWidget(section.content);
+        }
+    }
+    m_sections.clear();
+    m_splitter->hide();
+    m_splitter->deleteLater();
+    m_splitter = nullptr;
+    m_stack->show();
+}
+
+bool ViewZone::showsView(const QString &id) const
+{
+    return m_splitter ? m_ids.contains(id) : m_strip->activeId() == id;
+}
+
+QList<ZoneTabStrip *> ViewZone::sectionHeaders() const
+{
+    QList<ZoneTabStrip *> headers;
+    for (const Section &section : m_sections) {
+        headers.append(section.header);
+    }
+    return headers;
+}
+
+int ViewZone::dropIndexAt(const QPoint &pos) const
+{
+    if (!m_splitter) {
+        if (m_strip->isVisibleTo(this)) {
+            const QPoint local = m_strip->mapFrom(this, pos);
+            if (m_strip->rect().contains(local)) {
+                return m_strip->insertionIndexAt(local.x());
+            }
+        }
+        return -1;
+    }
+    const bool stacked = m_splitter->orientation() == Qt::Vertical;
+    for (int i = 0; i < m_sections.size(); ++i) {
+        const QPoint local = m_sections.at(i).header->mapFrom(this, pos);
+        if (m_sections.at(i).header->rect().contains(local)) {
+            const QRect header = m_sections.at(i).header->rect();
+            return (stacked ? local.y() < header.center().y() : local.x() < header.center().x()) ? i : i + 1;
+        }
+    }
+    return -1;
 }
 
 void ViewZone::rebuildStrip(const QString &active)
 {
     QList<ZoneTabStrip::Tab> tabs;
     for (const QString &id : std::as_const(m_ids)) {
-        tabs.append({id, m_registry->title(id), m_registry->icon(id), m_registry->closable(id)});
+        // Sem o "x" na aba: fechar é algo pontual e fica no menu de contexto (botão direito).
+        tabs.append({id, m_registry->title(id), m_registry->icon(id), false});
     }
     m_strip->setTabs(tabs, active);
 }
@@ -478,6 +627,11 @@ void setCardGlue(QWidget *root, bool glued)
 void ViewZone::applyGlue()
 {
     const bool glued = m_strip->isVisibleTo(this);
+    for (const Section &section : std::as_const(m_sections)) {
+        if (section.content) {
+            setCardGlue(section.content, true);
+        }
+    }
     for (int i = 0; i < m_stack->count(); ++i) {
         QWidget *page = m_stack->widget(i);
         setCardGlue(page, glued);
@@ -504,6 +658,20 @@ bool ViewZone::eventFilter(QObject *watched, QEvent *event)
 
 void ViewZone::releaseViews(QWidget *newParent)
 {
+    for (const Section &section : std::as_const(m_sections)) {
+        if (section.content) {
+            section.box->layout()->removeWidget(section.content);
+            setCardGlue(section.content, false);
+            section.content->hide();
+            section.content->setParent(newParent);
+        }
+    }
+    m_sections.clear();
+    if (m_splitter) {
+        m_splitter->hide();
+        m_splitter->deleteLater();
+        m_splitter = nullptr;
+    }
     while (m_stack->count() > 0) {
         QWidget *widget = m_stack->widget(0);
         m_stack->removeWidget(widget);
@@ -512,6 +680,15 @@ void ViewZone::releaseViews(QWidget *newParent)
         widget->setParent(newParent);
     }
     m_ids.clear();
+}
+
+QSize ViewZone::minimumSizeHint() const
+{
+    constexpr int kMinContentHeight = 64;
+    QSize hint = QWidget::minimumSizeHint();
+    const int extra = m_strip->isVisibleTo(this) ? m_strip->height() : 0;
+    hint.setHeight(qMin(hint.height(), extra + kMinContentHeight));
+    return hint;
 }
 
 void ViewZone::syncConstraints()

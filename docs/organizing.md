@@ -64,7 +64,7 @@ On a command: **Edit**, **Duplicate**, **Export…**, **Delete**. On a folder: t
 
 ## Search
 
-**Ctrl+F** shows the search bar; it filters commands by name with a fuzzy match (typos and gaps are fine). Press it again to hide. Searching opens the folders that hold a match; when you stop searching, every folder goes back to **how it was** before (no tree left wide open).
+**Ctrl+F** opens **Find item**: a search over commands, folders and notes with a fuzzy match (typos and gaps are fine). Choosing one takes you to it in the tree and opens its actions menu (run, show output, open document, edit…), and nothing runs on its own. **Ctrl+K** is the palette that acts right away (runs the command, opens the folder) and also lists app actions. When the Output or the Document has focus, Ctrl+F searches inside it instead.
 
 ## Command palette
 

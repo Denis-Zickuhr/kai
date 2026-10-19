@@ -316,6 +316,10 @@ struct SettingsData {
     // não altera o sistema do usuário sem consentimento explícito.
     bool autostart = false;
 
+    // Foco inteligente: selecionar na árvore traz a Saída (comando) ou o Documento (pasta) do item. Desligado (padrão),
+    // navegar não mexe neles: a Saída vem ao executar (ou pela guia dela) e o Documento pelo ícone de documento da pasta.
+    bool smartFocus = false;
+
     // Idioma da interface (language pack i18n). Código de idioma como
     // "en" (padrão) ou "pt". Resolve para assets/i18n/<code>.json via
     // TranslationManager. Textos sem tradução caem no inglês, depois na
@@ -364,6 +368,9 @@ struct SettingsData {
 
     // Configurações → KIP (spec 11 §23). Persistido no objeto "kip".
     KipSettings kip;
+    // Apps KIP com painel próprio que abrem sozinhos com o Kai (ids de comando). Preferência pessoal do painel: entra
+    // quando o usuário põe o app num painel, sai pelo menu do painel ("Abrir com o Kai").
+    QStringList kipPanelAutoStart;
 
     // Configurações → Linguagens: interpretadores de comandos Python/Node.
     // Persistido no objeto "interpreters".
@@ -386,8 +393,8 @@ public:
     // Arquivo separado das coleções (não fica no commands.json).
     QString collectionsFilePath() const;
     QString notesFilePath() const;
-    QString docUsageFilePath() const;
     // Memória do leitor de documentos (posições, rascunhos, recentes) — ver ui::DocSessionStore.
+    QString docUsageFilePath() const;
     QString docStateFilePath() const;
     // Layout flexível da janela (zonas, painéis, flutuantes, perspectivas) — ver ui::layout::LayoutStore. Estado pessoal:
     // fica fora do settings.json e nunca entra no YAML do projeto.

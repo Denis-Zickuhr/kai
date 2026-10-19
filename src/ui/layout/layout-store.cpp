@@ -92,11 +92,21 @@ LayoutStore::Loaded LayoutStore::load(const LayoutModel::Validator &isKnown, con
     }
 
     const QJsonObject root = doc.object();
+    // Um layout de antes da grade (cinco zonas fixas) não é convertido: o padrão assume e o arquivo antigo fica guardado ao
+    // lado, para o caso de alguém querer olhar. As perspectivas salvas daquele formato se perdem junto.
+    if (LayoutModel::isPreGrid(root)) {
+        const QString backup = m_path + QStringLiteral(".pre-grid");
+        if (!QFile::exists(backup)) {
+            QFile::copy(m_path, backup);
+        }
+        utils::Logger::warning(kLogTag, QStringLiteral("layout.json de antes da grade: layout padrão (cópia em '%1').").arg(backup));
+        return result;
+    }
     QStringList problems;
     result.layout = LayoutModel::fromJson(root, isKnown, &problems);
     const QJsonObject saved = root.value(QStringLiteral("perspectives")).toObject();
     for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) {
-        if (!it.key().trimmed().isEmpty() && it.value().isObject()) {
+        if (!it.key().trimmed().isEmpty() && it.value().isObject() && !LayoutModel::isPreGrid(it.value().toObject())) {
             result.perspectives.insert(it.key(), LayoutModel::fromJson(it.value().toObject(), isKnown));
         }
     }

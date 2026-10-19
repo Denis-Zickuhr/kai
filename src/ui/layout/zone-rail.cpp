@@ -22,11 +22,12 @@ namespace {
 constexpr int kIcon = 16;
 constexpr int kSlot = 28;
 constexpr int kPad = 9; // respiro entre a borda da pílula e o primeiro/último botão
+constexpr double kGap = 6.0; // o vão do divisor entre os cartões: a faixa o repete do lado do conteúdo
 } // namespace
 
-ZoneRail::ZoneRail(Zone zone, ViewRegistry *registry, QWidget *parent)
+ZoneRail::ZoneRail(Edge edge, ViewRegistry *registry, QWidget *parent)
     : QWidget(parent)
-    , m_zone(zone)
+    , m_edge(edge)
     , m_registry(registry)
 {
     setObjectName(QStringLiteral("zoneRail"));
@@ -46,7 +47,7 @@ QSize ZoneRail::sizeHint() const
     return vertical() ? QSize(kThickness, length) : QSize(length, kThickness);
 }
 
-void ZoneRail::setViews(const QStringList &ids, const QString &open)
+void ZoneRail::setViews(const QStringList &ids, const QStringList &open)
 {
     m_ids = ids;
     m_open = open;
@@ -55,12 +56,47 @@ void ZoneRail::setViews(const QStringList &ids, const QString &open)
     update();
 }
 
+QRectF ZoneRail::pillRect() const
+{
+    // Ao longo da faixa ela vai de ponta a ponta, como os cartões ao lado; na outra direção só o vão do divisor do lado do
+    // conteúdo (a borda da janela não ganha respiro: os cartões também a encostam).
+    QRectF pill = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    switch (m_edge) {
+    case Edge::Left:
+        pill.setRight(pill.right() - kGap);
+        break;
+    case Edge::Right:
+        pill.setLeft(pill.left() + kGap);
+        break;
+    case Edge::Top:
+        pill.setBottom(pill.bottom() - kGap);
+        break;
+    case Edge::Bottom:
+        pill.setTop(pill.top() + kGap);
+        break;
+    }
+    return pill;
+}
+
 // O slot 0 é o botão de expandir; os painéis vêm depois.
 QRect ZoneRail::slot(int index) const
 {
     const int offset = kPad + index * kSlot;
-    return vertical() ? QRect((kThickness - kSlot) / 2, offset, kSlot, kSlot)
-                      : QRect(offset, (kThickness - kSlot) / 2, kSlot, kSlot);
+    const QRectF pill = pillRect();
+    const int cross = vertical() ? int(pill.center().x() - kSlot / 2.0) : int(pill.center().y() - kSlot / 2.0);
+    return vertical() ? QRect(cross, offset, kSlot, kSlot) : QRect(offset, cross, kSlot, kSlot);
+}
+
+int ZoneRail::insertionIndexAt(const QPoint &pos) const
+{
+    const int along = vertical() ? pos.y() : pos.x();
+    for (int i = 0; i < m_ids.size(); ++i) {
+        const QRect box = slot(i + 1);
+        if (along < (vertical() ? box.center().y() : box.center().x())) {
+            return i;
+        }
+    }
+    return int(m_ids.size());
 }
 
 QRect ZoneRail::expandRect() const
@@ -91,8 +127,8 @@ void ZoneRail::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    // Uma "pílula" com a moldura dos painéis (borda + raio escolhido), um respiro das bordas da janela.
-    const QRectF pill = QRectF(rect()).adjusted(3.5, 3.5, -3.5, -3.5);
+    // Uma "pílula" com a moldura dos painéis (borda + raio escolhido), alinhada aos cartões vizinhos.
+    const QRectF pill = pillRect();
     const double radius = qMin(double(tk::radiusMd()), qMin(pill.width(), pill.height()) / 2.0);
     p.setPen(QPen(QColor(tk::borderColor()), 1));
     p.setBrush(QColor(tk::altBg()));
@@ -110,11 +146,12 @@ void ZoneRail::paintEvent(QPaintEvent *)
         }
     };
     // Expandir: o chevron aponta para onde a zona cresce.
-    const QString chevron = m_zone == Zone::Left ? QStringLiteral("chevron-right")
-                            : m_zone == Zone::Right ? QStringLiteral("chevron-left") : QStringLiteral("chevron-up");
+    const QString chevron = m_edge == Edge::Left ? QStringLiteral("chevron-right")
+                            : m_edge == Edge::Right ? QStringLiteral("chevron-left")
+                            : m_edge == Edge::Top ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up");
     drawSlot(slot(0), chevron, false, m_hover == -1);
     for (int i = 0; i < m_ids.size(); ++i) {
-        drawSlot(slot(i + 1), m_registry->icon(m_ids.at(i)), m_ids.at(i) == m_open, m_hover == i);
+        drawSlot(slot(i + 1), m_registry->icon(m_ids.at(i)), m_open.contains(m_ids.at(i)), m_hover == i);
     }
 }
 

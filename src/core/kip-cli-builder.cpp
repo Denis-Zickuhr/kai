@@ -34,6 +34,7 @@ struct Args {
     int pos = 0;
     QString verb;
     QString error;
+    KipStdinReader readStdin;
 
     bool atEnd() const { return pos >= list.size(); }
     const QString &peek() const { return list.at(pos); }
@@ -66,6 +67,48 @@ struct Args {
     void unknown(const QString &option) { error = tr("kip.cli.err.unknown_option").arg(option, verb); }
 };
 
+// Texto de um arquivo, ou do stdin quando o caminho é "-". Uma quebra de linha final sai (mesma regra do helper de
+// shell), e acima de kKipMaxBigTextBytes corta na última linha inteira que cabe (`truncated`).
+std::optional<QString> readSource(Args &a, const QString &path, bool *truncated)
+{
+    QByteArray data;
+    if (path == QLatin1String("-")) {
+        if (a.readStdin) {
+            data = a.readStdin();
+        } else {
+            QFile in;
+            if (!in.open(stdin, QIODevice::ReadOnly)) {
+                a.error = tr("kip.cli.err.cant_read").arg(path);
+                return std::nullopt;
+            }
+            data = in.readAll();
+        }
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            a.error = tr("kip.cli.err.cant_read").arg(path);
+            return std::nullopt;
+        }
+        data = file.readAll();
+    }
+    if (data.endsWith('\n')) data.chop(1);
+    if (data.size() > kKipMaxBigTextBytes) {
+        const int cut = data.lastIndexOf('\n', kKipMaxBigTextBytes);
+        data = data.left(qMax(0, cut));
+        if (truncated) *truncated = true;
+    }
+    return QString::fromUtf8(data);
+}
+
+// Valor de opção que aceita "-" = stdin (`--patch -`).
+std::optional<QString> textOrStdin(Args &a, const QString &option, bool *truncated)
+{
+    const std::optional<QString> v = a.value(option);
+    if (!v) return std::nullopt;
+    if (*v == QLatin1String("-")) return readSource(a, *v, truncated);
+    return v;
+}
+
 bool parseLevel(const QString &text, KipLevel *out)
 {
     bool known = false;
@@ -95,7 +138,8 @@ bool readFieldHeader(Args &a, KipField *field)
         QStringList names;
         for (KipFieldType t : {KipFieldType::Text, KipFieldType::Secret, KipFieldType::Textarea, KipFieldType::Number,
                                KipFieldType::Date, KipFieldType::Select, KipFieldType::List, KipFieldType::Table,
-                               KipFieldType::Filepick, KipFieldType::Folderpick, KipFieldType::Flags}) {
+                               KipFieldType::Filepick, KipFieldType::Folderpick, KipFieldType::Flags,
+                               KipFieldType::Tree, KipFieldType::Diff}) {
             names << kipFieldTypeToString(t);
         }
         a.error = tr("kip.cli.err.bad_field_type").arg(typeText, names.join(QStringLiteral(", ")));
@@ -167,10 +211,17 @@ bool addColumn(Args &a, QVector<KipColumn> *columns)
 {
     const std::optional<QString> spec = a.value(QStringLiteral("--column"));
     if (!spec) return false;
+    // key:label[:format] — o formato só conta quando o último pedaço é um formato conhecido (o rótulo pode ter ':').
     const int sep = spec->indexOf(QLatin1Char(':'));
     KipColumn column;
     column.key = sep < 0 ? *spec : spec->left(sep);
-    column.label = sep < 0 || sep == spec->size() - 1 ? column.key : spec->mid(sep + 1);
+    QString label = sep < 0 ? QString() : spec->mid(sep + 1);
+    const int last = label.lastIndexOf(QLatin1Char(':'));
+    if (last >= 0 && !label.mid(last + 1).isEmpty() && kipIsColumnFormat(label.mid(last + 1))) {
+        column.format = label.mid(last + 1);
+        label = label.left(last);
+    }
+    column.label = label.isEmpty() ? column.key : label;
     if (column.key.isEmpty()) {
         a.error = tr("kip.cli.err.bad_column").arg(*spec);
         return false;
@@ -238,6 +289,79 @@ bool setDefault(Args &a, KipField *field)
     return true;
 }
 
+// `--row-action <id> [label]` abre uma ação de linha; os `--row-action-*` seguintes valem para a ÚLTIMA (§27).
+bool applyRowActionOption(const QString &opt, Args &a, QVector<KipChip> *actions, bool *ok)
+{
+    *ok = true;
+    if (opt == QLatin1String("--row-action")) {
+        if (a.atEnd() || a.nextIsOption()) {
+            a.error = tr("kip.cli.err.row_action_needs_id");
+            *ok = false;
+            return true;
+        }
+        KipChip action;
+        action.id = a.take();
+        action.label = (!a.atEnd() && !a.nextIsOption()) ? a.take() : action.id;
+        actions->append(action);
+        return true;
+    }
+    static const QStringList modifiers = {
+        QStringLiteral("--row-action-description"), QStringLiteral("--row-action-icon"),
+        QStringLiteral("--row-action-danger"), QStringLiteral("--row-action-confirm"),
+        QStringLiteral("--row-action-confirm-title"), QStringLiteral("--row-action-confirm-text"),
+        QStringLiteral("--row-action-confirm-label"), QStringLiteral("--row-action-cancel-label")};
+    if (!modifiers.contains(opt)) {
+        return false;
+    }
+    if (actions->isEmpty()) {
+        a.error = tr("kip.cli.err.no_row_action").arg(opt);
+        *ok = false;
+        return true;
+    }
+    KipChip &action = actions->last();
+    if (opt == QLatin1String("--row-action-danger")) {
+        action.danger = true;
+        return true;
+    }
+    if (opt == QLatin1String("--row-action-confirm")) {
+        if (!action.confirm) action.confirm = KipChipConfirm{};
+        return true;
+    }
+    const std::optional<QString> v = a.value(opt);
+    if (!v) {
+        *ok = false;
+        return true;
+    }
+    if (opt == QLatin1String("--row-action-description")) action.description = *v;
+    else if (opt == QLatin1String("--row-action-icon")) action.icon = *v;
+    else {
+        if (!action.confirm) action.confirm = KipChipConfirm{};
+        if (opt == QLatin1String("--row-action-confirm-title")) action.confirm->title = *v;
+        else if (opt == QLatin1String("--row-action-confirm-text")) action.confirm->text = *v;
+        else if (opt == QLatin1String("--row-action-confirm-label")) action.confirm->confirmLabel = *v;
+        else action.confirm->cancelLabel = *v;
+    }
+    return true;
+}
+
+bool setJsonArray(Args &a, const QString &option, QJsonArray *out)
+{
+    const std::optional<QString> text = a.value(option);
+    if (!text) return false;
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(text->toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError) {
+        a.error = tr("kip.cli.err.bad_json").arg(error.errorString());
+        return false;
+    }
+    if (!doc.isArray()) {
+        a.error = tr("kip.cli.err.rows_not_array");
+        return false;
+    }
+    *out = doc.array();
+    return true;
+}
+
 // Um modificador após `--field`: devolve true se consumiu `opt`.
 // `ok` = false com a.error preenchido em caso de erro.
 bool applyFieldModifier(const QString &opt, Args &a, KipField *f, bool *ok)
@@ -246,7 +370,7 @@ bool applyFieldModifier(const QString &opt, Args &a, KipField *f, bool *ok)
     if (opt == QLatin1String("--options")) {
         const std::optional<QString> v = a.value(opt);
         if (!v) { *ok = false; return true; }
-        for (const QString &o : splitCsv(*v)) f->options.append({o, o, QString()});
+        for (const QString &o : splitCsv(*v)) f->options.append({o, o, QString(), QString()});
     } else if (opt == QLatin1String("--option")) {
         *ok = addOption(a, f);
     } else if (opt == QLatin1String("--flag")) {
@@ -317,6 +441,54 @@ bool applyFieldModifier(const QString &opt, Args &a, KipField *f, bool *ok)
         f->rowKey = *v;
     } else if (opt == QLatin1String("--rows-json")) {
         *ok = setRows(a, &f->rows);
+    } else if (opt == QLatin1String("--style")) {
+        const std::optional<QString> v = a.value(opt);
+        if (!v) { *ok = false; return true; }
+        f->style = *v;
+    } else if (opt == QLatin1String("--max-length")) {
+        const std::optional<double> n = a.number(opt);
+        if (!n) { *ok = false; return true; }
+        f->maxLength = qMax(0, int(*n));
+    } else if (opt == QLatin1String("--option-icon")) {
+        const std::optional<QString> v = a.value(opt);
+        if (!v) { *ok = false; return true; }
+        if (f->options.isEmpty()) {
+            a.error = tr("kip.cli.err.no_option").arg(opt);
+            *ok = false;
+            return true;
+        }
+        f->options.last().icon = *v;
+    } else if (opt == QLatin1String("--nodes-json")) {
+        QJsonArray nodes;
+        *ok = setJsonArray(a, opt, &nodes);
+        if (*ok) {
+            // Mesma leitura do protocolo (ids, limites) para o helper não mandar algo que o Kai recusaria.
+            QJsonObject probe{{QStringLiteral("kip"), 1}, {QStringLiteral("type"), QStringLiteral("prompt")},
+                              {QStringLiteral("id"), QStringLiteral("x")},
+                              {QStringLiteral("fields"), QJsonArray{QJsonObject{{QStringLiteral("name"), QStringLiteral("x")},
+                                                                                {QStringLiteral("type"), QStringLiteral("tree")},
+                                                                                {QStringLiteral("nodes"), nodes}}}}};
+            const KipParseResult parsed = parseKipLine(QString::fromUtf8(QJsonDocument(probe).toJson(QJsonDocument::Compact)));
+            if (parsed.message) {
+                const auto &prompt = std::get<KipPrompt>(*parsed.message);
+                if (!prompt.fields.isEmpty()) f->nodes = prompt.fields.first().nodes;
+            }
+        }
+    } else if (opt == QLatin1String("--patch") || opt == QLatin1String("--patch-file")) {
+        const std::optional<QString> v = opt == QLatin1String("--patch") ? textOrStdin(a, opt, &f->truncated)
+                                                                         : [&]() -> std::optional<QString> {
+            const std::optional<QString> path = a.value(opt);
+            if (!path) return std::nullopt;
+            return readSource(a, *path, &f->truncated);
+        }();
+        if (!v) { *ok = false; return true; }
+        f->patch = *v;
+    } else if (opt == QLatin1String("--select")) {
+        const std::optional<QString> v = a.value(opt);
+        if (!v) { *ok = false; return true; }
+        f->select = *v;
+    } else if (applyRowActionOption(opt, a, &f->rowActions, ok)) {
+        return true;
     } else {
         return false;
     }
@@ -348,7 +520,7 @@ bool parseFields(Args &a, QVector<KipField> *fields, const std::function<bool(co
         }
         // Modificador de campo sem campo antes: mensagem melhor que "unknown".
         KipField probe;
-        Args dummy{{QStringLiteral("x"), QStringLiteral("x")}, 0, QString(), QString()};
+        Args dummy{{QStringLiteral("x"), QStringLiteral("x")}, 0, QString(), QString(), {}};
         bool probeOk = true;
         if (opt.startsWith(QLatin1String("--")) && applyFieldModifier(opt, dummy, &probe, &probeOk)) {
             a.error = tr("kip.cli.err.no_field").arg(opt);
@@ -581,6 +753,7 @@ std::optional<KipMessage> buildProgress(Args &a)
         const QString token = a.take();
         if (token == QLatin1String("--no-cancel")) m.cancellable = false;
         else if (token == QLatin1String("--cancel")) m.cancellable = true;
+        else if (token == QLatin1String("--id")) { auto v = a.value(token); if (!v) return std::nullopt; m.id = *v; }
         else if (token.startsWith(QLatin1String("--"))) { a.unknown(token); return std::nullopt; }
         else positional << token;
     }
@@ -634,16 +807,21 @@ std::optional<KipMessage> buildStep(Args &a)
     QStringList positional;
     while (!a.atEnd()) {
         const QString token = a.take();
+        if (token == QLatin1String("--log")) { auto v = a.value(token); if (!v) return std::nullopt; m.log = *v; continue; }
         if (token.startsWith(QLatin1String("--"))) { a.unknown(token); return std::nullopt; }
         positional << token;
     }
-    if (positional.size() < 3) { a.error = tr("kip.cli.err.step_usage"); return std::nullopt; }
+    // Com --log o estado é opcional (só acrescenta ao log do item).
+    if (positional.size() < (m.log.isEmpty() ? 3 : 2)) { a.error = tr("kip.cli.err.step_usage"); return std::nullopt; }
     m.steps = positional.at(0);
     m.id = positional.at(1);
-    bool known = false;
-    m.state = kipStepStateFromString(positional.at(2), &known);
-    if (!known) { a.error = tr("kip.cli.err.bad_state").arg(positional.at(2)); return std::nullopt; }
-    m.detail = positional.mid(3).join(QLatin1Char(' '));
+    if (positional.size() > 2) {
+        bool known = false;
+        m.state = kipStepStateFromString(positional.at(2), &known);
+        if (!known) { a.error = tr("kip.cli.err.bad_state").arg(positional.at(2)); return std::nullopt; }
+        const QString detail = positional.mid(3).join(QLatin1Char(' '));
+        if (!detail.isEmpty()) m.detail = detail;
+    }
     return m;
 }
 
@@ -672,13 +850,161 @@ std::optional<KipMessage> buildTable(Args &a)
     KipTable m;
     while (!a.atEnd()) {
         const QString opt = a.take();
+        bool ok = true;
+        if (applyRowActionOption(opt, a, &m.rowActions, &ok)) { if (!ok) return std::nullopt; continue; }
         if (opt == QLatin1String("--id")) { auto v = a.value(opt); if (!v) return std::nullopt; m.id = *v; }
         else if (opt == QLatin1String("--title")) { auto v = a.value(opt); if (!v) return std::nullopt; m.title = *v; }
         else if (opt == QLatin1String("--column")) { if (!addColumn(a, &m.columns)) return std::nullopt; }
         else if (opt == QLatin1String("--rows-json")) { if (!setRows(a, &m.rows)) return std::nullopt; }
+        else if (opt == QLatin1String("--row-key")) { auto v = a.value(opt); if (!v) return std::nullopt; m.rowKey = *v; }
         else { a.unknown(opt); return std::nullopt; }
     }
     if (m.columns.isEmpty()) { a.error = tr("kip.cli.err.missing").arg(QStringLiteral("--column"), a.verb); return std::nullopt; }
+    return m;
+}
+
+std::optional<KipMessage> buildDiff(Args &a)
+{
+    KipDiff m;
+    QString leftFile, rightFile;
+    std::optional<QString> leftText, rightText, patch;
+    QString leftName, rightName;
+    while (!a.atEnd()) {
+        const QString opt = a.take();
+        if (opt == QLatin1String("--id")) { auto v = a.value(opt); if (!v) return std::nullopt; m.id = *v; }
+        else if (opt == QLatin1String("--title")) { auto v = a.value(opt); if (!v) return std::nullopt; m.title = *v; }
+        else if (opt == QLatin1String("--patch")) { patch = textOrStdin(a, opt, &m.truncated); if (!patch) return std::nullopt; }
+        else if (opt == QLatin1String("--patch-file")) {
+            auto v = a.value(opt);
+            if (!v) return std::nullopt;
+            patch = readSource(a, *v, &m.truncated);
+            if (!patch) return std::nullopt;
+        } else if (opt == QLatin1String("--left-file") || opt == QLatin1String("--right-file")) {
+            auto v = a.value(opt);
+            if (!v) return std::nullopt;
+            const std::optional<QString> text = readSource(a, *v, &m.truncated);
+            if (!text) return std::nullopt;
+            (opt == QLatin1String("--left-file") ? leftText : rightText) = text;
+            (opt == QLatin1String("--left-file") ? leftFile : rightFile) = *v;
+        } else if (opt == QLatin1String("--left-text")) { leftText = a.value(opt); if (!leftText) return std::nullopt; }
+        else if (opt == QLatin1String("--right-text")) { rightText = a.value(opt); if (!rightText) return std::nullopt; }
+        else if (opt == QLatin1String("--left-name")) { auto v = a.value(opt); if (!v) return std::nullopt; leftName = *v; }
+        else if (opt == QLatin1String("--right-name")) { auto v = a.value(opt); if (!v) return std::nullopt; rightName = *v; }
+        else if (opt == QLatin1String("--language")) { auto v = a.value(opt); if (!v) return std::nullopt; m.language = v->toLower(); }
+        else if (opt == QLatin1String("--view")) {
+            auto v = a.value(opt);
+            if (!v) return std::nullopt;
+            if (*v != QLatin1String("unified") && *v != QLatin1String("split")) {
+                a.error = tr("kip.cli.err.bad_view").arg(*v);
+                return std::nullopt;
+            }
+            m.view = *v;
+        } else if (opt == QLatin1String("--context")) { auto n = a.number(opt); if (!n) return std::nullopt; m.context = qBound(-1, int(*n), 1000); }
+        else if (opt == QLatin1String("--collapse-after")) { auto n = a.number(opt); if (!n) return std::nullopt; m.collapseAfter = qMax(0, int(*n)); }
+        else if (opt == QLatin1String("--ignore-whitespace")) { m.ignoreWhitespace = true; }
+        else { a.unknown(opt); return std::nullopt; }
+    }
+    if (patch) {
+        m.patch = *patch;
+    } else if (leftText && rightText) {
+        m.left = KipDiffSide{leftName.isEmpty() ? leftFile : leftName, *leftText};
+        m.right = KipDiffSide{rightName.isEmpty() ? rightFile : rightName, *rightText};
+    } else {
+        a.error = tr("kip.cli.err.diff_needs_content");
+        return std::nullopt;
+    }
+    return m;
+}
+
+std::optional<KipMessage> buildKv(Args &a)
+{
+    KipKv m;
+    while (!a.atEnd()) {
+        const QString opt = a.take();
+        if (opt == QLatin1String("--id")) { auto v = a.value(opt); if (!v) return std::nullopt; m.id = *v; }
+        else if (opt == QLatin1String("--title")) { auto v = a.value(opt); if (!v) return std::nullopt; m.title = *v; }
+        else if (opt == QLatin1String("--item")) {
+            if (a.atEnd() || a.nextIsOption()) { a.error = tr("kip.cli.err.kv_item_usage"); return std::nullopt; }
+            KipKvItem item;
+            item.key = a.take();
+            if (a.atEnd()) { a.error = tr("kip.cli.err.kv_item_usage"); return std::nullopt; }
+            item.value = a.take();
+            m.items.append(item);
+        } else if (opt == QLatin1String("--format") || opt == QLatin1String("--tone") || opt == QLatin1String("--copy")) {
+            if (m.items.isEmpty()) { a.error = tr("kip.cli.err.no_item").arg(opt); return std::nullopt; }
+            KipKvItem &item = m.items.last();
+            if (opt == QLatin1String("--copy")) { item.copy = true; continue; }
+            auto v = a.value(opt);
+            if (!v) return std::nullopt;
+            if (opt == QLatin1String("--format")) {
+                item.format = *v;
+            } else {
+                item.format = QStringLiteral("badge");
+                item.value = QJsonObject{{QStringLiteral("text"), item.value.toString()}, {QStringLiteral("tone"), *v}};
+            }
+        } else { a.unknown(opt); return std::nullopt; }
+    }
+    if (m.items.isEmpty()) { a.error = tr("kip.cli.err.missing").arg(QStringLiteral("--item"), a.verb); return std::nullopt; }
+    return m;
+}
+
+std::optional<KipMessage> buildStats(Args &a)
+{
+    KipStats m;
+    while (!a.atEnd()) {
+        const QString opt = a.take();
+        if (opt == QLatin1String("--id")) { auto v = a.value(opt); if (!v) return std::nullopt; m.id = *v; }
+        else if (opt == QLatin1String("--stat")) {
+            if (a.atEnd() || a.nextIsOption()) { a.error = tr("kip.cli.err.stat_usage"); return std::nullopt; }
+            KipStatItem stat;
+            stat.label = a.take();
+            if (a.atEnd()) { a.error = tr("kip.cli.err.stat_usage"); return std::nullopt; }
+            stat.value = a.take();
+            m.items.append(stat);
+        } else if (opt == QLatin1String("--detail") || opt == QLatin1String("--tone")) {
+            if (m.items.isEmpty()) { a.error = tr("kip.cli.err.no_item").arg(opt); return std::nullopt; }
+            auto v = a.value(opt);
+            if (!v) return std::nullopt;
+            (opt == QLatin1String("--detail") ? m.items.last().detail : m.items.last().tone) = *v;
+        } else { a.unknown(opt); return std::nullopt; }
+    }
+    if (m.items.isEmpty()) { a.error = tr("kip.cli.err.missing").arg(QStringLiteral("--stat"), a.verb); return std::nullopt; }
+    return m;
+}
+
+std::optional<KipMessage> buildCode(Args &a)
+{
+    KipCode m;
+    QStringList words;
+    std::optional<QString> fileText;
+    while (!a.atEnd()) {
+        const QString token = a.take();
+        if (token == QLatin1String("--id")) { auto v = a.value(token); if (!v) return std::nullopt; m.id = *v; }
+        else if (token == QLatin1String("--title")) { auto v = a.value(token); if (!v) return std::nullopt; m.title = *v; }
+        else if (token == QLatin1String("--language")) { auto v = a.value(token); if (!v) return std::nullopt; m.language = v->toLower(); }
+        else if (token == QLatin1String("--file")) {
+            auto v = a.value(token);
+            if (!v) return std::nullopt;
+            fileText = readSource(a, *v, &m.truncated);
+            if (!fileText) return std::nullopt;
+        } else if (token == QLatin1String("--highlight")) {
+            auto v = a.value(token);
+            if (!v) return std::nullopt;
+            for (const QString &n : splitCsv(*v)) {
+                bool ok = false;
+                const int line = n.toInt(&ok);
+                if (!ok || line <= 0) { a.error = tr("kip.cli.err.bad_number").arg(token, n); return std::nullopt; }
+                m.highlight.append(line);
+            }
+        } else if (token == QLatin1String("--max-lines")) { auto n = a.number(token); if (!n) return std::nullopt; m.maxLines = qMax(0, int(*n)); }
+        else if (token == QLatin1String("--no-line-numbers")) { m.lineNumbers = false; }
+        else if (token.startsWith(QLatin1String("--"))) { a.unknown(token); return std::nullopt; }
+        else { words << token; }
+    }
+    if (!fileText && words.isEmpty()) { a.error = tr("kip.cli.err.missing_arg").arg(a.verb, tr("kip.cli.arg.text")); return std::nullopt; }
+    // O arquivo primeiro, depois as palavras soltas (mesma ordem do helper de shell).
+    if (fileText) words.prepend(*fileText);
+    m.text = words.join(QLatin1Char('\n'));
     return m;
 }
 
@@ -823,7 +1149,7 @@ KipCliResult kipCliGet(const QString &json, const QString &path)
     return result;
 }
 
-KipCliResult runKipCli(const QStringList &rawArgs)
+KipCliResult runKipCli(const QStringList &rawArgs, const KipStdinReader &stdinReader)
 {
     if (rawArgs.isEmpty()) {
         return usageError(kipCliHelpText());
@@ -845,6 +1171,7 @@ KipCliResult runKipCli(const QStringList &rawArgs)
     Args a;
     a.list = rawArgs.mid(1);
     a.verb = verb;
+    a.readStdin = stdinReader;
 
     if (verb == QLatin1String("raw")) {
         if (rawArgs.size() != 2) {
@@ -872,6 +1199,8 @@ KipCliResult runKipCli(const QStringList &rawArgs)
         {QStringLiteral("table"), &buildTable},       {QStringLiteral("notify"), &buildNotify},
         {QStringLiteral("set-env"), &buildSetEnv},    {QStringLiteral("done"), &buildDone},
         {QStringLiteral("chip-result"), &buildChipResult},
+        {QStringLiteral("diff"), &buildDiff},         {QStringLiteral("kv"), &buildKv},
+        {QStringLiteral("stats"), &buildStats},       {QStringLiteral("code"), &buildCode},
     };
     for (const auto &entry : builders) {
         if (entry.first != verb) {

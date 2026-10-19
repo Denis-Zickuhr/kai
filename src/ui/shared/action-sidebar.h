@@ -15,7 +15,7 @@ namespace kai::ui {
 // (sem depender de arquivos de imagem — nítidos em qualquer DPI e
 // recoloríveis conforme o tema).
 enum class ActionIconShape {
-    Play, Stop, ForceStop, Reset, EditBody
+    Play, Stop, ForceStop, Reset, EditBody, ShowOutput, ShowDocument
 };
 
 // Grupo de ações "Execução", sempre referentes ao item atualmente
@@ -46,6 +46,11 @@ public:
     // as row actions conforme o tipo e estado do item. `hasSelection`
     // false => tudo desabilitado.
     void setRowContext(bool hasSelection, bool isCommand, bool isRunning, bool hasFailed, bool isHttp = false);
+    // Sem o foco inteligente a seleção não traz a Saída nem o Documento: estes dois botões trazem (`visible` false os
+    // esconde, com o foco inteligente ligado).
+    void setFocusActions(bool visible, bool canShowOutput, bool canShowDocument);
+    QToolButton *showOutputButton() const { return m_showOutputButton; }
+    QToolButton *showDocumentButton() const { return m_showDocumentButton; }
 
     // Recolori os ícones NEUTROS (reset) com a cor de destaque do tema
     // ativo. Os ícones de execução (play/stop/kill) mantêm cores
@@ -65,6 +70,8 @@ signals:
     void resetSelectedRequested();
     // Editar SÓ o body (rápido) do comando HTTP selecionado.
     void editBodySelectedRequested();
+    void showOutputSelectedRequested();
+    void showDocumentSelectedRequested();
 
 private:
     void setupUi();
@@ -78,6 +85,8 @@ private:
     QToolButton *m_forceStopButton = nullptr;
     QToolButton *m_resetButton = nullptr;
     QToolButton *m_editBodyButton = nullptr;
+    QToolButton *m_showOutputButton = nullptr;
+    QToolButton *m_showDocumentButton = nullptr;
 };
 
 } // namespace kai::ui

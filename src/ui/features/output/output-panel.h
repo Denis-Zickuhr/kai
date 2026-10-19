@@ -3,7 +3,6 @@
 #include "core/config-manager.h"
 #include "core/note-files.h"
 #include "engine/http-runner.h"
-#include "ui/features/docs/doc-note.h"
 #include "ui/features/output/ansi-text-parser.h"
 #include "ui/features/output/code-output-view.h"
 #include "ui/features/output/log-line-view.h"
@@ -44,8 +43,6 @@ namespace kai::ui {
 class JsonViewerWidget;
 class JsonSyntaxHighlighter;
 class HttpWaitView;
-class DocViewer;
-class DocSessionStore;
 class KipView;
 class OverflowIndicator;
 
@@ -202,45 +199,6 @@ public:
     // A view está viva em OUTRA janela (destacada): o painel embutido mostra um
     // cartão "Rodando na própria janela" + "Focar janela" no lugar dela.
     void setKipDetachedPlaceholder(bool detached);
-    // --- Documentação da pasta -----------------------------------------------
-    // Troca o CORPO pelo leitor de documentos (README da pasta): sem cabeçalho de abas, sem lixeira/cópia, só o leitor
-    // com o próprio zoom. `file` = documento escolhido; `showFolderReadme` abre o README do diretório (ou o primeiro
-    // documento que achar); numa pasta que existe mas não tem documento, mostra o atalho "criar README.md"; se o
-    // diretório não existe, mostra a tela "caminho não encontrado" (corrigir sozinho / à mão) e emite `documentUnavailable`. Qualquer chamada nova cancela a
-    // anterior; `clearDocument` volta ao normal.
-    // `notes`: as notas da pasta (seção "Notas" do explorador). Sem documento, a primeira nota abre no lugar.
-    void showDocument(const QString &file, const QString &label, const QVector<DocNote> &notes = {}, bool notesEnabled = false);
-    void showFolderReadme(const QString &directory, const QString &label, const QVector<DocNote> &notes = {},
-                          bool notesEnabled = false);
-    // Abre a nota `noteId` (entre `notes`) com `directory` como raiz do explorador (pode ser vazio).
-    void showNote(const QString &noteId, const QVector<DocNote> &notes, const QString &directory, const QString &label,
-                  bool startEditing);
-    // Atualiza só a lista de notas do leitor aberto (depois de criar/renomear/excluir).
-    void updateDocumentNotes(const QVector<DocNote> &notes, bool notesEnabled);
-    // Quem grava as notas editadas no leitor (o app).
-    void setNoteSaver(std::function<bool(const QString &, const QString &)> saver);
-    // Os nomes do autocompletar do editor de documentos (ver DocViewer::setNameProvider); vale também para o leitor criado depois.
-    void setDocNameProvider(std::function<QStringList(const QString &)> provider);
-    void clearDocument();
-    // A memória do leitor (posições, rascunhos, recentes): o mesmo store para todo o app. `scope` = a pasta do Kai a que o
-    // documento mostrado pertence (chamar antes de showFolderReadme/showNote/showDocument).
-    void setDocSessionStore(DocSessionStore *store);
-    void setDocumentScope(const QString &scope);
-    // Monta o leitor de documentos antes de ser preciso (a primeira abertura custava dezenas de ms de montagem de widgets).
-    void prepareDocumentViewer();
-    // Guarda no store onde o usuário está (fim do app, troca de tela).
-    void captureDocumentState();
-    // Abre um pedido novo mantendo o documento atual na tela até o novo chegar (sem passar pela saída vazia).
-    void beginDocumentRequest();
-    bool documentMode() const { return m_docMode; }
-    // O leitor de documentos num painel próprio do quadro (em vez de dentro do corpo da Saída): passar o contêiner dele move
-    // o leitor para lá; nullptr o devolve ao corpo. Com o leitor fora, a Saída segue mostrando a execução ("ler o README
-    // enquanto o comando roda").
-    void setDocumentHost(QWidget *host);
-    bool documentExternal() const { return !m_docHost.isNull(); }
-    // nullptr até o primeiro documento aparecer neste painel.
-    DocViewer *docViewer() const { return m_docViewer; }
-
     // O botão "janela própria" da view KIP (falso na própria janela destacada).
     void setKipDetachable(bool detachable);
     bool kipDetachedPlaceholder() const { return m_kipDetachedPlaceholder; }
@@ -320,20 +278,8 @@ signals:
     // A view KIP pediu uma janela própria (o cabeçalho do painel não existe nesse modo).
     void kipDetachRequested();
     void kipFocusWindowRequested();
-    // Documentação da pasta: nada a mostrar (sem README) e clique num link `kai:<ação>/<alvo>`.
-    void documentUnavailable(const QString &directory);
-    // Um documento passou a ser mostrado enquanto o leitor está fora do corpo (num painel próprio): o painel deve aparecer.
-    void documentModeEntered();
-    // Os botões da tela "caminho não encontrado" (sem README e com o diretório inexistente).
-    void documentDirectoryFixAutomatically(const QString &directory, const QString &suggestion);
-    void documentDirectoryFixManually(const QString &directory);
-    void documentKaiLinkActivated(const QString &action, const QString &target);
-    // O "+" da seção de notas do leitor.
-    void documentNewNoteRequested();
-    void documentNoteDeleteRequested(const QString &noteId);
     // O botão "salvar a saída como nota" (quem sabe de que comando é a saída é o app).
     void saveAsNoteRequested();
-    void documentNoteFileActionRequested(const QString &noteId, core::NoteFileAction action, const QString &content);
     // O cabeçalho (abas, ações e o botão de recolher) apareceu/sumiu: a barra de guias leva o botão de recolher quando ele some.
     void headerVisibilityChanged(bool visible);
 
@@ -538,23 +484,8 @@ private:
     bool m_kipDetachedPlaceholder = false;
     bool m_kipDetachable = true;
     void createKipView();
-    // Documentação da pasta: página do corpo criada no 1º uso.
-    DocViewer *ensureDocViewer();
-    DocViewer *m_docViewer = nullptr;
-    QPointer<QWidget> m_docHost;
-    // O leitor ocupa a página do corpo (e não um painel próprio)?
-    bool docInBody() const { return m_docMode && m_docViewer && m_docHost.isNull(); }
-    void enterDocMode();
-    DocSessionStore *m_docStore = nullptr;
-    QString m_docScope;
-    std::function<bool(const QString &, const QString &)> m_noteSaver;
-    std::function<QStringList(const QString &)> m_docNameProvider;
-    // Pastas (por diretório) cuja última visita acabou no leitor: a próxima já abre o leitor sem passar pela Saída vazia.
-    QHash<QString, bool> m_docProbe;
-    bool m_docMode = false;
     bool m_emptyPageShown = false;  // a página "sem execução" está na tela (o cabeçalho some)
     bool m_headerShown = true;
-    int m_docRequest = 0;
     bool m_interactiveMode = false;
 
     // A aba "Saída" é, de fato, m_outputContainer (QStackedLayout alternando

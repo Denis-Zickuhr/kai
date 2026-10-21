@@ -103,12 +103,13 @@ public:
         setStyleSheet(QStringLiteral(
             "QListWidget {"
             " background-color: %1; color: %2; border: 1px solid %3;"
-            " border-radius: %4px; outline: none; padding: 2px; }"
-            "QListWidget::item { padding: 4px 8px; border-radius: %5px; }"
+            " border-radius: %4px; outline: none; padding: 1px; font-size: %7pt; }"
+            "QListWidget::item { padding: 0px 6px; border-radius: %5px; }"
             "QListWidget::item:selected { background-color: %6; color: %2; }")
             .arg(tokens::surface2(), tokens::fg(), tokens::borderColor())
-            .arg(tokens::radiusMd()).arg(tokens::radiusSm())
-            .arg(tokens::selBg()));
+            .arg(tokens::radiusSm() + 1).arg(tokens::radiusSm())
+            .arg(tokens::selBg())
+            .arg(tokens::fontSizeSmallPt()));
 
         connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
             emit itemChosen(item->text());
@@ -122,10 +123,10 @@ public:
         if (!items.isEmpty()) {
             m_list->setCurrentRow(0);
         }
-        const int rowH = m_list->sizeHintForRow(0) > 0 ? m_list->sizeHintForRow(0) : 22;
-        const int visibleRows = qMin(items.size(), 8);
-        m_list->setFixedHeight(visibleRows * rowH + 6);
-        setFixedWidth(qMax(180, m_list->sizeHintForColumn(0) + 24));
+        const int rowH = m_list->sizeHintForRow(0) > 0 ? m_list->sizeHintForRow(0) : 20;
+        const int visibleRows = qMin(items.size(), 6);
+        m_list->setFixedHeight(visibleRows * rowH + 4);
+        setFixedWidth(qMax(140, m_list->sizeHintForColumn(0) + 20));
         adjustSize();
     }
 

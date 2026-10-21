@@ -111,7 +111,8 @@ QWidget *buildEnvCard(QWidget *parent, const core::Environment &env, bool isActi
 QPushButton *makeIconTextButton(QWidget *parent, const QString &iconName, const QString &text)
 {
     auto *button = new QPushButton(text, parent);
-    button->setIcon(LucideIcons::icon(iconName, QColor(tk::fg()), 16));
+    button->setIcon(LucideIcons::icon(iconName, QColor(tk::fg()), 14));
+    makeCompactButton(button);
     // Reforça a largura mínima pelo próprio sizeHint: num QHBoxLayout apertado
     // (sidebar estreita), o botão podia ser espremido abaixo do necessário
     // pro texto caber, cortando-o sem reticências (QPushButton não elide
@@ -155,7 +156,7 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
         setEmbedded(true);
         return;
     }
-    resize(760, 500);
+    resize(720, 480);
     centerOnParent(this);
 }
 
@@ -173,7 +174,7 @@ void EnvironmentManagerDialog::setEmbedded(bool embedded)
         m_topRow->setDirection(embedded ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     }
     if (m_list) {
-        m_list->setMinimumWidth(embedded ? 170 : 240);
+        m_list->setMinimumWidth(embedded ? 160 : 200);
     }
 }
 
@@ -246,6 +247,8 @@ void EnvironmentManagerDialog::setData(const QVector<core::Environment> &environ
 void EnvironmentManagerDialog::setupUi()
 {
     auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(2));
+    outer->setSpacing(tk::space(2));
 
     // A 2ª aba ("Variáveis Dinâmicas") só existe quando quem chama passou um
     // EnvironmentManager — feedback do usuário: aba isolada dos PACOTES
@@ -270,18 +273,19 @@ void EnvironmentManagerDialog::setupUi()
             "QWidget#envTabSwitcher { background-color: %1; border-radius: %2px; }")
             .arg(tk::bg()).arg(tk::radiusMd()));
         auto *switcherLayout = new QHBoxLayout(switcher);
-        switcherLayout->setContentsMargins(2, 2, 2, 2);
+        switcherLayout->setContentsMargins(1, 1, 1, 1);
         switcherLayout->setSpacing(2);
         const QString segmentCss = QStringLiteral(
-            "QPushButton { border: none; border-radius: %1px; padding: %2px %3px; font-weight: 600;"
-            " background: transparent; color: %4; }"
-            "QPushButton:checked { background-color: %5; color: %6; }")
-            .arg(tk::radiusSm()).arg(tk::space(1)).arg(tk::space(3))
+            "QPushButton { border: none; border-radius: %1px; padding: 0px %2px; min-height: 0px; font-weight: 600;"
+            " background: transparent; color: %3; }"
+            "QPushButton:checked { background-color: %4; color: %5; }")
+            .arg(tk::radiusSm()).arg(tk::space(3))
             .arg(tk::mutedFg()).arg(tk::accent()).arg(tk::bg());
         auto *packagesButton = new QPushButton(utils::tr(QStringLiteral("env.tab.packages")), switcher);
         auto *dynamicVarsButton = new QPushButton(utils::tr(QStringLiteral("env.tab.dynamic_vars")), switcher);
         for (QPushButton *btn : {packagesButton, dynamicVarsButton}) {
             btn->setCheckable(true);
+            btn->setFixedHeight(22);
             btn->setCursor(Qt::PointingHandCursor);
             btn->setStyleSheet(segmentCss);
         }
@@ -346,7 +350,7 @@ void EnvironmentManagerDialog::setupUi()
 
     m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("envPackageList"));
-    m_list->setMinimumWidth(240);
+    m_list->setMinimumWidth(200);
     m_list->setFrameShape(QFrame::NoFrame);
     // Zera o padding de item herdado do QSS legado ("QListWidget::item {
     // padding: 6px 8px }"): com um itemWidget (o cartão do pacote), esse
@@ -361,19 +365,24 @@ void EnvironmentManagerDialog::setupUi()
     leftCol->addWidget(m_list, 1);
 
     auto *listButtons = new QHBoxLayout();
-    m_dupButton = makeIconTextButton(this, QStringLiteral("copy"), utils::tr(QStringLiteral("env.action.duplicate")));
-    m_delButton = makeIconTextButton(this, QStringLiteral("trash-2"), utils::tr(QStringLiteral("env.action.delete")));
+    m_dupButton = makeIconTextButton(this, QStringLiteral("copy"), QString());
+    m_dupButton->setToolTip(utils::tr(QStringLiteral("env.action.duplicate")));
+    m_delButton = makeIconTextButton(this, QStringLiteral("trash-2"), QString());
+    m_delButton->setToolTip(utils::tr(QStringLiteral("env.action.delete")));
     connect(m_dupButton, &QPushButton::clicked, this, &EnvironmentManagerDialog::handleDuplicateEnvironment);
     connect(m_delButton, &QPushButton::clicked, this, &EnvironmentManagerDialog::handleDeleteEnvironment);
+    listButtons->setSpacing(tk::space(1));
+    listButtons->addStretch(1);
     listButtons->addWidget(m_dupButton);
     listButtons->addWidget(m_delButton);
+    listButtons->addStretch(1);
     leftCol->addLayout(listButtons);
 
     body->addLayout(leftCol);
 
     // --- Coluna direita: nome + toggle ativo + variáveis do pacote selecionado ---
     auto *rightCol = new QVBoxLayout();
-    rightCol->setSpacing(tk::space(3));
+    rightCol->setSpacing(tk::space(2));
 
     m_topRow = new QBoxLayout(QBoxLayout::LeftToRight);
     auto *topRow = m_topRow;
@@ -399,6 +408,7 @@ void EnvironmentManagerDialog::setupUi()
     // makeIconTextButton) — o cabeçalho do card fica bem cheio (título +
     // subtítulo + badge + botão) e o botão "+Add" cortava sem reticências.
     if (auto *actionButton = varsCard->findChild<QPushButton *>()) {
+        makeCompactButton(actionButton);
         actionButton->setMinimumWidth(actionButton->sizeHint().width());
     }
     // Expandido por padrão (diferente do Hooks/Params do Command Editor,
@@ -447,6 +457,7 @@ void EnvironmentManagerDialog::setupUi()
         QMessageBox::information(this, utils::tr(QStringLiteral("env.import_dotenv")),
                                  utils::tr(QStringLiteral("env.import_dotenv.done")).arg(merged));
     });
+    makeCompactButton(importEnvButton);
     rightCol->addWidget(importEnvButton, 0, Qt::AlignLeft);
 
     body->addLayout(rightCol, 1);

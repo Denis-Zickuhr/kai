@@ -1,3 +1,4 @@
+#include "core/project-format.h"
 #include "core/folder-actions.h"
 #include "core/working-dir.h"
 #include "ui/features/docs/document-panel.h"
@@ -6727,6 +6728,21 @@ QJsonArray MainWindow::runningProcessItems()
     return items;
 }
 
+// kai.yml com cabeçalho de export de pasta (scope "folder") é o arquivo de projeto dessa pasta: entra como projeto.
+static bool isProjectFile(const QString &path)
+{
+    if (QFileInfo(path).fileName().toLower() != QStringLiteral("kai.yml")) {
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    bool ok = false;
+    const QString json = core::yamlTextToJsonText(QString::fromUtf8(file.readAll()), &ok, nullptr);
+    return ok && core::isFolderScopeExport(QJsonDocument::fromJson(json.toUtf8()).object());
+}
+
 bool MainWindow::importProjectFromCli(const QString &path, const QStringList &only, QString &message)
 {
     // `kai import [arquivo|pasta]`: um pacote exportado (cabeçalho kai_export: comandos, ações, coleções, perfis...)
@@ -6734,7 +6750,7 @@ bool MainWindow::importProjectFromCli(const QString &path, const QStringList &on
     // CLI, ver cliImportSelection) escolhe as categorias. Qualquer outro kai.yml é um PROJETO: o mesmo import do
     // diálogo de projeto, pasta-pai = raiz e PROJECT_PATH no formato que o diálogo sugere (utils::toPosixPath).
     const QFileInfo info(path);
-    if (info.isFile()) {
+    if (info.isFile() && !isProjectFile(info.absoluteFilePath())) {
         core::ConfigManager::ImportResult package;
         QString readError;
         bool isPackage = false;

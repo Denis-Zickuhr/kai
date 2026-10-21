@@ -66,7 +66,7 @@ QWidget *makePill(const QString &text, const QColor &color)
     auto *label = new QLabel(text);
     label->setStyleSheet(QStringLiteral(
         "QLabel { background-color: rgba(%1, %2, %3, 38); color: %4;"
-        " border-radius: %5px; padding: 2px 8px; font-weight: 600; font-size: 11px; }")
+        " border-radius: %5px; padding: 1px 6px; font-weight: 600; font-size: 10px; }")
         .arg(color.red()).arg(color.green()).arg(color.blue())
         .arg(color.name()).arg(tk::radiusSm()));
     // Alinhado à ESQUERDA (não mais centralizado): projetos com nome
@@ -132,6 +132,7 @@ void DynamicVarsInspectorWidget::setupUi()
         resetScope(scopeKey);
     });
     m_resetScopeButton->setVisible(false);
+    makeCompactButton(m_resetScopeButton);
     filterRow->addWidget(m_resetScopeButton);
 
     auto *resetAllButton = new QPushButton(utils::tr(QStringLiteral("dynamic_vars.reset_all")), this);
@@ -142,6 +143,7 @@ void DynamicVarsInspectorWidget::setupUi()
         }
         resetAll();
     });
+    makeCompactButton(resetAllButton);
     filterRow->addWidget(resetAllButton);
 
     layout->addLayout(filterRow);

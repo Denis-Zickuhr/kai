@@ -55,6 +55,7 @@ AgentToolbox::AgentToolbox(AgentToolHost *host, QObject *parent)
     , m_host(host)
 {
     buildTools();
+    buildFileTools();
 }
 
 AgentToolbox::~AgentToolbox() = default;
@@ -388,6 +389,10 @@ void AgentToolbox::execute(const AiToolCall &call, std::function<void(const Tool
             if (!r.error.isEmpty()) o[QStringLiteral("error")] = r.error;
             finish({limited(compact(o)), !r.success && r.finished, {}});
         });
+        return;
+    }
+    if (tool->asyncFn) {
+        tool->asyncFn(call.arguments, std::move(done));
         return;
     }
     if (!tool->runFn) {

@@ -184,9 +184,9 @@ AiToolCard::AiToolCard(const core::AiToolCall &call, QWidget *parent)
     q->addWidget(m_questionLabel);
     m_optionsHost = new QWidget(m_questionBar);
     m_optionsHost->setObjectName(QStringLiteral("aiOptionsHost"));
-    auto *optionsLayout = new QHBoxLayout(m_optionsHost);
+    auto *optionsLayout = new QVBoxLayout(m_optionsHost);
     optionsLayout->setContentsMargins(0, 0, 0, 0);
-    optionsLayout->setSpacing(tk::space(2));
+    optionsLayout->setSpacing(tk::space(1));
     q->addWidget(m_optionsHost);
     m_answer = new QLineEdit(m_questionBar);
     m_answer->setObjectName(QStringLiteral("aiAnswerField"));
@@ -408,18 +408,34 @@ void AiToolCard::showQuestion(const QString &question, const QStringList &option
     m_title->setElidedText(utils::tr(QStringLiteral("ai.card.question")));
     m_args->setElidedText(QString());
     m_questionLabel->setText(question);
-    if (auto *layout = qobject_cast<QHBoxLayout *>(m_optionsHost->layout())) {
+    if (auto *layout = qobject_cast<QVBoxLayout *>(m_optionsHost->layout())) {
         while (QLayoutItem *item = layout->takeAt(0)) {
             delete item->widget();
             delete item;
         }
+        // Linhas slim: borda fina, destaque no hover/foco e a escolhida fica marcada até a resposta seguir.
+        const QString style = QStringLiteral(
+            "QPushButton#aiOptionChip { background: transparent; color: %1; border: 1px solid %2; border-radius: %3px;"
+            " padding: 0 10px; text-align: left; }"
+            "QPushButton#aiOptionChip:hover, QPushButton#aiOptionChip:focus { background: %4; border-color: %5; }"
+            "QPushButton#aiOptionChip:checked { background: %6; border-color: %5; color: %5; font-weight: 600; }"
+            "QPushButton#aiOptionChip:disabled { color: %7; }")
+            .arg(tk::fg(), tk::borderColor()).arg(tk::radiusSm())
+            .arg(tk::hoverBg(), tk::accent(), QColor(tk::accent()).darker(400).name(), tk::mutedFg());
         for (const QString &option : options) {
             auto *button = new QPushButton(option, m_optionsHost);
-            applyAiButtonStyle(button, AiButtonKind::Secondary);
-            connect(button, &QPushButton::clicked, this, [this, option]() { setRunning(); emit answered(option); });
+            button->setObjectName(QStringLiteral("aiOptionChip"));
+            button->setCheckable(true);
+            button->setCursor(Qt::PointingHandCursor);
+            button->setFixedHeight(26);
+            button->setStyleSheet(style);
+            connect(button, &QPushButton::clicked, this, [this, option, button]() {
+                button->setChecked(true);
+                setRunning();
+                emit answered(option);
+            });
             layout->addWidget(button);
         }
-        layout->addStretch(1);
     }
     m_optionsHost->setVisible(!options.isEmpty());
     m_questionBar->setVisible(true);

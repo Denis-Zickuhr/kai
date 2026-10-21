@@ -221,6 +221,9 @@ add_library(kai-engine STATIC
     src/engine/ai/agent-toolbox-internal.h
     src/engine/ai/agent-toolbox.cpp
     src/engine/ai/agent-toolbox-tools.cpp
+    src/engine/ai/agent-toolbox-files.cpp
+    src/engine/ai/agent-file-sandbox.h
+    src/engine/ai/agent-file-sandbox.cpp
     src/engine/kip-modules/kip-modules.qrc
 )
 

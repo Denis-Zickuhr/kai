@@ -18,6 +18,8 @@ struct AgentToolbox::Tool {
     ToolRisk risk = ToolRisk::Read;
     std::function<ToolPlan(const QJsonObject &)> planFn;   // nulo = plano padrão
     std::function<ToolOutcome(const QJsonObject &)> runFn; // run_command e ask_user não usam
+    // Ferramentas que fazem E/S fora da thread da GUI: avisam o fim por `done`, na thread do toolbox.
+    std::function<void(const QJsonObject &, std::function<void(const ToolOutcome &)>)> asyncFn;
 };
 
 struct AgentToolbox::Snapshot {

@@ -89,6 +89,7 @@ private:
 
     const Tool *toolNamed(const QString &name) const;
     void buildTools();
+    void buildFileTools(); // agent-toolbox-files.cpp: arquivos das pastas-projeto
 
     // Resolução
     const core::Command *findCommand(const QJsonObject &args, QString &error) const;

@@ -8455,6 +8455,60 @@ QStringList MainWindow::availableThemeNames() const
     return names;
 }
 
+bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, QString &error)
+{
+    const core::SettingsData old = m_configManager.loadSettings();
+    if (!m_configManager.saveSettings(newSettings)) {
+        error = QStringLiteral("The settings could not be saved.");
+        return false;
+    }
+    m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
+    if (newSettings.smartFocus != old.smartFocus) {
+        m_smartFocus = newSettings.smartFocus;
+        m_commandTree->setOutputMarksEnabled(!m_smartFocus);
+        m_commandTree->refreshRowMarks();
+    }
+    core::setKipSettings(newSettings.kip);
+    if (newSettings.activeTheme != old.activeTheme && !m_themeManager->loadTheme(newSettings.activeTheme)) {
+        utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado (pedido da IA).").arg(newSettings.activeTheme));
+    }
+    if (newSettings.uiDensity != old.uiDensity || newSettings.uiCornerStyle != old.uiCornerStyle
+        || newSettings.treeConnectorStyle != old.treeConnectorStyle || newSettings.fxShadows != old.fxShadows
+        || newSettings.fxTranslucency != old.fxTranslucency || newSettings.fxBlur != old.fxBlur
+        || newSettings.fxAnimations != old.fxAnimations || newSettings.autoHideOnFocusLoss != old.autoHideOnFocusLoss
+        || newSettings.gradientsEnabled != old.gradientsEnabled) {
+        applyAppearanceSettings();
+    }
+    if (newSettings.commandsBackgroundImage != old.commandsBackgroundImage
+        || newSettings.commandsBackgroundOpacity != old.commandsBackgroundOpacity) {
+        m_commandTree->setBackground(newSettings.commandsBackgroundImage, newSettings.commandsBackgroundOpacity);
+    }
+    if (newSettings.windowMode != old.windowMode || newSettings.windowWidth != old.windowWidth
+        || newSettings.windowHeight != old.windowHeight) {
+        if (isFullScreen() || isMaximized()) {
+            showNormal();
+        }
+        applyWindowGeometryPreference();
+    }
+    if (newSettings.language != old.language) {
+        utils::TranslationManager::instance().loadLanguage(newSettings.language);
+    }
+    if (newSettings.autostart != old.autostart
+        && !utils::AutostartManager::setEnabled(newSettings.autostart, QCoreApplication::applicationFilePath())) {
+        utils::Logger::warning(kLogTag, QStringLiteral("Não foi possível alterar o autostart do Kai (pedido da IA)."));
+    }
+    if (newSettings.shortcuts != old.shortcuts) {
+        setupActionShortcuts();
+    }
+    if (newSettings.executionActionsPlacement != old.executionActionsPlacement
+        || newSettings.displayActionsPlacement != old.displayActionsPlacement
+        || newSettings.itemActionsPlacement != old.itemActionsPlacement
+        || newSettings.showHiddenCommands != old.showHiddenCommands) {
+        applyActionGroupPlacement();
+    }
+    return true;
+}
+
 void MainWindow::handleSettingsRequested()
 {
     const core::SettingsData currentSettings = m_configManager.loadSettings();

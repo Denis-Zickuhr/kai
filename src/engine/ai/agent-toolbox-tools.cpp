@@ -1,6 +1,7 @@
 // As ferramentas do agente: esquema, plano (validação + prévia) e execução de cada uma.
 #include "engine/ai/agent-toolbox.h"
 #include "engine/ai/agent-toolbox-internal.h"
+#include "engine/ai/agent-toolbox-settings.h"
 
 #include "core/kai-file-validator.h"
 #include "utils/translation-manager.h"
@@ -955,6 +956,11 @@ void AgentToolbox::buildTools()
             if (!m_host->killCommand(c->id, a.value(QStringLiteral("force")).toBool(false), error)) return fail(error);
             return okText(QStringLiteral("Stop requested."));
         });
+
+    // Configuração (settings, temas, layout, perfis de execução): agent-toolbox-settings.cpp.
+    for (ConfigToolDef &def : buildConfigTools(m_host)) {
+        add(def.name, def.description, def.schema, def.risk, std::move(def.plan), std::move(def.run));
+    }
 }
 
 } // namespace kai::engine

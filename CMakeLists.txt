@@ -224,6 +224,8 @@ add_library(kai-engine STATIC
     src/engine/ai/agent-toolbox-files.cpp
     src/engine/ai/agent-file-sandbox.h
     src/engine/ai/agent-file-sandbox.cpp
+    src/engine/ai/agent-toolbox-settings.h
+    src/engine/ai/agent-toolbox-settings.cpp
     src/engine/kip-modules/kip-modules.qrc
 )
 
@@ -525,6 +527,8 @@ add_library(kai-ui STATIC
     src/ui/features/settings/tabs/ai-tab.cpp
     src/ui/layout/layout-model.h
     src/ui/layout/layout-model.cpp
+    src/ui/layout/layout-ops.h
+    src/ui/layout/layout-ops.cpp
     src/ui/layout/layout-store.h
     src/ui/layout/layout-store.cpp
     src/ui/layout/view-registry.h

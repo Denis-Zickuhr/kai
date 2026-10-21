@@ -70,6 +70,44 @@ private slots:
         QCOMPARE(repo->actions, QStringList{pull->id}); // a ação voltou ligada ao comando importado
     }
 
+    // O kai.yml da raiz do próprio Kai carrega o cabeçalho kai_export (scope "folder"): é o arquivo de projeto da
+    // pasta e tem de entrar como projeto (pasta raiz com o nome do diretório, subpastas pelos "path"), não como pacote.
+    void aFolderScopedKaiYmlIsImportedAsAProject()
+    {
+        const QString dir = m_files.filePath(QStringLiteral("selfproj"));
+        QDir().mkpath(dir);
+        QFile file(dir + QStringLiteral("/kai.yml"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("commands:\n"
+                   "  - name: \"Up\"\n    command: \"docker up\"\n    folder: \"Dev\"\n    type: \"command\"\n"
+                   "folders:\n"
+                   "  - name: \"Dev\"\n    path: \"Dev\"\n    icon: \"container\"\n"
+                   "kai_export:\n  id_free: true\n  scope: \"folder\"\n  version: 1\n");
+        file.close();
+
+        for (const QString &target : {dir + QStringLiteral("/kai.yml"), dir}) {
+            QDir(m_config.path()).removeRecursively();
+            QDir().mkpath(m_config.path());
+            MainWindow window;
+            QString message;
+            QVERIFY2(window.importProjectFromCli(target, {}, message), qPrintable(message));
+            const core::CommandsData saved = core::ConfigManager().loadCommands();
+            const core::Folder *project = nullptr;
+            for (const core::Folder &f : saved.folders) if (f.name == QStringLiteral("selfproj")) project = &f;
+            QVERIFY2(project, "a pasta raiz do projeto deve levar o nome do diretório");
+            QVERIFY(project->isProject);
+            QCOMPARE(project->workingDirMode, core::WorkingDirMode::Custom);
+            const core::Command *up = nullptr;
+            for (const core::Command &c : saved.commands) if (c.name == QStringLiteral("Up")) up = &c;
+            QVERIFY(up);
+            const core::Folder *dev = nullptr;
+            for (const core::Folder &f : saved.folders) if (f.id == up->folderId) dev = &f;
+            QVERIFY(dev);
+            QCOMPARE(dev->name, QStringLiteral("Dev"));
+            QCOMPARE(dev->parentId.value_or(QString()), project->id);
+        }
+    }
+
     void onlyChoosesTheCategories()
     {
         const QString path = writePackage();

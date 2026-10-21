@@ -42,4 +42,8 @@ ProjectFormatContent convertProjectFormat(const QJsonObject &root, const QString
 // O objeto está no formato de EXPORT do Kai (tem o cabeçalho "kai_export")?
 bool isKaiExportFormat(const QJsonObject &root);
 
+// Export de UMA pasta (kai_export.scope == "folder"): quando o arquivo se chama kai.yml é o arquivo de
+// projeto daquela pasta, não um pacote de configuração.
+bool isFolderScopeExport(const QJsonObject &root);
+
 } // namespace kai::core

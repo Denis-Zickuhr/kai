@@ -20,6 +20,13 @@ bool isKaiExportFormat(const QJsonObject &root)
     return root.value(QStringLiteral("kai_export")).isObject();
 }
 
+bool isFolderScopeExport(const QJsonObject &root)
+{
+    return isKaiExportFormat(root)
+        && root.value(QStringLiteral("kai_export")).toObject().value(QStringLiteral("scope")).toString()
+            == QLatin1String("folder");
+}
+
 ProjectFormatContent convertProjectFormat(const QJsonObject &root, const QString &rootFolderId,
                                           const QString &projectName, const QString &sourcePath)
 {

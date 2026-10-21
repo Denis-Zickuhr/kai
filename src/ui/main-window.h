@@ -636,6 +636,8 @@ private:
     void updateRunningCommandStatus();
     void appendToCommandLog(const QString &commandId, const QString &text);
     QStringList availableThemeNames() const;
+    // Grava e aplica as configurações como o diálogo faz, sem diálogo (ferramentas de configuração da IA).
+    bool applySettingsFromAgent(const core::SettingsData &settings, QString &error);
     QString resolveTargetFolderId() const;
     // Garante ID ÚNICO pra uma pasta nova (bug relatado: 2 pastas com o
     // MESMO NOME geravam o MESMO id via FolderEditorDialog::

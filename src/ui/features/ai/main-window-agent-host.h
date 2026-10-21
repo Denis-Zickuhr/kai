@@ -35,6 +35,11 @@ public:
                     std::function<void(const RunOutcome &)> done) override;
     bool killCommand(const QString &commandId, bool force, QString &error) override;
     bool openCommandInApp(const QString &commandId, QString &error) override;
+    bool saveSettings(const core::SettingsData &settings, QString &error) override;
+    QStringList availableThemes() const override;
+    QStringList availableLanguages() const override;
+    QJsonObject layoutState() const override;
+    QJsonObject applyLayoutRequest(const QJsonObject &request, bool dryRun) override;
 
 private:
     MainWindow *m_window;

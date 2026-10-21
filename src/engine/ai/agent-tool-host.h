@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QMap>
 #include <QString>
 #include <QVector>
@@ -58,6 +59,25 @@ public:
     // Abre o comando na janela do Kai como se o usuário tivesse clicado nele (formulário de parâmetros, terminal
     // interativo, tela KIP): serve para o que `runCommand` não consegue rodar sozinho. Não espera o fim.
     virtual bool openCommandInApp(const QString &commandId, QString &error) = 0;
+
+    // --- Configuração (ferramentas kai_settings_*, kai_theme_*, kai_layout_*, kai_run_profile_*). Têm padrão "não
+    // suportado" para que hosts de teste antigos continuem compilando.
+    // Grava o settings.json e APLICA o que for visível (tema, cantos, densidade, idioma, janela...) como o diálogo de
+    // Configurações. Nunca recebe nem grava chaves de IA (ficam no ai.json).
+    virtual bool saveSettings(const core::SettingsData &, QString &error)
+    {
+        error = QStringLiteral("Settings cannot be changed here.");
+        return false;
+    }
+    virtual QStringList availableThemes() const { return {}; }
+    virtual QStringList availableLanguages() const { return {}; }
+    // Estado do layout dos painéis: {layout, views:[{id,title,placed}], presets:[], perspectives:[]}.
+    virtual QJsonObject layoutState() const { return {}; }
+    // `request` = {preset | perspective | ops:[...]}. Com dryRun só valida e descreve. Devolve {ok, error?, changes:[texto]}.
+    virtual QJsonObject applyLayoutRequest(const QJsonObject &, bool /*dryRun*/)
+    {
+        return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("The layout cannot be changed here.")}};
+    }
 };
 
 } // namespace kai::engine

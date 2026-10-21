@@ -46,12 +46,36 @@ Artifacts land in `./dist`:
 - `dist/kai-windows/` — portable folder (`kai.exe` + Qt DLLs + plugins +
   assets). Zip it and it runs anywhere with a double-click.
 - `dist/kai-setup.exe` — the Windows installer (only with
-  `KAI_BUILD_INSTALLER=1`), built with **NSIS** (`makensis`, run natively
-  inside the build image — no wine needed for this step) from
-  `packaging/windows/kai.nsi`. It installs per-user (no admin required),
-  registers an uninstaller, and — before copying files — kills any
-  running `kai.exe` first, so rebuilding over an already-running instance
-  never silently fails to update the binary.
+  `KAI_BUILD_INSTALLER=1`), built with **NSIS 3 + Modern UI 2** (`makensis`,
+  run natively inside the build image — no wine needed for this step) from
+  `packaging/windows/kai.nsi`. This is the **official** installer; `kai.iss`
+  (Inno Setup) is only the legacy native-Windows path.
+
+#### What the installer does
+
+- **Language picker** (English / Português do Brasil), preselecting the
+  system language; the choice is remembered and reused by the uninstaller.
+- Pages: welcome, folder, **Preferences** (theme from `assets/themes`, app
+  language, start with Windows, start minimized in the tray), **Options**
+  (desktop shortcut, add `kai` to the user PATH), install, finish
+  ("Open Kai", opt-out).
+- Installs per-user (no admin) in `%LocalAppData%\Programs\Kai`; an existing
+  install keeps its folder. Kills a running `kai.exe` before copying files.
+- **Config**: on a fresh install it writes `%LocalAppData%\kai\settings.json`
+  with only `active_theme`, `language`, `start_visible` (false when "start
+  minimized") and `autostart`; "start with Windows" also writes the
+  `HKCU\...\Run\Kai` value. If `settings.json` already exists (update or
+  reinstall) the Preferences page is skipped and the file is never touched.
+- **Uninstaller** removes files, shortcuts, the Run value, the PATH entry and
+  its registry keys. Settings/data are kept unless you answer Yes to the
+  prompt (`/S` keeps them).
+- Silent install (`kai-setup.exe /S [/D=C:\dir]`) uses the defaults: Kai Dark,
+  English, desktop shortcut, PATH, no autostart, start visible.
+
+The banner/welcome bitmaps and `installer.ico` are generated from
+`assets/logo/kai.png` by `python3 packaging/windows/gen-installer-art.py`
+(stdlib only) and committed — rerun it if the logo changes. The release
+script bumps the version in `kai.nsi` (`APPVERSION`, `VIProductVersion`).
 
 ### How the Windows image is built
 
@@ -118,7 +142,7 @@ Optimize-VHD -Path "$env:LOCALAPPDATA\Packages\<distro>\LocalState\ext4.vhdx" -M
 ## Legacy path: native build on Windows (unmaintained)
 
 A native-Windows build path also exists (`build-windows.bat` + Inno Setup,
-`packaging/windows/kai.iss`), requiring a local Qt 6 (MSVC) install,
+`packaging/windows/kai.iss`, a plain installer without the pages above), requiring a local Qt 6 (MSVC) install,
 Visual Studio, CMake, and optionally Inno Setup. It isn't the path that
 produces release artifacts today and may drift out of sync with the NSIS
 installer's content and behavior — the Docker + NSIS path above is the
@@ -127,7 +151,7 @@ one to use.
 ## Portability notes already handled in the code
 
 - **Config & assets:** `QStandardPaths::AppConfigLocation` resolves to
-  `%APPDATA%\kai` on Windows automatically; `assets/` are looked up
+  `%LocalAppData%\kai` on Windows automatically; `assets/` are looked up
   relative to the `.exe`.
 - **Global shortcut:** QHotkey has a native Win32 backend, so the global
   shortcut works on Windows.

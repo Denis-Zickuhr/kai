@@ -742,6 +742,98 @@ private slots:
         QCOMPARE(expansionFromName(expansionName(Expansion::Horizontal)), Expansion::Horizontal);
         QCOMPARE(expansionFromName(QStringLiteral("whatever")), Expansion::Vertical);
     }
+
+    // ------------------------------------------------------------------------------------- modo Fit ("Ajustar")
+
+    void fitModeKeepsEmptyCellsEmptyAndSpansAreClampedToTheGrid()
+    {
+        LayoutModel model = LayoutModel::defaultLayout(); // lista em 0,0; Saída (+Documento) em 0,1
+        QVERIFY(model.setGrid(3, 2, Expansion::Fit));
+        QCOMPARE(model.expansion(), Expansion::Fit);
+        // Só o modo Fit estica.
+        LayoutModel vertical = LayoutModel::defaultLayout();
+        QVERIFY(!vertical.setZoneSpan(Zone{0, 0}, 1, 2));
+        // A lista pode descer para a linha de baixo (vazia), mas não passar da grade nem invadir a Saída.
+        QVERIFY(model.setZoneSpan(Zone{0, 0}, 1, 9));
+        QCOMPARE(model.zone(Zone{0, 0}).rowSpan, 2);
+        QVERIFY(!model.setZoneSpan(Zone{0, 0}, 2, 1)); // bate na Saída em 0,1
+        QVERIFY(!model.setZoneSpan(Zone{1, 1}, 2, 1)); // célula vazia: não tem o que esticar
+        QCOMPARE(model.clampSpan(Zone{0, 0}, 3, 2), QSize(1, 2));
+        // O plano traz o retângulo de cada célula que aparece.
+        const GridPlan plan = model.plan();
+        QCOMPARE(plan.fit.size(), 2);
+        QCOMPARE(plan.fit.at(0).zone, (Zone{0, 0}));
+        QCOMPARE(plan.fit.at(0).rowSpan, 2);
+        QCOMPARE(plan.fit.at(1).zone, (Zone{0, 1}));
+        QCOMPARE(plan.fit.at(1).colSpan, 1);
+    }
+
+    void aSpanThatLaterCollidesShrinksOnReadAndComesBackWhenTheNeighbourLeaves()
+    {
+        LayoutModel model = LayoutModel::defaultLayout();
+        model.setGrid(2, 2, Expansion::Fit);
+        model.closeView(view_id::kDocument);
+        model.closeView(view_id::kOutput);
+        QVERIFY(model.setZoneSpan(Zone{0, 0}, 2, 2));
+        QCOMPARE(model.fitCells().first().colSpan, 2);
+        model.placeView(view_id::kOutput, Zone{0, 1});
+        QCOMPARE(model.fitCells().first().colSpan, 1); // a Saída tomou a casa: a lista encolhe na leitura
+        QCOMPARE(model.zone(Zone{0, 0}).colSpan, 2);   // o pedido guardado não mudou
+        model.closeView(view_id::kOutput);
+        const QList<FitCell> alone = model.fitCells();
+        QCOMPARE(alone.size(), 1);
+        QCOMPARE(alone.first().colSpan, 2);
+        QCOMPARE(alone.first().rowSpan, 2);
+        // Um painel solto numa casa coberta toma o lugar e a célula grande recua.
+        model.placeView(view_id::kOutput, Zone{1, 1});
+        const QList<FitCell> cells = model.fitCells();
+        QCOMPARE(cells.size(), 2);
+        QCOMPARE(cells.first().colSpan * cells.first().rowSpan, 2);
+    }
+
+    void fitSpansRoundTripAndOldFilesLoadWithSingleCellSpans()
+    {
+        LayoutModel model = LayoutModel::defaultLayout();
+        model.setGrid(3, 2, Expansion::Fit);
+        model.setZoneSpan(Zone{0, 0}, 1, 2);
+        const QJsonObject json = model.toJson();
+        QCOMPARE(json.value(QStringLiteral("grid")).toObject().value(QStringLiteral("expansion")).toString(), QStringLiteral("fit"));
+        const QJsonObject cell = json.value(QStringLiteral("cells")).toObject().value(QStringLiteral("0,0")).toObject();
+        QCOMPARE(cell.value(QStringLiteral("row_span")).toInt(), 2);
+        QVERIFY(!cell.contains(QStringLiteral("col_span"))); // o que é 1 não vai para o arquivo
+        const LayoutModel back = LayoutModel::fromJson(json, knownViews());
+        QCOMPARE(back, model);
+        QCOMPARE(back.zone(Zone{0, 0}).rowSpan, 2);
+        // Um arquivo de antes do modo Fit (sem os campos) lê tudo como uma casa.
+        const LayoutModel old = LayoutModel::fromJson(LayoutModel::defaultLayout().toJson(), knownViews());
+        QCOMPARE(old.zone(Zone{0, 0}).colSpan, 1);
+        QCOMPARE(old.zone(Zone{0, 0}).rowSpan, 1);
+        QVERIFY(!LayoutModel::defaultLayout().toJson().value(QStringLiteral("cells")).toObject()
+                     .value(QStringLiteral("0,0")).toObject().contains(QStringLiteral("row_span")));
+        // Valores absurdos são limitados, não derrubam.
+        QJsonObject broken = json;
+        QJsonObject cells = broken.value(QStringLiteral("cells")).toObject();
+        QJsonObject first = cells.value(QStringLiteral("0,0")).toObject();
+        first.insert(QStringLiteral("row_span"), 99);
+        first.insert(QStringLiteral("col_span"), -4);
+        cells.insert(QStringLiteral("0,0"), first);
+        broken.insert(QStringLiteral("cells"), cells);
+        const LayoutModel fixed = LayoutModel::fromJson(broken, knownViews());
+        QCOMPARE(fixed.zone(Zone{0, 0}).colSpan, 1);
+        QCOMPARE(fixed.fitCells().first().rowSpan, 2);
+        QCOMPARE(expansionFromName(expansionName(Expansion::Fit)), Expansion::Fit);
+    }
+
+    void anEmptiedCellForgetsItsSpan()
+    {
+        LayoutModel model = LayoutModel::defaultLayout();
+        model.setGrid(2, 2, Expansion::Fit);
+        model.setZoneSpan(Zone{0, 0}, 1, 2);
+        model.closeView(view_id::kCommands);
+        QCOMPARE(model.zone(Zone{0, 0}).rowSpan, 1);
+        model.placeView(view_id::kCommands, Zone{0, 0});
+        QCOMPARE(model.fitCells().first().rowSpan, 1);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestLayoutModel)

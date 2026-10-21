@@ -67,12 +67,20 @@ std::optional<Zone> zoneFromName(const QString &name)
 
 QString expansionName(Expansion expansion)
 {
-    return expansion == Expansion::Horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical");
+    switch (expansion) {
+    case Expansion::Horizontal: return QStringLiteral("horizontal");
+    case Expansion::Fit: return QStringLiteral("fit");
+    case Expansion::Vertical: break;
+    }
+    return QStringLiteral("vertical");
 }
 
 Expansion expansionFromName(const QString &name)
 {
-    return name == QStringLiteral("horizontal") ? Expansion::Horizontal : Expansion::Vertical;
+    if (name == QStringLiteral("horizontal")) {
+        return Expansion::Horizontal;
+    }
+    return name == QStringLiteral("fit") ? Expansion::Fit : Expansion::Vertical;
 }
 
 // ------------------------------------------------------------------------------------------------------ construção
@@ -241,6 +249,12 @@ QJsonObject LayoutModel::toJson() const
         if (state.split) {
             obj.insert(QStringLiteral("split"), true);
         }
+        if (state.colSpan > 1) {
+            obj.insert(QStringLiteral("col_span"), state.colSpan);
+        }
+        if (state.rowSpan > 1) {
+            obj.insert(QStringLiteral("row_span"), state.rowSpan);
+        }
         if (state.collapsed) {
             obj.insert(QStringLiteral("collapsed"), true);
             if (!state.open.isEmpty()) {
@@ -328,6 +342,8 @@ LayoutModel LayoutModel::fromJson(const QJsonObject &root, const Validator &isKn
         state.collapsed = obj.value(QStringLiteral("collapsed")).toBool(false);
         state.open = obj.value(QStringLiteral("open")).toString();
         state.split = obj.value(QStringLiteral("split")).toBool(false);
+        state.colSpan = std::clamp(obj.value(QStringLiteral("col_span")).toInt(1), 1, kMaxGridLines);
+        state.rowSpan = std::clamp(obj.value(QStringLiteral("row_span")).toInt(1), 1, kMaxGridLines);
     }
     for (const QJsonValue &value : root.value(QStringLiteral("floating")).toArray()) {
         const QJsonObject obj = value.toObject();
@@ -384,7 +400,7 @@ std::optional<Edge> LayoutModel::railEdge(Zone zone) const
     if (!inGrid(zone)) {
         return std::nullopt;
     }
-    if (m_expansion == Expansion::Vertical) {
+    if (m_expansion != Expansion::Horizontal) {
         if (zone.col == 0) {
             return Edge::Left;
         }
@@ -482,7 +498,108 @@ GridPlan LayoutModel::plan(const std::function<bool(Zone)> &visible) const
         rawLines.append(m_lineSizes[line]);
     }
     result.lineWeights = normalised(rawLines);
+    if (m_expansion == Expansion::Fit) {
+        result.fit = fitCells([&](Zone zone) { return shown(zone); });
+    }
     return result;
+}
+
+QList<FitCell> LayoutModel::fitCells(const std::function<bool(Zone)> &visible) const
+{
+    // Toda célula com painel segura a própria casa antes de qualquer uma esticar: quem tem painel nunca perde o lugar.
+    bool claimed[kMaxGridLines][kMaxGridLines] = {};
+    for (Zone zone : cells()) {
+        if (zoneOccupied(zone)) {
+            claimed[zone.row][zone.col] = true;
+        }
+    }
+    QList<FitCell> out;
+    for (Zone zone : cells()) {
+        if (!zoneOccupied(zone)) {
+            continue;
+        }
+        const ZoneState &state = this->zone(zone);
+        int w = std::clamp(state.colSpan, 1, m_cols - zone.col);
+        int h = std::clamp(state.rowSpan, 1, m_rows - zone.row);
+        const auto conflicts = [&](int cw, int ch) {
+            for (int r = zone.row; r < zone.row + ch; ++r) {
+                for (int c = zone.col; c < zone.col + cw; ++c) {
+                    if ((r != zone.row || c != zone.col) && claimed[r][c]) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        while (conflicts(w, h)) {
+            if (w >= h && w > 1) {
+                --w;
+            } else if (h > 1) {
+                --h;
+            } else {
+                --w;
+            }
+        }
+        for (int r = zone.row; r < zone.row + h; ++r) {
+            for (int c = zone.col; c < zone.col + w; ++c) {
+                claimed[r][c] = true;
+            }
+        }
+        if (!visible || visible(zone)) {
+            out.append(FitCell{zone, zone.row, zone.col, h, w});
+        }
+    }
+    return out;
+}
+
+bool LayoutModel::spanFree(Zone zone, int colSpan, int rowSpan) const
+{
+    for (const FitCell &other : fitCells()) {
+        if (other.zone == zone) {
+            continue;
+        }
+        const bool apartCols = other.col + other.colSpan <= zone.col || zone.col + colSpan <= other.col;
+        const bool apartRows = other.row + other.rowSpan <= zone.row || zone.row + rowSpan <= other.row;
+        if (!apartCols && !apartRows) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QSize LayoutModel::clampSpan(Zone zone, int colSpan, int rowSpan) const
+{
+    int w = std::clamp(colSpan, 1, std::max(1, m_cols - zone.col));
+    int h = std::clamp(rowSpan, 1, std::max(1, m_rows - zone.row));
+    while (!spanFree(zone, w, h)) {
+        if (w >= h && w > 1) {
+            --w;
+        } else if (h > 1) {
+            --h;
+        } else {
+            break;
+        }
+    }
+    return QSize(w, h);
+}
+
+bool LayoutModel::setZoneSpan(Zone zone, int colSpan, int rowSpan)
+{
+    if (m_expansion != Expansion::Fit || !inGrid(zone) || !zoneOccupied(zone)) {
+        return false;
+    }
+    colSpan = std::clamp(colSpan, 1, m_cols - zone.col);
+    rowSpan = std::clamp(rowSpan, 1, m_rows - zone.row);
+    if (!spanFree(zone, colSpan, rowSpan)) {
+        return false;
+    }
+    ZoneState &state = m_zones[slotOf(zone)];
+    if (state.colSpan == colSpan && state.rowSpan == rowSpan) {
+        return false;
+    }
+    state.colSpan = colSpan;
+    state.rowSpan = rowSpan;
+    return true;
 }
 
 double LayoutModel::lineSize(int line) const
@@ -651,6 +768,7 @@ void LayoutModel::fixActive(ZoneState &zone)
         zone.collapsed = false;
         zone.split = false;
         zone.size = 0.0;
+        zone.colSpan = zone.rowSpan = 1;
     } else if (!zone.views.contains(zone.active)) {
         zone.active = zone.views.first();
     }

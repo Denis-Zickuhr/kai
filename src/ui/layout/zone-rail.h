@@ -21,7 +21,10 @@ public:
 
     Edge edge() const { return m_edge; }
     // Os painéis da borda (na ordem das células); `open` = os que estão abertos ao lado agora (ficam destacados).
-    void setViews(const QStringList &ids, const QStringList &open);
+    // `groups` (paralelo a `ids`): a célula de cada painel; onde ela muda, a faixa põe um separador. Vazio = um grupo só.
+    void setViews(const QStringList &ids, const QStringList &open, const QList<int> &groups = {});
+    // Os vãos dos separadores entre grupos (coordenadas da faixa), para os testes.
+    QList<QRect> separatorRects() const;
     QStringList viewIds() const { return m_ids; }
     QStringList openViews() const { return m_open; }
     // Retângulo do ícone do painel / do botão de expandir (coordenadas da faixa), para os testes.
@@ -52,6 +55,7 @@ protected:
 
 private:
     QRect slot(int index) const;
+    int separatorsBefore(int count) const;
     // A "pílula": o corpo da faixa, alinhado às bordas dos cartões vizinhos (ao longo da faixa) e com o mesmo vão do divisor
     // do lado do conteúdo.
     QRectF pillRect() const;
@@ -61,6 +65,7 @@ private:
     ViewRegistry *m_registry;
     QStringList m_ids;
     QStringList m_open;
+    QList<int> m_groups;
     void startDrag(int index);
 
     int m_hover = -2; // -2 nada, -1 expandir, >=0 ícone

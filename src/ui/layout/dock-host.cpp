@@ -1,5 +1,6 @@
 #include "ui/layout/dock-host.h"
 
+#include "ui/layout/fit-board.h"
 #include "ui/layout/floating-view-window.h"
 #include "ui/layout/view-zone.h"
 #include "ui/layout/zone-rail.h"
@@ -163,6 +164,11 @@ QString DockHost::structureSignature() const
     for (Zone zone : m_model.cells()) {
         parts << zoneName(zone) + QLatin1Char(':') + m_model.zone(zone).views.join(QLatin1Char(','));
     }
+    if (m_model.expansion() == Expansion::Fit) {
+        for (const FitCell &cell : m_model.fitCells()) {
+            parts << zoneName(cell.zone) + QStringLiteral("-span:%1x%2").arg(cell.colSpan).arg(cell.rowSpan);
+        }
+    }
     for (Zone zone : m_model.cells()) {
         parts << zoneName(zone) + QStringLiteral("-collapsed:") + (m_model.zone(zone).collapsed ? QStringLiteral("1") : QStringLiteral("0"));
         parts << zoneName(zone) + QStringLiteral("-split:") + (m_model.zone(zone).split ? QStringLiteral("1") : QStringLiteral("0"));
@@ -243,6 +249,19 @@ QStringList DockHost::railViews(Edge edge) const
     return ids;
 }
 
+QList<int> DockHost::railGroups(Edge edge) const
+{
+    QList<int> groups;
+    int group = 0;
+    for (Zone zone : m_model.cells()) {
+        const ZoneState &state = m_model.zone(zone);
+        if (state.collapsed && m_model.railEdge(zone) == std::optional<Edge>(edge)) {
+            groups += QList<int>(state.views.size(), group++);
+        }
+    }
+    return groups;
+}
+
 QStringList DockHost::railOpen(Edge edge) const
 {
     QStringList ids;
@@ -257,7 +276,7 @@ QStringList DockHost::railOpen(Edge edge) const
 void DockHost::refreshRail(Edge edge)
 {
     if (ZoneRail *rail = m_rails.value(edge)) {
-        rail->setViews(railViews(edge), railOpen(edge));
+        rail->setViews(railViews(edge), railOpen(edge), railGroups(edge));
     }
 }
 
@@ -300,6 +319,12 @@ void DockHost::rebuild()
         m_root = nullptr;
     }
     m_stackWidgets.clear();
+    if (m_fit) {
+        m_boardLayout->removeWidget(m_fit);
+        m_fit->hide();
+        m_fit->deleteLater();
+        m_fit = nullptr;
+    }
 
     // 2. Flutuantes: janelas que não são mais flutuantes devolvem o painel; as novas nascem.
     syncFloating();
@@ -327,7 +352,7 @@ void DockHost::rebuild()
                 continue;
             }
             auto *rail = new ZoneRail(edge, m_registry, this);
-            rail->setViews(ids, railOpen(edge));
+            rail->setViews(ids, railOpen(edge), railGroups(edge));
             connect(rail, &ZoneRail::viewClicked, this, [this](const QString &id) {
                 const auto zone = m_model.zoneOf(id);
                 if (!zone) {
@@ -362,6 +387,9 @@ void DockHost::rebuild()
     // 5. As zonas do plano e os divisores: um divisor raiz com uma pilha por coluna (modo vertical) ou linha (horizontal);
     // uma pilha com várias células é um divisor perpendicular.
     const bool rootHorizontal = m_plan.expansion == Expansion::Vertical;
+    if (m_plan.expansion == Expansion::Fit) {
+        buildFitBoard(maximizedZone, maximized);
+    } else {
     m_root = new QSplitter(rootHorizontal ? Qt::Horizontal : Qt::Vertical, m_board);
     m_root->setObjectName(QStringLiteral("outerSplitter"));
     m_root->setChildrenCollapsible(false);
@@ -395,9 +423,10 @@ void DockHost::rebuild()
         m_stackWidgets.append(built);
     }
     m_boardLayout->addWidget(m_root, 1);
+    }
 
     // Sementes proporcionais: o Qt as mantém ao redimensionar, e applyRatios() refina com os limites dos painéis.
-    {
+    if (m_root) {
         QList<int> rootSizes;
         for (int i = 0; i < m_plan.stacks.size(); ++i) {
             rootSizes << qMax(1, int(m_plan.lineWeights.at(i) * 10000));
@@ -422,15 +451,17 @@ void DockHost::rebuild()
         captureRatios();
         edited();
     };
-    connect(m_root, &QSplitter::splitterMoved, this, onSplitterMoved);
-    for (const StackWidgets &built : std::as_const(m_stackWidgets)) {
-        if (built.splitter) {
-            connect(built.splitter, &QSplitter::splitterMoved, this, onSplitterMoved);
+    if (m_root) {
+        connect(m_root, &QSplitter::splitterMoved, this, onSplitterMoved);
+        for (const StackWidgets &built : std::as_const(m_stackWidgets)) {
+            if (built.splitter) {
+                connect(built.splitter, &QSplitter::splitterMoved, this, onSplitterMoved);
+            }
         }
+        // Só o redimensionamento do quadro todo reaplica as proporções. NÃO observar as pilhas: arrastar o divisor da raiz
+        // redimensiona as pilhas, e reaplicar nessa hora desfaria o arraste do usuário.
+        m_root->installEventFilter(this);
     }
-    // Só o redimensionamento do quadro todo reaplica as proporções. NÃO observar as pilhas: arrastar o divisor da raiz
-    // redimensiona as pilhas, e reaplicar nessa hora desfaria o arraste do usuário.
-    m_root->installEventFilter(this);
 
     // Painéis registrados que ficaram sem lugar (fechados) esperam escondidos no depósito, senão continuariam filhos
     // da janela antiga e apareceriam por cima de tudo.
@@ -456,7 +487,12 @@ void DockHost::rebuild()
         m_outerLayout->addWidget(bottom);
     }
     // Filhos criados depois de a janela estar na tela não aparecem sozinhos.
-    m_root->setVisible(true);
+    if (m_root) {
+        m_root->setVisible(true);
+    }
+    if (m_fit) {
+        m_fit->setVisible(true);
+    }
     for (ZoneRail *rail : std::as_const(m_rails)) {
         rail->setVisible(true);
     }
@@ -478,7 +514,15 @@ void DockHost::rebuild()
 // uma vez só, em vez de cada painel ganhar a própria barra de rolagem.
 void DockHost::updateBoardMinimum()
 {
-    if (!m_board || !m_root) {
+    if (!m_board || (!m_root && !m_fit)) {
+        return;
+    }
+    if (m_fit) {
+        // Casas de tamanho confortável: a grade inteira nunca fica menor que colunas × linhas delas.
+        const int cols = m_model.cols();
+        const int rows = m_model.rows();
+        m_board->setMinimumSize(cols * kMinCellWidth + FitBoard::kGap * (cols - 1),
+                                rows * kMinCellHeight + FitBoard::kGap * (rows - 1));
         return;
     }
     const bool rootHorizontal = m_plan.expansion == Expansion::Vertical;
@@ -783,6 +827,56 @@ void DockHost::setGrid(int cols, int rows, Expansion expansion)
     if (maximized != m_model.maximized()) {
         emit maximizedChanged(m_model.maximized());
     }
+}
+
+void DockHost::buildFitBoard(const std::optional<Zone> &only, const QString &maximized)
+{
+    m_fit = new FitBoard(m_model.cols(), m_model.rows(), m_board);
+    QList<FitBoard::Item> items;
+    for (const FitCell &cell : std::as_const(m_plan.fit)) {
+        const Zone zone = cell.zone;
+        ViewZone *widget = createZone(zone);
+        widget->setStripSuppressed(kHideStripOnRevealed && m_revealed.contains(zone));
+        const ZoneState &state = m_model.zone(zone);
+        QString active = (only && *only == zone) ? maximized : state.active;
+        if (m_revealed.contains(zone)) {
+            active = m_revealed.value(zone);
+        }
+        widget->setSplitMode(state.split && !only && !m_revealed.contains(zone));
+        widget->setViews(state.views, active, m_model.tabsAlways());
+        m_zones.insert(zone, widget);
+        FitCell placed = cell;
+        if (only) { // maximizado: a célula ocupa a grade toda
+            placed = FitCell{zone, 0, 0, m_model.rows(), m_model.cols()};
+        }
+        items.append({widget, placed});
+    }
+    m_fit->setSpanHandlers(
+        [this](Zone zone, int cols, int rows) { return m_model.clampSpan(zone, cols, rows); },
+        [this](Zone zone, int cols, int rows) {
+            // O arrasto termina dentro da alça, que a reconstrução descarta: aplica depois.
+            QTimer::singleShot(0, this, [this, zone, cols, rows]() { setZoneSpan(zone, cols, rows); });
+        });
+    m_fit->setItems(items);
+    m_boardLayout->addWidget(m_fit, 1);
+    // Maximizado não tem alça (a célula já é a grade toda).
+    if (only) {
+        for (const FitBoard::Item &item : std::as_const(items)) {
+            if (QWidget *grip = m_fit->gripOf(item.cell.zone)) {
+                grip->hide();
+            }
+        }
+    }
+}
+
+bool DockHost::setZoneSpan(Zone zone, int colSpan, int rowSpan)
+{
+    if (!m_model.setZoneSpan(zone, colSpan, rowSpan)) {
+        return false;
+    }
+    rebuild();
+    edited();
+    return true;
 }
 
 void DockHost::setZoneCollapsed(Zone zone, bool collapsed)

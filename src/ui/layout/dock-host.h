@@ -18,6 +18,7 @@ class QVBoxLayout;
 
 namespace kai::ui::layout {
 
+class FitBoard;
 class ViewZone;
 class ZoneRail;
 
@@ -54,6 +55,9 @@ public:
     void applyLayout(const LayoutModel &layout);
     // Muda o tamanho da grade e o modo de expansão (os painéis das células que saem passam para a mais próxima).
     void setGrid(int cols, int rows, Expansion expansion);
+    // Modo Fit: quantas colunas × linhas a célula ocupa. false = nada mudou (modo errado, célula vazia ou ocupada).
+    bool setZoneSpan(Zone zone, int colSpan, int rowSpan);
+    FitBoard *fitBoard() const { return m_fit; }
     // Reconfere os painéis com o registro (um deixou de existir: o chat de IA sem provedor, um comando KIP apagado).
     void revalidate();
 
@@ -143,6 +147,7 @@ private:
     void updateBoardMinimum();
     QStringList railViews(Edge edge) const;
     QStringList railOpen(Edge edge) const;
+    QList<int> railGroups(Edge edge) const;
     void refreshRail(Edge edge);
     // Onde um ícone solto na faixa `edge` na posição `index` (da lista da faixa) entra: a célula e a posição nela.
     std::pair<Zone, int> railDropPosition(Edge edge, int index) const;
@@ -154,6 +159,7 @@ private:
     void seedRevealedFromModel();
     void syncOpenToModel();
     ViewZone *createZone(Zone zone);
+    void buildFitBoard(const std::optional<Zone> &only, const QString &maximized);
     void applyRatios();
     void captureRatios();
     void edited();
@@ -181,6 +187,7 @@ private:
     QHash<Zone, QString> m_revealed;
     std::optional<Zone> m_focusedZone; // a zona que tem (ou teve por último) o foco do teclado
     QSplitter *m_root = nullptr;
+    FitBoard *m_fit = nullptr; // o quadro do modo Fit (no lugar dos divisores)
     // O que o plano atual montou: por pilha, o divisor (nullptr com uma célula só), o widget que está no divisor raiz e as
     // zonas na ordem.
     struct StackWidgets {

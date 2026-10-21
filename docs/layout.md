@@ -10,6 +10,7 @@ A cell with **no panel disappears** and its neighbours take its place. Two fill 
 
 - **Fill vertically** (default): each column is a stack, top to bottom, of its filled cells only. A column with a single filled cell gives it the whole column; a column with none is gone and the others share the width.
 - **Fill horizontally**: the same, turned: each row is a stack, left to right, of its filled cells; a row with a single cell gives it the whole row.
+- **Fit**: nothing is absorbed; every cell is one square of the grid and empty squares stay empty. Drag the dotted handle at a cell's bottom-right corner (on the board, or on the preview in Settings) toward the size you want and the cell takes more columns/rows, like pieces in a suitcase inventory. A cell cannot grow over another filled cell; if a panel is dropped on a square it covered, the big cell shrinks back. Spans are saved in `layout.json` (`col_span` / `row_span`, only when above 1).
 
 Drawn on a 3 × 3 grid, with `■` filled and `·` empty — *vertical*: `■ · ·` / `■ ■ ■` / `■ · ·` has the first column in three parts and the middle cell of the others as full-height columns; *horizontal*: `■ · ·` / `· ■ ·` / `· · ■` is three full-width rows.
 

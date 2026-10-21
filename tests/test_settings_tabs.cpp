@@ -224,15 +224,17 @@ private slots:
         QCOMPARE(rows->value(), 1);
         QCOMPARE(requested.count(), 0);
 
-        // Mexer num campo avisa o quadro, com os três valores.
+        // Mexer nos campos NÃO muda o quadro (só o rascunho e a miniatura): quem confirma é o OK.
         rows->setValue(2);
+        expansion->setCurrentIndex(expansion->findData(int(kai::ui::layout::Expansion::Horizontal)));
+        QCOMPARE(requested.count(), 0);
+        QVERIFY(tab->gridDirty());
+        dialog.accept();
         QCOMPARE(requested.count(), 1);
         QCOMPARE(requested.last().at(0).toInt(), 3);
         QCOMPARE(requested.last().at(1).toInt(), 2);
-        QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Vertical));
-        expansion->setCurrentIndex(expansion->findData(int(kai::ui::layout::Expansion::Horizontal)));
-        QCOMPARE(requested.count(), 2);
         QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Horizontal));
+        QVERIFY(!tab->gridDirty());
         // A grade só aceita de 1 a 5.
         cols->setValue(99);
         QCOMPARE(cols->value(), 5);
@@ -249,6 +251,62 @@ private slots:
                 QVERIFY(!tab->gridPreview()->grab().isNull());
             }
         }
+    }
+    // Cancelar descarta o rascunho da grade: nada chega ao quadro (o bug: a mudança de linhas valia antes de confirmar).
+    void cancellingTheDialogDiscardsTheGridDraft()
+    {
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        QVector<Collection> collections;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {});
+        QSignalSpy grid(&dialog, &SettingsDialog::gridChangeRequested);
+        QSignalSpy spans(&dialog, &SettingsDialog::zoneSpanRequested);
+        dialog.setLayoutModel(kai::ui::layout::LayoutModel::defaultLayout());
+        dialog.layoutTab()->gridRowsField()->setValue(4);
+        QCOMPARE(grid.count(), 0);
+        dialog.reject();
+        QCOMPARE(grid.count(), 0);
+        QCOMPARE(spans.count(), 0);
+    }
+
+    // Modo Ajustar: arrastar na miniatura estica a célula; só o OK leva o tamanho ao quadro.
+    void fitModeSpansAreDraggedInThePreviewAndAppliedOnOk()
+    {
+        using namespace kai::ui::layout;
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        QVector<Collection> collections;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {});
+        LayoutTab *tab = dialog.layoutTab();
+        LayoutModel model = LayoutModel::defaultLayout(); // 2×2: lista em 0,0 e Saída em 0,1
+        dialog.setLayoutModel(model);
+        QComboBox *expansion = tab->gridExpansionField();
+        QVERIFY(expansion->findData(int(Expansion::Fit)) >= 0);
+        expansion->setCurrentIndex(expansion->findData(int(Expansion::Fit)));
+        GridPreview *preview = tab->gridPreview();
+        preview->resize(240, 120);
+        QSignalSpy spans(&dialog, &SettingsDialog::zoneSpanRequested);
+        QSignalSpy grid(&dialog, &SettingsDialog::gridChangeRequested);
+
+        // Aperta na lista (canto de cima à esquerda) e arrasta até a casa de baixo: ela passa a ocupar 2 linhas.
+        QTest::mousePress(preview, Qt::LeftButton, Qt::NoModifier, QPoint(30, 20));
+        QTest::mouseMove(preview, QPoint(30, 100));
+        QTest::mouseRelease(preview, Qt::LeftButton, Qt::NoModifier, QPoint(30, 100));
+        QCOMPARE(spans.count(), 0); // ainda é rascunho
+        QVERIFY(tab->gridDirty());
+        dialog.accept();
+        QCOMPARE(grid.count(), 1);
+        QCOMPARE(grid.last().at(2).toInt(), int(Expansion::Fit));
+        QCOMPARE(spans.count(), 1);
+        QCOMPARE(spans.last().at(0).toInt(), 0); // linha
+        QCOMPARE(spans.last().at(1).toInt(), 0); // coluna
+        QCOMPARE(spans.last().at(2).toInt(), 1); // colunas
+        QCOMPARE(spans.last().at(3).toInt(), 2); // linhas
+        QVERIFY(!preview->grab().isNull());
     }
 };
 

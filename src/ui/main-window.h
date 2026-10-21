@@ -38,7 +38,7 @@
 #include "ui/shared/top-utility-bar.h"
 #include "ui/shared/action-sidebar.h"
 #include "ui/features/history/process-list-dialog.h"
-#include "ui/features/output/log-viewer-dialog.h"
+#include "ui/features/output/logs-panel.h"
 #include "ui/layout/layout-model.h"
 #include "utils/theme-manager.h"
 
@@ -867,7 +867,6 @@ private:
     QSystemTrayIcon *m_trayIcon = nullptr;
     std::unique_ptr<QHotkey> m_globalHotkey;
     ProcessListDialog *m_processListDialog = nullptr;
-    LogViewerDialog *m_logViewerDialog = nullptr;
 
     // Estado do arraste da janela frameless (custom title bar).
     // Detecção de borda para resize da janela frameless: retorna as

@@ -24,7 +24,7 @@ struct LogEntry {
 };
 
 // Sink Qt do Logger: emite logEmitted a cada chamada de Logger::log, para
-// que uma janela (LogViewerDialog) possa se inscrever e exibir o histórico
+// que uma janela (LogsPanel) possa se inscrever e exibir o histórico
 // em tempo real, sem acoplar o Logger (funções estáticas, sem estado) a
 // nenhuma classe de UI.
 class LoggerSink : public QObject {

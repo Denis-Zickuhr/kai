@@ -17,6 +17,7 @@
 #include <QtTest>
 
 #include "ui/layout/dock-host.h"
+#include "ui/layout/fit-board.h"
 #include "ui/layout/floating-view-window.h"
 #include "ui/layout/layout-controller.h"
 #include "ui/layout/layout-store.h"
@@ -1596,6 +1597,77 @@ private slots:
         QTest::qWait(30);
         const QStringList order = controller.visibleViewOrder();
         QVERIFY(order.indexOf(view_id::kOutput) >= 0);
+    }
+
+    // A faixa põe um separador entre os painéis de células diferentes (variáveis numa, saída em outra); na mesma célula, não.
+    void theRailSeparatesPanelsFromDifferentCells()
+    {
+        Rig rig;
+        rig.dock->moveView(view_id::kHistory, kSide);
+        rig.dock->moveView(view_id::kDocument, kSideBottom);
+        rig.dock->setZoneCollapsed(kSide, true);
+        rig.dock->setZoneCollapsed(kSideBottom, true);
+        rig.show();
+        ZoneRail *rail = rig.dock->railWidget(Edge::Right);
+        QVERIFY(rail != nullptr);
+        QCOMPARE(rail->separatorRects().size(), 1);
+        const QRect sep = rail->separatorRects().first();
+        QVERIFY(sep.height() > 0);
+        // O separador cabe entre os dois ícones sem cobri-los.
+        QVERIFY(!sep.intersects(rail->iconRect(view_id::kHistory)));
+        QVERIFY(!sep.intersects(rail->iconRect(view_id::kDocument)));
+        QVERIFY(rail->iconRect(view_id::kDocument).top() - rail->iconRect(view_id::kHistory).bottom() > 1);
+
+        Rig same;
+        same.dock->moveView(view_id::kHistory, kSide);
+        same.dock->moveView(view_id::kDocument, kSide);
+        same.dock->setZoneCollapsed(kSide, true);
+        same.show();
+        QCOMPARE(same.dock->railWidget(Edge::Right)->separatorRects().size(), 0);
+    }
+
+    // Modo Ajustar: as células têm o tamanho de casas da grade, a alça estica por mais casas e o modelo guarda.
+    void fitModeSizesCellsBySpanAndTheGripStretchesThem()
+    {
+        Rig rig;
+        LayoutModel model = rig.dock->model();
+        model.setGrid(2, 2, Expansion::Fit);
+        rig.dock->setModel(model);
+        rig.show();
+        QVERIFY(rig.dock->fitBoard() != nullptr);
+        QVERIFY(rig.dock->rootSplitter() == nullptr);
+        const int cellWidth = rectIn(rig.dock, kTop).width();
+        QVERIFY(cellWidth > 0);
+        // A coluna do lado está vazia e continua vazia: ninguém a absorve.
+        QCOMPARE(rectIn(rig.dock, kBottom).width(), cellWidth);
+        QVERIFY(rig.dock->zoneWidget(kSide) == nullptr);
+
+        QVERIFY(rig.dock->setZoneSpan(kTop, 2, 1));
+        QTest::qWait(30);
+        QVERIFY(rectIn(rig.dock, kTop).width() > cellWidth * 3 / 2);
+        QCOMPARE(rectIn(rig.dock, kBottom).width(), cellWidth);
+
+        // Arrastar a alça da célula de baixo até a casa da direita: o pedido aparece e, ao soltar, vale.
+        FitBoard *board = rig.dock->fitBoard();
+        QVERIFY(board->gripOf(kBottom) != nullptr);
+        board->dragMoved(kBottom, board->cellRect(1, 1, 1, 1).center());
+        QCOMPARE(board->dragPreview(), QRect(0, 1, 2, 1));
+        board->dragEnded(kBottom);
+        QTest::qWait(30); // o host aplica depois que a alça sai da pilha de chamadas
+        QCOMPARE(rig.dock->model().zone(kBottom).colSpan, 2);
+        QVERIFY(rectIn(rig.dock, kBottom).width() > cellWidth * 3 / 2);
+
+        // A casa da direita da primeira linha é da célula de cima (esticada): a de baixo não sobe para lá.
+        board = rig.dock->fitBoard();
+        board->dragMoved(kBottom, board->cellRect(0, 1, 1, 1).center());
+        QCOMPARE(board->dragPreview().height(), 1);
+        board->dragEnded(kBottom);
+        QTest::qWait(30);
+        QCOMPARE(rig.dock->model().zone(kBottom).rowSpan, 1);
+        // Voltar ao modo de preencher desfaz o quadro Fit.
+        rig.dock->setGrid(2, 2, Expansion::Vertical);
+        QVERIFY(rig.dock->fitBoard() == nullptr);
+        QVERIFY(rig.dock->rootSplitter() != nullptr);
     }
 };
 

@@ -1875,6 +1875,7 @@ void MainWindow::registerPanelViews()
     constexpr int kNotificationsMinWidth = 400;
     constexpr int kVariablesMinWidth = 520;
     constexpr int kAiChatMinWidth = 360;
+    constexpr int kLogsMinWidth = 360;
     const auto base = [](const QString &id, const char *titleKey, const char *icon, Home home) {
         ViewSpec spec;
         spec.id = id;
@@ -1948,6 +1949,11 @@ void MainWindow::registerPanelViews()
         return wrapInPanelCard(m_environmentsPanel, QSize(kVariablesMinWidth, 420));
     };
     m_viewRegistry->registerView(variables);
+
+    ViewSpec logs = base(view_id::kLogs, "layout.view.logs", "scroll-text", Home::Secondary);
+    logs.minWidth = kLogsMinWidth;
+    logs.factory = [this]() -> QWidget * { return wrapInPanelCard(new LogsPanel, QSize(kLogsMinWidth, 240)); };
+    m_viewRegistry->registerView(logs);
 
     // O chat de IA só existe com um provedor configurado (sem provedor: nenhum botão, nenhum painel, nenhuma rede).
     m_aiConfigured = m_configManager.loadAiSettings().isConfigured();
@@ -2487,6 +2493,7 @@ void MainWindow::showCommandPalette()
         {"view_document", "layout.view.document", ""},
         {"view_processes", "layout.view.processes", ""},
         {"view_variables", "layout.view.variables", ""},
+        {"view_logs", "layout.view.logs", ""},
         {"maximize_panel", "menu.view.maximize_panel", "action.maximize_panel"},
         {"rearrange_panels", "menu.view.rearrange", "action.rearrange_panels"},
         {"restore_layout", "menu.view.restore_layout", "action.restore_layout"},
@@ -2577,6 +2584,7 @@ void MainWindow::runPaletteAction(const QString &actionId)
         {QStringLiteral("view_document"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kDocument); }},
         {QStringLiteral("view_processes"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kProcesses); }},
         {QStringLiteral("view_variables"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kVariables); }},
+        {QStringLiteral("view_logs"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kLogs); }},
         {QStringLiteral("view_ai_chat"), [](MainWindow *w) { w->showAiChat(); }},
         {QStringLiteral("maximize_panel"), [](MainWindow *w) { w->m_layoutController->toggleMaximizeFocused(); }},
         {QStringLiteral("rearrange_panels"), [](MainWindow *w) { w->m_dock->setEditMode(!w->m_dock->editMode()); }},
@@ -8455,11 +8463,13 @@ void MainWindow::handleSettingsRequested()
         [this]() { persistCommands(); }, [this]() { persistCollections(); }, this);
     // O layout dos painéis não depende do OK/Cancelar: restaurar vale na hora (e dá para continuar editando).
     connect(&dialog, &SettingsDialog::restoreLayoutRequested, this, &MainWindow::restoreDefaultLayout);
-    // A grade (colunas, linhas, expansão) também vale na hora.
+    // A grade (colunas, linhas, expansão, tamanhos do modo Ajustar) vale ao confirmar com OK; Cancelar descarta.
     if (m_dock) {
         dialog.setLayoutModel(m_dock->model());
         connect(&dialog, &SettingsDialog::gridChangeRequested, this,
                 [this](int cols, int rows, int expansion) { m_dock->setGrid(cols, rows, layout::Expansion(expansion)); });
+        connect(&dialog, &SettingsDialog::zoneSpanRequested, this,
+                [this](int row, int col, int colSpan, int rowSpan) { m_dock->setZoneSpan(layout::Zone{row, col}, colSpan, rowSpan); });
     }
 
     if (dialog.exec() != QDialog::Accepted) {
@@ -9153,12 +9163,7 @@ void MainWindow::handleNotificationHistoryRequested()
 
 void MainWindow::handleLogsRequested()
 {
-    if (!m_logViewerDialog) {
-        m_logViewerDialog = new LogViewerDialog(this);
-    }
-    m_logViewerDialog->show();
-    m_logViewerDialog->raise();
-    m_logViewerDialog->activateWindow();
+    m_layoutController->focusView(layout::view_id::kLogs);
 }
 
 void MainWindow::handleHelpRequested()

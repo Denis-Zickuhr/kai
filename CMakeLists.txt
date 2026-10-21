@@ -488,8 +488,8 @@ add_library(kai-ui STATIC
     src/ui/shared/shortcut-capture-field.cpp
     src/ui/features/history/process-list-dialog.h
     src/ui/features/history/process-list-dialog.cpp
-    src/ui/features/output/log-viewer-dialog.h
-    src/ui/features/output/log-viewer-dialog.cpp
+    src/ui/features/output/logs-panel.h
+    src/ui/features/output/logs-panel.cpp
     src/ui/features/kip/kip-chips.h
     src/ui/features/kip/kip-chips.cpp
     src/ui/features/kip/kip-blocks.h
@@ -536,6 +536,8 @@ add_library(kai-ui STATIC
     src/ui/layout/floating-view-window.cpp
     src/ui/layout/dock-host.h
     src/ui/layout/dock-host.cpp
+    src/ui/layout/fit-board.h
+    src/ui/layout/fit-board.cpp
     src/ui/layout/panel-card.h
     src/ui/layout/panel-card.cpp
     src/ui/layout/layout-controller.h

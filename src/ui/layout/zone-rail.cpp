@@ -21,6 +21,7 @@ namespace tk = kai::utils::tokens;
 namespace {
 constexpr int kIcon = 16;
 constexpr int kSlot = 28;
+constexpr int kSep = 9; // o vão (com o traço fino) entre os painéis de células diferentes
 constexpr int kPad = 9; // respiro entre a borda da pílula e o primeiro/último botão
 constexpr double kGap = 6.0; // o vão do divisor entre os cartões: a faixa o repete do lado do conteúdo
 } // namespace
@@ -43,14 +44,15 @@ ZoneRail::ZoneRail(Edge edge, ViewRegistry *registry, QWidget *parent)
 
 QSize ZoneRail::sizeHint() const
 {
-    const int length = int(m_ids.size() + 1) * kSlot + 2 * kPad;
+    const int length = int(m_ids.size() + 1) * kSlot + 2 * kPad + separatorsBefore(int(m_ids.size())) * kSep;
     return vertical() ? QSize(kThickness, length) : QSize(length, kThickness);
 }
 
-void ZoneRail::setViews(const QStringList &ids, const QStringList &open)
+void ZoneRail::setViews(const QStringList &ids, const QStringList &open, const QList<int> &groups)
 {
     m_ids = ids;
     m_open = open;
+    m_groups = groups.size() == ids.size() ? groups : QList<int>(ids.size(), 0);
     m_hover = -2;
     updateGeometry();
     update();
@@ -78,10 +80,20 @@ QRectF ZoneRail::pillRect() const
     return pill;
 }
 
+// Quantas mudanças de grupo há entre os `count` primeiros painéis (cada uma ganha um separador).
+int ZoneRail::separatorsBefore(int count) const
+{
+    int total = 0;
+    for (int i = 1; i < count && i < m_groups.size(); ++i) {
+        total += m_groups.at(i) != m_groups.at(i - 1) ? 1 : 0;
+    }
+    return total;
+}
+
 // O slot 0 é o botão de expandir; os painéis vêm depois.
 QRect ZoneRail::slot(int index) const
 {
-    const int offset = kPad + index * kSlot;
+    const int offset = kPad + index * kSlot + separatorsBefore(index) * kSep;
     const QRectF pill = pillRect();
     const int cross = vertical() ? int(pill.center().x() - kSlot / 2.0) : int(pill.center().y() - kSlot / 2.0);
     return vertical() ? QRect(cross, offset, kSlot, kSlot) : QRect(offset, cross, kSlot, kSlot);
@@ -97,6 +109,20 @@ int ZoneRail::insertionIndexAt(const QPoint &pos) const
         }
     }
     return int(m_ids.size());
+}
+
+QList<QRect> ZoneRail::separatorRects() const
+{
+    QList<QRect> out;
+    for (int i = 1; i < m_ids.size(); ++i) {
+        if (m_groups.at(i) != m_groups.at(i - 1)) {
+            const QRect before = slot(i);
+            const QRect after = slot(i + 1);
+            out.append(vertical() ? QRect(before.left(), before.bottom() + 1, before.width(), after.top() - before.bottom() - 1)
+                                  : QRect(before.right() + 1, before.top(), after.left() - before.right() - 1, before.height()));
+        }
+    }
+    return out;
 }
 
 QRect ZoneRail::expandRect() const
@@ -152,6 +178,22 @@ void ZoneRail::paintEvent(QPaintEvent *)
     drawSlot(slot(0), chevron, false, m_hover == -1);
     for (int i = 0; i < m_ids.size(); ++i) {
         drawSlot(slot(i + 1), m_registry->icon(m_ids.at(i)), m_open.contains(m_ids.at(i)), m_hover == i);
+    }
+    // O traço fino entre painéis de células diferentes.
+    p.setPen(QPen(QColor(tk::borderColor()), 1));
+    for (int i = 1; i < m_ids.size(); ++i) {
+        if (m_groups.at(i) == m_groups.at(i - 1)) {
+            continue;
+        }
+        const QRect before = slot(i);
+        const QRect after = slot(i + 1);
+        if (vertical()) {
+            const int y = (before.bottom() + after.top()) / 2;
+            p.drawLine(before.left() + 6, y, before.right() - 6, y);
+        } else {
+            const int x = (before.right() + after.left()) / 2;
+            p.drawLine(x, before.top() + 6, x, before.bottom() - 6);
+        }
     }
 }
 

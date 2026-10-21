@@ -78,10 +78,14 @@ public:
     void setLayoutModel(const layout::LayoutModel &model);
     LayoutTab *layoutTab() const { return m_layoutTab; }
 
+    // OK: confirma o rascunho da grade (Cancelar o descarta).
+    void accept() override;
+
 signals:
     // "Restaurar layout" (aba Layout): quem abriu o diálogo devolve os painéis ao lugar padrão, na hora.
     void restoreLayoutRequested();
     void gridChangeRequested(int cols, int rows, int expansion);
+    void zoneSpanRequested(int row, int col, int colSpan, int rowSpan);
 
 private:
     void setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,

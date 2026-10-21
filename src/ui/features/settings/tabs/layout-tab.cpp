@@ -16,6 +16,9 @@
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QPainter>
+#include <QMouseEvent>
+
+#include <algorithm>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QFileDialog>
@@ -32,12 +35,65 @@ GridPreview::GridPreview(QWidget *parent)
 {
     setObjectName(QStringLiteral("gridPreview"));
     setMinimumHeight(minimumSizeHint().height());
+    setCursor(Qt::ArrowCursor);
 }
 
 void GridPreview::setModel(const layout::LayoutModel &model)
 {
     m_model = model;
     update();
+}
+
+QRectF GridPreview::cellBox(const layout::FitCell &cell) const
+{
+    const QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
+    const int cols = m_model.cols();
+    const int rows = m_model.rows();
+    return QRectF(area.x() + area.width() * cell.col / cols, area.y() + area.height() * cell.row / rows,
+                  area.width() * cell.colSpan / cols, area.height() * cell.rowSpan / rows);
+}
+
+layout::Zone GridPreview::zoneAtPoint(const QPointF &pos) const
+{
+    const QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
+    const int col = area.width() > 0 ? int((pos.x() - area.x()) * m_model.cols() / area.width()) : 0;
+    const int row = area.height() > 0 ? int((pos.y() - area.y()) * m_model.rows() / area.height()) : 0;
+    return layout::Zone{std::clamp(row, 0, m_model.rows() - 1), std::clamp(col, 0, m_model.cols() - 1)};
+}
+
+// No modo Fit: apertar numa célula e arrastar na direção desejada faz ela ocupar as casas até o ponteiro.
+void GridPreview::mousePressEvent(QMouseEvent *event)
+{
+    m_dragZone.reset();
+    if (event->button() == Qt::LeftButton && m_model.expansion() == layout::Expansion::Fit) {
+        for (const layout::FitCell &cell : m_model.fitCells()) {
+            if (cellBox(cell).contains(event->position())) {
+                m_dragZone = cell.zone;
+                return;
+            }
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void GridPreview::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_dragZone) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    const layout::Zone at = zoneAtPoint(event->position());
+    const QSize span = m_model.clampSpan(*m_dragZone, at.col - m_dragZone->col + 1, at.row - m_dragZone->row + 1);
+    if (m_model.setZoneSpan(*m_dragZone, span.width(), span.height())) {
+        update();
+        emit spanChanged(*m_dragZone, span.width(), span.height());
+    }
+}
+
+void GridPreview::mouseReleaseEvent(QMouseEvent *event)
+{
+    m_dragZone.reset();
+    QWidget::mouseReleaseEvent(event);
 }
 
 void GridPreview::paintEvent(QPaintEvent *)
@@ -65,6 +121,27 @@ void GridPreview::paintEvent(QPaintEvent *)
     // O que aparece: cada célula com painel, esticada pelo modo de expansão sobre as vazias.
     const layout::GridPlan plan = m_model.plan();
     if (plan.empty()) {
+        return;
+    }
+    if (plan.expansion == layout::Expansion::Fit) {
+        QColor fitFill(tk::accent());
+        fitFill.setAlpha(70);
+        p.setPen(QPen(QColor(tk::accent()), 1));
+        p.setBrush(fitFill);
+        for (const layout::FitCell &cell : plan.fit) {
+            const QRectF box = cellBox(cell);
+            p.drawRoundedRect(box.adjusted(4, 4, -4, -4), radius, radius);
+            // A alça no canto: de onde se arrasta para ocupar mais casas.
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(tk::accent()));
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j <= i; ++j) {
+                    p.drawEllipse(QPointF(box.right() - 9.0 - j * 3.5, box.bottom() - 9.0 - (i - j) * 3.5), 0.9, 0.9);
+                }
+            }
+            p.setPen(QPen(QColor(tk::accent()), 1));
+            p.setBrush(fitFill);
+        }
         return;
     }
     const bool vertical = plan.expansion == layout::Expansion::Vertical;
@@ -282,23 +359,27 @@ LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
                              int(layout::Expansion::Vertical));
     m_gridExpansion->addItem(utils::tr(QStringLiteral("settings.layout.grid.expand.horizontal")),
                              int(layout::Expansion::Horizontal));
+    m_gridExpansion->addItem(utils::tr(QStringLiteral("settings.layout.grid.expand.fit")), int(layout::Expansion::Fit));
     addGridField(1, 0, QStringLiteral("settings.layout.grid.expansion"), m_gridExpansion);
     m_gridPreview = new GridPreview(gridGroup);
     gridLayout->addWidget(m_gridPreview, 4, 0, 1, 2);
     layout->addWidget(gridGroup);
 
-    const auto emitGrid = [this]() {
+    // A grade só vale ao confirmar (commitGrid): aqui muda o rascunho e a miniatura.
+    const auto editGrid = [this]() {
         if (m_syncingGrid) {
             return;
         }
         const auto expansion = layout::Expansion(m_gridExpansion->currentData().toInt());
         m_layoutModel.setGrid(m_gridCols->value(), m_gridRows->value(), expansion);
         m_gridPreview->setModel(m_layoutModel);
-        emit gridChangeRequested(m_gridCols->value(), m_gridRows->value(), int(expansion));
     };
-    connect(m_gridCols, &QSpinBox::valueChanged, this, emitGrid);
-    connect(m_gridRows, &QSpinBox::valueChanged, this, emitGrid);
-    connect(m_gridExpansion, &QComboBox::currentIndexChanged, this, emitGrid);
+    connect(m_gridCols, &QSpinBox::valueChanged, this, editGrid);
+    connect(m_gridRows, &QSpinBox::valueChanged, this, editGrid);
+    connect(m_gridExpansion, &QComboBox::currentIndexChanged, this, editGrid);
+    connect(m_gridPreview, &GridPreview::spanChanged, this, [this](layout::Zone zone, int cols, int rows) {
+        m_layoutModel.setZoneSpan(zone, cols, rows); // a miniatura já mudou o próprio modelo; mantém o rascunho igual
+    });
     m_gridPreview->setModel(m_layoutModel);
 
     layout->addStretch();
@@ -307,12 +388,50 @@ LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
 void LayoutTab::setLayoutModel(const layout::LayoutModel &model)
 {
     m_layoutModel = model;
+    m_initialModel = model;
     m_syncingGrid = true;
     m_gridCols->setValue(model.cols());
     m_gridRows->setValue(model.rows());
     m_gridExpansion->setCurrentIndex(m_gridExpansion->findData(int(model.expansion())));
     m_syncingGrid = false;
     m_gridPreview->setModel(m_layoutModel);
+}
+
+bool LayoutTab::gridDirty() const
+{
+    return m_layoutModel.cols() != m_initialModel.cols() || m_layoutModel.rows() != m_initialModel.rows()
+        || m_layoutModel.expansion() != m_initialModel.expansion() || !changedSpans().isEmpty();
+}
+
+QList<layout::Zone> LayoutTab::changedSpans() const
+{
+    QList<layout::Zone> out;
+    if (m_layoutModel.expansion() != layout::Expansion::Fit) {
+        return out;
+    }
+    for (layout::Zone zone : m_layoutModel.cells()) {
+        const layout::ZoneState &now = m_layoutModel.zone(zone);
+        const layout::ZoneState &was = m_initialModel.zone(zone);
+        if (now.colSpan != was.colSpan || now.rowSpan != was.rowSpan) {
+            out.append(zone);
+        }
+    }
+    return out;
+}
+
+void LayoutTab::commitGrid()
+{
+    if (!gridDirty()) {
+        return;
+    }
+    const layout::LayoutModel draft = m_layoutModel;
+    const QList<layout::Zone> spans = changedSpans();
+    emit gridChangeRequested(draft.cols(), draft.rows(), int(draft.expansion()));
+    for (layout::Zone zone : spans) {
+        const layout::ZoneState &state = draft.zone(zone);
+        emit zoneSpanRequested(zone.row, zone.col, state.colSpan, state.rowSpan);
+    }
+    m_initialModel = draft;
 }
 
 } // namespace kai::ui

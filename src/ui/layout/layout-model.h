@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QRect>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 
@@ -28,7 +29,9 @@ inline size_t qHash(const Zone &zone, size_t seed = 0) noexcept { return qHashMu
 
 // Como as células vazias são absorvidas. Vertical: cada coluna é uma pilha de cima para baixo só das células preenchidas
 // (a que sobra ocupa a coluna toda). Horizontal: o mesmo com as linhas, da esquerda para a direita.
-enum class Expansion { Vertical, Horizontal };
+// Fit ("Ajustar"): nada é absorvido; cada célula tem o tamanho de uma casa da grade e o usuário a estica por várias
+// colunas/linhas (ZoneState::colSpan/rowSpan), como as peças da maleta do RE4.
+enum class Expansion { Vertical, Horizontal, Fit };
 
 // Onde um painel nasce quando nunca esteve em lugar nenhum: na célula da lista de comandos ou na da Saída.
 enum class Home { Primary, Secondary };
@@ -53,6 +56,7 @@ inline const QString kProcesses = QStringLiteral("processes");
 inline const QString kHistory = QStringLiteral("history");
 inline const QString kNotifications = QStringLiteral("notifications");
 inline const QString kVariables = QStringLiteral("variables");
+inline const QString kLogs = QStringLiteral("logs");
 // Um comando KIP fixado como painel: "kip:<commandId>".
 inline const QString kKipPrefix = QStringLiteral("kip:");
 // Uma execução arrastada para fora da Saída: "run:<commandId>".
@@ -72,6 +76,9 @@ struct ZoneState {
     // Numa célula recolhida, o painel que está aberto ao lado do conteúdo (vazio = a faixa está fechada). Volta aberto ao
     // reiniciar o Kai.
     QString open;
+    // Só no modo Fit: quantas colunas/linhas a célula ocupa a partir dela mesma (1 = uma casa).
+    int colSpan = 1;
+    int rowSpan = 1;
 
     bool operator==(const ZoneState &other) const = default;
 };
@@ -92,12 +99,23 @@ struct GridStack {
     QList<double> weights;
 };
 
+// Uma célula do modo Fit com o retângulo (em casas da grade) que realmente ocupa.
+struct FitCell {
+    Zone zone;
+    int row = 0;
+    int col = 0;
+    int rowSpan = 1;
+    int colSpan = 1;
+};
+
 // O que aparece e com que proporção: o DockHost só traduz isto em divisores. Pilhas sem célula visível não entram.
 struct GridPlan {
     Expansion expansion = Expansion::Vertical;
     QList<GridStack> stacks;
     // A fração de cada pilha no eixo principal (soma 1), na mesma ordem de `stacks`.
     QList<double> lineWeights;
+    // Modo Fit: o retângulo de cada célula que aparece (as pilhas acima seguem como linhas, para quem só precisa da ordem).
+    QList<FitCell> fit;
 
     bool empty() const { return stacks.isEmpty(); }
 };
@@ -153,6 +171,15 @@ public:
     bool setGrid(int cols, int rows, Expansion expansion);
     // O que aparece. `visible` decide por célula (o padrão: tem painel e não está recolhida).
     GridPlan plan(const std::function<bool(Zone)> &visible = {}) const;
+    // Modo Fit: o retângulo efetivo de cada célula com painel (os pedidos que passam da grade ou batem em outra célula
+    // com painel encolhem na leitura; o pedido guardado não muda, então a célula volta a esticar quando o vizinho sai).
+    QList<FitCell> fitCells(const std::function<bool(Zone)> &visible = {}) const;
+    // Muda quanto a célula ocupa (modo Fit). Falha fora do modo, em célula vazia ou se o retângulo bate em outra célula com
+    // painel; `colSpan`/`rowSpan` são limitados à grade.
+    bool setZoneSpan(Zone zone, int colSpan, int rowSpan);
+    // O maior retângulo (colunas × linhas em `width` × `height`) que cabe a partir de `zone`, até o pedido: o que o arrasto
+    // mostra antes de soltar.
+    QSize clampSpan(Zone zone, int colSpan, int rowSpan) const;
     double lineSize(int line) const;
     bool setLineSize(int line, double size);
 
@@ -212,6 +239,7 @@ private:
     static constexpr int kSlots = kMaxGridLines * kMaxGridLines;
     static Zone zoneAt(int slot) { return Zone{slot / kMaxGridLines, slot % kMaxGridLines}; }
 
+    bool spanFree(Zone zone, int colSpan, int rowSpan) const;
     void removeEverywhere(const QString &view);
     void fixActive(ZoneState &zone);
     void rememberClosed(const QString &view);

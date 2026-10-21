@@ -2348,5 +2348,16 @@
   "ai.tool.kill_process": "Parar processo",
   "ai.chat.copy_conversation": "Copiar conversa",
   "ai.chat.role.user": "Você",
-  "ai.chat.role.assistant": "Assistente"
+  "ai.chat.role.assistant": "Assistente",
+  "tray.state.running": "%1 em execução",
+  "tray.state.idle": "Ocioso",
+  "tray.quick_run": "Execução rápida",
+  "tray.stop_all": "Parar tudo",
+  "tray.environment": "Ambiente",
+  "tray.theme": "Tema",
+  "tray.notifications": "Notificações",
+  "tray.notifications.history": "Histórico",
+  "tray.notifications.enabled": "Ativadas",
+  "tray.settings": "Configurações",
+  "tray.logs": "Logs"
 }

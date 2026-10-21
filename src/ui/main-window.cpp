@@ -127,6 +127,7 @@
 #include <QUrl>
 #include <QRegularExpression>
 #include <functional>
+#include "ui/shared/tray-menu.h"
 #include "ui/shared/window-translucency.h"
 #include "ui/shared/file-dialogs.h"
 
@@ -959,18 +960,63 @@ void MainWindow::setupTrayIcon()
     m_trayIcon->setIcon(loadAppIcon());
     m_trayIcon->setToolTip(utils::tr(QStringLiteral("mainwindow.tray.tooltip")));
 
-    auto *menu = new QMenu();
-
-    auto *toggleAction = menu->addAction(utils::tr(QStringLiteral("tray.toggle")));
-    connect(toggleAction, &QAction::triggered, this, &MainWindow::toggleVisibility);
-
-    auto *importAction = menu->addAction(utils::tr(QStringLiteral("tray.import")));
-    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportRequested);
-
-    menu->addSeparator();
-
-    auto *quitAction = menu->addAction(utils::tr(QStringLiteral("tray.quit")));
-    connect(quitAction, &QAction::triggered, qApp, &QCoreApplication::quit);
+    auto *menu = new TrayMenu();
+    // Estado lido a cada abertura: nada fica desatualizado e nada roda em segundo plano.
+    connect(menu, &QMenu::aboutToShow, this, [this, menu]() {
+        const core::SettingsData settings = m_configManager.loadSettings();
+        TrayMenu::State state;
+        for (const QString &id : m_processManager->trackedCommandIds()) {
+            if (m_processManager->statusOf(id) == engine::ProcessStatus::Running) {
+                ++state.runningCount;
+            }
+        }
+        state.notificationsEnabled = settings.notificationsEnabled;
+        for (const core::Environment &e : settings.environments) {
+            state.environmentIds << e.id;
+            state.environmentNames << (e.name.isEmpty() ? e.id : e.name);
+        }
+        state.activeEnvironmentId = settings.activeEnvironmentId;
+        state.themes = availableThemeNames();
+        state.activeTheme = settings.activeTheme;
+        menu->rebuild(state);
+    });
+    connect(menu, &TrayMenu::toggleRequested, this, &MainWindow::toggleVisibility);
+    connect(menu, &TrayMenu::importRequested, this, &MainWindow::handleImportRequested);
+    connect(menu, &TrayMenu::quitRequested, qApp, &QCoreApplication::quit);
+    connect(menu, &TrayMenu::quickRunRequested, this, [this]() {
+        showAndRaise();
+        showQuickRun();
+    });
+    connect(menu, &TrayMenu::stopAllRequested, m_processManager, &engine::ProcessManager::stopAll);
+    connect(menu, &TrayMenu::notificationsHistoryRequested, this, [this]() {
+        showAndRaise();
+        handleNotificationHistoryRequested();
+    });
+    connect(menu, &TrayMenu::notificationsToggled, this, [this](bool enabled) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        settings.notificationsEnabled = enabled;
+        if (!m_configManager.saveSettings(settings)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Falha ao persistir o estado das notificações."));
+        }
+    });
+    connect(menu, &TrayMenu::environmentChosen, this, &MainWindow::handleEnvironmentSelected);
+    connect(menu, &TrayMenu::themeChosen, this, [this](const QString &themeName) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        if (settings.activeTheme == themeName) {
+            return;
+        }
+        if (!m_themeManager->loadTheme(themeName)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado pela bandeja.").arg(themeName));
+            return;
+        }
+        settings.activeTheme = themeName;
+        m_configManager.saveSettings(settings);
+    });
+    connect(menu, &TrayMenu::settingsRequested, this, [this]() {
+        showAndRaise();
+        handleSettingsRequested();
+    });
+    connect(menu, &TrayMenu::logsRequested, this, &MainWindow::handleLogsRequested);
 
     m_trayIcon->setContextMenu(menu);
     connect(m_trayIcon, &QSystemTrayIcon::activated, this, &MainWindow::handleTrayIconActivated);

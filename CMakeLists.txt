@@ -463,6 +463,8 @@ add_library(kai-ui STATIC
     src/ui/shared/json-syntax-highlighter.cpp
     src/ui/shared/lucide-icons.h
     src/ui/shared/lucide-icons.cpp
+    src/ui/shared/tray-menu.h
+    src/ui/shared/tray-menu.cpp
     src/ui/shared/icon-picker-widget.h
     src/ui/shared/icon-picker-widget.cpp
     src/ui/shared/icon-picker-dialog.h

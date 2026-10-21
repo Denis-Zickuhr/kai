@@ -238,6 +238,24 @@ void FolderActionsView::paint(QPainter *painter, const QStyleOptionViewItem &opt
     }
 }
 
+QRect FolderActionsView::outputMarkRect(const QRect &cell)
+{
+    const int box = 20;
+    return QRect(cell.right() - kMargin - box + 1, cell.top() + (cell.height() - box) / 2, box, box);
+}
+
+const QTreeWidgetItem *FolderActionsView::outputMarkAt(const QPoint &viewportPos) const
+{
+    const QTreeWidgetItem *item = m_tree->itemAt(viewportPos);
+    if (!item || !m_provider.outputMarkOf || !m_provider.folderIdOf || !m_provider.folderIdOf(item).isEmpty()) {
+        return nullptr;
+    }
+    if (m_provider.outputMarkOf(item) == OutputMark::None) {
+        return nullptr;
+    }
+    return outputMarkRect(cellRectFor(item)).contains(viewportPos) ? item : nullptr;
+}
+
 // No fim da coluna (o tempo de execução fica no começo): discreta quando o comando tem saída, em destaque quando é a que
 // está na Saída.
 void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark)
@@ -248,7 +266,7 @@ void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, Ou
     const bool shown = mark == OutputMark::Shown;
     const QColor color(shown ? tk::accent() : tk::mutedFg());
     const int box = 20;
-    const QRect rect(cell.right() - kMargin - box + 1, cell.top() + (cell.height() - box) / 2, box, box);
+    const QRect rect = outputMarkRect(cell);
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     if (shown) {
@@ -415,6 +433,10 @@ bool FolderActionsView::eventFilter(QObject *watched, QEvent *event)
         if (mouse->button() != Qt::LeftButton) {
             return false;
         }
+        if (const QTreeWidgetItem *marked = outputMarkAt(mouse->pos())) {
+            m_pressedMark = marked;
+            return true;
+        }
         const Hit hit = hitTest(mouse->pos());
         if (hit.valid) {
             m_pressedId = hit.icon.virtualId;
@@ -430,6 +452,13 @@ bool FolderActionsView::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonRelease: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() == Qt::LeftButton && m_pressedMark) {
+            const QTreeWidgetItem *pressed = std::exchange(m_pressedMark, nullptr);
+            if (outputMarkAt(mouse->pos()) == pressed) {
+                emit outputMarkClicked(pressed);
+            }
+            return true;
+        }
         if (mouse->button() != Qt::LeftButton || m_pressedId.isEmpty()) {
             return false;
         }

@@ -840,6 +840,9 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         };
         auto *actionsView = new FolderActionsView(tree, std::move(provider));
         connect(actionsView, &FolderActionsView::activated, this, &CommandTreeWidget::folderActionActivated);
+        connect(actionsView, &FolderActionsView::outputMarkClicked, this, [this](const QTreeWidgetItem *item) {
+            emit commandOutputRequested(item->data(0, kCommandIdRole).toString());
+        });
         connect(actionsView, &FolderActionsView::contextRequested, this,
                 &CommandTreeWidget::folderActionContextRequested);
         // Clicar na linha da pasta FORA dos ícones desfoca a ação dela: a pasta

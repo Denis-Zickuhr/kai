@@ -103,12 +103,16 @@ signals:
     void contextRequested(const QString &commandId, const QString &folderId, const QPoint &globalPos);
     // Clique numa linha de pasta FORA dos ícones.
     void rowClicked(const QString &folderId);
+    // Clique no monitor de uma linha de comando: focar a saída dele.
+    void outputMarkClicked(const QTreeWidgetItem *item);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     QRect cellRectFor(const QTreeWidgetItem *item) const;
+    static QRect outputMarkRect(const QRect &cell);
+    const QTreeWidgetItem *outputMarkAt(const QPoint &viewportPos) const;
     static void paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark);
     void paintIcon(QPainter *painter, const QRect &box, const FolderActionIcon &icon, bool running,
                    bool focused, bool hovered, bool hasOutput) const;
@@ -123,6 +127,7 @@ private:
     QTreeWidget *m_tree;
     Provider m_provider;
     QString m_pressedId;
+    const QTreeWidgetItem *m_pressedMark = nullptr;
     QString m_hoverId;
     QPointer<QMenu> m_menu; // o menu de expansão aberto (pra tratar o botão direito nos itens)
 };

@@ -111,7 +111,7 @@ QWidget *buildEnvCard(QWidget *parent, const core::Environment &env, bool isActi
 QPushButton *makeIconTextButton(QWidget *parent, const QString &iconName, const QString &text)
 {
     auto *button = new QPushButton(text, parent);
-    button->setIcon(LucideIcons::icon(iconName, QColor(tk::fg()), 14));
+    button->setIcon(LucideIcons::icon(iconName, QColor(tk::fg()), 16));
     makeCompactButton(button);
     // Reforça a largura mínima pelo próprio sizeHint: num QHBoxLayout apertado
     // (sidebar estreita), o botão podia ser espremido abaixo do necessário
@@ -273,19 +273,19 @@ void EnvironmentManagerDialog::setupUi()
             "QWidget#envTabSwitcher { background-color: %1; border-radius: %2px; }")
             .arg(tk::bg()).arg(tk::radiusMd()));
         auto *switcherLayout = new QHBoxLayout(switcher);
-        switcherLayout->setContentsMargins(1, 1, 1, 1);
+        switcherLayout->setContentsMargins(2, 2, 2, 2);
         switcherLayout->setSpacing(2);
         const QString segmentCss = QStringLiteral(
             "QPushButton { border: none; border-radius: %1px; padding: 0px %2px; min-height: 0px; font-weight: 600;"
             " background: transparent; color: %3; }"
             "QPushButton:checked { background-color: %4; color: %5; }")
-            .arg(tk::radiusSm()).arg(tk::space(3))
+            .arg(tk::radiusSm()).arg(tk::space(4))
             .arg(tk::mutedFg()).arg(tk::accent()).arg(tk::bg());
         auto *packagesButton = new QPushButton(utils::tr(QStringLiteral("env.tab.packages")), switcher);
         auto *dynamicVarsButton = new QPushButton(utils::tr(QStringLiteral("env.tab.dynamic_vars")), switcher);
         for (QPushButton *btn : {packagesButton, dynamicVarsButton}) {
             btn->setCheckable(true);
-            btn->setFixedHeight(22);
+            btn->setFixedHeight(26);
             btn->setCursor(Qt::PointingHandCursor);
             btn->setStyleSheet(segmentCss);
         }
@@ -408,7 +408,8 @@ void EnvironmentManagerDialog::setupUi()
     // makeIconTextButton) — o cabeçalho do card fica bem cheio (título +
     // subtítulo + badge + botão) e o botão "+Add" cortava sem reticências.
     if (auto *actionButton = varsCard->findChild<QPushButton *>()) {
-        makeCompactButton(actionButton);
+        actionButton->setFixedHeight(28);
+        actionButton->setIconSize(QSize(16, 16));
         actionButton->setMinimumWidth(actionButton->sizeHint().width());
     }
     // Expandido por padrão (diferente do Hooks/Params do Command Editor,

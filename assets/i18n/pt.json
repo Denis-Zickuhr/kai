@@ -324,6 +324,7 @@
   "importcfg.terminal_target.renamed_n": "%1 (importado %2)",
   "importcfg.title": "Importar Configuração",
   "keyvalue.add": "Adicionar",
+  "keyvalue.empty": "Nenhuma variável",
   "keyvalue.edit_row": "Editar variável",
   "keyvalue.quick_add.key_placeholder": "NOVA_CHAVE...",
   "keyvalue.quick_add.save": "Salvar",

@@ -232,7 +232,7 @@ void ZoneRail::mouseMoveEvent(QMouseEvent *event)
         m_hover = hover;
         update();
     }
-    if ((event->buttons() & Qt::LeftButton) && m_pressIndex >= 0
+    if (m_dragEnabled && (event->buttons() & Qt::LeftButton) && m_pressIndex >= 0
         && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
         const int index = m_pressIndex;
         m_pressIndex = -2;

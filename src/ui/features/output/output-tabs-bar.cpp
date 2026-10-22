@@ -716,6 +716,7 @@ void OutputTabsBar::mouseMoveEvent(QMouseEvent *event)
     const QPoint pos = event->position().toPoint();
     constexpr int kDragOutMargin = 18;
     if (m_pressed >= 0 && !m_pressedClose && (event->buttons() & Qt::LeftButton)
+        && m_externalDragAllowed && m_externalDragAllowed()
         && (pos.y() < -kDragOutMargin || pos.y() > height() + kDragOutMargin)) {
         startExternalDrag();
         return;

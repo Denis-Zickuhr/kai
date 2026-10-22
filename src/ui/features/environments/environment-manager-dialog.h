@@ -11,15 +11,20 @@
 class QListWidget;
 class QLineEdit;
 class QPushButton;
+class QToolButton;
+class QSplitter;
+class QLabel;
 class QBoxLayout;
 class QCheckBox;
 class QDialogButtonBox;
 class QKeyEvent;
+class QResizeEvent;
+class QShowEvent;
 class QTimer;
 
 namespace kai::ui {
 
-class KeyValueEditorWidget;
+class VariablesEditorWidget;
 class DynamicVarsInspectorWidget;
 
 // Tela de gestão de Environments (pacotes de variáveis) — revamp visual
@@ -71,6 +76,8 @@ signals:
 protected:
     void done(int result) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     void handleSelectionChanged();
@@ -81,6 +88,9 @@ private slots:
 
 private:
     void setupUi();
+    void applyStyle();
+    void updateOrientation();
+    void updateMeta();
     void reloadList();
     void commitCurrentEditor(); // salva nome+vars do pacote em edição no modelo
     void scheduleChanged();
@@ -92,10 +102,12 @@ private:
 
     QListWidget *m_list = nullptr;
     QLineEdit *m_nameField = nullptr;
-    KeyValueEditorWidget *m_varsEditor = nullptr;
+    VariablesEditorWidget *m_varsEditor = nullptr;
     QCheckBox *m_activeToggle = nullptr;
-    QPushButton *m_dupButton = nullptr;
-    QPushButton *m_delButton = nullptr;
+    QToolButton *m_dupButton = nullptr;
+    QToolButton *m_delButton = nullptr;
+    QLabel *m_meta = nullptr;
+    QSplitter *m_splitter = nullptr;
 
     // 2ª aba, opcional (ver construtor) — variáveis DINÂMICAS.
     core::EnvironmentManager *m_envManager = nullptr;

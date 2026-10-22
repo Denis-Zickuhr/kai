@@ -34,6 +34,8 @@ public:
     // Entre quais ícones um painel largado em `pos` (coordenadas da faixa) entraria: 0..n (n = no fim).
     int insertionIndexAt(const QPoint &pos) const;
 
+    void setDragEnabled(bool on) { m_dragEnabled = on; }
+
     QSize sizeHint() const override;
 
 signals:
@@ -69,6 +71,7 @@ private:
     void startDrag(int index);
 
     int m_hover = -2; // -2 nada, -1 expandir, >=0 ícone
+    bool m_dragEnabled = false;
     int m_pressIndex = -2; // o que estava sob o mouse ao apertar (-2 = nada)
     QPoint m_pressPos;
 };

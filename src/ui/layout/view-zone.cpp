@@ -256,7 +256,7 @@ void ZoneTabStrip::mouseMoveEvent(QMouseEvent *event)
         m_hoverMenu = onMenu;
         update();
     }
-    if ((event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose
+    if (m_dragEnabled && (event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose
         && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
         const int index = m_pressIndex;
         m_pressIndex = -1;
@@ -402,6 +402,8 @@ void ViewZone::setViews(const QStringList &ids, const QString &active, bool stri
         }
     }
     rebuildStrip(active);
+    m_dragEnabled = stripAlways;
+    m_strip->setDragEnabled(stripAlways);
     m_strip->setVisible(!m_stripSuppressed && (stripAlways || ids.size() > 1));
     applyGlue();
     if (QWidget *front = m_registry->existingWidget(active)) {
@@ -437,6 +439,7 @@ void ViewZone::applySplit()
         auto *header = new ZoneTabStrip(box);
         header->setBarHeight(m_barHeight);
         header->setZoneFocused(m_zoneFocused);
+        header->setDragEnabled(m_dragEnabled);
         header->setTabs({{id, m_registry->title(id), m_registry->icon(id), false}}, id);
         connect(header, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
         connect(header, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);

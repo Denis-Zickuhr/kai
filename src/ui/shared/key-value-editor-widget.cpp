@@ -20,6 +20,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFrame>
+#include <QStackedWidget>
 #include <QAbstractItemView>
 #include <QColor>
 #include <QFont>
@@ -133,7 +134,13 @@ void KeyValueEditorWidget::setupUi(const QString &keyHeader, const QString &valu
     // dado + ações inline.
     m_table->horizontalHeader()->setVisible(false);
     m_table->setFrameShape(QFrame::NoFrame);
-    m_table->verticalHeader()->setDefaultSectionSize(standardRowHeight());
+    m_table->setObjectName(QStringLiteral("kvTable"));
+    m_table->setShowGrid(false);
+    m_table->setStyleSheet(QStringLiteral(
+        "QTableWidget#kvTable { background: transparent; }"
+        "QTableWidget#kvTable::item { border-bottom: 1px solid %1; padding: 0px %2px; }")
+        .arg(utils::tokens::borderColor()).arg(utils::tokens::space(2)));
+    m_table->verticalHeader()->setDefaultSectionSize(utils::tokens::iconButtonSize() + 4);
     m_table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     // Altura mínima de 5 linhas (era 2 — reduzido antes por causa de scroll
     // à toa com poucas variáveis, mas o pedido novo e mais amplo é "aumentar
@@ -141,7 +148,7 @@ void KeyValueEditorWidget::setupUi(const QString &keyHeader, const QString &valu
     // app). 5 é um meio-termo: bem mais espaço que antes sem chegar nas 6
     // linhas do configureTable — essa tabela tipicamente tem poucas
     // variáveis, então nem sempre precisa do mesmo piso das outras.
-    m_table->setMinimumHeight(5 * standardRowHeight());
+    m_table->setMinimumHeight(5 * (utils::tokens::iconButtonSize() + 4));
     m_table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     // Somente-leitura: edição pelo formulário (lápis inline ou duplo-clique).
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -166,30 +173,44 @@ void KeyValueEditorWidget::setupUi(const QString &keyHeader, const QString &valu
     connect(m_addButton, &QToolButton::clicked, this, &KeyValueEditorWidget::handleAddRowClicked);
     buttonsLayout->addWidget(m_addButton);
 
-    layout->addWidget(m_table);
+    m_emptyLabel = new QLabel(utils::tr(QStringLiteral("keyvalue.empty")), this);
+    m_emptyLabel->setAlignment(Qt::AlignCenter);
+    m_emptyLabel->setStyleSheet(QStringLiteral("QLabel { background: transparent; color: %1; }")
+        .arg(utils::tokens::mutedFg()));
+    m_stack = new QStackedWidget(this);
+    m_stack->addWidget(m_table);
+    m_stack->addWidget(m_emptyLabel);
+    layout->addWidget(m_stack, 1);
     layout->addWidget(m_buttonsRow);
 
     // --- Linha de "adição rápida" (opt-in, ver setInlineAddRowEnabled) ---
     // Criada aqui mas escondida por padrão: nasce junto pra já existir se o
     // dono ligar a opção depois de setValues(), sem depender de ordem de
-    // chamada.
+    // chamada. Campos e botão têm a MESMA altura; fundo transparente.
+    constexpr int kQuickH = 30;
     m_quickAddRow = new QWidget(this);
     m_quickAddRow->setObjectName(QStringLiteral("kvQuickAddRow"));
-    m_quickAddRow->setAttribute(Qt::WA_StyledBackground, true);
-    // Borda TRACEJADA na cor de accent (mockup do usuário) — qualificada por
-    // objectName, nunca um setStyleSheet cru (ver nota em dialog-utils.h
-    // sobre o bug de cascata em descendentes).
-    m_quickAddRow->setStyleSheet(QStringLiteral(
-        "QWidget#kvQuickAddRow { border: 1px dashed %1; border-radius: %2px; }")
-        .arg(utils::tokens::accent()).arg(utils::tokens::radiusMd()));
+    m_quickAddRow->setStyleSheet(QStringLiteral("QWidget#kvQuickAddRow { background: transparent; }"));
     auto *quickAddLayout = new QHBoxLayout(m_quickAddRow);
-    quickAddLayout->setContentsMargins(utils::tokens::space(2), utils::tokens::space(1),
-                                       utils::tokens::space(2), utils::tokens::space(1));
+    quickAddLayout->setContentsMargins(0, utils::tokens::space(1), 0, 0);
+    quickAddLayout->setSpacing(utils::tokens::space(2));
+    const QString fieldCss = QStringLiteral(
+        "QLineEdit#%1 { padding: 0px %2px; min-height: 0px; border-radius: %3px; }"
+        "QLineEdit#%1:focus { border: 1px solid %4; }")
+        .arg(QStringLiteral("kvQuickField")).arg(utils::tokens::space(3))
+        .arg(utils::tokens::radiusMdForHeight(kQuickH)).arg(utils::tokens::accent());
     m_quickAddKey = new QLineEdit(m_quickAddRow);
-    m_quickAddKey->setPlaceholderText(utils::tr(QStringLiteral("keyvalue.quick_add.key_placeholder")));
     m_quickAddValue = new QLineEdit(m_quickAddRow);
+    for (QLineEdit *edit : {m_quickAddKey, m_quickAddValue}) {
+        edit->setObjectName(QStringLiteral("kvQuickField"));
+        edit->setFixedHeight(kQuickH);
+        edit->setStyleSheet(fieldCss);
+    }
+    m_quickAddKey->setPlaceholderText(utils::tr(QStringLiteral("keyvalue.quick_add.key_placeholder")));
     m_quickAddValue->setPlaceholderText(utils::tr(QStringLiteral("keyvalue.quick_add.value_placeholder")));
     m_quickAddSave = new QPushButton(utils::tr(QStringLiteral("keyvalue.quick_add.save")), m_quickAddRow);
+    m_quickAddSave->setIcon(LucideIcons::icon(QStringLiteral("check"), QColor(utils::tokens::fg()), 16));
+    makeCompactButton(m_quickAddSave, kQuickH);
     connect(m_quickAddSave, &QPushButton::clicked, this, &KeyValueEditorWidget::handleQuickAddSave);
     connect(m_quickAddKey, &QLineEdit::returnPressed, this, &KeyValueEditorWidget::handleQuickAddSave);
     connect(m_quickAddValue, &QLineEdit::returnPressed, this, &KeyValueEditorWidget::handleQuickAddSave);
@@ -211,7 +232,7 @@ void KeyValueEditorWidget::setValueColumnVisible(bool visible)
     // rouba espaço nem corta os ícones.
     m_table->horizontalHeader()->setSectionResizeMode(kKvColKey, QHeaderView::Stretch);
     if (visible) {
-        m_table->horizontalHeader()->setSectionResizeMode(kKvColValue, QHeaderView::Interactive);
+        m_table->horizontalHeader()->setSectionResizeMode(kKvColValue, QHeaderView::Stretch);
     }
 }
 
@@ -293,7 +314,7 @@ void KeyValueEditorWidget::rebuildTable()
             : r.value;
         m_table->setItem(row, kKvColValue, makeItem(shownValue));
 
-        if (m_secretRevealEnabled && m_hasSecretColumn && r.secret) {
+        if (m_secretRevealEnabled && m_hasSecretColumn) {
             // Cabe o terceiro ícone (olho) além de lápis/lixeira — host
             // próprio em vez de makeRowActionsCell (que só monta dois).
             auto *host = new QWidget(m_table);
@@ -307,10 +328,16 @@ void KeyValueEditorWidget::rebuildTable()
             hostLayout->setContentsMargins(0, 0, utils::tokens::space(1), 0);
             hostLayout->setSpacing(utils::tokens::space(1));
             const QString key = r.key;
-            auto *eyeButton = makeIconButton(host, revealed ? QStringLiteral("eye-off") : QStringLiteral("eye"),
+            if (!r.secret) {
+                // Reserva o lugar do olho: lápis/lixeira alinham em todas as linhas.
+                auto *spacer = new QWidget(host);
+                spacer->setFixedSize(utils::tokens::iconButtonSize(), utils::tokens::iconButtonSize());
+                hostLayout->addWidget(spacer);
+            }
+            auto *eyeButton = r.secret ? makeIconButton(host, revealed ? QStringLiteral("eye-off") : QStringLiteral("eye"),
                 utils::tr(revealed ? QStringLiteral("keyvalue.secret.hide") : QStringLiteral("keyvalue.secret.reveal")),
-                QColor(utils::tokens::mutedFg()));
-            connect(eyeButton, &QToolButton::clicked, this, [this, key]() {
+                QColor(utils::tokens::mutedFg())) : nullptr;
+            if (eyeButton) connect(eyeButton, &QToolButton::clicked, this, [this, key]() {
                 if (m_revealedKeys.contains(key)) {
                     m_revealedKeys.remove(key);
                 } else {
@@ -318,7 +345,7 @@ void KeyValueEditorWidget::rebuildTable()
                 }
                 rebuildTable();
             });
-            hostLayout->addWidget(eyeButton, 0, Qt::AlignCenter);
+            if (eyeButton) hostLayout->addWidget(eyeButton, 0, Qt::AlignCenter);
             auto *rowActions = makeRowActionsCell(host,
                 [this, row]() { if (editRow(row)) rebuildTable(); },
                 [this, row]() { removeRowAt(row); });
@@ -330,6 +357,7 @@ void KeyValueEditorWidget::rebuildTable()
                 [this, row]() { removeRowAt(row); }));
         }
     }
+    m_stack->setCurrentWidget(m_rows.isEmpty() ? static_cast<QWidget *>(m_emptyLabel) : m_table);
     emit changed();
 }
 

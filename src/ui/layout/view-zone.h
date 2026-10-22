@@ -34,6 +34,8 @@ public:
     // A zona tem o foco do teclado: só nela o sublinhado da aba da frente usa a cor de destaque.
     void setZoneFocused(bool focused);
     bool zoneFocused() const { return m_zoneFocused; }
+    // Fora do modo reorganizar as abas não iniciam arrasto.
+    void setDragEnabled(bool on) { m_dragEnabled = on; }
     QString activeId() const { return m_active; }
     int count() const { return int(m_tabs.size()); }
     // Índice da aba sob `pos` (coordenadas da faixa) ou -1.
@@ -70,6 +72,7 @@ private:
     void relayout();
     void startDrag(int index);
 
+    bool m_dragEnabled = false;
     QList<Tab> m_tabs;
     QList<QRect> m_rects;
     QString m_active;
@@ -166,6 +169,7 @@ private:
     bool m_syncing = false;
     bool m_regluePending = false;
     bool m_stripSuppressed = false;
+    bool m_dragEnabled = false;
     bool m_wantSplit = false;
     bool m_zoneFocused = false;
     int m_barHeight = 30;

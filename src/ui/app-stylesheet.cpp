@@ -160,7 +160,9 @@ QString buildModernStylesheet()
     // --- Botões: primário (accent) vs neutro, via propriedade kaiRole ---
     qss += QStringLiteral(
         "QPushButton { background-color: %1; color: %2; border: 1px solid %3;"
-        " border-radius: %4px; padding: %5px %6px; min-height: %7px; font-weight: 500; }\n"
+        " border-radius: %4px; padding: %5px %6px; min-height: %7px; font-weight: 500;"
+        " outline: none; }\n"
+        "QPushButton:focus { border: 1px solid %11; }\n"
         "QPushButton:hover { background-color: %8; }\n"
         "QPushButton:pressed { background-color: %9; }\n"
         "QPushButton:disabled { color: %10; border-color: %3; }\n"

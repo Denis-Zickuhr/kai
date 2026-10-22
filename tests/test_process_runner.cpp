@@ -1,3 +1,5 @@
+#include <QDir>
+#include <QFile>
 #include <QTest>
 #include <QSignalSpy>
 
@@ -31,6 +33,39 @@ private slots:
             combinedOutput += call.at(0).toString();
         }
         QVERIFY(combinedOutput.contains(QStringLiteral("hello-kai")));
+    }
+
+    // Quem ignora o Ctrl+C/SIGTERM, ou saiu da sessão com setsid, ainda é morto depois do tempo de graça — mesmo que o
+    // runner seja destruído antes (era o caso de um script que continuava rodando depois de parado).
+    void stopKillsStubbornDescendantsEvenIfRunnerIsDestroyed()
+    {
+#if defined(Q_OS_LINUX)
+        const QString marker = QStringLiteral("kai-stubborn-%1").arg(QTest::currentTestFunction());
+        const auto alive = [&marker]() {
+            for (const QString &entry : QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                QFile cmd(QStringLiteral("/proc/%1/cmdline").arg(entry));
+                if (cmd.open(QIODevice::ReadOnly) && cmd.readAll().contains(marker.toUtf8())) {
+                    QFile stat(QStringLiteral("/proc/%1/stat").arg(entry));
+                    if (stat.open(QIODevice::ReadOnly) && !stat.readAll().contains(") Z")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        {
+            auto *runner = new ProcessRunner;
+            runner->setKillTimeoutMs(600);
+            runner->start(QStringLiteral("setsid bash -c 'trap \"\" INT TERM; exec -a %1 sleep 30' & sleep 30").arg(marker),
+                          QString(), {});
+            QTRY_VERIFY_WITH_TIMEOUT(alive(), 3000);
+            runner->stop();
+            delete runner; // os timers do runner morrem aqui; a escalada tem de continuar sozinha
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!alive(), 5000);
+#else
+        QSKIP("Linux only");
+#endif
     }
 
     // Valida injeção de ambiente via QProcessEnvironment.

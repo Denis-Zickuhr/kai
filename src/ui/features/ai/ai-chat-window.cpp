@@ -158,8 +158,10 @@ void AiChatWindow::buildUi()
     m_sidebar = new QWidget(this);
     m_sidebar->setObjectName(QStringLiteral("aiSidebar"));
     m_sidebar->setFixedWidth(kSidebarWidth);
-    m_sidebar->setStyleSheet(QStringLiteral("QWidget#aiSidebar { background: %1; border-right: 1px solid %2; }")
-                                 .arg(tk::surface(), tk::borderColor()));
+    m_sidebar->setStyleSheet(QStringLiteral(
+        "QWidget#aiSidebar { background: %1; border-right: 1px solid %2;"
+        " border-top-left-radius: %3px; border-bottom-left-radius: %3px; }")
+        .arg(tk::surface(), tk::borderColor()).arg(tk::radiusMd()));
     auto *sideLayout = new QVBoxLayout(m_sidebar);
     sideLayout->setContentsMargins(tk::space(2) + 2, tk::space(3), tk::space(2) + 2, tk::space(3));
     sideLayout->setSpacing(tk::space(2));
@@ -303,8 +305,8 @@ void AiChatWindow::buildUi()
     m_jump->setIcon(LucideIcons::icon(QStringLiteral("arrow-down"), QColor(tk::fg()), 16));
     m_jump->setToolTip(utils::tr(QStringLiteral("ai.chat.jump_bottom")));
     m_jump->setStyleSheet(QStringLiteral(
-        "QToolButton { background: %1; border: 1px solid %2; border-radius: 17px; padding: 0; min-height: 34px; min-width: 34px; }"
-        "QToolButton:hover { background: %3; }").arg(tk::surface2(), aiStrongBorder(), tk::hoverBg()));
+        "QToolButton { background: %1; border: 1px solid %2; border-radius: %4px; padding: 0; min-height: 34px; min-width: 34px; }"
+        "QToolButton:hover { background: %3; }").arg(tk::surface2(), aiStrongBorder(), tk::hoverBg()).arg(tk::radiusMd() <= 0 ? 0 : 17));
     m_jump->setVisible(false);
     connect(m_jump, &QToolButton::clicked, this, [this]() { forceBottom(); });
 
@@ -410,11 +412,12 @@ void AiChatWindow::buildUi()
     m_send->setCursor(Qt::PointingHandCursor);
     m_send->setFixedSize(36, 36);
     m_send->setStyleSheet(QStringLiteral(
-        "QPushButton { background: %1; border: 1px solid %2; border-radius: 18px; padding: 0px; min-height: 36px; min-width: 36px; }"
+        "QPushButton { background: %1; border: 1px solid %2; border-radius: %5px; padding: 0px; min-height: 36px; min-width: 36px; }"
         "QPushButton:hover { background: %3; }"
-        "QPushButton:disabled { background: %4; border: 1px solid %4; border-radius: 18px; }")
+        "QPushButton:disabled { background: %4; border: 1px solid %4; border-radius: %5px; }")
         .arg(tk::buttonColor(), QColor(tk::buttonColor()).lighter(135).name(), QColor(tk::buttonColor()).lighter(112).name(),
-             tk::borderColor()));
+             tk::borderColor())
+        .arg(tk::radiusMd() <= 0 ? 0 : 18));
     composerLayout->addWidget(m_send, 0, Qt::AlignBottom);
     columnLayout->addWidget(m_composer);
     mainLayout->addWidget(composerHost);

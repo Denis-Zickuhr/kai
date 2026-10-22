@@ -6,6 +6,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 class QMenu;
 class QPainter;
 class QTimer;
@@ -38,6 +40,8 @@ class OutputTabsBar : public QWidget {
     Q_OBJECT
 
 public:
+    // Puxar a guia para virar painel só vale quando isto retorna true (modo reorganizar).
+    void setExternalDragAllowed(std::function<bool()> allowed) { m_externalDragAllowed = std::move(allowed); }
     explicit OutputTabsBar(QWidget *parent = nullptr);
 
     // Substitui o conjunto de guias (ordem = ordem na barra). Guarda o início de cada execução vista rodando, para o
@@ -159,6 +163,7 @@ private:
     int m_dragX = 0;          // borda esquerda atual da guia arrastada (acompanha o mouse)
     int m_dragOrigin = -1;    // posição da guia ao começar o arrasto
     bool m_dragActive = false;
+    std::function<bool()> m_externalDragAllowed;
     bool m_pressedClose = false;
     QTimer *m_timer = nullptr;
 };

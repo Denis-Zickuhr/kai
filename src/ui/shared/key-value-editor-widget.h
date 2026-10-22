@@ -8,6 +8,8 @@
 
 class QTableWidget;
 class QToolButton;
+class QStackedWidget;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 
@@ -109,6 +111,8 @@ private:
     void handleQuickAddSave();
 
     QTableWidget *m_table = nullptr;
+    QStackedWidget *m_stack = nullptr;
+    QLabel *m_emptyLabel = nullptr;
     bool m_hasSecretColumn = false;
     QString m_keyHeader;
     QString m_valueHeader;

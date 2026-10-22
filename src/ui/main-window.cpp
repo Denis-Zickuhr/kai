@@ -714,6 +714,7 @@ void MainWindow::setupUi()
     });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabContextRequested, this, &MainWindow::showOutputTabMenu);
     // Puxar uma guia para fora da barra a transforma num painel arrastável (`run:<id>`): ver DockHost::beginViewDrag.
+    m_terminalDrawer->outputTabs()->setExternalDragAllowed([this]() { return m_dock && m_dock->editMode(); });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabDragStarted, this, [this](const QString &) {
         if (m_dock) {
             m_dock->beginViewDrag();

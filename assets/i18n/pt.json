@@ -158,7 +158,6 @@
   "dynamic_vars.reset_all.confirm": "Resetar toda variável dinâmica, em todos os projetos? Não dá pra desfazer.",
   "dynamic_vars.reset_scope": "Resetar este escopo",
   "dynamic_vars.reset_scope.confirm": "Resetar toda variável dinâmica em '%1'? Não dá pra desfazer.",
-  "dynamic_vars.column.variable": "Variável",
   "dynamic_vars.column.scope": "Projeto",
   "dynamic_vars.edit_row": "Editar variável",
   "dynamic_vars.field.name": "Nome",
@@ -166,7 +165,6 @@
   "env.new.default_name": "Novo pacote",
   "env.selector.tooltip": "Environment ativo (pacote de variáveis)",
   "env.sidebar.title": "MEUS AMBIENTES",
-  "env.vars.card.title": "Variáveis de Ambiente",
   "env.vars.count": "%1 variáveis",
   "export.dialog_title": "Salvar arquivo de exportação",
   "export.linked_collections.title": "Coleções vinculadas",
@@ -324,6 +322,7 @@
   "importcfg.terminal_target.renamed_n": "%1 (importado %2)",
   "importcfg.title": "Importar Configuração",
   "keyvalue.add": "Adicionar",
+  "keyvalue.empty": "Nenhuma variável",
   "keyvalue.edit_row": "Editar variável",
   "keyvalue.quick_add.key_placeholder": "NOVA_CHAVE...",
   "keyvalue.quick_add.save": "Salvar",
@@ -2359,5 +2358,8 @@
   "tray.notifications.history": "Histórico",
   "tray.notifications.enabled": "Ativadas",
   "tray.settings": "Configurações",
-  "tray.logs": "Logs"
+  "tray.logs": "Logs",
+  "variables.search.placeholder": "Buscar variáveis",
+  "variables.no_match": "Nada encontrado",
+  "dynamic_vars.empty": "Nenhuma variável dinâmica"
 }

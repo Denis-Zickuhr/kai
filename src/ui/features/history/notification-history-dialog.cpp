@@ -26,7 +26,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "ui/shared/adaptive-button.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/search-line-edit.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/panel-metrics.h"
 #include "ui/shared/tinted-badge.h"
@@ -210,7 +212,7 @@ constexpr int kCompactButtonHeight = 26;
 QPushButton *makeActionButton(QWidget *parent, const QString &iconName, const QString &text,
                               const QString &tooltip = QString())
 {
-    auto *button = new QPushButton(text, parent);
+    auto *button = new AdaptiveButton(text, parent);
     button->setIcon(LucideIcons::icon(iconName, QColor(tk::mutedFg()), 14));
     button->setIconSize(QSize(14, 14));
     button->setCursor(Qt::PointingHandCursor);
@@ -398,15 +400,12 @@ void NotificationHistoryDialog::setupUi()
     });
     top->addWidget(filterFrame);
 
-    m_searchField = new QLineEdit(this);
-    m_searchField->setClearButtonEnabled(true);
+    m_searchField = new SearchLineEdit(this);
     m_searchField->setPlaceholderText(utils::tr(QStringLiteral("notifications.search.placeholder")));
-    m_searchField->addAction(LucideIcons::icon(QStringLiteral("search"), QColor(tk::mutedFg()), 16),
-                             QLineEdit::LeadingPosition);
     m_searchField->setMinimumWidth(200);
     m_searchField->setFixedHeight(28);
-    m_searchField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px %1px; border-radius: %2px; }")
-        .arg(tk::space(2)).arg(tk::radiusMdForHeight(28)));
+    m_searchField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }")
+        .arg(tk::radiusMdForHeight(28)));
     connect(m_searchField, &QLineEdit::textChanged, this, [this]() { reload(); });
     top->addWidget(m_searchField);
     outer->addLayout(top);
@@ -491,6 +490,8 @@ void NotificationHistoryDialog::setupUi()
     head->setSpacing(tk::space(3));
     m_detailIcon = new QLabel(detail);
     m_detailIcon->setFixedSize(32, 32);
+    m_detailIcon->setObjectName(QStringLiteral("notificationDetailIcon"));
+    m_detailIcon->setStyleSheet(QStringLiteral("QLabel#notificationDetailIcon { background: transparent; border: none; }"));
     head->addWidget(m_detailIcon, 0, Qt::AlignTop);
     auto *headText = new QVBoxLayout();
     headText->setSpacing(tk::space(1));

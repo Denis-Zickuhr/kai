@@ -276,6 +276,7 @@ QStringList DockHost::railOpen(Edge edge) const
 void DockHost::refreshRail(Edge edge)
 {
     if (ZoneRail *rail = m_rails.value(edge)) {
+        rail->setDragEnabled(m_model.tabsAlways());
         rail->setViews(railViews(edge), railOpen(edge), railGroups(edge));
     }
 }
@@ -380,6 +381,7 @@ void DockHost::rebuild()
             connect(rail, &ZoneRail::viewMenuRequested, this, &DockHost::showPanelMenu);
             connect(rail, &ZoneRail::dragStarted, this, [this](const QString &) { beginViewDrag(); });
             connect(rail, &ZoneRail::dragFinished, this, &DockHost::endViewDrag);
+            rail->setDragEnabled(m_model.tabsAlways());
             m_rails.insert(edge, rail);
         }
     }

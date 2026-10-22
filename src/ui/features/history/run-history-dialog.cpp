@@ -25,7 +25,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "ui/shared/adaptive-button.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/search-line-edit.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
@@ -182,16 +184,16 @@ void RunHistoryDialog::setupUi()
     // --- Barra de cima: busca, contagem e limpar -----------------------------------------------------------------
     auto *top = new QHBoxLayout();
     top->setSpacing(tk::space(2));
-    m_search = new QLineEdit(this);
+    m_search = new SearchLineEdit(this);
     m_search->setObjectName(QStringLiteral("runSearch"));
     m_search->setPlaceholderText(utils::tr(QStringLiteral("runs.search")));
-    m_search->setClearButtonEnabled(true);
+    m_search->setStyleSheet(QStringLiteral("QLineEdit { padding: 0px; border-radius: %1px; }").arg(tk::radiusMd()));
     connect(m_search, &QLineEdit::textChanged, this, [this]() { rebuildList(); });
     top->addWidget(m_search, 1);
     m_count = new QLabel(this);
     m_count->setObjectName(QStringLiteral("runCount"));
     top->addWidget(m_count);
-    m_clearButton = new QPushButton(utils::tr(QStringLiteral("runs.action.clear")), this);
+    m_clearButton = new AdaptiveButton(utils::tr(QStringLiteral("runs.action.clear")), this);
     m_clearButton->setIcon(LucideIcons::icon(QStringLiteral("trash-2"), QColor(tk::mutedFg()), 16));
     m_clearButton->setCursor(Qt::PointingHandCursor);
     connect(m_clearButton, &QPushButton::clicked, this, &RunHistoryDialog::handleClear);
@@ -290,12 +292,12 @@ void RunHistoryDialog::setupUi()
 
     auto *actions = new QHBoxLayout();
     actions->setSpacing(tk::space(2));
-    m_rerun = new QPushButton(utils::tr(QStringLiteral("runs.action.rerun")), detail);
+    m_rerun = new AdaptiveButton(utils::tr(QStringLiteral("runs.action.rerun")), detail);
     m_rerun->setIcon(LucideIcons::icon(QStringLiteral("play"), QColor(tk::buttonFg()), 16));
     m_rerun->setProperty("kaiRole", QStringLiteral("primary"));
     m_rerun->setCursor(Qt::PointingHandCursor);
     connect(m_rerun, &QPushButton::clicked, this, &RunHistoryDialog::handleRerun);
-    m_copy = new QPushButton(utils::tr(QStringLiteral("runs.action.copy")), detail);
+    m_copy = new AdaptiveButton(utils::tr(QStringLiteral("runs.action.copy")), detail);
     m_copy->setIcon(LucideIcons::icon(QStringLiteral("copy"), QColor(tk::mutedFg()), 16));
     m_copy->setCursor(Qt::PointingHandCursor);
     connect(m_copy, &QPushButton::clicked, this, &RunHistoryDialog::handleCopy);

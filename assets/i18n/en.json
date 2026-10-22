@@ -158,7 +158,6 @@
   "dynamic_vars.reset_all.confirm": "Reset every dynamic variable, in every project? This can't be undone.",
   "dynamic_vars.reset_scope": "Reset this scope",
   "dynamic_vars.reset_scope.confirm": "Reset every dynamic variable in '%1'? This can't be undone.",
-  "dynamic_vars.column.variable": "Variable",
   "dynamic_vars.column.scope": "Project",
   "dynamic_vars.edit_row": "Edit variable",
   "dynamic_vars.field.name": "Name",
@@ -166,7 +165,6 @@
   "env.new.default_name": "New package",
   "env.selector.tooltip": "Active environment (variable package)",
   "env.sidebar.title": "MY ENVIRONMENTS",
-  "env.vars.card.title": "Environment Variables",
   "env.vars.count": "%1 variables",
   "export.dialog_title": "Save export file",
   "export.linked_collections.title": "Linked collections",
@@ -324,6 +322,7 @@
   "importcfg.terminal_target.renamed_n": "%1 (imported %2)",
   "importcfg.title": "Import Configuration",
   "keyvalue.add": "Add",
+  "keyvalue.empty": "No variables",
   "keyvalue.edit_row": "Edit variable",
   "keyvalue.quick_add.key_placeholder": "NEW_KEY...",
   "keyvalue.quick_add.save": "Save",
@@ -2359,5 +2358,8 @@
   "tray.notifications.history": "History",
   "tray.notifications.enabled": "Enabled",
   "tray.settings": "Settings",
-  "tray.logs": "Logs"
+  "tray.logs": "Logs",
+  "variables.search.placeholder": "Search variables",
+  "variables.no_match": "No matches",
+  "dynamic_vars.empty": "No dynamic variables"
 }

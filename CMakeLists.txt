@@ -398,6 +398,10 @@ add_library(kai-ui STATIC
     src/ui/features/environments/env-extractors-editor-widget.cpp
     src/ui/features/environments/declared-env-vars-editor-widget.h
     src/ui/features/environments/declared-env-vars-editor-widget.cpp
+    src/ui/features/environments/variable-list-view.h
+    src/ui/features/environments/variable-list-view.cpp
+    src/ui/features/environments/variables-editor-widget.h
+    src/ui/features/environments/variables-editor-widget.cpp
     src/ui/features/environments/dynamic-vars-inspector-widget.h
     src/ui/features/environments/dynamic-vars-inspector-widget.cpp
     src/ui/features/collections/project-detection-strategy.h
@@ -567,6 +571,10 @@ add_library(kai-ui STATIC
     src/ui/shared/tab-strip-background.cpp
     src/ui/shared/item-actions-bar.h
     src/ui/shared/item-actions-bar.cpp
+    src/ui/shared/adaptive-button.h
+    src/ui/shared/adaptive-button.cpp
+    src/ui/shared/search-line-edit.h
+    src/ui/shared/search-line-edit.cpp
     src/ui/shared/combo-popup-filter.h
     src/ui/shared/combo-popup-filter.cpp
     src/ui/shared/key-trace-filter.h

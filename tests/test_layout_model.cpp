@@ -791,6 +791,18 @@ private slots:
         QCOMPARE(cells.first().colSpan * cells.first().rowSpan, 2);
     }
 
+    void aLonePanelCarriesItsFitSizeToAnEmptyCell()
+    {
+        LayoutModel model = LayoutModel::defaultLayout();
+        QVERIFY(model.setGrid(3, 2, Expansion::Fit));
+        QVERIFY(model.setZoneSpan(Zone{0, 0}, 1, 2));
+        const QString list = model.zone(Zone{0, 0}).views.first();
+        QCOMPARE(model.zone(Zone{0, 0}).views.size(), 1);
+        QVERIFY(model.placeView(list, Zone{0, 2}));
+        QCOMPARE(model.zone(Zone{0, 2}).rowSpan, 2);
+        QCOMPARE(model.zone(Zone{0, 0}).rowSpan, 1);
+    }
+
     void fitSpansRoundTripAndOldFilesLoadWithSingleCellSpans()
     {
         LayoutModel model = LayoutModel::defaultLayout();

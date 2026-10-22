@@ -1627,6 +1627,21 @@ private slots:
     }
 
     // Modo Ajustar: as células têm o tamanho de casas da grade, a alça estica por mais casas e o modelo guarda.
+    void fitGripsOnlyShowInReorderMode()
+    {
+        Rig rig;
+        LayoutModel model = rig.dock->model();
+        model.setGrid(2, 2, Expansion::Fit);
+        rig.dock->setModel(model);
+        rig.show();
+        rig.dock->setEditMode(false);
+        QTest::qWait(30);
+        QVERIFY(rig.dock->fitBoard()->gripOf(kTop)->isHidden());
+        rig.dock->setEditMode(true);
+        QTest::qWait(30);
+        QVERIFY(!rig.dock->fitBoard()->gripOf(kTop)->isHidden());
+    }
+
     void fitModeSizesCellsBySpanAndTheGripStretchesThem()
     {
         Rig rig;

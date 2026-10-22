@@ -859,8 +859,8 @@ void DockHost::buildFitBoard(const std::optional<Zone> &only, const QString &max
         });
     m_fit->setItems(items);
     m_boardLayout->addWidget(m_fit, 1);
-    // Maximizado não tem alça (a célula já é a grade toda).
-    if (only) {
+    // Sem o modo reordenar (e maximizado, onde a célula já é a grade toda) não há alça.
+    if (only || !m_model.tabsAlways()) {
         for (const FitBoard::Item &item : std::as_const(items)) {
             if (QWidget *grip = m_fit->gripOf(item.cell.zone)) {
                 grip->hide();

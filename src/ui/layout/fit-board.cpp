@@ -29,6 +29,7 @@ public:
         setCursor(Qt::SizeFDiagCursor);
         setToolTip(utils::tr(QStringLiteral("layout.fit.grip")));
         setObjectName(QStringLiteral("fitGrip"));
+        setStyleSheet(QStringLiteral("#fitGrip { background: transparent; }"));
     }
 
 protected:
@@ -83,6 +84,7 @@ public:
     {
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setObjectName(QStringLiteral("fitPreview"));
+        setStyleSheet(QStringLiteral("#fitPreview { background: transparent; }"));
     }
 
 protected:

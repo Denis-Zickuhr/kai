@@ -855,12 +855,25 @@ bool LayoutModel::placeView(const QString &view, Zone zone, int index)
     if (index >= 0 && zoneOf(view) == std::optional<Zone>(zone) && m_zones[slotOf(zone)].views.indexOf(view) < index) {
         --index;
     }
+    // Um painel sozinho que vai para uma célula vazia leva o tamanho (Fit) que a célula de origem tinha.
+    int carryCols = 1;
+    int carryRows = 1;
+    const auto from = zoneOf(view);
+    if (from && *from != zone && m_zones[slotOf(*from)].views.size() == 1 && m_zones[slotOf(zone)].views.isEmpty()) {
+        carryCols = m_zones[slotOf(*from)].colSpan;
+        carryRows = m_zones[slotOf(*from)].rowSpan;
+    }
     removeEverywhere(view);
     ZoneState &state = m_zones[slotOf(zone)];
     const int at = index < 0 || index > state.views.size() ? int(state.views.size()) : index;
     state.views.insert(at, view);
     state.active = view;
     m_last.insert(view, zone);
+    if (carryCols > 1 || carryRows > 1) {
+        const QSize fit = clampSpan(zone, carryCols, carryRows);
+        state.colSpan = fit.width();
+        state.rowSpan = fit.height();
+    }
     return *this != before;
 }
 

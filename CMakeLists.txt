@@ -70,6 +70,8 @@ target_compile_options(vterm PRIVATE -w)
 # Compartilhada entre o binário principal e os testes, para evitar
 # recompilar as mesmas fontes duas vezes.
 add_library(kai-core STATIC
+    src/utils/action-shortcuts.h
+    src/utils/action-shortcuts.cpp
     src/core/models.h
     src/core/models.cpp
     src/core/note-files.h
@@ -230,14 +232,12 @@ add_library(kai-engine STATIC
 )
 
 target_include_directories(kai-engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(kai-engine PUBLIC kai-core Qt6::Core Qt6::Network)
+target_link_libraries(kai-engine PUBLIC kai-core Qt6::Core Qt6::Gui Qt6::Network)
 
 # --- Biblioteca "kai-ui": widgets Qt ---
 add_library(kai-ui STATIC
     src/utils/design-tokens.h
     src/utils/design-tokens.cpp
-    src/utils/action-shortcuts.h
-    src/utils/action-shortcuts.cpp
     src/ui/app-stylesheet.h
     src/ui/app-stylesheet.cpp
     src/ui/features/collections/export-dialog.h

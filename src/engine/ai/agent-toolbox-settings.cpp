@@ -8,6 +8,24 @@
 #include <QKeySequence>
 #include <cmath>
 
+namespace {
+// fromString devolve algo não vazio até para texto qualquer; o que não é tecla vira Key_unknown.
+bool isValidKeySequence(const QString &text)
+{
+    const QKeySequence seq = QKeySequence::fromString(text.trimmed());
+    if (seq.isEmpty()) {
+        return false;
+    }
+    for (int i = 0; i < seq.count(); ++i) {
+        if (seq[i].toCombined() == 0 || (seq[i].toCombined() & ~Qt::KeyboardModifierMask) == Qt::Key_unknown) {
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
+
 namespace kai::engine {
 
 using namespace toolutil;
@@ -209,7 +227,7 @@ QVector<Spec> buildSpecs(const AgentToolHost *host)
                              [](SettingsData &d) -> QString & { return d.globalHotkey; });
         auto base = hk.set;
         hk.set = [base](SettingsData &d, const QJsonValue &v) -> QString {
-            if (v.isString() && QKeySequence::fromString(v.toString().trimmed()).isEmpty()) return QStringLiteral("is not a valid key sequence");
+            if (v.isString() && !isValidKeySequence(v.toString())) return QStringLiteral("is not a valid key sequence");
             return base(d, v);
         };
         out << hk;
@@ -283,7 +301,7 @@ QVector<Spec> buildSpecs(const AgentToolHost *host)
             QStringList seqs;
             for (const QJsonValue &e : arr) {
                 const QString t = e.toString().trimmed();
-                if (!e.isString() || t.isEmpty() || QKeySequence::fromString(t).isEmpty()) {
+                if (!e.isString() || t.isEmpty() || !isValidKeySequence(t)) {
                     return QStringLiteral("'%1' is not a valid key sequence").arg(e.toString());
                 }
                 seqs << QKeySequence::fromString(t).toString();

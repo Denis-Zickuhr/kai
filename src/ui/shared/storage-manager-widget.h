@@ -6,7 +6,7 @@
 #include "core/config-manager.h"
 #include "core/models.h"
 
-class QComboBox;
+class QButtonGroup;
 class QLineEdit;
 class QTableWidget;
 class QLabel;
@@ -41,17 +41,22 @@ public:
     // persistCollections), reaproveitados em vez de duplicar I/O — chamar
     // um deles atualiza a árvore do app na hora, mesmo com este diálogo
     // ainda aberto por cima.
+    // `notes`/`persistNotes` são opcionais: sem eles o filtro "Notas" some.
     StorageManagerWidget(core::CommandsData &commandsData,
                           QVector<core::Collection> &collections,
                           std::function<void()> persistCommands,
                           std::function<void()> persistCollections,
+                          QVector<core::Note> *notes = nullptr,
+                          std::function<void()> persistNotes = {},
                           QWidget *parent = nullptr);
 
 private:
-    enum class DataKind { Command, Folder, Collection };
+    // "All" só existe como filtro; cada linha é de um dos outros tipos.
+    enum class DataKind { All, Command, Http, Folder, Collection, Note };
 
     struct RowInfo {
         QString id;
+        DataKind kind = DataKind::Command;
         QString name;
         QString typeBadgeText;
         QString typeBadgeColor; // hex resolvido do token de tema certo
@@ -62,26 +67,36 @@ private:
     QVector<RowInfo> collectRows() const;
     void updateSelectionState();
     void handleFilterChanged(const QString &text);
-    void handleKindChanged(int index);
+    void handleKindChanged();
     void handleSelectAll();
     void handleClearSelection();
     void handleDuplicateSelected();
     void handleDeleteSelected();
-    void duplicateSingle(const QString &id);
-    void deleteSingle(const QString &id);
+    void duplicateSingle(DataKind kind, const QString &id);
+    void deleteSingle(DataKind kind, const QString &id);
     // Só o despacho por tipo (sem persistir/reconstruir a tabela) — usado
     // tanto pra duplicar um item quanto pra duplicar vários de uma vez.
-    void applyDuplicate(const QString &id);
+    void applyDuplicate(DataKind kind, const QString &id);
     void duplicateCommand(const QString &id);
     void duplicateFolder(const QString &id);
     void duplicateCollection(const QString &id);
+    void duplicateNote(const QString &id);
     void deleteFolderReparenting(const QString &folderId);
-    QStringList checkedIds() const;
+    // Persiste só o que os tipos dados tocam (comandos/pastas, coleções, notas).
+    void persistFor(const QList<DataKind> &kinds);
+    struct Checked {
+        DataKind kind;
+        QString id;
+    };
+    QList<Checked> checkedItems() const;
     QString folderDisplayName(const QString &folderId) const;
-    QString confirmDeleteKey() const;
+    QString confirmDeleteText(const QList<DataKind> &kinds, int count) const;
+    static QString iconNameFor(DataKind kind);
     void setRowHighlighted(int row, bool highlighted);
     QWidget *makeTypeBadge(const QString &text, const QString &colorHex) const;
-    QWidget *makeRowActions(const QString &id);
+    int countOfKind(DataKind kind) const;
+    QString kindLabel(DataKind kind) const;
+    QWidget *makeRowActions(DataKind kind, const QString &id);
     // Checkbox de seleção da linha, numa coluna própria (não é mais o
     // checkbox nativo do item de texto): evita o "clique na caixinha não
     // funciona" — antes o clique nativo do Qt no indicador e o nosso
@@ -99,8 +114,11 @@ private:
     std::function<void()> m_persistCommands;
     std::function<void()> m_persistCollections;
 
-    DataKind m_currentKind = DataKind::Command;
-    QComboBox *m_kindField = nullptr;
+    QVector<core::Note> *m_notes = nullptr;
+    std::function<void()> m_persistNotes;
+
+    DataKind m_currentKind = DataKind::All;
+    QButtonGroup *m_kindGroup = nullptr;
     QLineEdit *m_filterField = nullptr;
     QLabel *m_totalLabel = nullptr;
     QTableWidget *m_table = nullptr;

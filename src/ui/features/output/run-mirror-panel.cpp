@@ -79,6 +79,11 @@ void RunMirrorPanel::showOutput()
     m_pages->setCurrentWidget(m_output);
 }
 
+void RunMirrorPanel::setFormattedOutput(bool enabled)
+{
+    m_output->setFormattedOutputEnabled(enabled);
+}
+
 void RunMirrorPanel::seed(const OutputPanel *embedded, const QString &storedLog)
 {
     if (embedded && embedded->commandId() == m_commandId) {
@@ -98,6 +103,9 @@ void RunMirrorPanel::beginRun()
 {
     m_output->clearAll();
     m_output->setStatus(OutputStatus::Running);
+    if (m_acceptsInput) {
+        m_output->setInputEnabled(true);
+    }
     showOutput();
 }
 
@@ -105,6 +113,9 @@ void RunMirrorPanel::setInitialStatus(ExecutionStatus status)
 {
     const OutputStatus next = toOutputStatus(status);
     m_output->setStatus(next);
+    if (m_acceptsInput) {
+        m_output->setInputEnabled(next == OutputStatus::Running);
+    }
     if (next != OutputStatus::Idle) {
         showOutput();
     }
@@ -130,6 +141,9 @@ void RunMirrorPanel::setStatus(ExecutionStatus status)
         return;
     }
     m_output->setStatus(next);
+    if (m_acceptsInput) {
+        m_output->setInputEnabled(next == OutputStatus::Running);
+    }
     if (next != OutputStatus::Idle) {
         showOutput();
     }

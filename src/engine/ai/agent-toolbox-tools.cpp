@@ -1,6 +1,7 @@
 // As ferramentas do agente: esquema, plano (validação + prévia) e execução de cada uma.
 #include "engine/ai/agent-toolbox.h"
 #include "engine/ai/agent-toolbox-internal.h"
+#include "engine/ai/agent-toolbox-settings.h"
 
 #include "core/kai-file-validator.h"
 #include "utils/translation-manager.h"
@@ -379,6 +380,27 @@ void AgentToolbox::buildTools()
             }
             const QString text = m_manifesto.sectionText(doc, section);
             if (text.isEmpty()) return fail(QStringLiteral("No such section. Call without 'section' to list them."));
+            const int offset = intArg(a, QStringLiteral("offset"), 0, 0, 100000000);
+            const QString slice = text.mid(offset, kMaxResultChars);
+            const int rest = text.size() - offset - slice.size();
+            return okText(rest > 0 ? slice + QStringLiteral("\n[%1 more characters; call again with offset=%2]").arg(rest).arg(offset + slice.size())
+                                   : slice);
+        });
+
+    add(QStringLiteral("read_samples"),
+        QStringLiteral("Read Kai's sample projects: working kai.yml files and scripts (shell, http, kip, logs, languages, hooks...). "
+                       "Look here for a real example before writing a command from scratch. Without 'path' it lists the files."),
+        objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("File from the list, e.g. http/kai.yml."))},
+                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QStringLiteral("Character offset for long files."))}}, {}),
+        ToolRisk::Read, titled(QStringLiteral("Read samples")),
+        [this](const QJsonObject &a) {
+            const QString path = strArg(a, QStringLiteral("path"));
+            if (path.isEmpty()) {
+                const QStringList files = m_samples.files();
+                return files.isEmpty() ? fail(QStringLiteral("The samples are not available.")) : okText(files.join(QLatin1Char('\n')));
+            }
+            const QString text = m_samples.fileText(path);
+            if (text.isEmpty()) return fail(QStringLiteral("No such file. Call without 'path' to list them."));
             const int offset = intArg(a, QStringLiteral("offset"), 0, 0, 100000000);
             const QString slice = text.mid(offset, kMaxResultChars);
             const int rest = text.size() - offset - slice.size();
@@ -955,6 +977,11 @@ void AgentToolbox::buildTools()
             if (!m_host->killCommand(c->id, a.value(QStringLiteral("force")).toBool(false), error)) return fail(error);
             return okText(QStringLiteral("Stop requested."));
         });
+
+    // Configuração (settings, temas, layout, perfis de execução): agent-toolbox-settings.cpp.
+    for (ConfigToolDef &def : buildConfigTools(m_host)) {
+        add(def.name, def.description, def.schema, def.risk, std::move(def.plan), std::move(def.run));
+    }
 }
 
 } // namespace kai::engine

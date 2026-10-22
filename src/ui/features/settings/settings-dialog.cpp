@@ -6,7 +6,6 @@
 #include "ui/features/settings/tabs/terminals-tab.h"
 #include "ui/features/settings/tabs/actions-tab.h"
 #include "ui/features/settings/tabs/kip-tab.h"
-#include "ui/features/settings/tabs/languages-tab.h"
 #include "ui/features/settings/tabs/ai-tab.h"
 #include "core/ai-conversation.h"
 #include "ui/features/settings/tabs/notifications-tab.h"
@@ -48,6 +47,8 @@ SettingsDialog::SettingsDialog(const core::SettingsData &currentSettings,
                                 QVector<core::Collection> &collections,
                                 std::function<void()> persistCommands,
                                 std::function<void()> persistCollections,
+                                QVector<core::Note> *notes,
+                                std::function<void()> persistNotes,
                                 QWidget *parent)
     : QDialog(parent)
     , m_themesDirPath(themesDirPath)
@@ -59,13 +60,14 @@ SettingsDialog::SettingsDialog(const core::SettingsData &currentSettings,
     setMinimumSize(480, 400);
     m_originalSettings = currentSettings;
     setupUi(currentSettings, availableThemeNames, commandsData, collections,
-            std::move(persistCommands), std::move(persistCollections));
+            std::move(persistCommands), std::move(persistCollections), notes, std::move(persistNotes));
     centerOnParent(this);
 }
 
 void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,
                               core::CommandsData &commandsData, QVector<core::Collection> &collections,
-                              std::function<void()> persistCommands, std::function<void()> persistCollections)
+                              std::function<void()> persistCommands, std::function<void()> persistCollections,
+                              QVector<core::Note> *notes, std::function<void()> persistNotes)
 {
     auto *outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
@@ -94,12 +96,12 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_layoutTab = new LayoutTab(currentSettings);
     connect(m_layoutTab, &LayoutTab::restoreLayoutRequested, this, &SettingsDialog::restoreLayoutRequested);
     connect(m_layoutTab, &LayoutTab::gridChangeRequested, this, &SettingsDialog::gridChangeRequested);
+    connect(m_layoutTab, &LayoutTab::zoneSpanRequested, this, &SettingsDialog::zoneSpanRequested);
     m_shortcutsTab = new ShortcutsTab(currentSettings);
     m_terminalsTab = new TerminalsTab(currentSettings);
     m_notificationsTab = new NotificationsTab(currentSettings);
     m_kipTab = new KipTab(currentSettings.kip);
     m_actionsTab = new ActionsTab(currentSettings.globalActions, commandsData.commands, commandsData.folders);
-    m_languagesTab = new LanguagesTab(currentSettings.interpreters);
     {
         core::ConfigManager config;
         m_originalAi = config.loadAiSettings();
@@ -144,10 +146,9 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
          wrapPage(m_terminalsTab)},
         {utils::tr(QStringLiteral("settings.group.actions")), QStringLiteral("zap"),
          wrapPage(m_actionsTab)},
-        {utils::tr(QStringLiteral("settings.group.languages")), QStringLiteral("code"),
-         wrapPage(m_languagesTab)},
         {utils::tr(QStringLiteral("settings.group.storage")), QStringLiteral("database"),
-         buildStoragePage(commandsData, collections, std::move(persistCommands), std::move(persistCollections))},
+         buildStoragePage(commandsData, collections, std::move(persistCommands), std::move(persistCollections),
+                          notes, std::move(persistNotes))},
         {utils::tr(QStringLiteral("settings.group.notifications")), QStringLiteral("bell"),
          wrapPage(m_notificationsTab)},
         {utils::tr(QStringLiteral("settings.group.kip")), QStringLiteral("wand-sparkles"),
@@ -285,12 +286,14 @@ void SettingsDialog::handleImportThemeClicked()
 
 QWidget *SettingsDialog::buildStoragePage(core::CommandsData &commandsData, QVector<core::Collection> &collections,
                                           std::function<void()> persistCommands,
-                                          std::function<void()> persistCollections)
+                                          std::function<void()> persistCollections,
+                                          QVector<core::Note> *notes,
+                                          std::function<void()> persistNotes)
 {
     // Sem wrapPage: a lista interna do StorageManagerWidget já rola
     // sozinha (mesmo motivo da aba Atalhos/ShortcutsManagerWidget).
     m_storageManager = new StorageManagerWidget(commandsData, collections,
-        std::move(persistCommands), std::move(persistCollections), nullptr);
+        std::move(persistCommands), std::move(persistCollections), notes, std::move(persistNotes), nullptr);
     return m_storageManager;
 }
 
@@ -302,6 +305,12 @@ core::AiSettings SettingsDialog::buildAiSettings() const
 bool SettingsDialog::aiSettingsChanged() const
 {
     return m_aiTab->settings().toJson(true) != m_originalAi.toJson(true);
+}
+
+void SettingsDialog::accept()
+{
+    m_layoutTab->commitGrid();
+    QDialog::accept();
 }
 
 void SettingsDialog::setLayoutModel(const layout::LayoutModel &model)
@@ -364,6 +373,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.language = m_generalTab->languageField()->currentData().toString();
     settings.autostart = m_generalTab->autostartField()->isChecked();
     settings.smartFocus = m_generalTab->smartFocusField()->isChecked();
+    settings.inlineActions = m_generalTab->inlineActionsField()->isChecked();
     settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
     // Campos NÃO editados neste diálogo são preservados do estado original
     // (feedback do usuário: as env globais foram para os Environments; não
@@ -408,7 +418,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.notifyOnFirstErrorInFormattedOutput = m_notificationsTab->notifyFirstErrorInFormattedOutputField()->isChecked();
     settings.notifyEvenWhenFocused = m_notificationsTab->notifyEvenWhenFocusedField()->isChecked();
     settings.kip = m_kipTab->settings();
-    settings.interpreters = m_languagesTab->settings();
+    settings.interpreters = m_generalTab->interpreters();
     settings.globalActions = m_actionsTab->globalActions();
 
     return settings;

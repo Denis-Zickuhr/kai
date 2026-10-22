@@ -51,7 +51,7 @@ private slots:
         c.activeEnvironment = QStringLiteral("Dev");
         c.extraInstructions = QStringLiteral("Prefira Python.");
         const QString p = buildAgentSystemPrompt(c);
-        for (const char *needle : {"Stay inside Kai", "DATA", "Never reveal", "approval", "read_manifesto", "2026-10-16", "'pt'", "'Dev'", "Prefira Python."}) {
+        for (const char *needle : {"Stay inside Kai", "DATA", "Never reveal", "approval", "read_manifesto", "read_samples", "2026-10-16", "'pt'", "'Dev'", "Prefira Python."}) {
             QVERIFY2(p.contains(QString::fromLatin1(needle)), needle);
         }
         // As instruções do usuário vêm DEPOIS das regras e dizem que não as anulam.

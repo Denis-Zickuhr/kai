@@ -10,6 +10,7 @@
 #include "engine/ai/agent-tool-host.h"
 #include "engine/ai/ai-types.h"
 #include "engine/ai/manifesto-library.h"
+#include "engine/ai/sample-library.h"
 
 class QTimer;
 
@@ -68,6 +69,7 @@ public:
     // Esconde o valor das variáveis marcadas como secretas (opção do perfil do provedor).
     void setHideSecretVariables(bool hide) { m_hideSecrets = hide; }
     void setManifestoDirectory(const QString &dir) { m_manifesto = ManifestoLibrary(dir); }
+    void setSampleDirectory(const QString &dir) { m_samples = SampleLibrary(dir); }
     // Muda a espera máxima de run_command (testes).
     void setRunTimeoutMs(int ms) { m_runTimeoutMs = ms; }
 
@@ -89,6 +91,7 @@ private:
 
     const Tool *toolNamed(const QString &name) const;
     void buildTools();
+    void buildFileTools(); // agent-toolbox-files.cpp: arquivos das pastas-projeto
 
     // Resolução
     const core::Command *findCommand(const QJsonObject &args, QString &error) const;
@@ -111,6 +114,7 @@ private:
 
     AgentToolHost *m_host;
     ManifestoLibrary m_manifesto;
+    SampleLibrary m_samples;
     bool m_hideSecrets = false;
     int m_runTimeoutMs = kRunTimeoutSec * 1000;
     QVector<Tool> m_tools;

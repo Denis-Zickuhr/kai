@@ -34,4 +34,14 @@ QString assetDir(const QString &relativeName)
     return QString();
 }
 
+QString sampleDir()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString dev = QDir(appDir).filePath(QStringLiteral("../../sample"));
+    if (QDir(dev).exists()) {
+        return QDir(dev).absolutePath();
+    }
+    return assetDir(QStringLiteral("samples"));
+}
+
 } // namespace kai::utils

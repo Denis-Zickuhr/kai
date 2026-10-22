@@ -6,6 +6,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 class QMenu;
 class QPainter;
 class QTimer;
@@ -38,6 +40,8 @@ class OutputTabsBar : public QWidget {
     Q_OBJECT
 
 public:
+    // Puxar a guia para virar painel só vale quando isto retorna true (modo reorganizar).
+    void setExternalDragAllowed(std::function<bool()> allowed) { m_externalDragAllowed = std::move(allowed); }
     explicit OutputTabsBar(QWidget *parent = nullptr);
 
     // Substitui o conjunto de guias (ordem = ordem na barra). Guarda o início de cada execução vista rodando, para o
@@ -62,11 +66,6 @@ public:
     bool quickRunVisible() const { return m_quickRunVisible; }
     QRect quickRunRect() const;
 
-    // Botão no fim da barra que recolhe/abre a Saída inteira (o chevron do cabeçalho da Saída some nos modos KIP e
-    // "sem execução", que escondem o cabeçalho). `iconName` aponta para onde a Saída recolhe. Escondido por padrão.
-    void setOutputToggle(bool visible, const QString &iconName);
-    QRect outputToggleRect() const;
-
     // A barra só aparece se isto for true (a saída colapsada a esconde).
     void setStripAllowed(bool allowed);
 
@@ -90,7 +89,6 @@ signals:
     void tabCloseRequested(const QString &id);
     void tabContextRequested(const QString &id, const QPoint &globalPos);
     void quickRunRequested();
-    void outputToggleRequested();
     // O usuário arrastou uma guia para outra posição (índice final na barra).
     void tabMoved(const QString &id, int newIndex);
     // O usuário puxou a guia PARA FORA da barra: começa um arrasto de painel (a execução vira um painel `run:<id>` ao ser
@@ -125,7 +123,7 @@ private:
     void paintTabs(QPainter &painter, const Layout &layout) const;
     bool isOverflowing() const;
     int leadingWidth() const;
-    int usableWidth() const; // a largura sem o botão da Saída no fim
+    int usableWidth() const;
     void updateVisibility();
     void updateTimer();
     void updateDrag(const QPoint &pos);
@@ -149,16 +147,13 @@ private:
     bool m_quickRunVisible = false;
     bool m_hoverQuickRun = false;
     bool m_pressedQuickRun = false;
-    bool m_outputToggleVisible = false;
-    QString m_outputToggleIcon = QStringLiteral("chevron-down");
-    bool m_hoverOutputToggle = false;
-    bool m_pressedOutputToggle = false;
     // Arrastar guias para reordenar: começa ao mover o mouse com uma guia pressionada.
     QPoint m_pressPos;
     int m_dragGrab = 0;       // distância do mouse à borda esquerda da guia no momento do clique
     int m_dragX = 0;          // borda esquerda atual da guia arrastada (acompanha o mouse)
     int m_dragOrigin = -1;    // posição da guia ao começar o arrasto
     bool m_dragActive = false;
+    std::function<bool()> m_externalDragAllowed;
     bool m_pressedClose = false;
     QTimer *m_timer = nullptr;
 };

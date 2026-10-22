@@ -10,8 +10,9 @@ class QVBoxLayout;
 
 namespace kai::ui::layout {
 
-// A janela solta de um painel (flutuante): a moldura própria do app (sem a decoração do sistema, igual à Saída destacada)
-// com o painel dentro e dois botões — devolver ao quadro e fixar no topo. Não tem dono (uma janela com dono anda em grupo
+// A janela solta de um painel (flutuante): a moldura do app (igual à Saída destacada: a própria, ou a do sistema no
+// Windows, onde dá o encaixe nas bordas e quadrantes da tela) com o painel dentro e dois botões — devolver ao quadro e
+// fixar no topo. Não tem dono (uma janela com dono anda em grupo
 // com ele no Windows e trazia o Kai todo para a frente a cada clique): quem esconde as flutuantes junto com o Kai é o
 // DockHost, e elas só voltam com ele: nunca aparecem sozinhas.
 class FloatingViewWindow : public kai::ui::AppWindowFrame {

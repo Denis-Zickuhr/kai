@@ -8,6 +8,9 @@ ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # log <level> <message> [extra JSON fields, starting with a comma]
 log() { printf '{"time":"%s","level":"%s","msg":"%s"%s}\n' "$(ts)" "$1" "$2" "${3:-}"; }
 
+# lf <level> <message> [extra key=value pairs]: one logfmt line (the message is always quoted)
+lf() { printf 'time=%s level=%s msg="%s"%s\n' "$(ts)" "$1" "$2" "${3:+ $3}"; }
+
 pause() { sleep "${1:-0.15}"; }
 
 mode_structured() {
@@ -100,6 +103,51 @@ mode_volume() {
   }'
 }
 
+mode_logfmt() {
+  lf debug "loading configuration" 'service=api file=/etc/app/config.yml'; pause
+  lf info  "server listening" 'service=api port=8080 tls=false'; pause
+  lf info  "request completed" 'service=api method=GET path=/v1/users status=200 duration_ms=12.4 request_id=9f1c2e'; pause
+  lf info  "request completed" 'service=api method=POST path=/v1/orders status=201 duration_ms=87.1 request_id=a41b77'; pause
+  lf warn  "slow query" 'service=db duration_ms=1840 threshold_ms=500'; pause
+  lf warn  "retrying upstream call" 'service=api attempt=2 max_attempts=5 upstream=payments'; pause
+  lf error "upstream call failed" 'service=api upstream=payments status=503 error="connection reset by peer"'; pause
+  lf info  "shutting down" 'service=api reason=SIGTERM'
+}
+
+mode_logfmt_mixed() {
+  # logfmt, JSON and plain text interleaved: each line becomes a card on its own, the rest stays grouped text.
+  echo "=== booting gateway (plain text banner) ==="
+  pause
+  lf info "gateway started" 'service=gateway port=9000'; pause
+  log info "worker started" ',"service":"worker","queue":"emails"'; pause
+  lf warn "deprecated header" 'service=gateway header=X-Legacy'; pause
+  echo "note: this line has a = sign but is not logfmt, so it stays plain text"
+  echo "retries = 3"
+  pause
+  log error "job failed" ',"service":"worker","job_id":"j-1001","error":"smtp timeout"'; pause
+  lf error "job failed" 'service=gateway job_id=j-1001 error="smtp timeout"'
+}
+
+mode_logfmt_shapes() {
+  # Key aliases, quoting, escapes, unicode, empty values, a bare level= with no msg, a very long message.
+  printf 'ts=%s lvl=warn msg="alternate keys (ts/lvl/msg)"\n' "$(date +%s)"; pause
+  printf 'severity=INFO message="quoted value with spaces and an = sign: a=b" user=ana\n'; pause
+  printf 'time=%s level=info msg="escapes: \\"quoted\\" and a back\\\\slash" path="C:\\\\temp\\\\file.txt"\n' "$(ts)"; pause
+  printf 'time=%s level=info msg="unicode: ação ✓ — 🚀" lang=pt-BR\n' "$(ts)"; pause
+  printf 'time=%s level=debug msg="empty and unquoted values" empty= flag=true ratio=0.50 id=000123\n' "$(ts)"; pause
+  printf 'level=error user=bruno error="no msg key: the card shows the pairs"\n'; pause
+  lf warn "a very long message that should wrap inside the card instead of forcing horizontal scrolling: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." 'service=demo'
+}
+
+mode_logfmt_stream() {
+  local count="${1:-60}" i level
+  for ((i = 1; i <= count; i++)); do
+    case $((i % 7)) in 0) level=warn ;; 3) level=debug ;; 5) level=error ;; *) level=info ;; esac
+    lf "$level" "tick $i of $count" "service=stream seq=$i"
+    sleep 0.3
+  done
+}
+
 case "${1:-structured}" in
   structured) mode_structured ;;
   mixed)      mode_mixed ;;
@@ -109,5 +157,9 @@ case "${1:-structured}" in
   error)      mode_error ;;
   stream)     shift; mode_stream "$@" ;;
   volume)     shift; mode_volume "$@" ;;
-  *) echo "unknown mode: $1 (structured|mixed|prefixed|shapes|wrapped|error|stream|volume)" >&2; exit 2 ;;
+  logfmt)         mode_logfmt ;;
+  logfmt-mixed)   mode_logfmt_mixed ;;
+  logfmt-shapes)  mode_logfmt_shapes ;;
+  logfmt-stream)  shift; mode_logfmt_stream "$@" ;;
+  *) echo "unknown mode: $1 (structured|mixed|prefixed|shapes|wrapped|error|stream|volume|logfmt|logfmt-mixed|logfmt-shapes|logfmt-stream)" >&2; exit 2 ;;
 esac

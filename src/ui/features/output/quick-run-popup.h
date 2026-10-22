@@ -32,6 +32,8 @@ public:
     void setEntries(const QVector<Entry> &entries);
     // Abre logo abaixo de `anchor` (coordenadas globais), limitado à tela, com o campo vazio e em foco.
     void openBelow(const QPoint &anchorGlobal);
+    // Sem janela do Kai por perto: no alto e no meio da área disponível da tela.
+    void openOnScreen(const QRect &available);
     void refreshStyle();
     void setPlaceholder(const QString &text);
     // Abre no alto de `window`, centralizada (o modo do Ctrl+K).

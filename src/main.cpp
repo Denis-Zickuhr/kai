@@ -16,6 +16,7 @@
 #include "ui/shared/combo-popup-filter.h"
 #include "ui/shared/key-trace-filter.h"
 #include "ui/shared/no-scroll-combo-filter.h"
+#include "utils/qt-builtin-translator.h"
 #include "ipc/cli-client.h"
 #include "ipc/ipc-server.h"
 #include "ipc/stream-channel.h"
@@ -275,6 +276,8 @@ int main(int argc, char *argv[])
     // mouse quando não estão focados (feedback do usuário: selects
     // trocavam de opção sozinhos ao rolar). Filtro global e leve.
     app.installEventFilter(new kai::ui::NoScrollComboFilter(&app));
+    // Menu de copiar/colar dos campos e botões padrão do Qt no idioma do app.
+    app.installTranslator(new kai::utils::QtBuiltinTranslator(&app));
     app.installEventFilter(new kai::ui::ComboPopupFilter(&app));
     kai::ui::installDialogFrames(); // diálogos sem a decoração do sistema (moldura do Kai)
 
@@ -403,6 +406,10 @@ int main(int argc, char *argv[])
     QObject::connect(ipc, &ipc::IpcServer::importRequested, &window,
         [&window](const QString &path, const QStringList &only, bool &ok, QString &message) {
             ok = window.importProjectFromCli(path, only, message);
+        });
+    QObject::connect(ipc, &ipc::IpcServer::importTreeRequested, &window,
+        [&window](const QString &path, bool &ok, QString &message) {
+            ok = window.importProjectTreeFromCli(path, message);
         });
     QObject::connect(ipc, &ipc::IpcServer::raiseRequested, &window,
         [&window](const QString &level, const QString &title, const QString &body, bool &ok, QString &message) {

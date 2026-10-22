@@ -56,7 +56,7 @@
   the WSL's `python3`; a login shell already loads pyenv/nvm). Global values live in
   `settings.json` → `interpreters` (`python`, `node`, `php`; defaults `python3`/`node`/`php`, and
   `python` for the default Python on Windows without a terminal target), edited in
-  Settings → Languages. `core::InterpreterSettings::resolve` picks command override,
+  Settings → General. `core::InterpreterSettings::resolve` picks command override,
   then global, then the language default.
 - **Injected modules** (resources in `src/engine/kip-modules/`): `kai` always (Python/Node), `kip` on KIP
   commands (the class `Kip` in PHP, which has no `kai`; also written to disk for scripts that run as files, see

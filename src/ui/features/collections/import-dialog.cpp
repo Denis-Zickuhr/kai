@@ -8,6 +8,7 @@
 #include "core/http-collection-import.h"
 #include "core/yaml-bridge.h"
 
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
@@ -125,6 +126,10 @@ ImportDialog::ImportDialog(QWidget *parent)
     cardsRow->addWidget(fileCard);
 
     layout->addLayout(cardsRow);
+
+    m_recursiveField = new QCheckBox(utils::tr(QStringLiteral("import.recursive")), this);
+    m_recursiveField->setProperty("kaiRole", QStringLiteral("switch"));
+    layout->addWidget(m_recursiveField);
     layout->addStretch(1);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
@@ -146,6 +151,7 @@ void ImportDialog::pickProjectFolder()
     }
     m_kind = Kind::Project;
     m_path = directory;
+    m_recursive = m_recursiveField->isChecked();
     accept();
 }
 

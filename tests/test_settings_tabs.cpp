@@ -19,8 +19,8 @@
 #include "ui/features/settings/tabs/appearance-tab.h"
 #include "ui/features/settings/tabs/general-tab.h"
 #include "ui/features/settings/tabs/kip-tab.h"
-#include "ui/features/settings/tabs/languages-tab.h"
 #include "ui/features/settings/tabs/layout-tab.h"
+#include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 
 using namespace kai::ui;
@@ -104,7 +104,7 @@ private slots:
         QCOMPARE(persisted, 1);
     }
 
-    void languagesHasItsOwnTabAndTheInterpretersRoundTrip()
+    void interpretersLiveInTheGeneralTabAndRoundTrip()
     {
         QTemporaryDir themes;
         QVERIFY(themes.isValid());
@@ -120,9 +120,10 @@ private slots:
         QVERIFY(nav);
         QStringList titles;
         for (int i = 0; i < nav->count(); ++i) titles << nav->item(i)->text();
-        QVERIFY2(titles.contains(kai::utils::tr(QStringLiteral("settings.group.languages"))), qPrintable(titles.join(',')));
+        // Os interpretadores são opções simples: moram na aba Geral, sem aba própria.
+        QVERIFY2(!titles.contains(kai::utils::tr(QStringLiteral("settings.group.languages"))), qPrintable(titles.join(',')));
 
-        auto *tab = dialog.findChild<LanguagesTab *>();
+        auto *tab = dialog.findChild<GeneralTab *>();
         QVERIFY(tab);
         QCOMPARE(tab->pythonField()->text(), settings.interpreters.python);
         QCOMPARE(tab->nodeField()->text(), settings.interpreters.node);
@@ -178,6 +179,9 @@ private slots:
         QVERIFY(!general->smartFocusField()->isChecked()); // Foco inteligente: desligado por padrão
         general->smartFocusField()->setChecked(true);
         QVERIFY(dialog.buildSettings().smartFocus);
+        QVERIFY(!general->inlineActionsField()->isChecked()); // Ações inline: desligadas por padrão
+        general->inlineActionsField()->setChecked(true);
+        QVERIFY(dialog.buildSettings().inlineActions);
         if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
             dialog.setStyleSheet(kai::ui::buildModernStylesheet());
             dialog.resize(900, 700);
@@ -224,15 +228,17 @@ private slots:
         QCOMPARE(rows->value(), 1);
         QCOMPARE(requested.count(), 0);
 
-        // Mexer num campo avisa o quadro, com os três valores.
+        // Mexer nos campos NÃO muda o quadro (só o rascunho e a miniatura): quem confirma é o OK.
         rows->setValue(2);
+        expansion->setCurrentIndex(expansion->findData(int(kai::ui::layout::Expansion::Horizontal)));
+        QCOMPARE(requested.count(), 0);
+        QVERIFY(tab->gridDirty());
+        dialog.accept();
         QCOMPARE(requested.count(), 1);
         QCOMPARE(requested.last().at(0).toInt(), 3);
         QCOMPARE(requested.last().at(1).toInt(), 2);
-        QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Vertical));
-        expansion->setCurrentIndex(expansion->findData(int(kai::ui::layout::Expansion::Horizontal)));
-        QCOMPARE(requested.count(), 2);
         QCOMPARE(requested.last().at(2).toInt(), int(kai::ui::layout::Expansion::Horizontal));
+        QVERIFY(!tab->gridDirty());
         // A grade só aceita de 1 a 5.
         cols->setValue(99);
         QCOMPARE(cols->value(), 5);
@@ -248,6 +254,113 @@ private slots:
                 tab->gridPreview()->resize(260, 130);
                 QVERIFY(!tab->gridPreview()->grab().isNull());
             }
+        }
+    }
+    // Cancelar descarta o rascunho da grade: nada chega ao quadro (o bug: a mudança de linhas valia antes de confirmar).
+    void cancellingTheDialogDiscardsTheGridDraft()
+    {
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        QVector<Collection> collections;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {});
+        QSignalSpy grid(&dialog, &SettingsDialog::gridChangeRequested);
+        QSignalSpy spans(&dialog, &SettingsDialog::zoneSpanRequested);
+        dialog.setLayoutModel(kai::ui::layout::LayoutModel::defaultLayout());
+        dialog.layoutTab()->gridRowsField()->setValue(4);
+        QCOMPARE(grid.count(), 0);
+        dialog.reject();
+        QCOMPARE(grid.count(), 0);
+        QCOMPARE(spans.count(), 0);
+    }
+
+    // Modo Ajustar: arrastar na miniatura estica a célula; só o OK leva o tamanho ao quadro.
+    void fitModeSpansAreDraggedInThePreviewAndAppliedOnOk()
+    {
+        using namespace kai::ui::layout;
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        QVector<Collection> collections;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {});
+        LayoutTab *tab = dialog.layoutTab();
+        LayoutModel model = LayoutModel::defaultLayout(); // 2×2: lista em 0,0 e Saída em 0,1
+        dialog.setLayoutModel(model);
+        QComboBox *expansion = tab->gridExpansionField();
+        QVERIFY(expansion->findData(int(Expansion::Fit)) >= 0);
+        expansion->setCurrentIndex(expansion->findData(int(Expansion::Fit)));
+        GridPreview *preview = tab->gridPreview();
+        preview->resize(240, 120);
+        QSignalSpy spans(&dialog, &SettingsDialog::zoneSpanRequested);
+        QSignalSpy grid(&dialog, &SettingsDialog::gridChangeRequested);
+
+        // Aperta na lista (canto de cima à esquerda) e arrasta até a casa de baixo: ela passa a ocupar 2 linhas.
+        QTest::mousePress(preview, Qt::LeftButton, Qt::NoModifier, QPoint(30, 20));
+        QTest::mouseMove(preview, QPoint(30, 100));
+        QTest::mouseRelease(preview, Qt::LeftButton, Qt::NoModifier, QPoint(30, 100));
+        QCOMPARE(spans.count(), 0); // ainda é rascunho
+        QVERIFY(tab->gridDirty());
+        dialog.accept();
+        QCOMPARE(grid.count(), 1);
+        QCOMPARE(grid.last().at(2).toInt(), int(Expansion::Fit));
+        QCOMPARE(spans.count(), 1);
+        QCOMPARE(spans.last().at(0).toInt(), 0); // linha
+        QCOMPARE(spans.last().at(1).toInt(), 0); // coluna
+        QCOMPARE(spans.last().at(2).toInt(), 1); // colunas
+        QCOMPARE(spans.last().at(3).toInt(), 2); // linhas
+        QVERIFY(!preview->grab().isNull());
+    }
+
+    // Só roda com KAI_TEST_SCREENSHOT_DIR: um PNG de cada página das Configurações (cantos arredondados) para olhar o visual.
+    void screenshotsForManualReview()
+    {
+        const QString dir = QString::fromLocal8Bit(qgetenv("KAI_TEST_SCREENSHOT_DIR"));
+        if (dir.isEmpty()) {
+            QSKIP("defina KAI_TEST_SCREENSHOT_DIR para gerar as imagens");
+        }
+        kai::utils::tokens::Effects effects;
+        effects.cornerStyle = 2;
+        kai::utils::tokens::setEffects(effects);
+        QTemporaryDir themes;
+        QVERIFY(themes.isValid());
+        CommandsData commands;
+        Folder folder;
+        folder.id = QStringLiteral("f1");
+        folder.name = QStringLiteral("Backend");
+        commands.folders << folder;
+        for (int i = 0; i < 6; ++i) {
+            Command c;
+            c.id = QStringLiteral("c%1").arg(i);
+            c.name = QStringLiteral("Comando %1").arg(i);
+            c.folderId = folder.id;
+            c.type = i % 3 == 2 ? CommandType::Http : CommandType::Command;
+            commands.commands << c;
+        }
+        QVector<Collection> collections;
+        Collection col;
+        col.id = QStringLiteral("col1");
+        col.name = QStringLiteral("Usuários");
+        col.folderId = folder.id;
+        collections << col;
+        QVector<Note> notes;
+        Note note;
+        note.id = QStringLiteral("n1");
+        note.name = QStringLiteral("Ideias");
+        note.folderId = folder.id;
+        notes << note;
+        SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), commands, collections,
+                              []() {}, []() {}, &notes, []() {});
+        dialog.setStyleSheet(kai::ui::buildModernStylesheet());
+        dialog.resize(920, 750);
+        dialog.show();
+        auto *nav = dialog.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+        QVERIFY(nav);
+        for (int i = 0; i < nav->count(); ++i) {
+            nav->setCurrentRow(i);
+            QTest::qWait(250);
+            dialog.grab().save(QStringLiteral("%1/settings-%2.png").arg(dir).arg(i, 2, 10, QLatin1Char('0')));
         }
     }
 };

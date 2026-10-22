@@ -7,8 +7,6 @@
 #include <QMenu>
 #include <QAction>
 #include <QToolButton>
-#include <QComboBox>
-#include <QSignalBlocker>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -113,17 +111,6 @@ void TopUtilityBar::setupUi()
     connect(addIconAction(fileMenu, QStringLiteral("log-out"), utils::tr(QStringLiteral("menu.file.quit"))), &QAction::triggered,
             this, &TopUtilityBar::quitAppRequested);
 
-    // --- Item ---
-    QMenu *itemMenu = m_menuBar->addMenu(utils::tr(QStringLiteral("menu.item")));
-    connect(addIconAction(itemMenu, QStringLiteral("square-terminal"), utils::tr(QStringLiteral("menu.item.new_command"))), &QAction::triggered,
-            this, &TopUtilityBar::newCommandRequested);
-    connect(addIconAction(itemMenu, QStringLiteral("folder-plus"), utils::tr(QStringLiteral("menu.item.new_folder"))), &QAction::triggered,
-            this, &TopUtilityBar::newFolderRequested);
-    connect(addIconAction(itemMenu, QStringLiteral("database"), utils::tr(QStringLiteral("menu.item.new_collection"))), &QAction::triggered,
-            this, &TopUtilityBar::newCollectionRequested);
-    connect(addIconAction(itemMenu, QStringLiteral("notebook"), utils::tr(QStringLiteral("menu.item.new_note"))), &QAction::triggered,
-            this, &TopUtilityBar::newNoteRequested);
-
     // --- Exibir: os painéis da janela (fechar/reabrir, mover, perspectivas). Fica vazio aqui e é repovoado pela
     // MainWindow a cada abertura (aboutToShow), porque depende do estado atual do layout.
     m_viewMenu = m_menuBar->addMenu(utils::tr(QStringLiteral("menu.view")));
@@ -174,75 +161,6 @@ void TopUtilityBar::setupUi()
     layout->addWidget(m_menuBar);
     layout->addStretch();
 
-    // Altura padrão dos itens compactos à direita da barra (combo de
-    // environment, botões de ícone).
-    constexpr int kBarItemH = 22;
-
-    // --- Seletor de environments (pacotes), estilo Insomnia/Postman ---
-    // Fica destacado no topo-direito, antes dos botões de janela: um combo
-    // para trocar o pacote ativo + um botão de "expandir" que abre a tela
-    // de gestão (criar/editar/excluir pacotes). Todos os elementos são
-    // fixados na MESMA altura (24px) e alinhados ao centro vertical, para
-    // ficarem em uma linha de base consistente com os botões de janela.
-    m_aiButton = new QToolButton(this);
-    m_aiButton->setObjectName(QStringLiteral("aiChatButton"));
-    m_aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), topBarIconColor(), 16));
-    m_aiButton->setIconSize(QSize(16, 16));
-    m_aiButton->setFixedSize(kBarItemH, kBarItemH);
-    m_aiButton->setAutoRaise(true);
-    m_aiButton->setToolTip(utils::tr(QStringLiteral("ai.topbar.tooltip")));
-    m_aiButton->setVisible(false);
-    connect(m_aiButton, &QToolButton::clicked, this, &TopUtilityBar::aiChatRequested);
-    layout->addWidget(m_aiButton, 0, Qt::AlignVCenter);
-
-    auto *envLabel = new QLabel(this);
-    m_environmentIcon = envLabel;
-    envLabel->setPixmap(LucideIcons::icon(QStringLiteral("layers"), topBarIconColor(), 16).pixmap(16, 16));
-    envLabel->setToolTip(utils::tr(QStringLiteral("env.selector.tooltip")));
-    envLabel->setFixedSize(18, kBarItemH);
-    envLabel->setAlignment(Qt::AlignCenter);
-    // Fundo transparente: o QLabel herdava um fundo do tema que aparecia
-    // como um "bloco" atrás do ícone de stack (bug reportado).
-    envLabel->setStyleSheet(QStringLiteral("background: transparent;"));
-
-    m_environmentSelector = new QComboBox(this);
-    m_environmentSelector->setObjectName(QStringLiteral("environmentSelector"));
-    m_environmentSelector->setMinimumWidth(160);
-    m_environmentSelector->setFixedHeight(kBarItemH);
-    m_environmentSelector->setToolTip(utils::tr(QStringLiteral("env.selector.tooltip")));
-    // O QSS genérico do tema aplica "QComboBox { min-height:24px; padding:
-    // 6px 10px; }", cujo padding vertical INFLA a altura efetiva e engrossa
-    // a barra (bug reportado). Sobrepomos um estilo compacto SÓ para este
-    // combo da title bar (via objectName), zerando o min-height e o padding
-    // vertical — mesma estratégia usada nos combos embutidos em tabela.
-    // O border-radius é REPETIDO aqui com o token de raio médio: uma regra
-    // #objectName tem especificidade maior que a genérica "QComboBox {...}"
-    // e, sem redeclarar o raio, o combo ficava com canto reto fixo,
-    // ignorando a preferência de canto do usuário (reto/suave/arredondado —
-    // relatado).
-    connect(m_environmentSelector, &QComboBox::activated, this, [this](int index) {
-        const QString id = m_environmentSelector->itemData(index).toString();
-        if (!id.isEmpty()) {
-            emit environmentSelected(id);
-        }
-    });
-
-    m_manageEnvironmentsButton = new QToolButton(this);
-    m_manageEnvironmentsButton->setObjectName(QStringLiteral("manageEnvironments"));
-    m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), topBarIconColor(), 16));
-    m_manageEnvironmentsButton->setIconSize(QSize(16, 16));
-    m_manageEnvironmentsButton->setFixedSize(kBarItemH, kBarItemH);
-    m_manageEnvironmentsButton->setAutoRaise(true);
-    m_manageEnvironmentsButton->setToolTip(utils::tr(QStringLiteral("env.manage.tooltip")));
-    refreshStyle();
-    connect(m_manageEnvironmentsButton, &QToolButton::clicked, this, &TopUtilityBar::manageEnvironmentsRequested);
-
-    // Espaçamento uniforme entre os itens do grupo de environment, todos
-    // alinhados ao centro vertical.
-    layout->addWidget(envLabel, 0, Qt::AlignVCenter);
-    layout->addWidget(m_environmentSelector, 0, Qt::AlignVCenter);
-    layout->addSpacing(4);
-    layout->addWidget(m_manageEnvironmentsButton, 0, Qt::AlignVCenter);
     layout->addSpacing(10);
 
     layout->addWidget(m_minimizeButton, 0, Qt::AlignVCenter);
@@ -250,58 +168,9 @@ void TopUtilityBar::setupUi()
     layout->addWidget(m_closeButton, 0, Qt::AlignVCenter);
 }
 
-void TopUtilityBar::setEnvironments(const QStringList &ids, const QStringList &names, const QString &activeId)
-{
-    if (!m_environmentSelector) {
-        return;
-    }
-    const QSignalBlocker blocker(m_environmentSelector);
-    m_environmentSelector->clear();
-    for (int i = 0; i < ids.size() && i < names.size(); ++i) {
-        m_environmentSelector->addItem(names.at(i), ids.at(i));
-    }
-    const int idx = m_environmentSelector->findData(activeId);
-    if (idx >= 0) {
-        m_environmentSelector->setCurrentIndex(idx);
-    }
-}
-
-void TopUtilityBar::setAiAvailable(bool available)
-{
-    if (m_aiButton) {
-        m_aiButton->setVisible(available);
-    }
-}
-
 void TopUtilityBar::refreshStyle()
 {
     refreshIcons();
-    if (m_environmentSelector) {
-        // O combo tem altura FIXA: com "Arredondado" o token radiusMd (16)
-        // passa da metade da altura, e o Qt desenha a borda errado com raio
-        // maior que isso (o combo aparecia quadrado). O teto é metade da
-        // altura, que já dá a forma de pílula.
-        const int radius = qMin(utils::tokens::radiusMd(), m_environmentSelector->maximumHeight() / 2);
-        // Fundo SÓLIDO em bg() (o campo global usa surface/input do tema).
-        m_environmentSelector->setStyleSheet(QStringLiteral(
-            "QComboBox#environmentSelector { min-height: 0px; padding: 1px 8px;"
-            " background-color: %2; border-radius: %1px; }")
-            .arg(radius)
-            .arg(utils::tokens::bg()));
-    }
-    if (m_aiButton) {
-        m_aiButton->setStyleSheet(QStringLiteral(
-            "QToolButton#aiChatButton { border: none; border-radius: %1px; background: transparent; }"
-            "QToolButton#aiChatButton:hover { background: %2; }")
-            .arg(utils::tokens::radiusSm()).arg(utils::tokens::hoverBg()));
-    }
-    if (m_manageEnvironmentsButton) {
-        m_manageEnvironmentsButton->setStyleSheet(QStringLiteral(
-            "QToolButton#manageEnvironments { border: none; border-radius: %1px;"
-            " background: transparent; }"
-            "QToolButton#manageEnvironments:hover { background: %2; }")
-            .arg(utils::tokens::radiusSm()).arg(utils::tokens::hoverBg()));
-    }
 }
 
 void TopUtilityBar::setMaximized(bool maximized)
@@ -318,18 +187,22 @@ void TopUtilityBar::refreshIcons()
             entry.first->setIcon(LucideIcons::icon(entry.second, color, 16));
         }
     }
-    if (m_environmentIcon) {
-        m_environmentIcon->setPixmap(LucideIcons::icon(QStringLiteral("layers"), color, 16).pixmap(16, 16));
-    }
-    if (m_manageEnvironmentsButton) {
-        m_manageEnvironmentsButton->setIcon(LucideIcons::icon(QStringLiteral("settings-2"), color, 16));
-    }
-    if (m_aiButton) {
-        m_aiButton->setIcon(LucideIcons::icon(QStringLiteral("sparkles"), color, 16));
-    }
     refreshWindowControlIcon(m_minimizeButton, WindowControl::Minimize);
     refreshWindowControlIcon(m_closeButton, WindowControl::Close);
     setMaximized(m_maximized);
+}
+
+bool TopUtilityBar::isDragArea(const QPoint &posInBar) const
+{
+    const QWidget *hit = childAt(posInBar);
+    if (!hit || hit == this) {
+        return true;
+    }
+    if (hit == m_menuBar) {
+        return m_menuBar->actionAt(m_menuBar->mapFrom(this, posInBar)) == nullptr;
+    }
+    // O logo (e outros rótulos) não reagem a clique.
+    return qobject_cast<const QLabel *>(hit) != nullptr;
 }
 
 void TopUtilityBar::mousePressEvent(QMouseEvent *event)

@@ -29,6 +29,7 @@
 #include <functional>
 #include <algorithm>
 
+#include "ui/features/command-editor/inline-row-actions.h"
 #include "ui/shared/icon-picker-widget.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/draggable-tree-widget.h"
@@ -196,7 +197,11 @@ void CommandTreeWidget::setupUi()
     // para a árvore da aba ativa e seleciona o primeiro item, para que
     // ↑/↓ naveguem os comandos imediatamente, sem exigir clique.
     connect(m_tabWidget, &QTabWidget::currentChanged, this, [this](int) {
-        focusFirstVisibleItem();
+        // Reconstruir a árvore (um comando editado por fora, pelo agente de IA) troca de aba sozinho: o teclado só vai
+        // para a árvore se já era dela (rebuildTabs devolve o foco no fim).
+        if (!m_rebuilding) {
+            focusFirstVisibleItem();
+        }
         // Ao trocar de aba, a Saída deve acompanhar o item ATUAL da nova aba
         // (pedido do usuário: a saída sempre segue o comando selecionado).
         // O currentItemChanged da árvore NÃO dispara só por trocar de aba se
@@ -459,6 +464,10 @@ void CommandTreeWidget::rebuildTabs()
     // reaplicá-los após reconstruir.
     const QSet<QString> expandedIds = collectExpandedIds();
     const QString selectedId = currentSelectionId();
+    // Sem nada com o foco (a primeira carga) ou com ele na própria árvore, ela o recebe de volta no fim; com o foco em
+    // outro painel (o campo do chat da IA, o Documento) ele fica onde está.
+    const QWidget *focused = QApplication::focusWidget();
+    const bool keepsFocus = !focused || isAncestorOf(focused);
 
     m_tabWidget->clear();
     m_treesByRootId.clear();
@@ -570,6 +579,12 @@ void CommandTreeWidget::rebuildTabs()
     if (auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget())) {
         if (!tree->currentItem() || tree->currentItem()->isHidden()) {
             selectFirstVisible(tree);
+        }
+    }
+
+    if (keepsFocus) {
+        if (auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget())) {
+            tree->setFocus();
         }
     }
 
@@ -840,6 +855,9 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         };
         auto *actionsView = new FolderActionsView(tree, std::move(provider));
         connect(actionsView, &FolderActionsView::activated, this, &CommandTreeWidget::folderActionActivated);
+        connect(actionsView, &FolderActionsView::outputMarkClicked, this, [this](const QTreeWidgetItem *item) {
+            emit commandOutputRequested(item->data(0, kCommandIdRole).toString());
+        });
         connect(actionsView, &FolderActionsView::contextRequested, this,
                 &CommandTreeWidget::folderActionContextRequested);
         // Clicar na linha da pasta FORA dos ícones desfoca a ação dela: a pasta
@@ -850,6 +868,44 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
             if (parsed && parsed->folderId == folderId) {
                 setFocusedAction(QString());
                 emit selectionChanged(folderId, true);
+            }
+        });
+    }
+
+    // Botões de ação logo depois do nome (Configurações → Ações inline).
+    {
+        using Kind = InlineRowActions::Kind;
+        auto *inlineActions = new InlineRowActions(tree, [this](const QTreeWidgetItem *item) {
+            QVector<Kind> kinds;
+            const QString id = item->data(0, kCommandIdRole).toString();
+            if (item->data(0, kIsCommandRole).toBool()) {
+                const bool running = m_runningCommandIds.contains(id);
+                kinds.append(running ? Kind::Stop : Kind::Play);
+                if (running || m_failedCommandIds.contains(id)) {
+                    kinds.append(Kind::Reset);
+                }
+                if (item->data(0, kIsHttpRole).toBool()) {
+                    kinds.append(Kind::EditBody);
+                }
+                if (m_commandHasOutput && m_commandHasOutput(id)) {
+                    kinds.append(Kind::Output);
+                }
+            }
+            if (!item->data(0, kIsCollectionRole).toBool() && m_itemHasDocument && m_itemHasDocument(id)) {
+                kinds.append(Kind::Document);
+            }
+            return kinds;
+        });
+        inlineActions->setEnabled(m_inlineActions);
+        connect(inlineActions, &InlineRowActions::activated, this, [this](const QTreeWidgetItem *item, Kind kind) {
+            const QString id = item->data(0, kCommandIdRole).toString();
+            switch (kind) {
+            case Kind::Play: emit playRequested(id); break;
+            case Kind::Stop: emit killRequested(id); break;
+            case Kind::Reset: emit resetRequested(id); break;
+            case Kind::EditBody: emit quickEditBodyRequested(id); break;
+            case Kind::Output: emit commandOutputRequested(id); break;
+            case Kind::Document: emit documentRequested(id); break;
             }
         });
     }
@@ -2452,6 +2508,16 @@ void CommandTreeWidget::setShownCommand(const QString &commandId)
     }
     m_shownCommandId = commandId;
     refreshActionViews();
+}
+
+void CommandTreeWidget::setInlineActionsEnabled(bool enabled)
+{
+    m_inlineActions = enabled;
+    for (QTreeWidget *tree : std::as_const(m_treesByRootId)) {
+        for (auto *delegate : tree->findChildren<InlineRowActions *>(QString(), Qt::FindDirectChildrenOnly)) {
+            delegate->setEnabled(enabled);
+        }
+    }
 }
 
 void CommandTreeWidget::refreshActionViews()

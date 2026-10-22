@@ -5,12 +5,12 @@ Global variables live in **packages** (Insomnia/Postman vibe). Only one is
 
 ## Switching packages
 
-- **Picker at the top-right** of the window.
+- The **Variables** panel (View → Variables), the tray menu, or the command palette (**Ctrl+K**).
 - From the CLI: `kai env use Prod` (see [cli.md](cli.md)).
 
 ## Managing them
 
-The ⚙ button next to the picker opens the screen to **create / duplicate /
+The **Variables** panel (View menu) is the screen to **create / duplicate /
 rename / delete** packages and edit their variables.
 
 ## Import a `.env` file

@@ -39,7 +39,7 @@ The field at the bottom sends text to the command's input — for `read` prompts
 |   |   |
 |---|---|
 | **Interactive terminal** | a real terminal grid for `vim`, `htop`, `less`, a nested Claude Code. Turn it on in the command's advanced settings. |
-| **Formatted output** | each line that is a JSON log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by *level*, and Kai can [notify](notifications.md) on the first ERROR line. |
+| **Formatted output** | each line that is a JSON or [logfmt](https://brandur.org/logfmt) (`level=info msg="server up" port=8080`) log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by *level*, and Kai can [notify](notifications.md) on the first ERROR line. |
 
 ## Reading the README while a command runs
 

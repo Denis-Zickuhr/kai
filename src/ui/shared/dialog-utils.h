@@ -49,6 +49,22 @@
 
 namespace kai::ui {
 
+// Botão de tamanho confortável (28px): padding generoso, ícone de 16px, raio pelo token. Sem texto vira quadrado só de ícone.
+inline void makeCompactButton(QAbstractButton *button, int height = 28)
+{
+    button->setFixedHeight(height);
+    button->setCursor(Qt::PointingHandCursor);
+    if (button->text().isEmpty()) {
+        button->setFixedWidth(height);
+    }
+    button->setIconSize(QSize(16, 16));
+    button->setStyleSheet(QStringLiteral("%1 { padding: 0px %2px; min-height: 0px; border-radius: %3px; }")
+        .arg(qobject_cast<QPushButton *>(button) ? QStringLiteral("QPushButton")
+                                                 : QString::fromLatin1(button->metaObject()->className()))
+        .arg(button->text().isEmpty() ? 0 : utils::tokens::space(3))
+        .arg(utils::tokens::radiusMdForHeight(height)));
+}
+
 // Caminho completo (raiz -> pasta), um nome por segmento, na ordem em que
 // aparecem na hierarquia — feedback do usuário: "os campos de seletor de
 // pastas precisam exibir o PATH completo, ao ter pastas com o mesmo nome

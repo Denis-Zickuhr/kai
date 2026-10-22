@@ -213,15 +213,22 @@ private slots:
         QVERIFY(manager.saveSettings(s));
 
         const SettingsData loaded = manager.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente (auto-seedado
-        // pra dar um lugar de configurar Saída/TTY sem precisar de
-        // wrapping — ver ConfigManager::loadSettings).
-        QCOMPARE(loaded.terminalProfiles.size(), 2);
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
         const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
             [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
         QVERIFY(it != loaded.terminalProfiles.constEnd());
         QCOMPARE(it->shell, ShellFlavor::PowerShell);
         QCOMPARE(it->usePty, false);
+    }
+
+    // Nenhum perfil "Default" é criado sozinho: apagar o último perfil o deixa apagado.
+    void noTerminalProfileIsAutoCreated()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        s.terminalProfiles.clear();
+        QVERIFY(manager.saveSettings(s));
+        QVERIFY(manager.loadSettings().terminalProfiles.isEmpty());
     }
 
     // Migração: um alvo PowerShell antigo com a gambiarra $l[2..] é reescrito
@@ -242,9 +249,7 @@ private slots:
         QVERIFY(manager.saveSettings(s));
 
         const SettingsData loaded = manager.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente — ver comentário
-        // equivalente em terminalTargetShellFlavorRoundTrip().
-        QCOMPARE(loaded.terminalProfiles.size(), 2);
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
         const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
             [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
         QVERIFY(it != loaded.terminalProfiles.constEnd());

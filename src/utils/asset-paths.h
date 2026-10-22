@@ -15,4 +15,8 @@ namespace kai::utils {
 // o fallback, em vez de receber um caminho inválido que falha silenciosamente.
 QString assetDir(const QString &relativeName);
 
+// Pasta dos projetos de exemplo: sample/ na raiz do projeto (desenvolvimento) ou assets/samples
+// nos layouts portátil e instalado. Vazia se nada existir.
+QString sampleDir();
+
 } // namespace kai::utils

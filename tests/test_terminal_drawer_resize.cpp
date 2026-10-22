@@ -76,9 +76,8 @@ private slots:
         QVERIFY(drawer.testAttribute(Qt::WA_StyledBackground));
     }
 
-    // Colapsada, a fileira de ações do cabeçalho some e sobra só o chevron;
-    // expandida, tudo volta.
-    void collapsedHeaderKeepsOnlyTheChevron()
+    // Colapsada, a fileira de ações do cabeçalho some; expandida, tudo volta. A Saída não tem botão de recolher.
+    void collapsedHeaderHidesTheActionsAndHasNoToggleButton()
     {
         auto *sibling = new QWidget();
         auto *drawer = new TerminalDrawer();
@@ -87,24 +86,19 @@ private slots:
         splitter.addWidget(drawer);
         splitter.resize(400, 800);
 
-        auto *toggle = drawer->findChild<QToolButton *>(QStringLiteral("terminalDrawerToggle"));
-        // Abas + ações (e a faixa de overflow) vivem na linha rolável; o
-        // chevron fica fora dela.
+        // Abas + ações (e a faixa de overflow) vivem na linha rolável.
         auto *scroll = drawer->findChild<QWidget *>(QStringLiteral("outputHeaderScroll"));
-        QVERIFY(toggle != nullptr);
         QVERIFY(scroll != nullptr);
-        QVERIFY(!scroll->isAncestorOf(toggle));
+        QVERIFY(drawer->findChild<QToolButton *>(QStringLiteral("terminalDrawerToggle")) == nullptr);
 
         drawer->setExpanded(false);
-        QVERIFY(!toggle->isHidden());
         QVERIFY2(scroll->isHidden(), "abas e ações deveriam sumir com o painel colapsado");
 
         drawer->setExpanded(true);
         QVERIFY2(!scroll->isHidden(), "abas e ações deveriam voltar ao expandir");
-        QVERIFY(!toggle->isHidden());
     }
 
-    // Saída na lateral, colapsada: coluna estreita (só o chevron), não os 96px
+    // Saída na lateral, colapsada: coluna estreita, não os 96px
     // mínimos de antes, para dar o máximo de espaço aos comandos.
     void collapsedSideColumnIsNarrow()
     {

@@ -68,11 +68,8 @@ private:
 AppWindowFrame::AppWindowFrame(QWidget *parent)
     : QWidget(parent)
 {
-    // Os hints são explícitos: o FramelessWindowHint faz o Qt tratar os flags como
-    // "customizados" e não aplicar os padrões (no Windows a janela nascia sem
-    // WS_MINIMIZEBOX/WS_SYSMENU e o clique na barra de tarefas era ignorado).
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint
-                   | Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint);
+    m_systemFrame = systemFrameByDefault();
+    setWindowFlags(frameFlags());
     setObjectName(QStringLiteral("rootContainer"));
     setAttribute(Qt::WA_StyledBackground, true);
     setMouseTracking(true);
@@ -106,6 +103,9 @@ AppWindowFrame::AppWindowFrame(QWidget *parent)
     bar->addWidget(m_maximize, 0, Qt::AlignVCenter);
     bar->addWidget(m_close, 0, Qt::AlignVCenter);
     root->addWidget(m_titleBar);
+    if (m_systemFrame) {
+        m_titleBar->hide(); // a barra de título é a nativa
+    }
 
     m_content = new QWidget(this);
     m_content->setObjectName(QStringLiteral("appWindowContent"));
@@ -121,6 +121,46 @@ AppWindowFrame::AppWindowFrame(QWidget *parent)
 AppWindowFrame::~AppWindowFrame()
 {
     clearResizeCursor();
+}
+
+bool AppWindowFrame::systemFrameByDefault()
+{
+#if defined(Q_OS_WIN)
+    return true;
+#else
+    return false;
+#endif
+}
+
+// Os hints são explícitos: o FramelessWindowHint faz o Qt tratar os flags como "customizados" e não aplicar os padrões (no
+// Windows a janela nascia sem WS_MINIMIZEBOX/WS_SYSMENU e o clique na barra de tarefas era ignorado).
+Qt::WindowFlags AppWindowFrame::frameFlags() const
+{
+    Qt::WindowFlags flags = Qt::Window | Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint
+                            | Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint;
+    flags |= m_systemFrame ? Qt::WindowTitleHint : Qt::FramelessWindowHint;
+    return flags;
+}
+
+void AppWindowFrame::setUseSystemFrame(bool on)
+{
+    if (m_systemFrame == on) {
+        return;
+    }
+    m_systemFrame = on;
+    const bool wasVisible = isVisible();
+    const Qt::WindowFlags onTop = windowFlags() & Qt::WindowStaysOnTopHint;
+    setWindowFlags(frameFlags() | onTop); // mudar os hints esconde a janela
+    m_titleBar->setVisible(!on);
+    if (on) {
+        qApp->removeEventFilter(this); // as bordas passam a ser do sistema
+        clearResizeCursor();
+    }
+    m_nativeCornerStyle = -1;
+    if (wasVisible) {
+        show();
+    }
+    updateShape();
 }
 
 QString AppWindowFrame::titleText() const
@@ -163,12 +203,17 @@ void AppWindowFrame::updateShape()
 #if defined(Q_OS_WIN)
     const int cornerStyle = tk::effects().cornerStyle;
     if (isVisible() && m_nativeCornerStyle != cornerStyle) {
-        m_nativeCorners = applyNativeWindowCorners(this, cornerStyle);
+        if (m_systemFrame) {
+            applyNativeTitleBarTheme(this);
+        } else {
+            m_nativeCorners = applyNativeWindowCorners(this, cornerStyle);
+        }
         m_nativeCornerStyle = cornerStyle;
     }
 #endif
 
-    const bool flat = fillsScreen || m_nativeCorners;
+    // Moldura do sistema: cantos, borda e sombra são dela; o contêiner só pinta o fundo, reto.
+    const bool flat = m_systemFrame || fillsScreen || m_nativeCorners;
     if (property("kaiMaximized").toBool() != flat) {
         setProperty("kaiMaximized", flat);
         style()->unpolish(this);
@@ -214,8 +259,10 @@ void AppWindowFrame::resizeEvent(QResizeEvent *event)
 void AppWindowFrame::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
-    // Filtro global: os filhos cobrem as bordas, então só vemos o clique aqui.
-    qApp->installEventFilter(this);
+    // Filtro global: os filhos cobrem as bordas, então só vemos o clique aqui. Com a moldura do sistema as bordas são dela.
+    if (!m_systemFrame) {
+        qApp->installEventFilter(this);
+    }
     updateShape();
 }
 
@@ -249,6 +296,9 @@ void AppWindowFrame::clearResizeCursor()
 
 bool AppWindowFrame::eventFilter(QObject *watched, QEvent *event)
 {
+    if (m_systemFrame) {
+        return QWidget::eventFilter(watched, event);
+    }
     if (m_resizeCursorActive && event->type() == QEvent::MouseMove) {
         // O ponteiro foi para um widget de outra janela (ou esta não está mais ativa): o cursor de borda não vale mais.
         const auto *under = qobject_cast<QWidget *>(watched);

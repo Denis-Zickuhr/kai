@@ -209,7 +209,7 @@ void FolderActionsView::paint(QPainter *painter, const QStyleOptionViewItem &opt
         // Linha de comando (play + tempo) ou pasta sem ação: o desenho padrão da coluna.
         QStyledItemDelegate::paint(painter, option, index);
         if (item && folderId.isEmpty() && m_provider.outputMarkOf) {
-            paintOutputMark(painter, option.rect, m_provider.outputMarkOf(item));
+            paintOutputMark(painter, option.rect, m_provider.outputMarkOf(item), item == m_hoverMark);
         }
         return;
     }
@@ -238,9 +238,27 @@ void FolderActionsView::paint(QPainter *painter, const QStyleOptionViewItem &opt
     }
 }
 
+QRect FolderActionsView::outputMarkRect(const QRect &cell)
+{
+    const int box = 20;
+    return QRect(cell.right() - kMargin - box + 1, cell.top() + (cell.height() - box) / 2, box, box);
+}
+
+const QTreeWidgetItem *FolderActionsView::outputMarkAt(const QPoint &viewportPos) const
+{
+    const QTreeWidgetItem *item = m_tree->itemAt(viewportPos);
+    if (!item || !m_provider.outputMarkOf || !m_provider.folderIdOf || !m_provider.folderIdOf(item).isEmpty()) {
+        return nullptr;
+    }
+    if (m_provider.outputMarkOf(item) == OutputMark::None) {
+        return nullptr;
+    }
+    return outputMarkRect(cellRectFor(item)).contains(viewportPos) ? item : nullptr;
+}
+
 // No fim da coluna (o tempo de execução fica no começo): discreta quando o comando tem saída, em destaque quando é a que
 // está na Saída.
-void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark)
+void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, OutputMark mark, bool hovered)
 {
     if (mark == OutputMark::None) {
         return;
@@ -248,12 +266,12 @@ void FolderActionsView::paintOutputMark(QPainter *painter, const QRect &cell, Ou
     const bool shown = mark == OutputMark::Shown;
     const QColor color(shown ? tk::accent() : tk::mutedFg());
     const int box = 20;
-    const QRect rect(cell.right() - kMargin - box + 1, cell.top() + (cell.height() - box) / 2, box, box);
+    const QRect rect = outputMarkRect(cell);
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
-    if (shown) {
+    if (shown || hovered) {
         QColor fill = color;
-        fill.setAlpha(50);
+        fill.setAlpha(shown ? 50 : 36);
         painter->setPen(Qt::NoPen);
         painter->setBrush(fill);
         painter->drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), tk::radiusSm(), tk::radiusSm());
@@ -415,6 +433,10 @@ bool FolderActionsView::eventFilter(QObject *watched, QEvent *event)
         if (mouse->button() != Qt::LeftButton) {
             return false;
         }
+        if (const QTreeWidgetItem *marked = outputMarkAt(mouse->pos())) {
+            m_pressedMark = marked;
+            return true;
+        }
         const Hit hit = hitTest(mouse->pos());
         if (hit.valid) {
             m_pressedId = hit.icon.virtualId;
@@ -430,6 +452,13 @@ bool FolderActionsView::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonRelease: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() == Qt::LeftButton && m_pressedMark) {
+            const QTreeWidgetItem *pressed = std::exchange(m_pressedMark, nullptr);
+            if (outputMarkAt(mouse->pos()) == pressed) {
+                emit outputMarkClicked(pressed);
+            }
+            return true;
+        }
         if (mouse->button() != Qt::LeftButton || m_pressedId.isEmpty()) {
             return false;
         }
@@ -452,22 +481,30 @@ bool FolderActionsView::eventFilter(QObject *watched, QEvent *event)
         auto *mouse = static_cast<QMouseEvent *>(event);
         const Hit hit = hitTest(mouse->pos());
         const QString hovered = hit.valid ? hit.icon.virtualId : QString();
-        if (hovered != m_hoverId) {
+        const QTreeWidgetItem *mark = outputMarkAt(mouse->pos());
+        if (hovered != m_hoverId || mark != m_hoverMark) {
             m_hoverId = hovered;
-            m_tree->viewport()->setCursor(hit.valid ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            m_hoverMark = mark;
+            m_tree->viewport()->setCursor(hit.valid || mark ? Qt::PointingHandCursor : Qt::ArrowCursor);
             m_tree->viewport()->update();
         }
         return false;
     }
     case QEvent::Leave:
-        if (!m_hoverId.isEmpty()) {
+        if (!m_hoverId.isEmpty() || m_hoverMark) {
             m_hoverId.clear();
+            m_hoverMark = nullptr;
             m_tree->viewport()->setCursor(Qt::ArrowCursor);
             m_tree->viewport()->update();
         }
         return false;
     case QEvent::ToolTip: {
         auto *help = static_cast<QHelpEvent *>(event);
+        if (const QTreeWidgetItem *mark = outputMarkAt(help->pos())) {
+            QToolTip::showText(help->globalPos(), utils::tr(QStringLiteral("sidebar.show_output")), m_tree->viewport(),
+                               outputMarkRect(cellRectFor(mark)));
+            return true;
+        }
         const Hit hit = hitTest(help->pos());
         if (!hit.valid) {
             return false;

@@ -39,6 +39,7 @@
 #include "ui/layout/view-registry.h"
 #include "ui/layout/view-zone.h"
 #include "ui/main-window.h"
+#include "ui/shared/action-sidebar.h"
 #include "ui/shared/status-line.h"
 #include "ui/shared/top-utility-bar.h"
 #include "utils/action-shortcuts.h"
@@ -496,9 +497,6 @@ private slots:
         QTest::qWait(60);
         drawer->setExpanded(false);
         QVERIFY(drawer->isExpanded());
-        auto *toggle = drawer->findChild<QToolButton *>(QStringLiteral("terminalDrawerToggle"));
-        QVERIFY(toggle != nullptr);
-        QVERIFY(toggle->isHidden());
     }
 
     void collapsingTheOutputGivesTheSpaceBackInEveryArrangement_data()
@@ -693,8 +691,8 @@ private slots:
         QVERIFY(environments->isVisible());
     }
 
-    // O seletor de ambientes da barra de cima traz o painel Variáveis (a tela de ambientes embutida), e as edições nele
-    // valem sozinhas: gravadas nas configurações, sem OK.
+    // Pedir a gestão dos ambientes traz o painel Variáveis (a tela de ambientes embutida), e as edições nele valem
+    // sozinhas: gravadas nas configurações, sem OK.
     void theManageEnvironmentsRequestOpensTheVariablesPanelThatSavesByItself()
     {
         seed({});
@@ -703,7 +701,7 @@ private slots:
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         DockHost *dock = window.dockHost();
-        emit window.findChild<TopUtilityBar *>()->manageEnvironmentsRequested();
+        QMetaObject::invokeMethod(&window, "handleManageEnvironmentsRequested");
         QTest::qWait(80);
         QVERIFY(dock->model().isPlaced(view_id::kVariables));
         auto *panel = window.findChild<EnvironmentManagerDialog *>();
@@ -722,8 +720,6 @@ private slots:
             }
             return false;
         }(), 4000);
-        // A barra de cima passa a mostrar o nome novo.
-        QVERIFY(window.findChild<TopUtilityBar *>() != nullptr);
     }
 
     void theAiChatPanelDoesNotExistWithoutAProvider()
@@ -738,7 +734,6 @@ private slots:
         emit menu->aboutToShow();
         QVERIFY(actionTitled(menu, utils::tr(QStringLiteral("layout.view.ai_chat"))) == nullptr);
         QVERIFY(!window.findChild<AiChatWindow *>());
-        QVERIFY(!window.findChild<QToolButton *>(QStringLiteral("aiChatButton"))->isVisible());
     }
 
     void withAProviderTheAiChatIsAPanelThatKeepsItsPlace()
@@ -762,7 +757,7 @@ private slots:
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QVERIFY(window.viewRegistry()->isKnown(view_id::kAiChat));
-            window.findChild<QToolButton *>(QStringLiteral("aiChatButton"))->click();
+            QMetaObject::invokeMethod(&window, "showAiChat");
             QTest::qWait(80);
             auto *chat = window.findChild<AiChatWindow *>();
             QVERIFY(chat != nullptr);
@@ -941,6 +936,36 @@ private slots:
         QCOMPARE(mirror->output()->plainOutput().count(QStringLiteral("alpha-1")), 1);
     }
 
+    // O painel de um comando de saída formatada mostra os cards (antes mostrava o JSON cru) e tem, no cabeçalho, os botões de
+    // execução: executar de novo e parar sem precisar da árvore.
+    void aRunPanelKeepsTheFormattedOutputAndHasItsOwnActionButtons()
+    {
+        core::Command logs = shell(QStringLiteral("a"), QStringLiteral("Alpha"),
+                                   QStringLiteral("echo '{\"level\":\"info\",\"msg\":\"hello\"}'; sleep 3"));
+        logs.formattedOutput = true;
+        seed({logs});
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        activate(window, QStringLiteral("a"));
+        QTRY_VERIFY_WITH_TIMEOUT(window.storedOutputFor(QStringLiteral("a")).contains(QStringLiteral("hello")), 4000);
+
+        window.layoutController()->focusView(QStringLiteral("run:a"));
+        QTest::qWait(80);
+        auto *mirror = window.findChild<RunMirrorPanel *>();
+        QVERIFY(mirror != nullptr);
+        QVERIFY(mirror->output()->formattedOutputEnabled());
+
+        auto *strip = mirror->output()->findChild<ActionSidebar *>();
+        QVERIFY(strip != nullptr);
+        const auto buttons = strip->findChildren<QToolButton *>();
+        QVERIFY(buttons.size() >= 4); // executar, parar, forçar, reiniciar (e o body no HTTP)
+        QTRY_VERIFY_WITH_TIMEOUT(!buttons.at(0)->isEnabled() && buttons.at(1)->isEnabled(), 4000); // rodando: só parar
+        buttons.at(1)->click();
+        QTRY_VERIFY_WITH_TIMEOUT(buttons.at(0)->isEnabled() && !buttons.at(1)->isEnabled(), 6000); // parou: só executar
+    }
+
     void droppingARunTabOnAZoneOpensItsPanel()
     {
         seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out"))});
@@ -964,8 +989,60 @@ private slots:
         QTRY_COMPARE(dock->zoneOf(QStringLiteral("run:a")), std::optional<Zone>(kLowerLeft));
         QVERIFY(!dock->overlay()->isVisible());
         QVERIFY(window.findChild<RunMirrorPanel *>() != nullptr);
-        // A guia continua na Saída: o painel é um espelho, não uma mudança de lugar.
+        // O comando passa a viver só no painel: a guia sai da Saída.
+        QTRY_VERIFY(!bar->hasTab(QStringLiteral("a")));
+    }
+
+    // "Parar tudo" da bandeja: pára o comando que roda pelo pipeline (não só os processos em segundo plano).
+    void stopAllRunningStopsACommandRunningInThePipeline()
+    {
+        seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo started; sleep 30"))});
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        activate(window, QStringLiteral("a"));
+        QTRY_COMPARE_WITH_TIMEOUT(drawer->embeddedPanel()->status(), OutputStatus::Running, 4000);
+        QVERIFY(QMetaObject::invokeMethod(&window, "stopAllRunning", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->status() != OutputStatus::Running, 8000);
+    }
+
+    // Com painel próprio o comando aparece só nele: rodar de novo não cria guia na Saída, não a conecta nem a traz para a
+    // frente; fechar o painel devolve a guia (sem tomar a frente).
+    void aCommandWithItsOwnPanelRunsOnlyThere()
+    {
+        seed({shell(QStringLiteral("a"), QStringLiteral("Alpha"), QStringLiteral("echo alpha-out")),
+              shell(QStringLiteral("b"), QStringLiteral("Beta"), QStringLiteral("echo beta-out"))});
+        MainWindow window;
+        window.resize(1300, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *drawer = window.findChild<TerminalDrawer *>();
+        activate(window, QStringLiteral("b"));
+        QTRY_VERIFY_WITH_TIMEOUT(drawer->embeddedPanel()->plainOutput().contains(QStringLiteral("beta-out")), 4000);
+        activate(window, QStringLiteral("a"));
+        QTRY_VERIFY_WITH_TIMEOUT(window.storedOutputFor(QStringLiteral("a")).contains(QStringLiteral("alpha-out")), 4000);
+
+        window.layoutController()->focusView(QStringLiteral("run:a"));
+        QTest::qWait(80);
+        auto *mirror = window.findChild<RunMirrorPanel *>();
+        QVERIFY(mirror != nullptr);
+        OutputTabsBar *bar = drawer->outputTabs();
+        QTRY_VERIFY(!bar->hasTab(QStringLiteral("a")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("b")); // a Saída voltou para a guia vizinha
+
+        activate(window, QStringLiteral("a"));
+        QTRY_VERIFY_WITH_TIMEOUT(mirror->output()->plainOutput().count(QStringLiteral("alpha-out")) == 1
+                                     && mirror->output()->status() == OutputStatus::Success, 4000);
+        QVERIFY(!bar->hasTab(QStringLiteral("a")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("b"));
+        QVERIFY(!drawer->embeddedPanel()->plainOutput().contains(QStringLiteral("alpha-out")));
+
+        window.dockHost()->closeView(QStringLiteral("run:a"));
+        QTest::qWait(80);
         QVERIFY(bar->hasTab(QStringLiteral("a")));
+        QCOMPARE(drawer->currentCommandId(), QStringLiteral("b"));
     }
 
     void aRunTabDroppedOutsideTheWindowBecomesAFloatingPanel()

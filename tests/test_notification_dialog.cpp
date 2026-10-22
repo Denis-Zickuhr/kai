@@ -13,6 +13,8 @@
 
 #include "core/notification-history.h"
 #include "ui/features/history/notification-history-dialog.h"
+#include "ui/app-stylesheet.h"
+#include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
 
 using namespace kai::core;
@@ -149,6 +151,26 @@ private slots:
         QVERIFY(list != nullptr && search != nullptr);
         search->setText(QStringLiteral("B"));
         QTRY_COMPARE_WITH_TIMEOUT(list->count(), 2, 3000); // cabeçalho de hoje + B
+    }
+
+    // Só roda com KAI_TEST_SCREENSHOT_DIR: um PNG da central (cantos arredondados) para olhar botões, filtro e raios.
+    void screenshotForManualReview()
+    {
+        const QString dir = QString::fromLocal8Bit(qgetenv("KAI_TEST_SCREENSHOT_DIR"));
+        if (dir.isEmpty()) {
+            QSKIP("defina KAI_TEST_SCREENSHOT_DIR para gerar a imagem");
+        }
+        kai::utils::tokens::Effects effects;
+        effects.cornerStyle = 2;
+        kai::utils::tokens::setEffects(effects);
+        NotificationHistory history;
+        seed(history);
+        NotificationHistoryDialog dialog(&history);
+        dialog.setStyleSheet(kai::ui::buildModernStylesheet());
+        dialog.resize(900, 520);
+        dialog.show();
+        QTest::qWait(300);
+        dialog.grab().save(dir + QStringLiteral("/notifications.png"));
     }
 };
 

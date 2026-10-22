@@ -41,8 +41,32 @@ commands:
         name: "COUNT"
         type: "text"
     type: "command"
+  - command: "bash ./emit-logs.sh logfmt"
+    formatted_output: true
+    name: "9. Logfmt (key=value per line)"
+    type: "command"
+  - command: "bash ./emit-logs.sh logfmt-mixed"
+    formatted_output: true
+    name: "10. Logfmt + JSON + plain text mixed"
+    type: "command"
+  - command: "bash ./emit-logs.sh logfmt-shapes"
+    formatted_output: true
+    name: "11. Logfmt quoting, escapes, aliases, unicode"
+    type: "command"
+  - command: "bash ./emit-logs.sh logfmt-stream {{COUNT}}"
+    formatted_output: true
+    name: "12. Logfmt live stream"
+    params:
+      - default: "40"
+        label: "Number of lines"
+        name: "COUNT"
+        type: "text"
+    type: "command"
+  - command: "bash ./emit-logs.sh logfmt"
+    name: "13. Same as 9, but normal output (compare)"
+    type: "command"
   - command: "bash ./emit-logs.sh structured"
-    name: "9. Same as 1, but normal output (compare)"
+    name: "14. Same as 1, but normal output (compare)"
     type: "command"
 icon: "scroll-text"
 project_name: "Kai Formatted Output Demo"

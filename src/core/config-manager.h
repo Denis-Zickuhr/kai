@@ -320,6 +320,10 @@ struct SettingsData {
     // navegar não mexe neles: a Saída vem ao executar (ou pela guia dela) e o Documento pelo ícone de documento da pasta.
     bool smartFocus = false;
 
+    // Ações inline: as ações do item (executar, parar, reiniciar, body, saída, documento) aparecem na própria linha da
+    // árvore, logo depois do nome, conforme o estado dele. Desligado (padrão): só pelo grupo Execução e pelo menu.
+    bool inlineActions = false;
+
     // Idioma da interface (language pack i18n). Código de idioma como
     // "en" (padrão) ou "pt". Resolve para assets/i18n/<code>.json via
     // TranslationManager. Textos sem tradução caem no inglês, depois na

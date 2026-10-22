@@ -1,7 +1,7 @@
 #include <QTest>
 #include <QApplication>
 #include <QTableWidget>
-#include <QComboBox>
+#include <QScrollBar>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QPushButton>
@@ -99,9 +99,14 @@ QTableWidget *tableOf(StorageManagerWidget &widget)
     return widget.findChild<QTableWidget *>();
 }
 
-QComboBox *kindComboOf(StorageManagerWidget &widget)
+// Chips de tipo, na ordem: Todos, Comandos, HTTP, Pastas, Coleções (e Notas, se houver notas).
+enum Kind { All = 0, Commands, Http, Folders, Collections, Notes };
+
+void selectKind(StorageManagerWidget &widget, Kind kind)
 {
-    return widget.findChild<QComboBox *>();
+    const auto chips = widget.findChildren<QPushButton *>(QStringLiteral("storageKindChip"));
+    QVERIFY(kind < chips.size());
+    chips.at(kind)->click();
 }
 
 QLineEdit *filterOf(StorageManagerWidget &widget)
@@ -135,18 +140,41 @@ private slots:
                                                             QStringLiteral("f1"), 3)};
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        QCOMPARE(tableOf(widget)->rowCount(), 2); // default kind = Comandos
+        QCOMPARE(tableOf(widget)->rowCount(), 4); // default = Todos (1 pasta + 2 comandos + 1 coleção)
+        selectKind(widget, Commands);
+        QCOMPARE(tableOf(widget)->rowCount(), 2);
         // Checkbox é um cell widget de verdade, numa coluna própria.
         QVERIFY(checkboxAt(tableOf(widget), 0));
         QVERIFY(!checkboxAt(tableOf(widget), 0)->isChecked());
 
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
+        selectKind(widget, Folders);
         QCOMPARE(tableOf(widget)->rowCount(), 1);
 
-        kindComboOf(widget)->setCurrentIndex(2); // Coleções
+        selectKind(widget, Collections);
         QCOMPARE(tableOf(widget)->rowCount(), 1);
         // Coluna "Pasta/Origem" traz a contagem de registros junto.
         QVERIFY(tableOf(widget)->item(0, kLocationCol)->text().contains(QStringLiteral("3")));
+    }
+
+    // Bug relatado (print): numa janela estreita a coluna Nome ficava de
+    // ~30px (Pasta/Origem ocupava tudo) e surgia barra horizontal.
+    void nameColumnStaysReadableInANarrowWidget()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("f1"), QStringLiteral("Kai API Tester"));
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build Release"), QStringLiteral("f1"));
+        QVector<Collection> collections;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {});
+        widget.resize(560, 500);
+        widget.show();
+        QTest::qWait(30);
+        QVERIFY2(tableOf(widget)->columnWidth(kNameCol) >= 120, qPrintable(QString::number(tableOf(widget)->columnWidth(kNameCol))));
+        QVERIFY(!tableOf(widget)->horizontalScrollBar()->isVisible());
+        const auto chips = widget.findChildren<QPushButton *>(QStringLiteral("storageKindChip"));
+        for (auto *chip : chips) {
+            QVERIFY(chip->geometry().right() <= widget.width());
+        }
     }
 
     void filterRestrictsVisibleItems()
@@ -235,7 +263,7 @@ private slots:
                                                             QString(), 2)};
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(2); // Coleções
+        selectKind(widget, Collections);
         checkRowsContaining(tableOf(widget), QStringLiteral("Usuarios"));
 
         duplicateButtonOf(widget)->click();
@@ -255,7 +283,7 @@ private slots:
         QVector<Collection> collections;
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
+        selectKind(widget, Folders);
         checkRowsContaining(tableOf(widget), QStringLiteral("Meio"));
 
         confirmNextMessageBox();
@@ -278,7 +306,7 @@ private slots:
         QVector<Collection> collections;
 
         StorageManagerWidget widget(data, collections, [] {}, [] {});
-        kindComboOf(widget)->setCurrentIndex(1); // Pastas
+        selectKind(widget, Folders);
         // Marca "Raiz" e "Meio" (mas NÃO "Folha") pra excluir os dois juntos.
         QTableWidget *table = tableOf(widget);
         for (int i = 0; i < table->rowCount(); ++i) {
@@ -298,6 +326,81 @@ private slots:
         QVERIFY(!data.folders.first().parentId.has_value() || data.folders.first().parentId->isEmpty());
         QCOMPARE(data.commands.size(), 1);
         QCOMPARE(data.commands.first().folderId, QStringLiteral("leaf"));
+    }
+
+    void httpRequestsHaveTheirOwnFilter()
+    {
+        CommandsData data;
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build"), QString());
+        Command http = makeCommand(QStringLiteral("h1"), QStringLiteral("Ping"), QString());
+        http.type = CommandType::Http;
+        data.commands << http;
+        QVector<Collection> collections;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {});
+        selectKind(widget, Commands);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Build"));
+        selectKind(widget, Http);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Ping"));
+    }
+
+    void notesHaveAFilterAndCanBeDuplicatedAndDeleted()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("f1"), QStringLiteral("Docs"));
+        data.commands << makeCommand(QStringLiteral("c1"), QStringLiteral("Build"), QStringLiteral("f1"));
+        QVector<Collection> collections;
+        QVector<Note> notes;
+        Note note;
+        note.id = QStringLiteral("n1");
+        note.folderId = QStringLiteral("f1");
+        note.name = QStringLiteral("Ideias");
+        notes << note;
+        int notesPersisted = 0;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {}, &notes, [&] { ++notesPersisted; });
+        QCOMPARE(tableOf(widget)->rowCount(), 3); // pasta + comando + nota
+        selectKind(widget, Notes);
+        QCOMPARE(tableOf(widget)->rowCount(), 1);
+        QCOMPARE(tableOf(widget)->item(0, kNameCol)->text(), QStringLiteral("Ideias"));
+
+        checkRowsContaining(tableOf(widget), QStringLiteral("Ideias"));
+        duplicateButtonOf(widget)->click();
+        QCOMPARE(notes.size(), 2);
+        QVERIFY(notes.last().id != QStringLiteral("n1"));
+        QVERIFY(notes.last().name.startsWith(QStringLiteral("Ideias ")));
+        QCOMPARE(notes.last().folderId, QStringLiteral("f1"));
+        QCOMPARE(notesPersisted, 1);
+
+        checkRowsContaining(tableOf(widget), QStringLiteral("Ideias"));
+        confirmNextMessageBox();
+        deleteButtonOf(widget)->click();
+        QVERIFY(notes.isEmpty());
+        QCOMPARE(notesPersisted, 2);
+    }
+
+    void deletingAFolderMovesItsNotesUpToo()
+    {
+        CommandsData data;
+        data.folders << makeFolder(QStringLiteral("root"), QStringLiteral("Raiz"))
+                      << makeFolder(QStringLiteral("mid"), QStringLiteral("Meio"), QStringLiteral("root"));
+        QVector<Collection> collections;
+        QVector<Note> notes;
+        Note note;
+        note.id = QStringLiteral("n1");
+        note.folderId = QStringLiteral("mid");
+        note.name = QStringLiteral("Ideias");
+        notes << note;
+
+        StorageManagerWidget widget(data, collections, [] {}, [] {}, &notes, [] {});
+        selectKind(widget, Folders);
+        checkRowsContaining(tableOf(widget), QStringLiteral("Meio"));
+        confirmNextMessageBox();
+        deleteButtonOf(widget)->click();
+        QCOMPARE(notes.size(), 1);
+        QCOMPARE(notes.first().folderId, QStringLiteral("root"));
     }
 
     void rowLevelDeleteButtonRemovesJustThatItem()

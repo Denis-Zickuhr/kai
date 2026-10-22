@@ -39,6 +39,8 @@ public:
     // O cartão "ainda não rodou" está na frente (só no KIP fixado).
     bool showsIdleCard() const;
 
+    // Saída formatada do comando (Command::formattedOutput): vale antes do seed, que já alimenta a visão.
+    void setFormattedOutput(bool enabled);
     // Estado inicial: o do painel embutido quando ele mostra este comando; senão o log guardado da sessão.
     void seed(const OutputPanel *embedded, const QString &storedLog);
     // Uma nova execução do comando começou: o log anterior sai e o estado volta a "rodando".
@@ -50,6 +52,8 @@ public:
     void setStatus(ExecutionStatus status);
     // `takeFocus` falso: a view não puxa o foco do teclado (o app que abriu sozinho no boot).
     void bindKipSession(engine::KipSession *session, bool takeFocus = true);
+    // O painel é o único lugar do comando (sem a Saída): o campo de resposta fica ligado enquanto ele roda.
+    void setAcceptsInput(bool accepts) { m_acceptsInput = accepts; }
     void setName(const QString &name);
     void applyBarHeight(int height);
     void refreshStyle();
@@ -67,6 +71,7 @@ private:
     QWidget *m_idleCard = nullptr;
     QLabel *m_idleTitle = nullptr;
     OutputPanel *m_output = nullptr;
+    bool m_acceptsInput = false;
 };
 
 } // namespace kai::ui

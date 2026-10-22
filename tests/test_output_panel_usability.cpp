@@ -257,18 +257,6 @@ private slots:
         }
     }
 
-    // O seletor de envs é chapado: sem gradiente do tema.
-    void environmentSelectorHasSolidBackground()
-    {
-        TopUtilityBar topBar;
-        auto *combo = topBar.findChild<QComboBox *>(QStringLiteral("environmentSelector"));
-        QVERIFY(combo != nullptr);
-        const QString qss = combo->styleSheet();
-        QVERIFY2(qss.contains(QStringLiteral("background-color: ") + kai::utils::tokens::bg()),
-                 qPrintable(qss));
-        QVERIFY2(!qss.contains(QStringLiteral("gradient")), qPrintable(qss));
-    }
-
     // Abas que não cabem (pastas raiz / abas da Saída) mostram uma faixa de
     // overflow; se cabem, ela não aparece.
     void overflowIndicatorAppearsOnlyWhenTabsDoNotFit()
@@ -328,7 +316,7 @@ private slots:
     }
 
     // O cabeçalho da Saída (abas + ícones) rola na horizontal quando estreito, em
-    // vez de cortar os ícones/status, e o botão de colapsar fica fora da rolagem.
+    // vez de cortar os ícones/status.
     void outputHeaderScrollsWhenTooNarrow()
     {
         QWidget host;
@@ -339,10 +327,7 @@ private slots:
 
         drawer.setExecutionStatus(ExecutionStatus::Running); // sem execução o cabeçalho fica escondido
         auto *scroll = drawer.findChild<QScrollArea *>(QStringLiteral("outputHeaderScroll"));
-        auto *toggle = drawer.findChild<QToolButton *>(QStringLiteral("terminalDrawerToggle"));
         QVERIFY(scroll != nullptr);
-        QVERIFY(toggle != nullptr);
-        QVERIFY2(!scroll->isAncestorOf(toggle), "o chevron não pode rolar junto com as abas");
 
         drawer.setGeometry(0, 0, 800, 300);
         QTest::qWait(30);
@@ -417,9 +402,9 @@ private slots:
     }
 
     // Em "Arredondado" o radiusMd (16) passa da metade da altura dos widgets de
-    // altura fixa (combo de envs ~22px, campo de busca ~30px); o Qt desenha a
-    // borda errado com raio maior que isso (combo aparecia quadrado). O raio
-    // aplicado tem de respeitar o teto de metade da altura.
+    // altura fixa (campo de busca ~30px); o Qt desenha a borda errado com raio
+    // maior que isso (o campo aparecia quadrado). O raio aplicado tem de
+    // respeitar o teto de metade da altura.
     void fixedHeightWidgetsClampRadiusToHalfTheirHeight()
     {
         namespace tk = kai::utils::tokens;
@@ -428,9 +413,7 @@ private slots:
         rounded.cornerStyle = 2;
         tk::setEffects(rounded);
 
-        TopUtilityBar topBar;
         OutputPanel panel;
-        topBar.refreshStyle();
         panel.applyThemeVariables({});
 
         auto radiusOf = [](const QString &qss) {
@@ -438,12 +421,6 @@ private slots:
             const auto match = re.match(qss);
             return match.hasMatch() ? match.captured(1).toInt() : -1;
         };
-
-        auto *combo = topBar.findChild<QComboBox *>(QStringLiteral("environmentSelector"));
-        QVERIFY(combo != nullptr);
-        const int comboRadius = radiusOf(combo->styleSheet());
-        QVERIFY2(comboRadius >= 0 && comboRadius <= combo->maximumHeight() / 2,
-                 qPrintable(combo->styleSheet()));
 
         QLineEdit *searchField = nullptr;
         for (auto *edit : panel.findChildren<QLineEdit *>()) {
@@ -460,8 +437,8 @@ private slots:
         tk::setEffects(saved);
     }
 
-    // Seletor de envs e busca da saída têm QSS local: trocar "Cantos" nas
-    // Configurações precisa chegar neles (antes ficavam com o raio da criação).
+    // A busca da saída tem QSS local: trocar "Cantos" nas Configurações precisa chegar nela (antes ficava com o raio
+    // da criação).
     void localStylesFollowCornerPreferenceChange()
     {
         namespace tk = kai::utils::tokens;
@@ -470,21 +447,15 @@ private slots:
         soft.cornerStyle = 1;
         tk::setEffects(soft);
 
-        TopUtilityBar topBar;
         OutputPanel panel;
 
         tk::Effects sharp = saved;
         sharp.cornerStyle = 0;
         tk::setEffects(sharp);
-        topBar.refreshStyle();
         panel.applyThemeVariables({});
 
-        auto *combo = topBar.findChild<QComboBox *>(QStringLiteral("environmentSelector"));
         auto *overlay = panel.findChild<QWidget *>(QStringLiteral("outputSearchOverlay"));
-        QVERIFY(combo != nullptr);
         QVERIFY(overlay != nullptr);
-        QVERIFY2(combo->styleSheet().contains(QStringLiteral("border-radius: 0px")),
-                 qPrintable(combo->styleSheet()));
         QVERIFY2(overlay->styleSheet().contains(QStringLiteral("border-radius: 0px")),
                  qPrintable(overlay->styleSheet()));
 

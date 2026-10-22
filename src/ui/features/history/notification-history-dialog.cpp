@@ -26,7 +26,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "ui/shared/adaptive-button.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/search-line-edit.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/panel-metrics.h"
 #include "ui/shared/tinted-badge.h"
@@ -202,15 +204,16 @@ public:
     }
 };
 
-// Botão de ação. Sem `text` vira botão só de ícone (quadrado, com tooltip).
-// Nenhum é "default" do diálogo: o primeiro QPushButton virava botão primário
-// (roxo) sozinho.
+// Botão de ação, com a altura e o raio dos botões padrão do tema. Sem `text` vira botão só de
+// ícone (com tooltip). Nenhum é "default" do diálogo: o primeiro QPushButton virava botão
+// primário (roxo) sozinho.
+
 QPushButton *makeActionButton(QWidget *parent, const QString &iconName, const QString &text,
                               const QString &tooltip = QString())
 {
-    auto *button = new QPushButton(text, parent);
-    button->setIcon(LucideIcons::icon(iconName, QColor(tk::mutedFg()), 16));
-    button->setIconSize(QSize(16, 16));
+    auto *button = new AdaptiveButton(text, parent);
+    button->setIcon(LucideIcons::icon(iconName, QColor(tk::mutedFg()), 14));
+    button->setIconSize(QSize(14, 14));
     button->setCursor(Qt::PointingHandCursor);
     button->setAutoDefault(false);
     button->setDefault(false);
@@ -218,7 +221,7 @@ QPushButton *makeActionButton(QWidget *parent, const QString &iconName, const QS
         button->setToolTip(tooltip);
     }
     if (text.isEmpty()) {
-        button->setFixedWidth(tk::controlHeight() + tk::space(2));
+        button->setProperty("kaiIconOnly", true);
     }
     return button;
 }
@@ -286,7 +289,7 @@ NotificationHistoryDialog::NotificationHistoryDialog(core::NotificationHistory *
         setEmbedded(true);
         return;
     }
-    setMinimumSize(860, 480);
+    setMinimumSize(720, 440);
     resize(1000, 600);
     centerOnParent(this);
 }
@@ -297,10 +300,10 @@ void NotificationHistoryDialog::setEmbedded(bool embedded)
     setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
     setProperty("kaiEmbedded", embedded);
     m_buttonBox->setVisible(!embedded);
-    setMinimumSize(embedded ? QSize(260, 200) : QSize(860, 480));
+    setMinimumSize(embedded ? QSize(260, 200) : QSize(720, 440));
     // Num painel estreito os cartões e a busca cedem: o dado vale mais que a folga do diálogo.
-    m_listCard->setMinimumWidth(embedded ? 150 : 300);
-    m_detailCard->setMinimumWidth(embedded ? 150 : 480);
+    m_listCard->setMinimumWidth(embedded ? 150 : 260);
+    m_detailCard->setMinimumWidth(embedded ? 150 : 380);
     m_searchField->setMinimumWidth(embedded ? 120 : 240);
     for (QWidget *card : {static_cast<QWidget *>(this), m_listCard, m_detailCard}) {
         style()->unpolish(card);
@@ -354,8 +357,8 @@ void NotificationHistoryDialog::setCommandResolver(CommandResolver resolver)
 void NotificationHistoryDialog::setupUi()
 {
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(4));
-    outer->setSpacing(tk::space(3));
+    outer->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
+    outer->setSpacing(tk::space(2));
 
     // --- Topo: resumo | filtro | busca ---
     auto *top = new QHBoxLayout();
@@ -377,6 +380,7 @@ void NotificationHistoryDialog::setupUi()
         button->setText(text);
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
+        button->setFixedHeight(tk::controlHeight() - 6);
         return button;
     };
     m_filterAllButton = makeFilterButton(utils::tr(QStringLiteral("notifications.filter.all")));
@@ -394,12 +398,12 @@ void NotificationHistoryDialog::setupUi()
     });
     top->addWidget(filterFrame);
 
-    m_searchField = new QLineEdit(this);
-    m_searchField->setClearButtonEnabled(true);
+    m_searchField = new SearchLineEdit(this);
     m_searchField->setPlaceholderText(utils::tr(QStringLiteral("notifications.search.placeholder")));
-    m_searchField->addAction(LucideIcons::icon(QStringLiteral("search"), QColor(tk::mutedFg()), 16),
-                             QLineEdit::LeadingPosition);
-    m_searchField->setMinimumWidth(240);
+    m_searchField->setMinimumWidth(200);
+    m_searchField->setFixedHeight(tk::controlHeight());
+    m_searchField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }")
+        .arg(tk::radiusMdForHeight(tk::controlHeight())));
     connect(m_searchField, &QLineEdit::textChanged, this, [this]() { reload(); });
     top->addWidget(m_searchField);
     outer->addLayout(top);
@@ -469,6 +473,7 @@ void NotificationHistoryDialog::setupUi()
     placeholderLayout->addWidget(placeholderIcon);
     auto *placeholderText = new QLabel(utils::tr(QStringLiteral("notifications.detail.placeholder")), placeholder);
     placeholderText->setAlignment(Qt::AlignCenter);
+    placeholderText->setWordWrap(true);
     placeholderText->setStyleSheet(QStringLiteral("color: %1;").arg(tk::mutedFg()));
     placeholderLayout->addWidget(placeholderText);
     placeholderLayout->addStretch(1);
@@ -477,13 +482,15 @@ void NotificationHistoryDialog::setupUi()
     // Página 1: detalhe.
     auto *detail = new QWidget(m_detailStack);
     auto *detailLayout = new QVBoxLayout(detail);
-    detailLayout->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(3));
-    detailLayout->setSpacing(tk::space(3));
+    detailLayout->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(2));
+    detailLayout->setSpacing(tk::space(2));
 
     auto *head = new QHBoxLayout();
     head->setSpacing(tk::space(3));
     m_detailIcon = new QLabel(detail);
-    m_detailIcon->setFixedSize(44, 44);
+    m_detailIcon->setFixedSize(32, 32);
+    m_detailIcon->setObjectName(QStringLiteral("notificationDetailIcon"));
+    m_detailIcon->setStyleSheet(QStringLiteral("QLabel#notificationDetailIcon { background: transparent; border: none; }"));
     head->addWidget(m_detailIcon, 0, Qt::AlignTop);
     auto *headText = new QVBoxLayout();
     headText->setSpacing(tk::space(1));
@@ -528,11 +535,12 @@ void NotificationHistoryDialog::setupUi()
     m_deleteButton = makeActionButton(detail, QStringLiteral("trash-2"), QString(), utils::tr(QStringLiteral("notifications.action.delete")));
     m_deleteButton->setObjectName(QStringLiteral("notificationDelete"));
     m_deleteButton->setProperty("kaiRole", QStringLiteral("danger"));
+    actions->addStretch(1);
     actions->addWidget(m_toggleReadButton);
     actions->addWidget(m_goToButton);
     actions->addWidget(m_copyButton);
-    actions->addStretch(1);
     actions->addWidget(m_deleteButton);
+    actions->addStretch(1);
     detailLayout->addLayout(actions);
     connect(m_toggleReadButton, &QPushButton::clicked, this, &NotificationHistoryDialog::toggleSelectedRead);
     connect(m_goToButton, &QPushButton::clicked, this, &NotificationHistoryDialog::goToSelectedCommand);
@@ -545,12 +553,12 @@ void NotificationHistoryDialog::setupUi()
     splitter->addWidget(detailCard);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({380, 620});
+    splitter->setSizes({320, 420});
     m_splitter = splitter;
     m_listCard = listCard;
     m_detailCard = detailCard;
-    listCard->setMinimumWidth(300);
-    detailCard->setMinimumWidth(480);
+    listCard->setMinimumWidth(260);
+    detailCard->setMinimumWidth(380);
     // Páginas dos cartões: transparentes (o fundo do cartão aparece inteiro, sem um retângulo escuro quadrado por dentro).
     m_listStack->setObjectName(QStringLiteral("notificationStack"));
     m_detailStack->setObjectName(QStringLiteral("notificationStack"));
@@ -569,9 +577,9 @@ void NotificationHistoryDialog::setupUi()
     m_clearButton->setAutoDefault(false);
     connect(m_markAllButton, &QPushButton::clicked, this, &NotificationHistoryDialog::markAllRead);
     connect(m_clearButton, &QPushButton::clicked, this, &NotificationHistoryDialog::clearAll);
+    footer->addStretch(1);
     footer->addWidget(m_markAllButton);
     footer->addWidget(m_clearButton);
-    footer->addStretch(1);
     m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
     stripDialogButtonIcons(m_buttonBox);
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -586,7 +594,11 @@ void NotificationHistoryDialog::setupUi()
 
 void NotificationHistoryDialog::applyStyle()
 {
-    // Tudo derivado dos tokens; raios SEMPRE pelos tokens de canto.
+    // Tudo derivado dos tokens; raios SEMPRE pelos tokens de canto, limitados à altura real do
+    // elemento (um raio maior que metade da altura renderiza quadrado). Os botões herdam o estilo
+    // global; só o filtro (segmentado) e os botões só de ícone têm regras próprias.
+    const int filterFrameRadius = tk::radiusMdForHeight(tk::controlHeight());
+    const int filterButtonRadius = qMax(0, filterFrameRadius - 2);
     setStyleSheet(QStringLiteral(
         "QFrame#notificationCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }"
         "QStackedWidget#notificationStack, QWidget#notificationPage { background: transparent; }"
@@ -597,18 +609,23 @@ void NotificationHistoryDialog::applyStyle()
         "QListWidget#notificationList::item:selected { background: transparent; }"
         "QTextBrowser#notificationBody { background: transparent; border: none; }"
         "QFrame#notificationSeparator { background-color: %2; border: none; }"
-        "QFrame#notificationFilter { background-color: %1; border: 1px solid %2; border-radius: %3px; }"
-        "QToolButton#notificationFilterButton { background: transparent; border: none; color: %4;"
-        " padding: 3px %5px; border-radius: %6px; }"
-        "QToolButton#notificationFilterButton:checked { background-color: %7; color: %8; font-weight: 600; }"
-        "QToolButton#notificationFilterButton:hover:!checked { color: %8; }"
-        "QLabel#notificationChip { border-radius: %6px; padding: 1px %5px; font-weight: 600; font-size: 8pt; }")
+        "QFrame#notificationFilter { background-color: %1; border: 1px solid %2; border-radius: %4px; }"
+        // Mesmo peso nos dois estados: o negrito só no :checked alargava o texto depois de medido e cortava a palavra.
+        "QToolButton#notificationFilterButton { background: transparent; border: none; color: %5;"
+        " padding: 0px %6px; min-height: 0px; border-radius: %7px; }"
+        "QToolButton#notificationFilterButton:checked { background-color: %8; color: %9; }"
+        "QToolButton#notificationFilterButton:hover:!checked { color: %9; }"
+        "QPushButton[kaiIconOnly=\"true\"] { padding-left: %10px; padding-right: %10px; }"
+        "QLabel#notificationChip { border-radius: %11px; padding: 1px %6px; font-weight: 600; font-size: 8pt; }")
         .arg(tk::surface(), tk::borderColor())
         .arg(tk::radiusMd())
+        .arg(filterFrameRadius)
         .arg(tk::mutedFg())
         .arg(tk::space(3))
-        .arg(qMax(0, tk::radiusMd() - 3))
-        .arg(tk::selBg(), tk::fg()));
+        .arg(filterButtonRadius)
+        .arg(tk::selBg(), tk::fg())
+        .arg(tk::space(2))
+        .arg(tk::radiusSm()));
 }
 
 // --------------------------------------------------------------------- dados
@@ -719,7 +736,7 @@ void NotificationHistoryDialog::updateDetail()
         return;
     }
     const EventMeta meta = eventMeta(record->eventKey);
-    m_detailIcon->setPixmap(tintedBadge(meta, 44));
+    m_detailIcon->setPixmap(tintedBadge(meta, 32));
     m_detailTitle->setText(record->title);
     m_detailChip->setText(utils::tr(meta.labelKey));
     QColor chipBackground = meta.color;

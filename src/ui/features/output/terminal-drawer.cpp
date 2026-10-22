@@ -117,22 +117,6 @@ TerminalDrawer::TerminalDrawer(QWidget *parent)
     connect(m_detachButton, &QToolButton::clicked, this, &TerminalDrawer::detachOutput);
     connect(m_panel, &OutputPanel::kipDetachRequested, this, &TerminalDrawer::detachOutput);
 
-    m_toggleButton = new QToolButton(this);
-    m_toggleButton->setObjectName(QStringLiteral("terminalDrawerToggle"));
-    m_toggleButton->setAutoRaise(true);
-    m_toggleButton->setCursor(Qt::PointingHandCursor);
-    m_toggleButton->setToolTip(utils::tr(QStringLiteral("terminal_drawer.toggle.tooltip")));
-    // Último item da fileira e o único que sobra com o painel colapsado.
-    m_panel->addTrailingHeaderWidget(m_toggleButton);
-    connect(m_toggleButton, &QToolButton::clicked, this, &TerminalDrawer::toggleExpanded);
-
-    connect(m_tabsBar, &OutputTabsBar::outputToggleRequested, this, &TerminalDrawer::toggleExpanded);
-    connect(m_panel, &OutputPanel::headerVisibilityChanged, this, [this](bool visible) {
-        m_headerShown = visible;
-        updateToggleIcon();
-    });
-    m_headerShown = m_panel->headerShown(); // o painel já decidiu antes de a conexão existir
-    updateToggleIcon();
     connect(m_panel, &OutputPanel::commandEntered, this, &TerminalDrawer::commandEntered);
     connect(m_panel, &OutputPanel::interruptRequested, this, &TerminalDrawer::interruptRequested);
     connect(m_panel, &OutputPanel::eofRequested, this, &TerminalDrawer::eofRequested);
@@ -185,7 +169,6 @@ void TerminalDrawer::setDrawerPosition(DrawerPosition position)
     if (!m_expanded) {
         applyCollapsedConstraints();
     }
-    updateToggleIcon();
 }
 
 void TerminalDrawer::refreshFrameInset()
@@ -234,13 +217,7 @@ void TerminalDrawer::setExpanded(bool expanded)
         applyCollapsedConstraints();
     }
 
-    updateToggleIcon();
     emit expandedChanged(expanded);
-}
-
-void TerminalDrawer::toggleExpanded()
-{
-    setExpanded(!m_expanded);
 }
 
 void TerminalDrawer::applyCollapsedConstraints()
@@ -396,31 +373,6 @@ void TerminalDrawer::applyExpandedConstraints()
             }
         }
     }
-}
-
-void TerminalDrawer::updateToggleIcon()
-{
-    // Direção do chevron aponta para onde o painel COLAPSA (fecha) quando
-    // expandido, e para onde ele EXPANDE (abre) quando colapsado — mesma
-    // convenção de sempre (chevron-down/up na posição "embaixo"), estendida
-    // às laterais.
-    QString iconName;
-    if (m_position == DrawerPosition::Left) {
-        iconName = m_expanded ? QStringLiteral("chevron-left") : QStringLiteral("chevron-right");
-    } else if (m_position == DrawerPosition::Right) {
-        iconName = m_expanded ? QStringLiteral("chevron-right") : QStringLiteral("chevron-left");
-    } else if (m_position == DrawerPosition::Top) {
-        iconName = m_expanded ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down");
-    } else {
-        iconName = m_expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-up");
-    }
-    m_toggleButton->setIcon(LucideIcons::icon(iconName, QColor(tk::mutedFg()), 15));
-    // No miolo da janela não há para onde recolher: nenhum dos dois botões aparece.
-    const bool collapsible = m_position != DrawerPosition::Center;
-    m_toggleButton->setVisible(collapsible);
-    // O mesmo botão no fim da barra de guias: o cabeçalho da Saída (onde está o de cima) some nos modos KIP e
-    // "sem execução". Expandida, o ícone aponta para onde a Saída recolhe.
-    m_tabsBar->setOutputToggle(collapsible && !m_headerShown, iconName);
 }
 
 // ---------------------------------------------------------------- delegação
@@ -635,7 +587,6 @@ void TerminalDrawer::applyThemeVariables(const QMap<QString, QString> &variables
     }
     m_detachButton->setIcon(LucideIcons::icon(QStringLiteral("external-link"),
                                               QColor(tk::mutedFg()), 15));
-    updateToggleIcon();
 }
 
 // ---------------------------------------------------------------- detach
@@ -713,6 +664,8 @@ void TerminalDrawer::detachOutput()
         m_detachedPanel = nullptr;
         m_detachedCardLayout = nullptr;
     });
+
+    emit detachedPanelCreated(m_detachedPanel, m_detachedCommandId);
 
     showDetachedWindowPerPreference();
     m_detachedWindow->raise();

@@ -2,10 +2,12 @@
 #include "ui/shared/name-uniqueness.h"
 #include "ui/shared/table-utils.h"
 #include "ui/shared/dialog-utils.h"
+#include "ui/shared/flow-layout.h"
+#include "ui/shared/lucide-icons.h"
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
 
-#include <QComboBox>
+#include <QButtonGroup>
 #include <QLineEdit>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -37,9 +39,10 @@ constexpr int kNameCol = 1;
 constexpr int kTypeCol = 2;
 constexpr int kLocationCol = 3;
 constexpr int kActionsCol = 4;
+constexpr int kKindRole = Qt::UserRole + 1;
 // Largura da coluna de Tipo (badge): folga suficiente pro maior rótulo
-// ("DELETE") com a fonte em negrito + padding do badge.
-constexpr int kTypeColWidth = 92;
+// ("COLLECTION") com a fonte em negrito + padding do badge.
+constexpr int kTypeColWidth = 104;
 
 // Sufixo de nome livre pra duplicação: "Nome (cópia)", "Nome (cópia 2)",
 // "Nome (cópia 3)"... até achar um que `collides` não rejeite. `collides`
@@ -79,96 +82,123 @@ StorageManagerWidget::StorageManagerWidget(core::CommandsData &commandsData,
                                             QVector<core::Collection> &collections,
                                             std::function<void()> persistCommands,
                                             std::function<void()> persistCollections,
+                                            QVector<core::Note> *notes,
+                                            std::function<void()> persistNotes,
                                             QWidget *parent)
     : QWidget(parent)
     , m_commandsData(commandsData)
     , m_collections(collections)
     , m_persistCommands(std::move(persistCommands))
     , m_persistCollections(std::move(persistCollections))
+    , m_notes(notes)
+    , m_persistNotes(std::move(persistNotes))
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setContentsMargins(20, 14, 20, 14);
     layout->setSpacing(10);
 
-    auto *titleLabel = new QLabel(utils::tr(QStringLiteral("storage.title")), this);
-    QFont titleFont = titleLabel->font();
-    titleFont.setPointSize(titleFont.pointSize() + 2);
-    titleFont.setWeight(QFont::Bold);
-    titleLabel->setFont(titleFont);
-    layout->addWidget(titleLabel);
-
-    auto *subtitleLabel = new QLabel(utils::tr(QStringLiteral("storage.subtitle")), this);
-    subtitleLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    subtitleLabel->setWordWrap(true);
-    layout->addWidget(subtitleLabel);
-
-    // Aviso de "ação imediata" no padrão de hint já usado no resto do app
-    // (mesma caixa de Aparência > Efeitos visuais, Perfis de Execução etc.
-    // — ver layout_helpers::makeHintBanner) — antes tinha virado texto
-    // solto dentro do subtítulo, sem o destaque visual padrão (relatado).
-    layout->addWidget(layout_helpers::makeHintBanner(this,
-        utils::tr(QStringLiteral("storage.immediate_hint"))));
-
+    // Linha 1: busca + total + seleção rápida.
     auto *filterRow = new QHBoxLayout();
     filterRow->setSpacing(8);
     m_filterField = new QLineEdit(this);
     m_filterField->setPlaceholderText(utils::tr(QStringLiteral("storage.filter.placeholder")));
+    m_filterField->setClearButtonEnabled(true);
     filterRow->addWidget(m_filterField, 1);
-    m_kindField = new QComboBox(this);
-    m_kindField->addItem(utils::tr(QStringLiteral("storage.kind.commands")), int(DataKind::Command));
-    m_kindField->addItem(utils::tr(QStringLiteral("storage.kind.folders")), int(DataKind::Folder));
-    m_kindField->addItem(utils::tr(QStringLiteral("storage.kind.collections")), int(DataKind::Collection));
-    filterRow->addWidget(m_kindField);
     m_totalLabel = new QLabel(this);
     m_totalLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_totalLabel->setToolTip(utils::tr(QStringLiteral("storage.immediate_hint")));
     filterRow->addWidget(m_totalLabel);
-    layout->addLayout(filterRow);
-
-    auto *quickSelectRow = new QHBoxLayout();
-    quickSelectRow->setSpacing(8);
     m_selectAllButton = new QPushButton(utils::tr(QStringLiteral("storage.select_all")), this);
     m_clearSelectionButton = new QPushButton(utils::tr(QStringLiteral("storage.clear_selection")), this);
-    quickSelectRow->addWidget(m_selectAllButton);
-    quickSelectRow->addWidget(m_clearSelectionButton);
-    quickSelectRow->addStretch(1);
-    layout->addLayout(quickSelectRow);
+    for (QPushButton *button : {m_selectAllButton, m_clearSelectionButton}) {
+        button->setObjectName(QStringLiteral("storageBulkButton"));
+    }
+    filterRow->addWidget(m_selectAllButton);
+    filterRow->addWidget(m_clearSelectionButton);
+    layout->addLayout(filterRow);
 
-    m_table = new QTableWidget(0, 5, this);
+    // Linha 2: filtro por tipo, em chips com a contagem de cada um.
+    auto *kindRow = new FlowLayout(0, 6, 6);
+    m_kindGroup = new QButtonGroup(this);
+    m_kindGroup->setExclusive(true);
+    QList<DataKind> kinds = {DataKind::All, DataKind::Command, DataKind::Http, DataKind::Folder,
+                             DataKind::Collection};
+    if (m_notes) {
+        kinds << DataKind::Note;
+    }
+    for (const DataKind kind : kinds) {
+        auto *chip = new QPushButton(this);
+        chip->setObjectName(QStringLiteral("storageKindChip"));
+        chip->setCheckable(true);
+        chip->setCursor(Qt::PointingHandCursor);
+        chip->setProperty("kind", int(kind));
+        chip->setChecked(kind == m_currentKind);
+        m_kindGroup->addButton(chip, int(kind));
+        kindRow->addWidget(chip);
+    }
+    layout->addLayout(kindRow);
+
+    // A tabela vive num cartão arredondado (raio do usuário), sem moldura própria.
+    auto *tableCard = new QFrame(this);
+    tableCard->setObjectName(QStringLiteral("storageTableCard"));
+    tableCard->setStyleSheet(QStringLiteral(
+        "QFrame#storageTableCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }")
+        .arg(utils::tokens::surface2(), utils::tokens::borderColor()).arg(utils::tokens::radiusLg()));
+    auto *cardLayout = new QVBoxLayout(tableCard);
+    cardLayout->setContentsMargins(6, 6, 6, 6);
+
+    m_table = new QTableWidget(0, 5, tableCard);
+    m_table->setObjectName(QStringLiteral("storageTable"));
     m_table->setFrameShape(QFrame::NoFrame);
+    m_table->setStyleSheet(QStringLiteral(
+        "QTableWidget#storageTable, QTableWidget#storageTable::viewport { background: transparent; }"
+        "QTableWidget#storageTable QHeaderView { background: transparent; border: none; }"
+        "QTableWidget#storageTable QTableCornerButton::section { background: transparent; border: none; }"
+        "QTableWidget#storageTable::item { padding: 0px 8px; border-bottom: 1px solid %1; }"
+        "QTableWidget#storageTable QHeaderView::section { background: transparent; border: none;"
+        " border-bottom: 1px solid %1; color: %2; font-size: %3pt; font-weight: 600; padding: 4px 8px; }")
+        .arg(utils::tokens::borderColor(), utils::tokens::mutedFg()).arg(utils::tokens::fontSizeSmallPt()));
     m_table->setHorizontalHeaderLabels({
         QString(),
-        utils::tr(QStringLiteral("storage.table.name")),
-        utils::tr(QStringLiteral("storage.table.type")),
-        utils::tr(QStringLiteral("storage.table.location")),
-        utils::tr(QStringLiteral("storage.table.actions")),
+        utils::tr(QStringLiteral("storage.table.name")).toUpper(),
+        utils::tr(QStringLiteral("storage.table.type")).toUpper(),
+        utils::tr(QStringLiteral("storage.table.location")).toUpper(),
+        utils::tr(QStringLiteral("storage.table.actions")).toUpper(),
     });
+    m_table->horizontalHeader()->setHighlightSections(false);
+    m_table->horizontalHeader()->setSectionsClickable(false);
+    m_table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_table->verticalHeader()->setVisible(false);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionMode(QAbstractItemView::NoSelection);
+    m_table->setFocusPolicy(Qt::NoFocus);
     m_table->setAlternatingRowColors(false);
     m_table->setShowGrid(false);
+    m_table->setIconSize(QSize(16, 16));
     // Altura padrão já calibrada em table-utils.h pra caber um botão de
-    // ícone (iconButtonSize()) sem cortar embaixo — 40px fixo deixava uma
-    // sobrinha cortada nos ícones de duplicar/excluir (relatado).
+    // ícone (iconButtonSize()) sem cortar embaixo.
     m_table->verticalHeader()->setDefaultSectionSize(standardRowHeight());
     // Larguras da checkbox e das ações reaproveitam os mesmos números já
-    // testados noutras tabelas do app (table-utils.h), derivados do token
-    // de tamanho de botão de ícone — sem isso a checkbox e os ícones de
-    // duplicar/excluir apareciam CORTADOS (bug relatado com print: a
-    // checkbox virava um "[" e os ícones perdiam metade do desenho),
-    // porque QHeaderView::ResizeToContents não mede cell widgets direito.
+    // testados noutras tabelas do app (table-utils.h): ResizeToContents não
+    // mede cell widgets direito, e a checkbox/ícones apareciam cortados.
     m_table->horizontalHeader()->setSectionResizeMode(kCheckCol, QHeaderView::Fixed);
     m_table->setColumnWidth(kCheckCol, selectionColumnWidth());
     m_table->horizontalHeader()->setSectionResizeMode(kNameCol, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(kTypeCol, QHeaderView::Fixed);
     m_table->setColumnWidth(kTypeCol, kTypeColWidth);
-    m_table->horizontalHeader()->setSectionResizeMode(kLocationCol, QHeaderView::ResizeToContents);
+    // Nome e Pasta/Origem dividem o espaço que sobra (elide com "…"); sem
+    // barra horizontal, senão o Nome some quando a janela é estreita.
+    m_table->horizontalHeader()->setSectionResizeMode(kLocationCol, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setMinimumSectionSize(48);
+    m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_table->setTextElideMode(Qt::ElideRight);
     m_table->horizontalHeader()->setSectionResizeMode(kActionsCol, QHeaderView::Fixed);
     m_table->setColumnWidth(kActionsCol, rowActionsColumnWidth());
-    layout->addWidget(m_table, 1);
+    cardLayout->addWidget(m_table);
+    layout->addWidget(tableCard, 1);
 
-    // Barra contextual do rodapé (mockup do usuário): só aparece quando
-    // há alguma seleção, com contagem + Duplicar + Excluir Selecionados.
+    // Barra contextual do rodapé: só aparece quando há alguma seleção, com
+    // contagem + Duplicar + Excluir Selecionados.
     m_contextualBar = new QWidget(this);
     m_contextualBar->setObjectName(QStringLiteral("storageContextualBar"));
     m_contextualBar->setStyleSheet(QStringLiteral(
@@ -192,18 +222,31 @@ StorageManagerWidget::StorageManagerWidget(core::CommandsData &commandsData,
     contextualLayout->addWidget(m_duplicateButton);
     contextualLayout->addWidget(m_deleteButton);
     layout->addWidget(m_contextualBar);
-    m_contextualBar->hide(); // some quando não há seleção (mockup)
+    m_contextualBar->hide(); // some quando não há seleção
 
-    connect(m_kindField, &QComboBox::currentIndexChanged, this, &StorageManagerWidget::handleKindChanged);
+    // Chips: estilo próprio, com o raio vindo dos tokens.
+    setStyleSheet(QStringLiteral(
+        "QPushButton#storageKindChip { background-color: transparent; color: %1; border: 1px solid %2;"
+        " border-radius: %3px; padding: 3px 10px; min-height: 0px; }"
+        "QPushButton#storageBulkButton { padding: 4px 10px; min-height: 0px; border-radius: %7px; }"
+        "QPushButton#storageKindChip:hover { background-color: %4; }"
+        "QPushButton#storageKindChip:checked { background-color: %5; color: %6; border-color: %5; }")
+        .arg(utils::tokens::mutedFg(), utils::tokens::borderColor())
+        .arg(utils::tokens::radiusMdForHeight(26))
+        .arg(utils::tokens::hoverBg(), utils::tokens::accent(), utils::tokens::buttonFg())
+        .arg(utils::tokens::radiusMdForHeight(28)));
+
+    connect(m_kindGroup, &QButtonGroup::idClicked, this, [this](int id) {
+        m_currentKind = static_cast<DataKind>(id);
+        handleKindChanged();
+    });
     connect(m_filterField, &QLineEdit::textChanged, this, &StorageManagerWidget::handleFilterChanged);
     connect(m_selectAllButton, &QPushButton::clicked, this, &StorageManagerWidget::handleSelectAll);
     connect(m_clearSelectionButton, &QPushButton::clicked, this, &StorageManagerWidget::handleClearSelection);
     connect(m_duplicateButton, &QPushButton::clicked, this, &StorageManagerWidget::handleDuplicateSelected);
     connect(m_deleteButton, &QPushButton::clicked, this, &StorageManagerWidget::handleDeleteSelected);
     // Clicar em qualquer lugar da linha (fora da checkbox — ela já se
-    // vira sozinha — e fora da coluna de Ações) alterna a seleção, sem
-    // precisar acertar a caixinha pequena (mockup: a linha inteira fica
-    // clicável).
+    // vira sozinha — e fora da coluna de Ações) alterna a seleção.
     connect(m_table, &QTableWidget::cellClicked, this, [this](int row, int column) {
         if (column == kCheckCol || column == kActionsCol) {
             return;
@@ -224,6 +267,38 @@ QString StorageManagerWidget::folderDisplayName(const QString &folderId) const
         }
     }
     return utils::tr(QStringLiteral("storage.location.none"));
+}
+
+QString StorageManagerWidget::kindLabel(DataKind kind) const
+{
+    switch (kind) {
+    case DataKind::All: return utils::tr(QStringLiteral("storage.kind.all"));
+    case DataKind::Command: return utils::tr(QStringLiteral("storage.kind.commands"));
+    case DataKind::Http: return utils::tr(QStringLiteral("storage.kind.http"));
+    case DataKind::Folder: return utils::tr(QStringLiteral("storage.kind.folders"));
+    case DataKind::Collection: return utils::tr(QStringLiteral("storage.kind.collections"));
+    case DataKind::Note: return utils::tr(QStringLiteral("storage.kind.notes"));
+    }
+    return QString();
+}
+
+int StorageManagerWidget::countOfKind(DataKind kind) const
+{
+    const auto countCommands = [this](bool http) {
+        return int(std::count_if(m_commandsData.commands.constBegin(), m_commandsData.commands.constEnd(),
+            [http](const core::Command &c) { return (c.type == core::CommandType::Http) == http; }));
+    };
+    switch (kind) {
+    case DataKind::Command: return countCommands(false);
+    case DataKind::Http: return countCommands(true);
+    case DataKind::Folder: return m_commandsData.folders.size();
+    case DataKind::Collection: return m_collections.size();
+    case DataKind::Note: return m_notes ? m_notes->size() : 0;
+    case DataKind::All:
+        return m_commandsData.commands.size() + m_commandsData.folders.size() + m_collections.size()
+            + (m_notes ? m_notes->size() : 0);
+    }
+    return 0;
 }
 
 QCheckBox *StorageManagerWidget::checkboxAt(int row) const
@@ -247,18 +322,25 @@ QWidget *StorageManagerWidget::makeRowCheckbox(int row)
 
 QWidget *StorageManagerWidget::makeTypeBadge(const QString &text, const QString &colorHex) const
 {
-    auto *label = new QLabel(text);
+    // Contêiner transparente: o selo tem altura própria (não a da linha) e alinha com o cabeçalho.
+    auto *host = new QWidget();
+    host->setObjectName(QStringLiteral("tableCellHost"));
+    host->setStyleSheet(QStringLiteral("QWidget#tableCellHost { background: transparent; }"));
+    auto *hostLayout = new QHBoxLayout(host);
+    hostLayout->setContentsMargins(8, 0, 4, 0);
+    auto *label = new QLabel(text, host);
     const QColor color(colorHex);
     label->setStyleSheet(QStringLiteral(
         "QLabel { background-color: rgba(%1, %2, %3, 38); color: %4;"
-        " border-radius: %5px; padding: 2px 8px; font-weight: 600; font-size: 11px; }")
+        " border-radius: %5px; padding: 2px 8px; font-weight: 600; font-size: 8pt; }")
         .arg(color.red()).arg(color.green()).arg(color.blue())
         .arg(colorHex).arg(utils::tokens::radiusSm()));
     label->setAlignment(Qt::AlignCenter);
-    return label;
+    hostLayout->addWidget(label, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    return host;
 }
 
-QWidget *StorageManagerWidget::makeRowActions(const QString &id)
+QWidget *StorageManagerWidget::makeRowActions(DataKind kind, const QString &id)
 {
     // Mesmo host ("tableCellHost") e mesmo makeIconButton (tamanho fixo
     // via utils::tokens::iconButtonSize()) que makeRowActionsCell usa em
@@ -274,12 +356,12 @@ QWidget *StorageManagerWidget::makeRowActions(const QString &id)
 
     auto *duplicateBtn = makeIconButton(host, QStringLiteral("copy"),
         utils::tr(QStringLiteral("storage.row.duplicate_tip")), QColor(utils::tokens::mutedFg()));
-    connect(duplicateBtn, &QToolButton::clicked, this, [this, id]() { duplicateSingle(id); });
+    connect(duplicateBtn, &QToolButton::clicked, this, [this, kind, id]() { duplicateSingle(kind, id); });
     rowLayout->addWidget(duplicateBtn, 0, Qt::AlignCenter);
 
     auto *deleteBtn = makeIconButton(host, QStringLiteral("trash-2"),
         utils::tr(QStringLiteral("storage.row.delete_tip")), QColor(utils::tokens::errorFg()));
-    connect(deleteBtn, &QToolButton::clicked, this, [this, id]() { deleteSingle(id); });
+    connect(deleteBtn, &QToolButton::clicked, this, [this, kind, id]() { deleteSingle(kind, id); });
     rowLayout->addWidget(deleteBtn, 0, Qt::AlignCenter);
 
     return host;
@@ -289,38 +371,42 @@ QVector<StorageManagerWidget::RowInfo> StorageManagerWidget::collectRows() const
 {
     QVector<RowInfo> rows;
     const QString filter = m_filterField->text().trimmed();
+    const auto wants = [this](DataKind kind) { return m_currentKind == DataKind::All || m_currentKind == kind; };
+    const auto matches = [&filter](const QString &name) {
+        return filter.isEmpty() || name.contains(filter, Qt::CaseInsensitive);
+    };
 
-    switch (m_currentKind) {
-    case DataKind::Command:
-        for (const core::Command &c : m_commandsData.commands) {
-            if (!filter.isEmpty() && !c.name.contains(filter, Qt::CaseInsensitive)) {
-                continue;
-            }
-            RowInfo row;
-            row.id = c.id;
-            row.name = c.name;
-            if (c.type == core::CommandType::Command) {
-                row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.shell"));
-                row.typeBadgeColor = utils::tokens::accent();
-            } else {
-                const core::HttpMethod method = c.httpConfig.has_value() ? c.httpConfig->method : core::HttpMethod::Get;
-                row.typeBadgeText = core::httpMethodToString(method);
-                switch (method) {
-                case core::HttpMethod::Get: row.typeBadgeColor = utils::tokens::infoFg(); break;
-                case core::HttpMethod::Post: row.typeBadgeColor = utils::tokens::successFg(); break;
-                case core::HttpMethod::Put:
-                case core::HttpMethod::Patch: row.typeBadgeColor = utils::tokens::warningFg(); break;
-                case core::HttpMethod::Delete: row.typeBadgeColor = utils::tokens::errorFg(); break;
-                default: row.typeBadgeColor = utils::tokens::mutedFg(); break;
-                }
-            }
-            row.location = folderDisplayName(c.folderId);
-            rows << row;
+    for (const core::Command &c : m_commandsData.commands) {
+        const bool isHttp = c.type == core::CommandType::Http;
+        const DataKind kind = isHttp ? DataKind::Http : DataKind::Command;
+        if (!wants(kind) || !matches(c.name)) {
+            continue;
         }
-        break;
-    case DataKind::Folder:
+        RowInfo row;
+        row.id = c.id;
+        row.kind = kind;
+        row.name = c.name;
+        if (!isHttp) {
+            row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.shell"));
+            row.typeBadgeColor = utils::tokens::accent();
+        } else {
+            const core::HttpMethod method = c.httpConfig.has_value() ? c.httpConfig->method : core::HttpMethod::Get;
+            row.typeBadgeText = core::httpMethodToString(method);
+            switch (method) {
+            case core::HttpMethod::Get: row.typeBadgeColor = utils::tokens::infoFg(); break;
+            case core::HttpMethod::Post: row.typeBadgeColor = utils::tokens::successFg(); break;
+            case core::HttpMethod::Put:
+            case core::HttpMethod::Patch: row.typeBadgeColor = utils::tokens::warningFg(); break;
+            case core::HttpMethod::Delete: row.typeBadgeColor = utils::tokens::errorFg(); break;
+            default: row.typeBadgeColor = utils::tokens::mutedFg(); break;
+            }
+        }
+        row.location = folderDisplayName(c.folderId);
+        rows << row;
+    }
+    if (wants(DataKind::Folder)) {
         for (const core::Folder &f : m_commandsData.folders) {
-            if (!filter.isEmpty() && !f.name.contains(filter, Qt::CaseInsensitive)) {
+            if (!matches(f.name)) {
                 continue;
             }
             int children = 0;
@@ -333,33 +419,67 @@ QVector<StorageManagerWidget::RowInfo> StorageManagerWidget::collectRows() const
             for (const core::Collection &col : m_collections) {
                 if (col.folderId == f.id) ++children;
             }
+            if (m_notes) {
+                for (const core::Note &n : *m_notes) {
+                    if (n.folderId == f.id) ++children;
+                }
+            }
             RowInfo row;
             row.id = f.id;
+            row.kind = DataKind::Folder;
             row.name = f.name;
             row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.folder"));
             row.typeBadgeColor = utils::tokens::mutedFg();
             row.location = utils::tr(QStringLiteral("storage.folder.children_count")).arg(children);
             rows << row;
         }
-        break;
-    case DataKind::Collection:
+    }
+    if (wants(DataKind::Collection)) {
         for (const core::Collection &col : m_collections) {
-            if (!filter.isEmpty() && !col.name.contains(filter, Qt::CaseInsensitive)) {
+            if (!matches(col.name)) {
                 continue;
             }
             RowInfo row;
             row.id = col.id;
+            row.kind = DataKind::Collection;
             row.name = col.name;
             row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.collection"));
-            row.typeBadgeColor = utils::tokens::mutedFg();
+            row.typeBadgeColor = utils::tokens::warningFg();
             row.location = utils::tr(QStringLiteral("storage.item_with_sublabel"))
                 .arg(folderDisplayName(col.folderId),
                      utils::tr(QStringLiteral("storage.collection.entries_count")).arg(col.entries.size()));
             rows << row;
         }
-        break;
+    }
+    if (m_notes && wants(DataKind::Note)) {
+        for (const core::Note &note : *m_notes) {
+            if (!matches(note.name)) {
+                continue;
+            }
+            RowInfo row;
+            row.id = note.id;
+            row.kind = DataKind::Note;
+            row.name = note.name;
+            row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.note"));
+            row.typeBadgeColor = utils::tokens::infoFg();
+            row.location = folderDisplayName(note.folderId);
+            rows << row;
+        }
     }
     return rows;
+}
+
+QString StorageManagerWidget::iconNameFor(DataKind kind)
+{
+    switch (kind) {
+    case DataKind::Http: return QStringLiteral("globe");
+    case DataKind::Folder: return QStringLiteral("folder");
+    case DataKind::Collection: return QStringLiteral("table");
+    case DataKind::Note: return QStringLiteral("notebook");
+    case DataKind::All:
+    case DataKind::Command: break;
+    }
+    return QStringLiteral("terminal");
 }
 
 void StorageManagerWidget::rebuildTable()
@@ -369,27 +489,32 @@ void StorageManagerWidget::rebuildTable()
 
     const QVector<RowInfo> rows = collectRows();
     m_table->setRowCount(rows.size());
+    const QColor muted(utils::tokens::mutedFg());
     for (int i = 0; i < rows.size(); ++i) {
         const RowInfo &row = rows.at(i);
         m_table->setCellWidget(i, kCheckCol, makeRowCheckbox(i));
-        auto *nameItem = new QTableWidgetItem(row.name);
+        auto *nameItem = new QTableWidgetItem(LucideIcons::icon(iconNameFor(row.kind),
+                                                                QColor(row.typeBadgeColor), 16), row.name);
         nameItem->setFlags(Qt::ItemIsEnabled);
         nameItem->setData(kIdRole, row.id);
+        nameItem->setData(kKindRole, int(row.kind));
         m_table->setItem(i, kNameCol, nameItem);
         m_table->setCellWidget(i, kTypeCol, makeTypeBadge(row.typeBadgeText, row.typeBadgeColor));
-        m_table->setItem(i, kLocationCol, new QTableWidgetItem(row.location));
-        m_table->item(i, kLocationCol)->setFlags(Qt::ItemIsEnabled);
-        m_table->setCellWidget(i, kActionsCol, makeRowActions(row.id));
+        auto *locationItem = new QTableWidgetItem(row.location);
+        locationItem->setFlags(Qt::ItemIsEnabled);
+        locationItem->setForeground(muted);
+        m_table->setItem(i, kLocationCol, locationItem);
+        m_table->setCellWidget(i, kActionsCol, makeRowActions(row.kind, row.id));
     }
 
     m_table->blockSignals(false);
 
-    int totalOfKind = 0;
-    switch (m_currentKind) {
-    case DataKind::Command: totalOfKind = m_commandsData.commands.size(); break;
-    case DataKind::Folder: totalOfKind = m_commandsData.folders.size(); break;
-    case DataKind::Collection: totalOfKind = m_collections.size(); break;
+    for (QAbstractButton *button : m_kindGroup->buttons()) {
+        const DataKind kind = static_cast<DataKind>(button->property("kind").toInt());
+        button->setText(QStringLiteral("%1  %2").arg(kindLabel(kind)).arg(countOfKind(kind)));
     }
+
+    const int totalOfKind = countOfKind(m_currentKind);
     if (m_filterField->text().trimmed().isEmpty()) {
         m_totalLabel->setText(utils::tr(QStringLiteral("storage.count.total")).arg(totalOfKind));
     } else {
@@ -413,16 +538,15 @@ void StorageManagerWidget::setRowHighlighted(int row, bool highlighted)
 
 void StorageManagerWidget::updateSelectionState()
 {
-    const int selected = checkedIds().size();
+    const int selected = checkedItems().size();
     m_contextualBar->setVisible(selected > 0);
     if (selected > 0) {
         m_selectionLabel->setText(utils::tr(QStringLiteral("storage.selection_count")).arg(selected).arg(m_table->rowCount()));
     }
 }
 
-void StorageManagerWidget::handleKindChanged(int)
+void StorageManagerWidget::handleKindChanged()
 {
-    m_currentKind = static_cast<DataKind>(m_kindField->currentData().toInt());
     rebuildTable();
 }
 
@@ -449,18 +573,34 @@ void StorageManagerWidget::handleClearSelection()
     }
 }
 
-QStringList StorageManagerWidget::checkedIds() const
+QList<StorageManagerWidget::Checked> StorageManagerWidget::checkedItems() const
 {
-    QStringList ids;
+    QList<Checked> items;
     for (int i = 0; i < m_table->rowCount(); ++i) {
         const auto *checkbox = checkboxAt(i);
         const QTableWidgetItem *nameItem = m_table->item(i, kNameCol);
         if (checkbox && checkbox->isChecked() && nameItem) {
-            ids << nameItem->data(kIdRole).toString();
+            items.append({static_cast<DataKind>(nameItem->data(kKindRole).toInt()),
+                          nameItem->data(kIdRole).toString()});
         }
+    }
+    return items;
+}
+
+namespace {
+QSet<QString> allIds(const core::CommandsData &data, const QVector<core::Collection> &collections,
+                     const QVector<core::Note> *notes)
+{
+    QSet<QString> ids;
+    for (const core::Command &c : data.commands) ids.insert(c.id);
+    for (const core::Folder &f : data.folders) ids.insert(f.id);
+    for (const core::Collection &c : collections) ids.insert(c.id);
+    if (notes) {
+        for (const core::Note &n : *notes) ids.insert(n.id);
     }
     return ids;
 }
+} // namespace
 
 void StorageManagerWidget::duplicateCommand(const QString &id)
 {
@@ -470,11 +610,7 @@ void StorageManagerWidget::duplicateCommand(const QString &id)
         return;
     }
     core::Command copy = *it;
-    QSet<QString> existingIds;
-    for (const core::Command &c : m_commandsData.commands) existingIds.insert(c.id);
-    for (const core::Folder &f : m_commandsData.folders) existingIds.insert(f.id);
-    for (const core::Collection &c : m_collections) existingIds.insert(c.id);
-    copy.id = newUniqueId(it->id, existingIds);
+    copy.id = newUniqueId(it->id, allIds(m_commandsData, m_collections, m_notes));
     copy.name = freeCopyName(it->name, [this, &copy](const QString &name) {
         return commandNameCollides(m_commandsData.commands, copy.folderId, name);
     });
@@ -492,11 +628,7 @@ void StorageManagerWidget::duplicateFolder(const QString &id)
         return;
     }
     core::Folder copy = *it;
-    QSet<QString> existingIds;
-    for (const core::Command &c : m_commandsData.commands) existingIds.insert(c.id);
-    for (const core::Folder &f : m_commandsData.folders) existingIds.insert(f.id);
-    for (const core::Collection &c : m_collections) existingIds.insert(c.id);
-    copy.id = newUniqueId(it->id, existingIds);
+    copy.id = newUniqueId(it->id, allIds(m_commandsData, m_collections, m_notes));
     copy.name = QStringLiteral("%1 %2").arg(it->name, utils::tr(QStringLiteral("storage.copy_suffix")));
     // Cópia RASA (só o item da pasta) — não duplica o conteúdo/subárvore
     // (limitação conhecida, fora do escopo de "exclusão/manutenção rápida").
@@ -511,11 +643,7 @@ void StorageManagerWidget::duplicateCollection(const QString &id)
         return;
     }
     core::Collection copy = *it;
-    QSet<QString> existingIds;
-    for (const core::Command &c : m_commandsData.commands) existingIds.insert(c.id);
-    for (const core::Folder &f : m_commandsData.folders) existingIds.insert(f.id);
-    for (const core::Collection &c : m_collections) existingIds.insert(c.id);
-    copy.id = newUniqueId(it->id, existingIds);
+    copy.id = newUniqueId(it->id, allIds(m_commandsData, m_collections, m_notes));
     copy.name = freeCopyName(it->name, [this, &copy](const QString &name) {
         return collectionNameCollides(m_collections, copy.folderId, name);
     });
@@ -526,40 +654,89 @@ void StorageManagerWidget::duplicateCollection(const QString &id)
     m_collections.append(copy);
 }
 
-void StorageManagerWidget::applyDuplicate(const QString &id)
+void StorageManagerWidget::duplicateNote(const QString &id)
 {
-    switch (m_currentKind) {
-    case DataKind::Command: duplicateCommand(id); break;
+    if (!m_notes) {
+        return;
+    }
+    const auto it = std::find_if(m_notes->constBegin(), m_notes->constEnd(),
+        [&id](const core::Note &n) { return n.id == id; });
+    if (it == m_notes->constEnd()) {
+        return;
+    }
+    core::Note copy = *it;
+    copy.id = newUniqueId(QStringLiteral("note"), allIds(m_commandsData, m_collections, m_notes));
+    copy.name = freeCopyName(it->name, [this, &copy](const QString &name) {
+        return std::any_of(m_notes->constBegin(), m_notes->constEnd(), [&](const core::Note &n) {
+            return n.folderId == copy.folderId && n.name.trimmed() == name.trimmed();
+        });
+    });
+    copy.order = -1;
+    m_notes->append(copy);
+}
+
+void StorageManagerWidget::applyDuplicate(DataKind kind, const QString &id)
+{
+    switch (kind) {
+    case DataKind::Command:
+    case DataKind::Http: duplicateCommand(id); break;
     case DataKind::Folder: duplicateFolder(id); break;
     case DataKind::Collection: duplicateCollection(id); break;
+    case DataKind::Note: duplicateNote(id); break;
+    case DataKind::All: break;
     }
 }
 
-void StorageManagerWidget::duplicateSingle(const QString &id)
+void StorageManagerWidget::persistFor(const QList<DataKind> &kinds)
 {
-    applyDuplicate(id);
-    if (m_currentKind == DataKind::Collection) {
-        m_persistCollections();
-    } else {
+    bool commands = false;
+    bool collections = false;
+    bool notes = false;
+    for (const DataKind kind : kinds) {
+        switch (kind) {
+        case DataKind::Command:
+        case DataKind::Http:
+        case DataKind::Folder: commands = true; break;
+        case DataKind::Collection: collections = true; break;
+        case DataKind::Note: notes = true; break;
+        case DataKind::All: break;
+        }
+    }
+    // Pastas excluídas mexem na pasta de coleções e notas: salva todos os afetados.
+    if (kinds.contains(DataKind::Folder)) {
+        collections = true;
+        notes = m_notes != nullptr;
+    }
+    if (commands && m_persistCommands) {
         m_persistCommands();
     }
+    if (collections && m_persistCollections) {
+        m_persistCollections();
+    }
+    if (notes && m_persistNotes) {
+        m_persistNotes();
+    }
+}
+
+void StorageManagerWidget::duplicateSingle(DataKind kind, const QString &id)
+{
+    applyDuplicate(kind, id);
+    persistFor({kind});
     rebuildTable();
 }
 
 void StorageManagerWidget::handleDuplicateSelected()
 {
-    const QStringList ids = checkedIds();
-    if (ids.isEmpty()) {
+    const QList<Checked> items = checkedItems();
+    if (items.isEmpty()) {
         return;
     }
-    for (const QString &id : ids) {
-        applyDuplicate(id);
+    QList<DataKind> kinds;
+    for (const Checked &item : items) {
+        applyDuplicate(item.kind, item.id);
+        kinds << item.kind;
     }
-    if (m_currentKind == DataKind::Collection) {
-        m_persistCollections();
-    } else {
-        m_persistCommands();
-    }
+    persistFor(kinds);
     rebuildTable();
 }
 
@@ -596,79 +773,101 @@ void StorageManagerWidget::deleteFolderReparenting(const QString &folderId)
             col.folderId = grandparentId;
         }
     }
+    if (m_notes) {
+        for (core::Note &note : *m_notes) {
+            if (note.folderId == folderId) {
+                note.folderId = grandparentId;
+            }
+        }
+    }
     m_commandsData.folders.removeIf([&folderId](const core::Folder &f) { return f.id == folderId; });
 }
 
-QString StorageManagerWidget::confirmDeleteKey() const
+QString StorageManagerWidget::confirmDeleteText(const QList<DataKind> &kinds, int count) const
 {
-    switch (m_currentKind) {
-    case DataKind::Command: return QStringLiteral("storage.confirm_delete.commands");
-    case DataKind::Folder: return QStringLiteral("storage.confirm_delete.folders");
-    case DataKind::Collection: return QStringLiteral("storage.confirm_delete.collections");
+    QSet<int> distinct;
+    for (const DataKind kind : kinds) {
+        distinct.insert(kind == DataKind::Http ? int(DataKind::Command) : int(kind));
     }
-    return QStringLiteral("storage.confirm_delete.commands");
+    if (distinct.size() == 1) {
+        switch (static_cast<DataKind>(*distinct.begin())) {
+        case DataKind::Folder: return utils::tr(QStringLiteral("storage.confirm_delete.folders")).arg(count);
+        case DataKind::Collection: return utils::tr(QStringLiteral("storage.confirm_delete.collections")).arg(count);
+        case DataKind::Note: return utils::tr(QStringLiteral("storage.confirm_delete.notes")).arg(count);
+        default: return utils::tr(QStringLiteral("storage.confirm_delete.commands")).arg(count);
+        }
+    }
+    return utils::tr(QStringLiteral("storage.confirm_delete.items")).arg(count);
 }
 
-void StorageManagerWidget::deleteSingle(const QString &id)
+void StorageManagerWidget::deleteSingle(DataKind kind, const QString &id)
 {
     if (!confirmYesNo(this, utils::tr(QStringLiteral("delete.confirm.title")),
-                      utils::tr(confirmDeleteKey()).arg(1))) {
+                      confirmDeleteText({kind}, 1))) {
         return;
     }
 
-    switch (m_currentKind) {
+    switch (kind) {
     case DataKind::Command:
+    case DataKind::Http:
         m_commandsData.commands.removeIf([&id](const core::Command &c) { return c.id == id; });
-        m_persistCommands();
         break;
     case DataKind::Folder:
         deleteFolderReparenting(id);
-        m_persistCommands();
         break;
     case DataKind::Collection:
         m_collections.removeIf([&id](const core::Collection &c) { return c.id == id; });
-        m_persistCollections();
         break;
+    case DataKind::Note:
+        if (m_notes) {
+            m_notes->removeIf([&id](const core::Note &n) { return n.id == id; });
+        }
+        break;
+    case DataKind::All: return;
     }
+    persistFor({kind});
     rebuildTable();
 }
 
 void StorageManagerWidget::handleDeleteSelected()
 {
-    const QStringList ids = checkedIds();
-    if (ids.isEmpty()) {
+    const QList<Checked> items = checkedItems();
+    if (items.isEmpty()) {
         return;
+    }
+    QList<DataKind> kinds;
+    QSet<QString> commandIds;
+    QSet<QString> collectionIds;
+    QSet<QString> noteIds;
+    QStringList folderIds;
+    for (const Checked &item : items) {
+        kinds << item.kind;
+        switch (item.kind) {
+        case DataKind::Command:
+        case DataKind::Http: commandIds.insert(item.id); break;
+        case DataKind::Folder: folderIds << item.id; break;
+        case DataKind::Collection: collectionIds.insert(item.id); break;
+        case DataKind::Note: noteIds.insert(item.id); break;
+        case DataKind::All: break;
+        }
     }
 
     if (!confirmYesNo(this, utils::tr(QStringLiteral("delete.confirm.title")),
-                      utils::tr(confirmDeleteKey()).arg(ids.size()))) {
+                      confirmDeleteText(kinds, items.size()))) {
         return;
     }
 
-    switch (m_currentKind) {
-    case DataKind::Command: {
-        const QSet<QString> idSet(ids.constBegin(), ids.constEnd());
-        m_commandsData.commands.removeIf([&idSet](const core::Command &c) { return idSet.contains(c.id); });
-        m_persistCommands();
-        break;
+    // Uma pasta por vez, relendo o estado a cada passo (cobre marcar
+    // uma pasta E sua subpasta juntas na mesma operação).
+    for (const QString &id : folderIds) {
+        deleteFolderReparenting(id);
     }
-    case DataKind::Folder: {
-        // Uma pasta por vez, relendo o estado a cada passo (cobre marcar
-        // uma pasta E sua subpasta juntas na mesma operação).
-        for (const QString &id : ids) {
-            deleteFolderReparenting(id);
-        }
-        m_persistCommands();
-        break;
+    m_commandsData.commands.removeIf([&commandIds](const core::Command &c) { return commandIds.contains(c.id); });
+    m_collections.removeIf([&collectionIds](const core::Collection &c) { return collectionIds.contains(c.id); });
+    if (m_notes) {
+        m_notes->removeIf([&noteIds](const core::Note &n) { return noteIds.contains(n.id); });
     }
-    case DataKind::Collection: {
-        const QSet<QString> idSet(ids.constBegin(), ids.constEnd());
-        m_collections.removeIf([&idSet](const core::Collection &c) { return idSet.contains(c.id); });
-        m_persistCollections();
-        break;
-    }
-    }
-
+    persistFor(kinds);
     rebuildTable();
 }
 

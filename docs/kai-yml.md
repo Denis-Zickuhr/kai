@@ -51,7 +51,7 @@ Headers are a **list** (`name`, `value`, optional `enabled: false`); the old `Na
 ## Python and Node commands
 
 `language` makes the text of a command **code** instead of a shell line (`"native"` is the default).
-`interpreter` is optional and overrides the global one (Settings → Languages) for this command:
+`interpreter` is optional and overrides the global one (Settings → General) for this command:
 
 ```yaml
 - name: "Report"

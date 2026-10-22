@@ -671,6 +671,7 @@ SettingsData ConfigManager::loadSettings()
         data.autostart = root.value("autostart").toBool(false);
     }
     data.smartFocus = root.value("smart_focus").toBool(data.smartFocus);
+    data.inlineActions = root.value("inline_actions").toBool(data.inlineActions);
     if (root.contains("language")) {
         data.language = root.value("language").toString();
     }
@@ -714,37 +715,6 @@ SettingsData ConfigManager::loadSettings()
         }
     }
 
-    // Alvo "Default" (pseudo-alvo SEMPRE presente, pedido do usuário: "vou
-    // precisar que exista um alvo de terminal fake chamado default, pra eu
-    // poder aplicar algumas configs nele"): template VAZIO = execução
-    // local direta, idêntica a não escolher nenhum alvo (mesmo
-    // comportamento de sempre) — existe só pra dar um lugar de configurar
-    // Saída/TTY sem precisar de nenhum wrapping (WSL, docker, etc.).
-    // Auto-criado se ausente, em QUALQUER plataforma (diferente do seed do
-    // WSL abaixo, que é só Windows e só quando a lista inteira está
-    // vazia). Se o usuário apagar, reaparece no próximo load — mais
-    // simples/robusto que impedir a exclusão na UI.
-    {
-        bool hasDefaultNamed = false;
-        bool hasAnyMarkedDefault = false;
-        for (const TerminalProfile &t : data.terminalProfiles) {
-            if (t.name == QStringLiteral("Default")) { hasDefaultNamed = true; }
-            if (t.isDefault) { hasAnyMarkedDefault = true; }
-        }
-        if (!hasDefaultNamed) {
-            TerminalProfile def;
-            def.name = QStringLiteral("Default");
-            def.commandTemplate = QString(); // vazio = local direto, sem wrapping
-            def.usePty = true;
-            // Marcado como PADRÃO de cara (pedido do usuário: "o sistema já
-            // cria um terminal padrão... e já vem marcado como padrão") —
-            // só quando NENHUM outro perfil já está marcado, pra não roubar
-            // a marcação de um perfil real que o usuário configurou.
-            def.isDefault = !hasAnyMarkedDefault;
-            data.terminalProfiles.prepend(def);
-        }
-    }
-
     const QJsonObject envObj = root.value("global_env_vars").toObject();
     for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
         data.globalEnvVars[it.key()] = it.value().toString();
@@ -753,13 +723,13 @@ SettingsData ConfigManager::loadSettings()
 #if defined(Q_OS_WIN)
     // Alvo "WSL" DEFAULT (feedback do usuário: "queria só um terminal, um
     // chamado wsl, que roda qualquer comando e flag"). Só é seedado no
-    // Windows quando o usuário ainda não tem NENHUM alvo configurado.
+    // Windows na primeira execução (sem settings.json), quando ainda não há NENHUM alvo.
     // É o "ultimate terminal": TTY ligado (roda como o Windows Terminal:
     // entra no WSL sob um terminal real, então read/docker -it/scripts
     // interativos funcionam) + injeção via base64+eval (imune a &&, aspas,
     // pipes — o comando é decodificado e executado no MESMO bash, cujo
     // stdin é o tty do ConPTY, então tudo funciona). Um alvo só, universal.
-    if (data.terminalProfiles.isEmpty()) {
+    if (root.isEmpty() && data.terminalProfiles.isEmpty()) {
         TerminalProfile wsl;
         wsl.name = QStringLiteral("WSL");
         // O b64 vai como ARGUMENTO POSICIONAL ($1) do bash — assim o cmd.exe
@@ -963,6 +933,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["graceful_stop_timeout_sec"] = data.gracefulStopTimeoutSec;
     root["autostart"] = data.autostart;
     root["smart_focus"] = data.smartFocus;
+    root["inline_actions"] = data.inlineActions;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
 
@@ -1644,6 +1615,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["graceful_stop_timeout_sec"] = settings.gracefulStopTimeoutSec;
     settingsObj["autostart"] = settings.autostart;
     settingsObj["smart_focus"] = settings.smartFocus;
+    settingsObj["inline_actions"] = settings.inlineActions;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
         QJsonObject obj;
@@ -2655,6 +2627,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.gracefulStopTimeoutSec = s.value("graceful_stop_timeout_sec").toInt(result.settings.gracefulStopTimeoutSec);
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
         result.settings.smartFocus = s.value("smart_focus").toBool(result.settings.smartFocus);
+        result.settings.inlineActions = s.value("inline_actions").toBool(result.settings.inlineActions);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {
             const QJsonObject o = v.toObject();

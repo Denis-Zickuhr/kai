@@ -34,6 +34,8 @@ public:
     // A zona tem o foco do teclado: só nela o sublinhado da aba da frente usa a cor de destaque.
     void setZoneFocused(bool focused);
     bool zoneFocused() const { return m_zoneFocused; }
+    // Fora do modo reorganizar as abas não iniciam arrasto.
+    void setDragEnabled(bool on) { m_dragEnabled = on; }
     QString activeId() const { return m_active; }
     int count() const { return int(m_tabs.size()); }
     // Índice da aba sob `pos` (coordenadas da faixa) ou -1.
@@ -43,6 +45,9 @@ public:
     QRect tabRect(int index) const;
     QRect closeRect(int index) const;
     QRect menuRect() const;
+    QRect maximizeRect() const;
+    // O painel maximizado no quadro (vazio = nenhum): a aba da frente que for ele mostra "restaurar" no lugar de "maximizar".
+    void setMaximizedView(const QString &id);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -52,11 +57,13 @@ signals:
     void tabCloseRequested(const QString &id);
     void tabMenuRequested(const QString &id, const QPoint &globalPos);
     void tabDoubleClicked(const QString &id);
+    void tabMaximizeRequested(const QString &id);
     void dragStarted(const QString &id);
     // `action` Qt::IgnoreAction = ninguém aceitou o painel (largado fora de qualquer zona).
     void dragFinished(const QString &id, Qt::DropAction action, const QPoint &globalPos);
 
 protected:
+    bool event(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -69,7 +76,9 @@ protected:
 private:
     void relayout();
     void startDrag(int index);
+    bool activeIsMaximized() const { return !m_maximizedId.isEmpty() && m_maximizedId == m_active; }
 
+    bool m_dragEnabled = false;
     QList<Tab> m_tabs;
     QList<QRect> m_rects;
     QString m_active;
@@ -78,6 +87,9 @@ private:
     int m_hover = -1;
     bool m_hoverClose = false;
     bool m_hoverMenu = false;
+    bool m_hoverMaximize = false;
+    bool m_pressOnMaximize = false;
+    QString m_maximizedId;
     int m_pressIndex = -1;
     QPoint m_pressPos;
     bool m_pressOnClose = false;
@@ -119,6 +131,9 @@ public:
     int dropIndexAt(const QPoint &pos) const;
     // As caixas do modo dividir (cabeçalhos), para os testes.
     QList<ZoneTabStrip *> sectionHeaders() const;
+    // O painel maximizado no quadro (vazio = nenhum). Antes de setViews: uma zona maximizada mostra a faixa mesmo sem o modo
+    // reorganizar, senão ficaria sem o ícone de restaurar.
+    void setMaximizedView(const QString &id);
     // Esconde a faixa de abas mesmo com vários painéis (a zona aberta a partir de uma faixa lateral: os ícones da faixa já trocam de painel).
     void setStripSuppressed(bool suppressed) { m_stripSuppressed = suppressed; }
     // Devolve os widgets dos painéis a `newParent` (escondidos), esvaziando a zona antes de ela ser descartada.
@@ -166,6 +181,8 @@ private:
     bool m_syncing = false;
     bool m_regluePending = false;
     bool m_stripSuppressed = false;
+    QString m_maximizedView;
+    bool m_dragEnabled = false;
     bool m_wantSplit = false;
     bool m_zoneFocused = false;
     int m_barHeight = 30;

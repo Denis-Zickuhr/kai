@@ -2,16 +2,19 @@
 
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
+#include "utils/translation-manager.h"
 
 #include <QApplication>
 #include <QCursor>
 #include <QContextMenuEvent>
 #include <QDrag>
 #include <QFontMetrics>
+#include <QHelpEvent>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QToolTip>
 #include <QSplitter>
 #include <QStyle>
 #include <QTimer>
@@ -34,6 +37,8 @@ constexpr int kGap = 6;
 constexpr int kCloseSize = 14;
 constexpr int kMinTabWidth = 72;
 constexpr int kMenuWidth = 38;
+constexpr int kMaximizeWidth = 28;
+constexpr int kMaximizeIcon = 14;
 } // namespace
 
 // ------------------------------------------------------------------------------------------------ ZoneTabStrip
@@ -79,7 +84,7 @@ QSize ZoneTabStrip::sizeHint() const
 
 QSize ZoneTabStrip::minimumSizeHint() const
 {
-    return QSize(kMenuWidth + kMinTabWidth, m_barHeight);
+    return QSize(kMenuWidth + kMaximizeWidth + kMinTabWidth, m_barHeight);
 }
 
 void ZoneTabStrip::relayout()
@@ -98,7 +103,7 @@ void ZoneTabStrip::relayout()
         widths.append(w);
         total += w;
     }
-    const int available = qMax(kMinTabWidth, width() - kMenuWidth - 4);
+    const int available = qMax(kMinTabWidth, width() - kMenuWidth - kMaximizeWidth - 4);
     if (total > available) {
         // Aperta as abas proporcionalmente, sem passar do mínimo.
         const double scale = double(available) / double(total);
@@ -131,6 +136,19 @@ QRect ZoneTabStrip::closeRect(int index) const
 QRect ZoneTabStrip::menuRect() const
 {
     return QRect(width() - kMenuWidth, 0, kMenuWidth, m_barHeight);
+}
+
+QRect ZoneTabStrip::maximizeRect() const
+{
+    return QRect(width() - kMenuWidth - kMaximizeWidth, 0, kMaximizeWidth, m_barHeight);
+}
+
+void ZoneTabStrip::setMaximizedView(const QString &id)
+{
+    if (m_maximizedId != id) {
+        m_maximizedId = id;
+        update();
+    }
 }
 
 int ZoneTabStrip::indexAt(const QPoint &pos) const
@@ -214,6 +232,22 @@ void ZoneTabStrip::paintEvent(QPaintEvent *)
         }
     }
 
+    // Maximizar / restaurar o painel da frente.
+    if (!m_tabs.isEmpty()) {
+        const QRect b = maximizeRect();
+        p.setPen(Qt::NoPen);
+        if (m_hoverMaximize) {
+            p.setBrush(QColor(tk::hoverBg()));
+            p.drawRoundedRect(QRect(b.center().x() - 11, b.center().y() - 11, 22, 22), tk::radiusSm(), tk::radiusSm());
+        }
+        const QIcon icon = LucideIcons::icon(activeIsMaximized() ? QStringLiteral("minimize-2") : QStringLiteral("maximize-2"),
+                                             QColor(m_hoverMaximize ? tk::fg() : tk::mutedFg()), kMaximizeIcon);
+        if (!icon.isNull()) {
+            icon.paint(&p, QRect(b.center().x() - kMaximizeIcon / 2, b.center().y() - kMaximizeIcon / 2, kMaximizeIcon,
+                                 kMaximizeIcon));
+        }
+    }
+
     // O "mais" (três pontos): menu do painel da frente.
     const QRect m = menuRect();
     p.setPen(Qt::NoPen);
@@ -237,6 +271,7 @@ void ZoneTabStrip::mousePressEvent(QMouseEvent *event)
     m_pressIndex = indexAt(event->pos());
     m_pressPos = event->pos();
     m_pressOnClose = m_pressIndex >= 0 && closeRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos());
+    m_pressOnMaximize = m_pressIndex < 0 && maximizeRect().contains(event->pos());
     if (m_pressIndex >= 0 && !m_pressOnClose) {
         // A faixa mostra já a aba clicada (quem troca o painel é o ViewZone, em resposta ao sinal).
         m_active = m_tabs.at(m_pressIndex).id;
@@ -250,13 +285,15 @@ void ZoneTabStrip::mouseMoveEvent(QMouseEvent *event)
     const int index = indexAt(event->pos());
     const bool onClose = index >= 0 && closeRect(index).adjusted(-3, -3, 3, 3).contains(event->pos());
     const bool onMenu = menuRect().contains(event->pos());
-    if (index != m_hover || onClose != m_hoverClose || onMenu != m_hoverMenu) {
+    const bool onMaximize = !m_tabs.isEmpty() && maximizeRect().contains(event->pos());
+    if (index != m_hover || onClose != m_hoverClose || onMenu != m_hoverMenu || onMaximize != m_hoverMaximize) {
         m_hover = index;
         m_hoverClose = onClose;
         m_hoverMenu = onMenu;
+        m_hoverMaximize = onMaximize;
         update();
     }
-    if ((event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose
+    if (m_dragEnabled && (event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose
         && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
         const int index = m_pressIndex;
         m_pressIndex = -1;
@@ -267,7 +304,9 @@ void ZoneTabStrip::mouseMoveEvent(QMouseEvent *event)
 void ZoneTabStrip::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        if (menuRect().contains(event->pos()) && m_pressIndex < 0 && !m_active.isEmpty()) {
+        if (m_pressOnMaximize && maximizeRect().contains(event->pos()) && !m_active.isEmpty()) {
+            emit tabMaximizeRequested(m_active);
+        } else if (menuRect().contains(event->pos()) && m_pressIndex < 0 && !m_active.isEmpty()) {
             emit tabMenuRequested(m_active, mapToGlobal(QPoint(menuRect().left(), menuRect().bottom())));
         } else if (m_pressIndex >= 0 && m_pressOnClose && closeRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos())) {
             emit tabCloseRequested(m_tabs.at(m_pressIndex).id);
@@ -275,6 +314,7 @@ void ZoneTabStrip::mouseReleaseEvent(QMouseEvent *event)
     }
     m_pressIndex = -1;
     m_pressOnClose = false;
+    m_pressOnMaximize = false;
 }
 
 void ZoneTabStrip::mouseDoubleClickEvent(QMouseEvent *event)
@@ -289,13 +329,30 @@ void ZoneTabStrip::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ZoneTabStrip::leaveEvent(QEvent *event)
 {
-    if (m_hover != -1 || m_hoverMenu) {
+    if (m_hover != -1 || m_hoverMenu || m_hoverMaximize) {
         m_hover = -1;
         m_hoverClose = false;
         m_hoverMenu = false;
+        m_hoverMaximize = false;
         update();
     }
     QWidget::leaveEvent(event);
+}
+
+bool ZoneTabStrip::event(QEvent *event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        const auto *help = static_cast<QHelpEvent *>(event);
+        if (!m_tabs.isEmpty() && maximizeRect().contains(help->pos())) {
+            QToolTip::showText(help->globalPos(), utils::tr(activeIsMaximized() ? QStringLiteral("layout.strip.restore")
+                                                                                 : QStringLiteral("layout.strip.maximize")),
+                               this);
+        } else {
+            QToolTip::hideText();
+        }
+        return true;
+    }
+    return QWidget::event(event);
 }
 
 void ZoneTabStrip::contextMenuEvent(QContextMenuEvent *event)
@@ -368,6 +425,7 @@ ViewZone::ViewZone(Zone zone, ViewRegistry *registry, QWidget *parent)
     connect(m_strip, &ZoneTabStrip::tabCloseRequested, this, &ViewZone::viewCloseRequested);
     connect(m_strip, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
     connect(m_strip, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);
+    connect(m_strip, &ZoneTabStrip::tabMaximizeRequested, this, &ViewZone::viewMaximizeRequested);
     connect(m_strip, &ZoneTabStrip::dragStarted, this, &ViewZone::dragStarted);
     connect(m_strip, &ZoneTabStrip::dragFinished, this, &ViewZone::dragFinished);
     connect(m_stack, &ZoneStack::layoutRequested, this, &ViewZone::syncConstraints);
@@ -380,6 +438,11 @@ void ViewZone::setBarHeight(int height)
     for (const Section &section : std::as_const(m_sections)) {
         section.header->setBarHeight(height);
     }
+}
+
+void ViewZone::setMaximizedView(const QString &id)
+{
+    m_maximizedView = id;
 }
 
 void ViewZone::setZoneFocused(bool focused)
@@ -402,7 +465,11 @@ void ViewZone::setViews(const QStringList &ids, const QString &active, bool stri
         }
     }
     rebuildStrip(active);
-    m_strip->setVisible(!m_stripSuppressed && (stripAlways || ids.size() > 1));
+    m_dragEnabled = stripAlways;
+    m_strip->setDragEnabled(stripAlways);
+    m_strip->setMaximizedView(m_maximizedView);
+    const bool holdsMaximized = !m_maximizedView.isEmpty() && ids.contains(m_maximizedView);
+    m_strip->setVisible(!m_stripSuppressed && (stripAlways || ids.size() > 1 || holdsMaximized));
     applyGlue();
     if (QWidget *front = m_registry->existingWidget(active)) {
         m_stack->setCurrentWidget(front);
@@ -437,9 +504,12 @@ void ViewZone::applySplit()
         auto *header = new ZoneTabStrip(box);
         header->setBarHeight(m_barHeight);
         header->setZoneFocused(m_zoneFocused);
+        header->setDragEnabled(m_dragEnabled);
         header->setTabs({{id, m_registry->title(id), m_registry->icon(id), false}}, id);
         connect(header, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
         connect(header, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);
+        connect(header, &ZoneTabStrip::tabMaximizeRequested, this, &ViewZone::viewMaximizeRequested);
+        header->setMaximizedView(m_maximizedView);
         connect(header, &ZoneTabStrip::dragStarted, this, &ViewZone::dragStarted);
         connect(header, &ZoneTabStrip::dragFinished, this, &ViewZone::dragFinished);
         vbox->addWidget(header);

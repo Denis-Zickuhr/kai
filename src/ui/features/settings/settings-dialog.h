@@ -21,7 +21,6 @@ class TerminalsTab;
 class NotificationsTab;
 class KipTab;
 class ActionsTab;
-class LanguagesTab;
 class AiTab;
 
 // Diálogo de Configurações Globais: gestão do atalho
@@ -57,6 +56,8 @@ public:
                              QVector<core::Collection> &collections,
                              std::function<void()> persistCommands,
                              std::function<void()> persistCollections,
+                             QVector<core::Note> *notes = nullptr,
+                             std::function<void()> persistNotes = {},
                              QWidget *parent = nullptr);
 
     core::SettingsData buildSettings() const;
@@ -78,18 +79,24 @@ public:
     void setLayoutModel(const layout::LayoutModel &model);
     LayoutTab *layoutTab() const { return m_layoutTab; }
 
+    // OK: confirma o rascunho da grade (Cancelar o descarta).
+    void accept() override;
+
 signals:
     // "Restaurar layout" (aba Layout): quem abriu o diálogo devolve os painéis ao lugar padrão, na hora.
     void restoreLayoutRequested();
     void gridChangeRequested(int cols, int rows, int expansion);
+    void zoneSpanRequested(int row, int col, int colSpan, int rowSpan);
 
 private:
     void setupUi(const core::SettingsData &currentSettings, const QStringList &availableThemeNames,
                  core::CommandsData &commandsData, QVector<core::Collection> &collections,
-                 std::function<void()> persistCommands, std::function<void()> persistCollections);
+                 std::function<void()> persistCommands, std::function<void()> persistCollections,
+                 QVector<core::Note> *notes, std::function<void()> persistNotes);
 
     QWidget *buildStoragePage(core::CommandsData &commandsData, QVector<core::Collection> &collections,
-                               std::function<void()> persistCommands, std::function<void()> persistCollections);
+                               std::function<void()> persistCommands, std::function<void()> persistCollections,
+                               QVector<core::Note> *notes, std::function<void()> persistNotes);
     // Embrulha uma página num scroll sem moldura, com padding uniforme.
     QWidget *wrapPage(QWidget *inner) const;
     // Re-escaneia m_themesDirPath por *.json e repopula o combo de tema da
@@ -110,7 +117,6 @@ private:
     NotificationsTab *m_notificationsTab = nullptr;
     KipTab *m_kipTab = nullptr;
     ActionsTab *m_actionsTab = nullptr;
-    LanguagesTab *m_languagesTab = nullptr;
     AiTab *m_aiTab = nullptr;
     core::AiSettings m_originalAi;
 

@@ -235,10 +235,11 @@ public:
 
 public slots:
     void setExpanded(bool expanded);
-    void toggleExpanded();
 
 signals:
     void expandedChanged(bool expanded);
+    // A janela destacada nasceu: quem a quiser enfeitar (a faixa de ações do comando) pega o painel dela aqui.
+    void detachedPanelCreated(OutputPanel *panel, const QString &commandId);
 
     // Emitido quando o usuário muda QUALQUER opção de exibição no menu da
     // Saída, para o MainWindow persistir GLOBALMENTE em settings.json
@@ -292,7 +293,6 @@ private:
     // quando a posição muda com o painel já colapsado.
     void applyCollapsedConstraints();
     void applyExpandedConstraints();
-    void updateToggleIcon();
     // Tamanho/estado inicial da janela destacada conforme as preferências de
     // janela do usuário (tamanho fixo, maximizada, tela cheia ou "lembrar").
     void showDetachedWindowPerPreference();
@@ -306,7 +306,6 @@ private:
     QWidget *m_detachedWindow = nullptr;
     QVBoxLayout *m_detachedCardLayout = nullptr; // recuo da moldura da janela destacada
 
-    QToolButton *m_toggleButton = nullptr;
     QToolButton *m_detachButton = nullptr;
     OutputTabsBar *m_tabsBar = nullptr;
 
@@ -317,7 +316,6 @@ private:
     QString m_currentCommandId;   // comando conectado ao painel embutido
     QSet<QString> m_kipPinned;    // comandos KIP fixados num painel próprio do quadro
     QString m_detachedCommandId;  // comando FIXO da janela destacada
-    bool m_headerShown = true; // o cabeçalho da Saída (e o botão de recolher dele) está na tela
     bool m_expanded = true;
     int m_lastExpandedHeight = 0;
     int m_lastExpandedWidth = 0;  // ver applyExpandedConstraints (posição esquerda/direita)

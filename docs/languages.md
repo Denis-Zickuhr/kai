@@ -36,7 +36,7 @@ echo "Deploying to " . getenv("TARGET");
 
 ## Which interpreter
 
-- **Settings → Languages** holds the global ones: `python3`, `node` and `php` by default (on Windows without an execution profile, Python defaults to `python`).
+- **Settings → General** holds the global ones: `python3`, `node` and `php` by default (on Windows without an execution profile, Python defaults to `python`).
 - A command can override it in its **Interpreter** field.
 - The value is a **shell line resolved where the command runs**: on a WSL profile it is the WSL's `python3`, and a login shell already loads pyenv and nvm. It can have arguments (`uv run python`); quote paths with spaces yourself.
 

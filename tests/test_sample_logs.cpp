@@ -69,7 +69,7 @@ private slots:
         const QString text = QString::fromUtf8(file.readAll());
         const core::ValidationResult result = core::validateKaiFileText(text);
         QVERIFY2(result.issues.isEmpty(), qPrintable(result.issues.isEmpty() ? QString() : result.issues.first().path + QStringLiteral(": ") + result.issues.first().message));
-        QCOMPARE(text.count(QStringLiteral("formatted_output: true")), 8); // o 9º é a comparação, com a saída normal
+        QCOMPARE(text.count(QStringLiteral("formatted_output: true")), 12); // os dois últimos são a comparação, com a saída normal
     }
 
     void structuredModeMakesOneCardPerLine()
@@ -105,6 +105,16 @@ private slots:
         ui::LogLineModel model;
         model.appendText(r.output);
         QCOMPARE(model.entryAt(model.rowCount() - 1).level, QStringLiteral("fatal"));
+    }
+
+    void logfmtModesBecomeCards()
+    {
+        QCOMPARE(shape(run({QStringLiteral("logfmt")}).output), (QPair<int, int>(8, 0)));
+        // JSON e logfmt lado a lado: 2 JSON + 3 logfmt viram card; o banner e as duas linhas com "=" que não são logfmt
+        // ficam como texto (as duas últimas, seguidas, formam um grupo só)
+        QCOMPARE(shape(run({QStringLiteral("logfmt-mixed")}).output), (QPair<int, int>(5, 2)));
+        QCOMPARE(shape(run({QStringLiteral("logfmt-shapes")}).output), (QPair<int, int>(7, 0)));
+        QCOMPARE(shape(run({QStringLiteral("logfmt-stream"), QStringLiteral("3")}).output), (QPair<int, int>(3, 0)));
     }
 
     void streamAndVolumeTakeTheLineCount()

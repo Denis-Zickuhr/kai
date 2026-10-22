@@ -1903,9 +1903,8 @@ void OutputPanel::setCollapsedNarrow(bool narrow)
 
 int OutputPanel::collapsedHeaderWidth() const
 {
-    // Colapsado só sobra o botão de expandir/colapsar (fora da linha rolável).
-    const int trailing = m_trailingHeaderWidget ? m_trailingHeaderWidget->sizeHint().width() : 0;
-    return trailing + tk::space(1) * 2;
+    // Colapsado a linha inteira some: sobra só a margem do cabeçalho.
+    return tk::space(1) * 2;
 }
 
 void OutputPanel::addHeaderWidget(QWidget *widget)
@@ -1972,18 +1971,6 @@ void OutputPanel::applyHeaderRowHeight()
     if (m_tabBar) {
         applyTabBarStyle(m_tabBar, rowHeight);
     }
-}
-
-void OutputPanel::addTrailingHeaderWidget(QWidget *widget)
-{
-    auto *headerLayout = m_header ? qobject_cast<QHBoxLayout *>(m_header->layout()) : nullptr;
-    if (!widget || !headerLayout) {
-        return;
-    }
-    // Fora da linha rolável: o botão de colapsar nunca some por rolagem.
-    widget->setParent(m_header);
-    headerLayout->addWidget(widget, 0, Qt::AlignVCenter);
-    m_trailingHeaderWidget = widget;
 }
 
 void OutputPanel::setHeaderActionsVisible(bool visible)

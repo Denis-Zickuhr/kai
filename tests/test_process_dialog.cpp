@@ -8,6 +8,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QToolButton>
+#include <QComboBox>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMenu>
@@ -228,6 +229,20 @@ private slots:
             hasHistory = hasHistory || action->text() == kai::utils::tr(QStringLiteral("menu.file.run_history"));
         }
         QVERIFY2(hasHistory, "Arquivo deveria ter Histórico de execuções");
+    }
+
+    // A barra do topo é só menus e controles da janela: o menu Item, o botão da IA e o seletor de ambientes saíram
+    // (os painéis e o menu Exibir cobrem isso).
+    void topBarHasNoItemMenuAiButtonOrEnvironmentSelector()
+    {
+        TopUtilityBar bar;
+        auto *menuBar = bar.findChild<QMenuBar *>();
+        QVERIFY(menuBar != nullptr);
+        // Arquivo, Exibir, Configurações e Ajuda.
+        QCOMPARE(menuBar->actions().size(), 4);
+        QVERIFY(bar.findChild<QToolButton *>(QStringLiteral("aiChatButton")) == nullptr);
+        QVERIFY(bar.findChild<QComboBox *>() == nullptr);
+        QVERIFY(bar.findChild<QToolButton *>(QStringLiteral("manageEnvironments")) == nullptr);
     }
 };
 

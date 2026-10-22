@@ -3,6 +3,8 @@
 #include <QDialog>
 #include <QString>
 
+class QCheckBox;
+
 namespace kai::ui {
 
 // ============================================================================
@@ -32,6 +34,8 @@ public:
     // Válidos só depois de exec() == QDialog::Accepted.
     Kind kind() const { return m_kind; }
     QString path() const { return m_path; }
+    // Só vale para Kind::Project: importa TODOS os projetos (kai.yml) abaixo da pasta escolhida.
+    bool recursive() const { return m_recursive; }
 
     // Decide OpenApi vs Config pelo CONTEÚDO de um arquivo (chave "openapi"/
     // "swagger" no topo = OpenAPI; "kai_export"/"commands"/"folders"/
@@ -49,6 +53,8 @@ private:
 
     Kind m_kind = Kind::Project;
     QString m_path;
+    bool m_recursive = false;
+    QCheckBox *m_recursiveField = nullptr;
 };
 
 } // namespace kai::ui

@@ -257,6 +257,12 @@ void QuickRunPopup::openBelow(const QPoint &anchorGlobal)
     present(anchorGlobal);
 }
 
+void QuickRunPopup::openOnScreen(const QRect &available)
+{
+    setFixedWidth(kPopupWidth);
+    present(QPoint(available.center().x() - kPopupWidth / 2, available.top() + available.height() / 5));
+}
+
 void QuickRunPopup::openCentered(const QWidget *window)
 {
     if (!window) {

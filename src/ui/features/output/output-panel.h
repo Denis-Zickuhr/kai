@@ -137,10 +137,6 @@ public:
     // Injeta um botão/widget no cabeçalho (usado pelo drawer para colocar
     // colapsar/destacar sem duplicar o cabeçalho numa segunda implementação).
     void addHeaderWidget(QWidget *widget);
-    // Como addHeaderWidget, mas o widget vai para o FIM da fileira de ações
-    // e é o ÚNICO que continua visível com o painel colapsado (o botão de
-    // expandir/colapsar do drawer).
-    void addTrailingHeaderWidget(QWidget *widget);
     // Altura ÚNICA das barras do painel (cabeçalho e rodapé de resposta). O
     // MainWindow passa a altura REAL das barras de ação vizinhas, para as
     // linhas separadoras dos painéis ficarem alinhadas em qualquer densidade.
@@ -427,7 +423,6 @@ private:
     int m_headerHeight = 0;
     int m_barHeight = 0; // altura fixa única da barra (abas + ícones alinhados)
     QWidget *m_headerExtras = nullptr;
-    QWidget *m_trailingHeaderWidget = nullptr; // ver addTrailingHeaderWidget
     // Abas + ícones ficam numa linha que ROLA na horizontal quando não cabe
     // (barra escondida; a faixa de destaque em m_headerOverflow mostra a
     // posição). O chevron fica FORA da área rolável, sempre visível.

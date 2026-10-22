@@ -3,6 +3,11 @@
 #include "utils/design-tokens.h"
 
 #include <QCompleter>
+#include <QHash>
+#include <QPen>
+#include <QSet>
+#include <QVariantList>
+#include <functional>
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPainterPath>
@@ -18,6 +23,9 @@ constexpr int kPillHPad = 8;   // padding horizontal interno de cada pill
 constexpr int kPillGap = 4;    // espaço ENTRE pills
 constexpr int kRowVPad = 6;    // padding vertical da linha do item (espaçamento pedido pela spec)
 constexpr int kRowHPad = 8;    // padding horizontal da linha do item
+constexpr int kIndent = 18;    // recuo por nível de profundidade (árvore)
+constexpr int kDepthRole = Qt::UserRole + 2;   // int: profundidade (0 = raiz)
+constexpr int kGuidesRole = Qt::UserRole + 3;  // QVariantList<bool>: por nível, "ainda há irmãos abaixo"
 
 // Tom do accent para o segmento na profundidade `depth` (0 = pasta raiz):
 // quanto mais fundo, mais claro — pedido explícito da spec ("níveis mais
@@ -70,37 +78,44 @@ void FolderPickerPillDelegate::paint(QPainter *painter, const QStyleOptionViewIt
     const QFontMetrics fm(font);
     const int radius = tk::radiusSm();
 
-    int x = option.rect.left() + kRowHPad;
-    const int chipHeight = fm.height() + kRowVPad;
-    const int y = option.rect.top() + (option.rect.height() - chipHeight) / 2;
+    const int depth = index.data(kDepthRole).toInt();
+    const QVariantList guides = index.data(kGuidesRole).toList();
+    const bool selected = option.state & QStyle::State_Selected;
 
-    for (int depth = 0; depth < segments.size(); ++depth) {
-        const QString &text = segments.at(depth);
-        const int textWidth = fm.horizontalAdvance(text);
-        const int chipWidth = textWidth + kPillHPad * 2;
-
-        const QRect chipRect(x, y, chipWidth, chipHeight);
-        const QColor bg = pillColorForDepth(depth);
-
-        QPainterPath path;
-        path.addRoundedRect(chipRect, radius, radius);
-        painter->fillPath(path, bg);
-
-        painter->setPen(readableTextColor(bg));
-        painter->drawText(chipRect, Qt::AlignCenter, text);
-
-        x += chipWidth;
-        if (depth < segments.size() - 1) {
-            // Separador "›" entre pills, na cor de texto padrão do item.
-            painter->setPen(option.state & QStyle::State_Selected
-                ? option.palette.highlightedText().color()
-                : QColor(tk::mutedFg()));
-            const QRect sepRect(x, option.rect.top(), fm.horizontalAdvance(QStringLiteral(" › ")) + kPillGap,
-                                option.rect.height());
-            painter->drawText(sepRect, Qt::AlignCenter, QStringLiteral("›"));
-            x += sepRect.width();
+    // Árvore: uma coluna de recuo por ancestral; cada uma leva a linha
+    // vertical se esse ancestral ainda tem irmãos abaixo. O último nível é
+    // o conector ├/└ até a pill da própria pasta.
+    QColor guide(selected ? option.palette.highlightedText().color() : QColor(tk::mutedFg()));
+    guide.setAlpha(110);
+    painter->setPen(QPen(guide, 1));
+    const int left = option.rect.left() + kRowHPad;
+    const int midY = option.rect.center().y();
+    for (int level = 0; level < depth; ++level) {
+        const int cx = left + level * kIndent + kIndent / 2;
+        const bool more = level < guides.size() && guides.at(level).toBool();
+        if (level < depth - 1) {
+            if (more) {
+                painter->drawLine(cx, option.rect.top(), cx, option.rect.bottom());
+            }
+        } else {
+            painter->drawLine(cx, option.rect.top(), cx, more ? option.rect.bottom() : midY);
+            painter->drawLine(cx, midY, cx + kIndent / 2 - 2, midY);
         }
     }
+
+    const int x = left + depth * kIndent;
+    const int chipHeight = fm.height() + kRowVPad;
+    const int y = option.rect.top() + (option.rect.height() - chipHeight) / 2;
+    const int maxTextWidth = qMax(24, option.rect.right() - kRowHPad - x - kPillHPad * 2);
+    const QString text = fm.elidedText(segments.last(), Qt::ElideRight, maxTextWidth);
+    const QRect chipRect(x, y, fm.horizontalAdvance(text) + kPillHPad * 2, chipHeight);
+    const QColor bg = pillColorForDepth(depth);
+
+    QPainterPath path;
+    path.addRoundedRect(chipRect, radius, radius);
+    painter->fillPath(path, bg);
+    painter->setPen(readableTextColor(bg));
+    painter->drawText(chipRect, Qt::AlignCenter, text);
 
     painter->restore();
 }
@@ -113,21 +128,18 @@ QSize FolderPickerPillDelegate::sizeHint(const QStyleOptionViewItem &option, con
     }
 
     const QFontMetrics fm(option.font);
-    int width = kRowHPad * 2;
-    for (int depth = 0; depth < segments.size(); ++depth) {
-        width += fm.horizontalAdvance(segments.at(depth)) + kPillHPad * 2;
-        if (depth < segments.size() - 1) {
-            width += fm.horizontalAdvance(QStringLiteral(" › ")) + kPillGap;
-        }
-    }
-    const int height = fm.height() + kRowVPad * 2;
-    return QSize(width, height);
+    const int width = kRowHPad * 2 + index.data(kDepthRole).toInt() * kIndent
+        + fm.horizontalAdvance(segments.last()) + kPillHPad * 2;
+    return QSize(width, fm.height() + kRowVPad * 2);
 }
 
 FolderPickerWidget::FolderPickerWidget(QWidget *parent)
     : QComboBox(parent)
 {
     setItemDelegate(new FolderPickerPillDelegate(this));
+    // Caminhos longos não podem alargar o diálogo: o combo fechado clipa.
+    setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    setMinimumContentsLength(16);
 
     connect(this, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_indexToFolderId.contains(index)) {
@@ -140,7 +152,9 @@ QStringList FolderPickerWidget::pathSegments(const QString &folderId) const
 {
     QStringList path;
     QString currentId = folderId;
-    while (!currentId.isEmpty()) {
+    QSet<QString> seen;
+    while (!currentId.isEmpty() && !seen.contains(currentId)) {
+        seen.insert(currentId);
         const kai::core::Folder *folder = nullptr;
         for (const auto &f : m_folders) {
             if (f.id == currentId) {
@@ -167,24 +181,56 @@ void FolderPickerWidget::populateItems()
     clear();
     m_indexToFolderId.clear();
 
-    int index = 0;
+    // Ordem de árvore (pai antes dos filhos, irmãos na ordem recebida);
+    // pastas cujo pai não está na lista viram raízes.
+    QSet<QString> known;
     for (const auto &folder : m_folders) {
-        const QStringList segments = pathSegments(folder.id);
-        // Texto plano (fallback do delegate + o que o QCompleter busca —
-        // inclui TODOS os segmentos, não só o nome final, então buscar
-        // "Projeto A" também acha subpastas dela mesmo filtrando pelo meio
-        // do caminho).
-        addItem(segments.join(QStringLiteral(" › ")));
-        // Qt::UserRole (role PADRÃO de QComboBox::itemData/currentData): o
-        // folderId em si — callers existentes (project-import-options-
-        // dialog, testes) leem por aqui via currentData(), API nativa do
-        // QComboBox, não só via selectedFolderId() (API própria deste
-        // widget). Qt::UserRole+1 seguem os segmentos, só para o delegate
-        // desenhar as pills.
-        setItemData(index, folder.id, Qt::UserRole);
-        setItemData(index, segments, Qt::UserRole + 1);
-        m_indexToFolderId[index] = folder.id;
-        index++;
+        known.insert(folder.id);
+    }
+    QHash<QString, QVector<const kai::core::Folder *>> children;
+    QVector<const kai::core::Folder *> roots;
+    for (const auto &folder : m_folders) {
+        const QString parent = folder.parentId.value_or(QString());
+        if (parent.isEmpty() || !known.contains(parent) || parent == folder.id) {
+            roots.append(&folder);
+        } else {
+            children[parent].append(&folder);
+        }
+    }
+
+    int index = 0;
+    QSet<QString> visited;
+    std::function<void(const kai::core::Folder *, QVariantList)> visit =
+        [&](const kai::core::Folder *folder, QVariantList guides) {
+            if (visited.contains(folder->id)) return;
+            visited.insert(folder->id);
+            const QStringList segments = pathSegments(folder->id);
+            // Texto plano = caminho completo (fallback do delegate, texto do
+            // combo fechado e o que a busca casa).
+            addItem(segments.join(QStringLiteral(" › ")));
+            // Qt::UserRole (role PADRÃO de QComboBox::itemData/currentData): o
+            // folderId — callers existentes leem por aqui. As demais roles só
+            // servem ao delegate da árvore.
+            setItemData(index, folder->id, Qt::UserRole);
+            setItemData(index, segments, Qt::UserRole + 1);
+            setItemData(index, int(guides.size()), kDepthRole);
+            setItemData(index, guides, kGuidesRole);
+            m_indexToFolderId[index] = folder->id;
+            index++;
+            const auto &kids = children.value(folder->id);
+            for (int i = 0; i < kids.size(); ++i) {
+                QVariantList childGuides = guides;
+                childGuides.append(i < kids.size() - 1);
+                visit(kids.at(i), childGuides);
+            }
+        };
+    for (int i = 0; i < roots.size(); ++i) {
+        // Raízes não têm conector: o nível 0 só entra a partir dos filhos.
+        visit(roots.at(i), {});
+    }
+    // Ciclos (A→B→A) nunca chegam a uma raiz; mostra o resto em vez de sumir.
+    for (const auto &folder : m_folders) {
+        visit(&folder, {});
     }
 
     blockSignals(false);

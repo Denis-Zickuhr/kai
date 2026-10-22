@@ -6,13 +6,13 @@
 
 1. Create **folders** (they become tabs) and, inside them, **commands** — see [Folders, tree & search](organizing.md).
 2. Write the command: a [shell line](commands.md), [Python or Node code](languages.md) or an [HTTP request](commands-http.md). Ask for values with [parameters](parameters.md).
-3. Set **variables** in an [environment](environments.md) (the selector at the top) and use them as `{{VAR}}`.
+3. Set **variables** in an [environment](environments.md) (the **Variables** panel) and use them as `{{VAR}}`.
 4. Run with a double-click or **Enter**; follow the [Output](output.md) live.
 5. Automate: [hooks](hooks.md), [schedules](scheduling.md), [auto-replies](responders.md), and the [command line](cli.md).
 
 ## The main window
 
-- **Top bar:** menus **File** (import, export, run history, logs, hide, quit), **Item** (new folder / command / collection), **Settings** and **Help**; the environment selector sits on the right.
+- **Top bar:** menus **File** (import, export, run history, logs, hide, quit), **View** (panels and layout), **Settings** and **Help**.
 - **Tabs and tree:** one tab per folder, with the commands and subfolders in a tree; the side bar next to it runs, stops, edits and creates things.
 - **Output panel:** the result of the selected command (on the right by default; any [panel](layout.md) can be dragged to another cell).
 - **Status line:** how many commands are running (click for the [process list](processes.md)), whether the last run succeeded and the unread [notifications](notifications.md).

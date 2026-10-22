@@ -8,6 +8,7 @@
 namespace kai::cli {
 
 class StdinForwarderPrivate;
+class InterruptForwarderPrivate;
 
 // Entrada do terminal -> comando (rodando no app ou num PTY local). Em tty
 // (Unix) vira modo "cru": cada tecla (inclusive Ctrl+C) vai direto pro PTY
@@ -29,6 +30,23 @@ public:
 
 private:
     std::unique_ptr<StdinForwarderPrivate> d;
+};
+
+// Ctrl+C como SINAL do terminal de quem chamou (CTRL_C_EVENT no Windows, SIGINT no Unix) -> comando. Existe pro
+// kai.exe chamado do WSL: o stdin é um pipe, o tty do Linux transforma a tecla em sinal e a interop o entrega ao
+// kai.exe, que por padrão morreria na hora, derrubando o ConPTY (e o `docker compose up`, o binário que espera o
+// remoto...) sem chance de limpeza. Aqui o sinal é engolido e vira `sink("\x03")` na thread principal, o que o
+// terminal do comando trata como o Ctrl+C de qualquer terminal. O kai segue esperando o comando terminar.
+class InterruptForwarder {
+public:
+    using Sink = std::function<void()>;
+    explicit InterruptForwarder(Sink sink);
+    ~InterruptForwarder();
+    InterruptForwarder(const InterruptForwarder &) = delete;
+    InterruptForwarder &operator=(const InterruptForwarder &) = delete;
+
+private:
+    std::unique_ptr<InterruptForwarderPrivate> d;
 };
 
 // Remove, do começo de `output`, o eco do que o próprio usuário digitou

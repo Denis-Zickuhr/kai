@@ -12,10 +12,11 @@
 
 class QComboBox;
 class QLineEdit;
-class QTableWidget;
 class QPushButton;
 
 namespace kai::ui {
+
+class VariableListView;
 
 // Inspeção/reset das variáveis DINÂMICAS (extraídas por HTTP env_extractor
 // ou captura de env de hook) — feedback do usuário: hoje elas ficam
@@ -94,7 +95,8 @@ private:
 
     QLineEdit *m_filterField = nullptr;
     QComboBox *m_scopeField = nullptr;
-    QTableWidget *m_table = nullptr;
+    VariableListView *m_list = nullptr;
+    QVector<RowInfo> m_shown;
     QPushButton *m_resetScopeButton = nullptr;
 };
 

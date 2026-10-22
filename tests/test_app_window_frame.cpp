@@ -18,6 +18,7 @@ private slots:
     void isFramelessWithTheAppTitleBarAndControls()
     {
         AppWindowFrame frame;
+        frame.setUseSystemFrame(false); // o padrão no Windows é a moldura do sistema
         frame.setWindowTitle(QStringLiteral("Kai — Saída"));
         frame.resize(700, 500);
         frame.show();
@@ -42,6 +43,7 @@ private slots:
     void maximizeButtonTogglesAndMaximizedWindowsLoseTheirRoundedCorners()
     {
         AppWindowFrame frame;
+        frame.setUseSystemFrame(false);
         frame.resize(700, 500);
         frame.show();
         QVERIFY(QTest::qWaitForWindowExposed(&frame));
@@ -59,6 +61,7 @@ private slots:
     void closeButtonClosesTheWindow()
     {
         auto *frame = new AppWindowFrame;
+        frame->setUseSystemFrame(false);
         frame->setAttribute(Qt::WA_DeleteOnClose);
         frame->show();
         QPointer<AppWindowFrame> guard(frame);
@@ -78,10 +81,46 @@ private slots:
             if (auto *f = qobject_cast<AppWindowFrame *>(w)) frame = f;
         }
         QVERIFY2(frame, "a Saída destacada tem de usar a moldura do app");
-        QVERIFY(frame->windowFlags() & Qt::FramelessWindowHint);
+        QCOMPARE(bool(frame->windowFlags() & Qt::FramelessWindowHint), !AppWindowFrame::systemFrameByDefault());
         QVERIFY(!frame->titleText().isEmpty());
-        frame->closeButton()->click();
+        frame->close();
         QTRY_VERIFY(!drawer.hasDetachedWindow());
+    }
+
+    // Moldura do sistema (o padrão no Windows): a barra de título é a nativa, então a própria some e o sistema cuida de
+    // bordas, redimensionamento e encaixe nos quadrantes da tela. Só a barra e as bordas mudam: o conteúdo é o mesmo.
+    void systemFrameDropsTheAppTitleBarAndTheFramelessHint()
+    {
+        AppWindowFrame frame;
+        frame.setUseSystemFrame(true);
+        frame.setWindowTitle(QStringLiteral("Kai — Saída"));
+        frame.resize(700, 500);
+        frame.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&frame));
+        QVERIFY(frame.usesSystemFrame());
+        QVERIFY(!(frame.windowFlags() & Qt::FramelessWindowHint));
+        QVERIFY(frame.windowFlags() & Qt::WindowTitleHint);
+        QVERIFY(frame.windowFlags() & Qt::WindowMaximizeButtonHint);
+        QVERIFY(!frame.titleBar()->isVisible());
+        QVERIFY(frame.contentWidget()->isVisible());
+        // O contêiner pinta reto e sem a máscara de cantos: quem arredonda (ou não) é o sistema.
+        QVERIFY(frame.property("kaiMaximized").toBool());
+        QVERIFY(frame.mask().isEmpty());
+        QCOMPARE(frame.windowTitle(), QStringLiteral("Kai — Saída"));
+
+        // E volta à moldura própria sem perder a janela.
+        frame.setUseSystemFrame(false);
+        QVERIFY(frame.windowFlags() & Qt::FramelessWindowHint);
+        QTRY_VERIFY(frame.isVisible());
+        QVERIFY(frame.titleBar()->isVisible());
+    }
+
+    void switchingTheFrameKeepsTheAlwaysOnTopHint()
+    {
+        AppWindowFrame frame;
+        frame.setWindowFlag(Qt::WindowStaysOnTopHint, true);
+        frame.setUseSystemFrame(!AppWindowFrame::systemFrameByDefault());
+        QVERIFY(frame.windowFlags() & Qt::WindowStaysOnTopHint);
     }
 };
 

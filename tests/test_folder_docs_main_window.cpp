@@ -16,6 +16,7 @@
 #include <QTreeWidget>
 
 #include "core/config-manager.h"
+#include "ui/features/ai/main-window-agent-host.h"
 #include "ui/features/command-editor/command-tree-widget.h"
 #include "ui/features/docs/doc-nav-bar.h"
 #include "ui/features/docs/doc-search-bar.h"
@@ -328,29 +329,34 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!docs->documentMode(), 4000);
     }
 
-    // Sem execução o cabeçalho da Saída (abas, ações e o botão de recolher) fica escondido: o botão de recolher passa para
-    // o fim da barra de guias.
-    void theBarCollapsesTheOutputWhenTheHeaderIsHidden()
+    // O agente de IA edita um comando e a árvore é reconstruída: a seleção volta ao mesmo item, e isso não traz a Saída (nem
+    // o Documento) para a frente do que o usuário estava lendo.
+    void anEditFromTheAgentDoesNotChangeWhichPanelIsInFront()
     {
+        write(m_project.path() + QStringLiteral("/README.md"), QStringLiteral("# Hello panel\n"));
         seed(m_project.path());
         MainWindow window;
-        window.resize(1200, 760);
+        window.resize(1300, 800);
         window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *tree = window.findChild<CommandTreeWidget *>();
-        auto *drawer = window.findChild<TerminalDrawer *>();
-        OutputPanel *panel = drawer->embeddedPanel();
-        QWidget *header = panel->findChild<QWidget *>(QStringLiteral("outputHeader"));
-        QVERIFY(header);
+        QVERIFY(tree->selectCommand(QStringLiteral("a")));
+        QCOMPARE(activeInZoneOf(window, layout::view_id::kOutput), layout::view_id::kOutput);
 
-        QVERIFY(tree->selectCommand(QStringLiteral("c"))); // nunca rodou: sem cabeçalho
-        QTRY_VERIFY_WITH_TIMEOUT(!header->isVisible(), 2000);
-        QVERIFY(drawer->outputTabs()->outputToggleRect().isValid());
-        QVERIFY(drawer->isExpanded());
-        OutputTabsBar *bar = drawer->outputTabs();
-        QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->outputToggleRect().center());
-        QVERIFY(!drawer->isExpanded());
-        // Recolhida: o cabeçalho volta (é por ele que se reabre).
-        QTRY_VERIFY_WITH_TIMEOUT(header->isVisible(), 2000);
+        // O usuário lê o Documento; o agente renomeia o comando selecionado.
+        QVERIFY(window.dockHost()->revealView(layout::view_id::kDocument));
+        QCOMPARE(activeInZoneOf(window, layout::view_id::kDocument), layout::view_id::kDocument);
+        auto *host = window.findChild<MainWindowAgentHost *>();
+        QVERIFY(host != nullptr);
+        for (core::Command &command : host->commandsData().commands) {
+            if (command.id == QLatin1String("a")) {
+                command.name = QStringLiteral("Alpha 2");
+            }
+        }
+        host->commandsChanged();
+        QTest::qWait(60);
+        QCOMPARE(tree->currentSelectionId(), QStringLiteral("a"));
+        QCOMPARE(activeInZoneOf(window, layout::view_id::kDocument), layout::view_id::kDocument);
     }
 
     // O botão das pastas do painel Documento: o menu lista cada FONTE de documentos uma vez, mais usadas primeiro.

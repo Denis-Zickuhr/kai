@@ -8,6 +8,7 @@
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QThread>
+#include <QSet>
 #include <QVector>
 
 // APIs POSIX (PTY, sinais, waitpid) só existem em Unix. No Windows
@@ -187,15 +188,23 @@ void killProcessGroup(qint64 pid, int signal)
     }
 }
 
-// PIDs de TODOS os processos da sessão `sid`. O filho do Kai é líder de sessão
-// (setsid / forkpty), e tudo que ele lança fica nessa sessão, mesmo em outros
-// grupos. Importa porque `bash -i` (job control) põe o comando em primeiro
-// plano num grupo PRÓPRIO: killpg no grupo do shell não o alcança (o Ctrl+C
-// alcança, pois vai ao grupo em primeiro plano do terminal). Sem /proc
-// (ex: macOS) devolve vazio e quem chama cai no killpg.
-QVector<pid_t> sessionMembers(pid_t sid)
+// Um processo vivo (zumbi não conta) lido de /proc.
+struct ProcInfo {
+    pid_t pid = 0;
+    pid_t ppid = 0;
+    pid_t sid = 0;
+    quint64 start = 0;
+};
+
+// Identidade de um processo que não se confunde com outro que reaproveitou o PID: pid + instante de início.
+struct ProcTag {
+    pid_t pid = 0;
+    quint64 start = 0;
+};
+
+QVector<ProcInfo> scanProcesses()
 {
-    QVector<pid_t> members;
+    QVector<ProcInfo> all;
     const QStringList entries = QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &entry : entries) {
         bool isPid = false;
@@ -207,31 +216,93 @@ QVector<pid_t> sessionMembers(pid_t sid)
         if (!stat.open(QIODevice::ReadOnly)) {
             continue;
         }
-        // "pid (comm) estado ppid pgrp sessão ...": o comm pode ter espaços e
-        // parênteses, então o resto vem depois do ÚLTIMO ')'.
+        // "pid (comm) estado ppid pgrp sessão ... starttime": o comm pode ter espaços e parênteses, então o resto vem
+        // depois do ÚLTIMO ')'. Índices a partir do estado: 0=estado, 1=ppid, 3=sessão, 19=starttime.
         const QByteArray data = stat.readAll();
         const int closeParen = data.lastIndexOf(')');
         if (closeParen < 0) {
             continue;
         }
         const QList<QByteArray> fields = data.mid(closeParen + 2).split(' ');
-        if (fields.size() > 3 && static_cast<pid_t>(fields.at(3).toInt()) == sid) {
-            members.append(pid);
+        if (fields.size() <= 19 || fields.at(0) == "Z") {
+            continue;
         }
+        all.append({pid, static_cast<pid_t>(fields.at(1).toInt()), static_cast<pid_t>(fields.at(3).toInt()),
+                    fields.at(19).toULongLong()});
     }
-    return members;
+    return all;
 }
 
-// Sinal para a sessão inteira (todos os grupos) + o grupo do líder.
-void killSession(pid_t sid, int signal)
+// Tudo que pertence ao comando: a sessão `sid` (o filho do Kai é líder de sessão, via setsid/forkpty) E toda a
+// descendência por pai/filho — um script que chama setsid() sai da sessão mas continua filho de quem o lançou. Os
+// `remembered` (fotografados ao pedir o encerramento) pegam quem já foi reparentado ao init no meio do caminho; o
+// instante de início garante que um PID reaproveitado por outro programa não seja morto por engano.
+QVector<ProcTag> processTree(pid_t sid, const QVector<ProcTag> &remembered = {})
+{
+    const QVector<ProcInfo> all = scanProcesses();
+    QSet<pid_t> wanted;
+    for (const ProcInfo &p : all) {
+        if (p.sid == sid || p.pid == sid) {
+            wanted.insert(p.pid);
+        }
+    }
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (const ProcInfo &p : all) {
+            if (!wanted.contains(p.pid) && wanted.contains(p.ppid)) {
+                wanted.insert(p.pid);
+                grew = true;
+            }
+        }
+    }
+    for (const ProcTag &tag : remembered) {
+        for (const ProcInfo &p : all) {
+            if (p.pid == tag.pid && p.start == tag.start) {
+                wanted.insert(p.pid);
+            }
+        }
+    }
+    QVector<ProcTag> tree;
+    for (const ProcInfo &p : all) {
+        if (wanted.contains(p.pid)) {
+            tree.append({p.pid, p.start});
+        }
+    }
+    return tree;
+}
+
+// Sinal para o comando inteiro (todos os grupos, a sessão e os descendentes) + o grupo do líder.
+void killSession(pid_t sid, int signal, const QVector<ProcTag> &remembered = {})
 {
     if (sid <= 0) {
         return;
     }
-    for (const pid_t member : sessionMembers(sid)) {
-        ::kill(member, signal);
+    for (const ProcTag &member : processTree(sid, remembered)) {
+        ::kill(member.pid, signal);
     }
     killProcessGroup(sid, signal);
+}
+
+// Escalada SIGTERM -> SIGKILL que NÃO depende do ProcessRunner: o runner pode ser destruído antes (o líder sai com o
+// Ctrl+C, o gerenciador troca o runner numa nova execução), e os timers dele morreriam junto, deixando para trás o que
+// ignorou o sinal. `termAfterMs` < 0 pula o SIGTERM. Só mexe no que ainda vive e é o mesmo processo de antes.
+void scheduleReap(pid_t sid, const QVector<ProcTag> &remembered, int termAfterMs, int killAfterMs)
+{
+    if (termAfterMs >= 0) {
+        QTimer::singleShot(termAfterMs, [sid, remembered]() {
+            if (!processTree(sid, remembered).isEmpty()) {
+                killSession(sid, SIGTERM, remembered);
+            }
+        });
+    }
+    QTimer::singleShot(killAfterMs, [sid, remembered, killAfterMs]() {
+        if (!processTree(sid, remembered).isEmpty()) {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Processo não encerrou em %1ms, forçando SIGKILL ao que sobrou do comando.").arg(killAfterMs));
+            killSession(sid, SIGKILL, remembered);
+        }
+    });
 }
 #else
 // Encerra a ÁRVORE de processos inteira no Windows via `taskkill /T /F`,
@@ -428,6 +499,7 @@ ProcessRunner::~ProcessRunner()
 #if !defined(Q_OS_WIN)
     if (m_ptyMasterFd >= 0 && m_ptyChildPid > 0) {
         // Modo PTY (Unix): encerra o grupo do processo filho e reap síncrono.
+        const QVector<ProcTag> remembered = processTree(static_cast<pid_t>(m_ptyChildPid));
         killSession(static_cast<pid_t>(m_ptyChildPid), SIGTERM);
         int status = 0;
         // Espera curta pelo término; se não sair, SIGKILL.
@@ -441,8 +513,9 @@ ProcessRunner::~ProcessRunner()
                 ::waitpid(static_cast<pid_t>(m_ptyChildPid), &status, 0);
             }
         }
-        // O líder já saiu, mas jobs de outros grupos da sessão podem ter ficado.
-        killSession(static_cast<pid_t>(m_ptyChildPid), SIGKILL);
+        // O líder já saiu, mas o que ele lançou pode estar fazendo a própria limpeza (ex: `docker compose up` descendo os
+        // containers): SIGKILL só depois do tempo de graça, sem prender a GUI esperando.
+        scheduleReap(static_cast<pid_t>(m_ptyChildPid), remembered, -1, m_killTimeoutMs);
         cleanupPty();
         return;
     }
@@ -454,10 +527,13 @@ ProcessRunner::~ProcessRunner()
         // ao ser terminado).
 #if !defined(Q_OS_WIN)
         const qint64 pid = processId();
+        const QVector<ProcTag> remembered = processTree(static_cast<pid_t>(pid));
         killSession(static_cast<pid_t>(pid), SIGTERM);
         if (!m_process->waitForFinished(m_killTimeoutMs)) {
-            killSession(static_cast<pid_t>(pid), SIGKILL);
+            killSession(static_cast<pid_t>(pid), SIGKILL, remembered);
             m_process->waitForFinished(1000);
+        } else {
+            scheduleReap(static_cast<pid_t>(pid), remembered, -1, m_killTimeoutMs);
         }
 #else
         // Windows: taskkill /T /F mata a ÁRVORE (cmd + wsl + filhos), não
@@ -1271,6 +1347,36 @@ void ProcessRunner::stop()
     }
 
     m_stopRequested = true;
+#if defined(Q_OS_WIN)
+    if (m_conProcess) {
+        // Parar = o que o Ctrl+C faria, e só depois escalar (igual ao Unix). Matar a árvore de cara não dava ao
+        // binário/`docker compose` a chance de limpar: o lado WSL levava TERM+KILL em 1s e o remoto ficava rodando.
+        // O ConPTY transforma o ^C no CTRL_C_EVENT do console e o wsl.exe o entrega ao tty do Linux (SIGINT).
+        utils::Logger::info(kLogTag,
+            QStringLiteral("Solicitando encerramento gracioso (Ctrl+C) via ConPTY; árvore morta em %1ms se continuar viva.")
+                .arg(m_killTimeoutMs));
+        writeRaw(QStringLiteral("\x03"));
+        QTimer::singleShot(m_killTimeoutMs, this, [this]() {
+            if (!isRunning()) {
+                return;
+            }
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Processo ainda vivo após o tempo de graça; encerrando a árvore."));
+            // O kill do lado WSL acha o processo remoto descendo a árvore por PPID: se o Windows matar o wsl.exe no
+            // mesmo instante, o remoto é reparentado ao init e escapa (ficava rodando). Remoto primeiro, janela
+            // para o TERM/KILL dele agir, só então a árvore local.
+            const bool hasRemote = !m_remoteKillCommandLine.trimmed().isEmpty();
+            fireRemoteKill();
+            if (!hasRemote) {
+                forceStop();
+                return;
+            }
+            constexpr int kRemoteKillSettleMs = 1500;
+            QTimer::singleShot(kRemoteKillSettleMs, this, [this]() { forceStop(); });
+        });
+        return;
+    }
+#endif
     // Mata primeiro o lado REMOTO (WSL): o taskkill local não alcança os
     // processos Linux (não são filhos Windows) — sem isto ficam fantasmas.
     fireRemoteKill();
@@ -1278,16 +1384,7 @@ void ProcessRunner::stop()
 #if defined(Q_OS_WIN)
     // Encerra a ÁRVORE inteira (taskkill /T /F): mata cmd.exe + wsl.exe +
     // filhos no WSL (bug: matar só o processo direto deixava a árvore viva
-    // e o "encerrar" não surtia efeito). Vale para ConPTY e QProcess.
-    if (m_conProcess) {
-        const qint64 conPid = static_cast<qint64>(::GetProcessId(static_cast<HANDLE>(m_conProcess)));
-        utils::Logger::info(kLogTag,
-            QStringLiteral("Encerrando árvore de processos (ConPTY, pid=%1) via Job Object.").arg(conPid));
-        terminateProcessTree(conPid);
-        ::TerminateProcess(static_cast<HANDLE>(m_conProcess), 1); // reforço
-        Q_UNUSED(pid);
-        return;
-    }
+    // e o "encerrar" não surtia efeito). Caminho sem ConPTY (QProcess): não há como mandar Ctrl+C.
     utils::Logger::info(kLogTag,
         QStringLiteral("Encerrando árvore de processos (pid=%1) via Job Object.").arg(pid));
     terminateProcessTree(pid);
@@ -1306,7 +1403,7 @@ void ProcessRunner::stop()
     // Parar = o que o Ctrl+C faria, e só depois escalar. Antes o primeiro
     // passo era SIGTERM no grupo do SHELL: o bash interativo (-i) o ignora e
     // não chega ao comando em primeiro plano (grupo próprio, ver
-    // sessionMembers), então comandos que o Ctrl+C encerra continuavam
+    // processTree), então comandos que o Ctrl+C encerra continuavam
     // rodando — e, vivos, mantinham o PTY aberto.
     //   1) Ctrl+C: sob PTY escreve ^C (a disciplina de linha manda SIGINT ao
     //      grupo em primeiro plano; quem lê ^C como tecla, via tty, também
@@ -1323,20 +1420,10 @@ void ProcessRunner::stop()
         killProcessGroup(pid, SIGINT);
     }
 
+    // Fotografia da árvore ANTES de qualquer sinal (os descendentes que mudarem de sessão ou forem reparentados ainda
+    // são achados) e escalada independente deste objeto: se o runner for destruído antes do fim, ela continua.
     const pid_t sid = static_cast<pid_t>(pid);
-    QTimer::singleShot(m_killTimeoutMs / 2, this, [this, sid]() {
-        if (isRunning() || !sessionMembers(sid).isEmpty()) {
-            killSession(sid, SIGTERM);
-        }
-    });
-    QTimer::singleShot(m_killTimeoutMs, this, [this, sid]() {
-        if (isRunning() || !sessionMembers(sid).isEmpty()) {
-            utils::Logger::warning(kLogTag,
-                QStringLiteral("Processo não encerrou em %1ms, forçando SIGKILL à sessão de processos.")
-                    .arg(m_killTimeoutMs));
-            killSession(sid, SIGKILL);
-        }
-    });
+    scheduleReap(sid, processTree(sid), m_killTimeoutMs / 2, m_killTimeoutMs);
 #endif
 }
 

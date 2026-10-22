@@ -1,108 +1,113 @@
 #include "ui/features/settings/tabs/general-tab.h"
-#include "ui/shared/dialog-utils.h"
+#include "ui/features/settings/tabs/settings-form.h"
 #include "utils/translation-manager.h"
 
 #include <QVBoxLayout>
-#include <QGridLayout>
 #include <QGroupBox>
-#include <QLabel>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QLineEdit>
 #include <QSpinBox>
 
 namespace kai::ui {
 
+namespace {
+QSpinBox *makeSpin(QWidget *parent, int min, int max, int value, const QString &suffix)
+{
+    auto *box = new QSpinBox(parent);
+    box->setRange(min, max);
+    box->setSuffix(suffix);
+    box->setValue(value);
+    return box;
+}
+
+QLineEdit *makeInterpreterField(QWidget *parent, const QString &objectName, const QString &value,
+                                const QString &placeholder)
+{
+    auto *field = new QLineEdit(value, parent);
+    field->setObjectName(objectName);
+    field->setPlaceholderText(placeholder);
+    return field;
+}
+} // namespace
+
 GeneralTab::GeneralTab(const core::SettingsData &currentSettings, QWidget *parent)
     : QWidget(parent)
 {
+    namespace sf = settings_form;
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 18, 20, 18);
-    layout->setSpacing(14);
+    layout->setContentsMargins(sf::kPageMargin, sf::kPageMargin, sf::kPageMargin, sf::kPageMargin);
+    layout->setSpacing(sf::kPageSpacing);
 
-    auto *personalizationGroup = new QGroupBox(
-        utils::tr(QStringLiteral("settings.group.personalization")), this);
-    auto *personalizationGrid = new QGridLayout(personalizationGroup);
-    personalizationGrid->setContentsMargins(14, 16, 14, 12);
-    personalizationGrid->setHorizontalSpacing(16);
-    personalizationGrid->setVerticalSpacing(4);
+    QGridLayout *grid = nullptr;
 
-    auto *languageLabel = new QLabel(utils::tr(QStringLiteral("settings.language")), personalizationGroup);
-    languageLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    m_languageField = new QComboBox(personalizationGroup);
+    auto *systemGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.startup")), &grid);
+    m_languageField = new QComboBox(systemGroup);
     for (const QString &code : utils::TranslationManager::instance().availableLanguages()) {
         m_languageField->addItem(utils::TranslationManager::displayName(code), code);
     }
     const int langIndex = m_languageField->findData(currentSettings.language);
     m_languageField->setCurrentIndex(langIndex >= 0 ? langIndex : 0);
-    personalizationGrid->addWidget(languageLabel, 0, 0);
-    personalizationGrid->addWidget(m_languageField, 1, 0);
-    personalizationGrid->setColumnStretch(0, 1);
-    layout->addWidget(personalizationGroup);
-
-    auto *systemGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.startup")), this);
-    auto *systemLayout = new QVBoxLayout(systemGroup);
-    systemLayout->setContentsMargins(14, 16, 14, 12);
-    systemLayout->setSpacing(4);
-
-    m_autostartField = new QCheckBox(utils::tr(QStringLiteral("settings.autostart.label")), systemGroup);
-    m_autostartField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_autostartField->setChecked(currentSettings.autostart);
-    systemLayout->addWidget(m_autostartField);
-    systemLayout->addWidget(layout_helpers::makeHintBanner(systemGroup,
-        utils::tr(QStringLiteral("settings.autostart.hint"))));
+    sf::addField(grid, systemGroup, utils::tr(QStringLiteral("settings.language")), m_languageField);
+    m_autostartField = sf::addSwitch(grid, systemGroup, utils::tr(QStringLiteral("settings.autostart.label")),
+        currentSettings.autostart, utils::tr(QStringLiteral("settings.autostart.hint")));
     layout->addWidget(systemGroup);
 
-    // ENCERRAMENTO DE PROCESSOS (pedido do usuário: "o Docker tem um sistema
-    // de gracefully stopping... o Kai mata seco"). Antes o tempo de espera
-    // entre SIGTERM e SIGKILL era um valor fixo de 2000ms no código, sem
-    // nenhum controle na UI — agora configurável em segundos.
-    auto *executionGroup = new QGroupBox(
-        utils::tr(QStringLiteral("settings.group.execution")), this);
-    auto *executionLayout = new QVBoxLayout(executionGroup);
-    executionLayout->setContentsMargins(14, 16, 14, 12);
-    executionLayout->setSpacing(4);
-
-    auto *timeoutLabel = new QLabel(
-        utils::tr(QStringLiteral("settings.graceful_stop_timeout")), executionGroup);
-    timeoutLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    m_gracefulStopTimeoutField = new QSpinBox(executionGroup);
-    m_gracefulStopTimeoutField->setRange(1, 300);
-    m_gracefulStopTimeoutField->setSuffix(QStringLiteral(" s"));
-    m_gracefulStopTimeoutField->setValue(currentSettings.gracefulStopTimeoutSec);
-    executionLayout->addWidget(timeoutLabel);
-    executionLayout->addWidget(m_gracefulStopTimeoutField);
-    executionLayout->addWidget(layout_helpers::makeHintBanner(executionGroup,
-        utils::tr(QStringLiteral("settings.graceful_stop_timeout.hint"))));
+    auto *executionGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.execution")), &grid);
+    m_gracefulStopTimeoutField = makeSpin(executionGroup, 1, 300, currentSettings.gracefulStopTimeoutSec,
+                                          QStringLiteral(" s"));
+    sf::addField(grid, executionGroup, utils::tr(QStringLiteral("settings.graceful_stop_timeout")),
+        m_gracefulStopTimeoutField, utils::tr(QStringLiteral("settings.graceful_stop_timeout.hint")));
+    m_outputMaxLogSizeField = makeSpin(executionGroup, 64, 64 * 1024, currentSettings.outputMaxLogSizeKb,
+                                       QStringLiteral(" KB"));
+    m_outputMaxLogSizeField->setSingleStep(256);
+    sf::addField(grid, executionGroup, utils::tr(QStringLiteral("settings.output_max_log_size")),
+        m_outputMaxLogSizeField);
     layout->addWidget(executionGroup);
 
-    // SAÍDA: opções que não são de layout (antes soltas na aba Aparência).
-    auto *outputGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.output")), this);
-    auto *outputLayout = new QVBoxLayout(outputGroup);
-    outputLayout->setContentsMargins(14, 16, 14, 12);
-    outputLayout->setSpacing(4);
-
-    auto *logSizeLabel = new QLabel(utils::tr(QStringLiteral("settings.output_max_log_size")), outputGroup);
-    logSizeLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    m_outputMaxLogSizeField = new QSpinBox(outputGroup);
-    m_outputMaxLogSizeField->setRange(64, 64 * 1024);
-    m_outputMaxLogSizeField->setSingleStep(256);
-    m_outputMaxLogSizeField->setSuffix(QStringLiteral(" KB"));
-    m_outputMaxLogSizeField->setValue(currentSettings.outputMaxLogSizeKb);
-    outputLayout->addWidget(logSizeLabel);
-    outputLayout->addWidget(m_outputMaxLogSizeField);
-
-    m_smartFocusField = new QCheckBox(utils::tr(QStringLiteral("settings.smart_focus.label")), outputGroup);
+    auto *treeGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.tree_behavior")), &grid);
+    m_smartFocusField = sf::addSwitch(grid, treeGroup, utils::tr(QStringLiteral("settings.smart_focus.label")),
+        currentSettings.smartFocus, utils::tr(QStringLiteral("settings.smart_focus.hint")));
     m_smartFocusField->setObjectName(QStringLiteral("smartFocusField"));
-    m_smartFocusField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_smartFocusField->setChecked(currentSettings.smartFocus);
-    outputLayout->addSpacing(8);
-    outputLayout->addWidget(m_smartFocusField);
-    outputLayout->addWidget(layout_helpers::makeHintBanner(outputGroup,
-        utils::tr(QStringLiteral("settings.smart_focus.hint"))));
+    m_inlineActionsField = sf::addSwitch(grid, treeGroup, utils::tr(QStringLiteral("settings.inline_actions.label")),
+        currentSettings.inlineActions, utils::tr(QStringLiteral("settings.inline_actions.hint")));
+    m_inlineActionsField->setObjectName(QStringLiteral("inlineActionsField"));
+    layout->addWidget(treeGroup);
 
-    layout->addWidget(outputGroup);
+    auto *languagesGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.languages")), &grid);
+    languagesGroup->setToolTip(utils::tr(QStringLiteral("settings.languages.hint")));
+    const core::InterpreterSettings defaults;
+    m_python = makeInterpreterField(languagesGroup, QStringLiteral("languagesPythonField"),
+                                    currentSettings.interpreters.python, defaults.python);
+    sf::addField(grid, languagesGroup, utils::tr(QStringLiteral("settings.languages.python")), m_python,
+                 utils::tr(QStringLiteral("settings.languages.python.tip")));
+    m_node = makeInterpreterField(languagesGroup, QStringLiteral("languagesNodeField"),
+                                  currentSettings.interpreters.node, defaults.node);
+    sf::addField(grid, languagesGroup, utils::tr(QStringLiteral("settings.languages.node")), m_node,
+                 utils::tr(QStringLiteral("settings.languages.node.tip")));
+    m_php = makeInterpreterField(languagesGroup, QStringLiteral("languagesPhpField"),
+                                 currentSettings.interpreters.php, defaults.php);
+    sf::addField(grid, languagesGroup, utils::tr(QStringLiteral("settings.languages.php")), m_php,
+                 utils::tr(QStringLiteral("settings.languages.php.tip")));
+    layout->addWidget(languagesGroup);
 
     layout->addStretch();
+}
+
+core::InterpreterSettings GeneralTab::interpreters() const
+{
+    core::InterpreterSettings out;
+    // Vazio volta ao padrão da linguagem (mantém o settings.json sempre usável).
+    if (!m_python->text().trimmed().isEmpty()) {
+        out.python = m_python->text().trimmed();
+    }
+    if (!m_node->text().trimmed().isEmpty()) {
+        out.node = m_node->text().trimmed();
+    }
+    if (!m_php->text().trimmed().isEmpty()) {
+        out.php = m_php->text().trimmed();
+    }
+    return out;
 }
 
 } // namespace kai::ui

@@ -1,7 +1,12 @@
 #include "ui/features/ai/main-window-agent-host.h"
 
 #include "ui/external-run-session.h"
+#include "ui/layout/dock-host.h"
+#include "ui/layout/layout-controller.h"
+#include "ui/layout/layout-ops.h"
+#include "ui/layout/view-registry.h"
 #include "ui/main-window.h"
+#include "utils/translation-manager.h"
 
 #include <memory>
 
@@ -109,6 +114,84 @@ bool MainWindowAgentHost::openCommandInApp(const QString &commandId, QString &er
     m_window->showAndRaise();
     m_window->handleCommandActivated(commandId);
     return true;
+}
+
+bool MainWindowAgentHost::saveSettings(const core::SettingsData &settings, QString &error)
+{
+    return m_window->applySettingsFromAgent(settings, error);
+}
+
+QStringList MainWindowAgentHost::availableThemes() const { return m_window->availableThemeNames(); }
+QStringList MainWindowAgentHost::availableLanguages() const { return utils::TranslationManager::instance().availableLanguages(); }
+
+QJsonObject MainWindowAgentHost::layoutState() const
+{
+    if (!m_window->m_dock || !m_window->m_viewRegistry) {
+        return {};
+    }
+    const layout::LayoutModel &model = m_window->m_dock->model();
+    const layout::ViewRegistry *registry = m_window->m_viewRegistry;
+    QStringList ids = registry->staticIds();
+    for (const QString &placed : model.placedViews()) {
+        if (!ids.contains(placed)) ids << placed;
+    }
+    QJsonArray views;
+    for (const QString &id : ids) {
+        QString where = QStringLiteral("closed");
+        if (const auto zone = model.zoneOf(id)) where = layout::zoneName(*zone);
+        else if (model.isFloating(id)) where = QStringLiteral("floating");
+        views.append(QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("title"), registry->title(id)},
+                                 {QStringLiteral("at"), where}, {QStringLiteral("closable"), registry->closable(id)}});
+    }
+    QJsonObject out{{QStringLiteral("layout"), model.toJson()},
+                    {QStringLiteral("views"), views},
+                    {QStringLiteral("presets"), QJsonArray::fromStringList(layout::layoutPresetNames())}};
+    if (m_window->m_layoutController) {
+        out[QStringLiteral("perspectives")] = QJsonArray::fromStringList(m_window->m_layoutController->savedPerspectiveNames());
+    }
+    return out;
+}
+
+QJsonObject MainWindowAgentHost::applyLayoutRequest(const QJsonObject &request, bool dryRun)
+{
+    auto refuse = [](const QString &why) {
+        return QJsonObject{{QStringLiteral("ok"), false}, {QStringLiteral("error"), why}};
+    };
+    if (!m_window->m_dock || !m_window->m_viewRegistry) {
+        return refuse(QStringLiteral("The layout is not available."));
+    }
+    layout::ViewRegistry *registry = m_window->m_viewRegistry;
+    const layout::LayoutModel current = m_window->m_dock->model();
+    layout::LayoutModel target;
+    if (request.contains(QStringLiteral("preset"))) {
+        const auto preset = layout::LayoutModel::presetFromName(request.value(QStringLiteral("preset")).toString());
+        if (!preset) {
+            return refuse(QStringLiteral("Unknown preset. Known: %1.").arg(layout::layoutPresetNames().join(QStringLiteral(", "))));
+        }
+        target = layout::LayoutModel::preset(*preset);
+    } else if (request.contains(QStringLiteral("perspective"))) {
+        const QString name = request.value(QStringLiteral("perspective")).toString();
+        if (!m_window->m_layoutController || !m_window->m_layoutController->savedPerspectives().contains(name)) {
+            return refuse(QStringLiteral("No saved perspective named '%1'.").arg(name));
+        }
+        target = m_window->m_layoutController->savedPerspectives().value(name);
+    } else {
+        layout::LayoutOpsContext context;
+        context.isKnown = registry->validator();
+        context.closable = [registry](const QString &id) { return registry->closable(id); };
+        context.home = [registry](const QString &id) { return registry->defaultHome(id); };
+        const layout::LayoutOpsResult result = layout::applyLayoutOps(current, request.value(QStringLiteral("ops")).toArray(), context);
+        if (!result.ok) {
+            return refuse(result.error);
+        }
+        target = result.model;
+    }
+    QJsonArray changes;
+    for (const QString &line : layout::describeLayoutChanges(current, target)) changes.append(line);
+    if (!dryRun && target != current) {
+        m_window->m_dock->applyLayout(target);
+    }
+    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("changes"), changes}};
 }
 
 } // namespace kai::ui

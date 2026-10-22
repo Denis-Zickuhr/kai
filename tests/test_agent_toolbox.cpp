@@ -61,6 +61,7 @@ private slots:
         host.settingsData.activeEnvironmentId = QStringLiteral("e1");
         box = std::make_unique<AgentToolbox>(&host);
         box->setManifestoDirectory(QStringLiteral("assets/manifesto"));
+        box->setSampleDirectory(QStringLiteral("sample"));
     }
 
     // ----------------------------------------------------------- catálogo
@@ -74,7 +75,7 @@ private slots:
             QCOMPARE(s.inputSchema.value(QStringLiteral("type")).toString(), QStringLiteral("object"));
         }
         for (const char *expected : {"list_folders", "list_commands", "get_command", "create_command", "update_command",
-                                     "delete_command", "run_command", "kill_process", "ask_user", "read_manifesto",
+                                     "delete_command", "run_command", "kill_process", "ask_user", "read_manifesto", "read_samples",
                                      "set_environment_variable", "create_folder", "delete_folder", "move_command", "run_in_app"}) {
             QVERIFY2(names.contains(QString::fromLatin1(expected)), expected);
         }
@@ -253,6 +254,17 @@ private slots:
         QVERIFY(run(QStringLiteral("read_manifesto"), {{QStringLiteral("document"), QStringLiteral("kai")}, {QStringLiteral("section"), QStringLiteral("99.9")}}).isError);
         const QString schema = run(QStringLiteral("read_manifesto"), {{QStringLiteral("document"), QStringLiteral("schema")}}).content;
         QVERIFY(schema.contains(QStringLiteral("command")));
+    }
+
+    void samplesAreListedAndReadable()
+    {
+        const QString list = run(QStringLiteral("read_samples"), {}).content;
+        QVERIFY(list.contains(QStringLiteral("http/kai.yml")));
+        const ToolOutcome file = run(QStringLiteral("read_samples"), {{QStringLiteral("path"), QStringLiteral("http/kai.yml")}});
+        QVERIFY(!file.isError);
+        QVERIFY(file.content.contains(QStringLiteral("commands:")));
+        QVERIFY(run(QStringLiteral("read_samples"), {{QStringLiteral("path"), QStringLiteral("nope.yml")}}).isError);
+        QVERIFY(run(QStringLiteral("read_samples"), {{QStringLiteral("path"), QStringLiteral("../CMakeLists.txt")}}).isError);
     }
 
     void validateKaiYmlReportsIssues()

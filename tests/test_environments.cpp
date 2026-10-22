@@ -129,10 +129,7 @@ private slots:
         QVERIFY(cm.saveSettings(s));
 
         const SettingsData loaded = cm.loadSettings();
-        // +1 pelo pseudo-alvo "Default", sempre presente (auto-seedado
-        // pra dar um lugar de configurar Saída/TTY sem precisar de
-        // wrapping — ver ConfigManager::loadSettings).
-        QCOMPARE(loaded.terminalProfiles.size(), 3);
+        QCOMPARE(loaded.terminalProfiles.size(), 2);
         bool sawTty = false, sawRobust = false;
         for (const TerminalProfile &t : loaded.terminalProfiles) {
             if (t.name == QStringLiteral("WSL (tty)")) { sawTty = true; QVERIFY(t.usePty); }

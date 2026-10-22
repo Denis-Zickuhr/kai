@@ -3,6 +3,12 @@
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
+#include <QTimer>
+
+#ifndef Q_OS_WIN
+#include <csignal>
+#include <unistd.h>
+#endif
 
 #include "cli/cli-local-executor.h"
 #include "core/config-manager.h"
@@ -264,6 +270,52 @@ private slots:
         const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("falha")});
         QVERIFY(outcome.handled);
         QCOMPARE(outcome.exitCode, 7);
+    }
+
+    // Bug real: `kai dev up` (docker compose up) chamado do WSL — o Ctrl+C chega ao kai como SINAL (o stdin é um pipe),
+    // o processo morria na hora e o comando ficava sem limpeza (container vivo). Agora o sinal vira ^C no terminal do
+    // comando e o kai espera ele terminar, devolvendo o código dele (130).
+    void interruptIsForwardedAsCtrlCAndTheCommandIsAwaited()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("SIGINT/PTY de verdade só no Unix; no Windows o CTRL_C_EVENT é testado à mão.");
+#else
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QDir::setCurrent(dir.path());
+        const QString ready = dir.filePath(QStringLiteral("ready"));
+        const QString status = dir.filePath(QStringLiteral("status"));
+        QFile kaiYml(dir.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiYml.open(QIODevice::WriteOnly));
+        kaiYml.write(QStringLiteral(
+            "project_name: \"Demo\"\n"
+            "commands:\n"
+            "  - name: \"Up\"\n"
+            "    type: shell\n"
+            "    cli_path: up\n"
+            "    command: \"trap 'echo cleaning > %2; sleep 1; echo done > %2; exit 130' INT; echo > %1; while :; do sleep 0.1; done\"\n")
+            .arg(ready, status).toUtf8());
+        kaiYml.close();
+
+        qputenv("KAI_CLI_FORWARD_INPUT", "1");
+        int attempts = 0;
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, &poll, [&]() {
+            if (QFile::exists(ready) || ++attempts > 200) {
+                poll.stop();
+                ::kill(::getpid(), SIGINT);
+            }
+        });
+        poll.start(50);
+        const LocalExecutionOutcome outcome = runLocalCliPath({QStringLiteral("kai"), QStringLiteral("up")});
+        qunsetenv("KAI_CLI_FORWARD_INPUT");
+
+        QVERIFY(outcome.handled);
+        QCOMPARE(outcome.exitCode, 130);
+        QFile out(status);
+        QVERIFY2(out.open(QIODevice::ReadOnly), "o comando não chegou a tratar o Ctrl+C");
+        QCOMPARE(QString::fromUtf8(out.readAll()).trimmed(), QStringLiteral("done"));
+#endif
     }
 
     // Caminho que não bate com nada: exit 2, handled=true.

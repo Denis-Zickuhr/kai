@@ -230,7 +230,7 @@ private slots:
         QVERIFY(ConfigManager().saveAiSettings(s));
         CommandsData commands;
         QVector<Collection> collections;
-        SettingsDialog dialog(ConfigManager().loadSettings(), {QStringLiteral("kai-dark")}, QString(), commands, collections, [] {}, [] {}, m_theme.get());
+        SettingsDialog dialog(ConfigManager().loadSettings(), {QStringLiteral("kai-dark")}, QString(), commands, collections, [] {}, [] {}, nullptr, {}, m_theme.get());
         AiTab *tab = dialog.findChild<AiTab *>();
         QVERIFY(tab);
         QVERIFY(!dialog.aiSettingsChanged());
@@ -260,7 +260,7 @@ private slots:
         }
         CommandsData commands;
         QVector<Collection> collections;
-        SettingsDialog dialog(ConfigManager().loadSettings(), {QStringLiteral("kai-dark")}, QString(), commands, collections, [] {}, [] {}, m_theme.get());
+        SettingsDialog dialog(ConfigManager().loadSettings(), {QStringLiteral("kai-dark")}, QString(), commands, collections, [] {}, [] {}, nullptr, {}, m_theme.get());
         AiTab *tab = dialog.findChild<AiTab *>();
         QVERIFY(tab->clearButton()->isEnabled());
         emit tab->clearConversationsRequested(); // o usuário já confirmou
@@ -1008,7 +1008,7 @@ private slots:
         MainWindow window;
         window.resize(1180, 760);
         window.show();
-        window.findChild<QToolButton *>(QStringLiteral("aiChatButton"))->click();
+        QMetaObject::invokeMethod(&window, "showAiChat");
         AiChatWindow *chat = window.findChild<AiChatWindow *>();
         QVERIFY(chat);
         QTemporaryDir store;
@@ -1048,27 +1048,23 @@ private slots:
         QTRY_VERIFY(!savedNames().contains(QStringLiteral("Say hi")));
     }
 
-    void mainWindowShowsTheAiButtonOnlyWithAProviderAndOpensTheChat()
+    void mainWindowOpensTheChatOnlyWithAProvider()
     {
         QTemporaryDir cfg;
         useNonFreshConfig(cfg);
         {
             MainWindow window;
             window.show();
-            QToolButton *button = window.findChild<QToolButton *>(QStringLiteral("aiChatButton"));
-            QVERIFY(button);
-            QVERIFY(!button->isVisibleTo(&window));
+            QMetaObject::invokeMethod(&window, "showAiChat");
+            QVERIFY(!window.findChild<AiChatWindow *>()); // sem provedor o chat não existe
         }
         saveAi({profile(QStringLiteral("anth"), QStringLiteral("http://127.0.0.1:1"))});
         MainWindow window;
         window.resize(1180, 760);
         window.show();
-        QToolButton *button = window.findChild<QToolButton *>(QStringLiteral("aiChatButton"));
-        QVERIFY(button);
-        QVERIFY(button->isVisibleTo(&window));
-        shot(&window, QStringLiteral("main-window-ai-button"));
+        shot(&window, QStringLiteral("main-window-ai-chat"));
         QVERIFY(!window.findChild<AiChatWindow *>());
-        button->click();
+        QMetaObject::invokeMethod(&window, "showAiChat");
         AiChatWindow *chat = window.findChild<AiChatWindow *>();
         QVERIFY(chat);
         QVERIFY(chat->isVisible());

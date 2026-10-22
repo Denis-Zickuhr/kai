@@ -4,12 +4,16 @@
 // combina com a busca e mostra uma dica quando não há nenhum.
 
 #include <QTest>
+#include <QSignalSpy>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTreeWidget>
 #include <QLabel>
+#include <QLineEdit>
+#include <QVBoxLayout>
 
 #include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/command-editor/inline-row-actions.h"
 #include "ui/shared/expand-collapse-bar.h"
 #include "utils/design-tokens.h"
 #include "core/models.h"
@@ -68,6 +72,57 @@ private:
     }
 
 private slots:
+    // Ações inline: desligadas não há botão; ligadas, o botão da borda da coluna do nome, na linha selecionada, executa o comando
+    // (e vira Parar enquanto roda) sem mexer na seleção.
+    void inlineActionsSitAtTheEdgeOfTheNameColumnAndRunTheCommand()
+    {
+        CommandTreeWidget widget;
+        fill(widget);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+        QTreeWidget *tree = treeForRoot(widget, QStringLiteral("f_root"));
+        QVERIFY(tree);
+        QTreeWidgetItem *alpha = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == QStringLiteral("Alpha")) alpha = tree->topLevelItem(i);
+        }
+        QVERIFY(alpha);
+        tree->setCurrentItem(alpha);
+        QSignalSpy play(&widget, &CommandTreeWidget::playRequested);
+        QSignalSpy kill(&widget, &CommandTreeWidget::killRequested);
+        auto *inlineActions = tree->findChild<InlineRowActions *>();
+        QVERIFY(inlineActions);
+
+        const QRect row = tree->visualItemRect(alpha);
+        QVERIFY(!inlineActions->hitTest(QPoint(row.left() + 60, row.center().y())).valid);
+        const int offRight = tree->columnViewportPosition(0) + tree->columnWidth(0)
+            - InlineRowActions::kEdgeGap - InlineRowActions::kBox / 2;
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, {}, QPoint(offRight, row.center().y()));
+        QCOMPARE(play.count(), 0); // desligado: o clique não é de nenhum botão
+
+        widget.setInlineActionsEnabled(true);
+        // O primeiro botão (executar/parar) fica sempre na borda direita da coluna do nome, em toda linha.
+        const int columnRight = tree->columnViewportPosition(0) + tree->columnWidth(0);
+        const QPoint onPlay(columnRight - InlineRowActions::kEdgeGap - InlineRowActions::kBox / 2, row.center().y());
+        QVERIFY(inlineActions->hitTest(onPlay).valid);
+        QCOMPARE(inlineActions->hitTest(onPlay).kind, InlineRowActions::Kind::Play);
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            widget.setRunningCommandIds({QStringLiteral("c_c")});
+            QTest::mouseMove(tree->viewport(), QPoint(row.left() + 40, row.center().y()));
+            widget.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/inline-actions.png"));
+            widget.setRunningCommandIds({});
+        }
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, {}, onPlay);
+        QCOMPARE(play.count(), 1);
+        QCOMPARE(play.first().first().toString(), QStringLiteral("c_a"));
+        QCOMPARE(tree->currentItem(), alpha);
+
+        widget.setRunningCommandIds({QStringLiteral("c_a")});
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, {}, onPlay);
+        QCOMPARE(kill.count(), 1);
+        QCOMPARE(play.count(), 1);
+    }
+
     // A busca abre pastas para mostrar o que casou; ao PARAR de buscar elas voltam ao que estavam (antes ficava a
     // árvore toda aberta). O mesmo vale para o filtro de "só em execução".
     void searchAndRunningFilterGiveTheFoldersBackAsTheyWere()
@@ -103,6 +158,39 @@ private slots:
         sub->setExpanded(false);
         widget.setShowRunningOnly(false);
         QVERIFY(sub->isExpanded());
+    }
+
+    // Reconstruir a árvore (um comando editado pelo agente de IA, a troca de tema) não rouba o teclado de quem o tem: o
+    // campo do chat continua com o foco. Com o foco na própria árvore, ela o recebe de volta.
+    void rebuildingTheTreeKeepsTheKeyboardWhereItWas()
+    {
+        QWidget host;
+        auto *layout = new QVBoxLayout(&host);
+        auto *tree = new CommandTreeWidget(&host);
+        auto *chatInput = new QLineEdit(&host);
+        layout->addWidget(tree);
+        layout->addWidget(chatInput);
+        fill(*tree);
+        host.resize(360, 460);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+        chatInput->setFocus();
+        QTRY_VERIFY(chatInput->hasFocus());
+        Folder root; root.id = "f_root"; root.name = "Raiz";
+        Command edited; edited.id = "c_a"; edited.name = "Alpha 2"; edited.folderId = "f_root"; edited.command = "echo";
+        tree->setData({root}, {edited});
+        QTest::qWait(30);
+        QVERIFY(chatInput->hasFocus());
+
+        QTreeWidget *current = qobject_cast<QTreeWidget *>(tree->findChild<QTabWidget *>()->currentWidget());
+        QVERIFY(current);
+        current->setFocus();
+        QTRY_VERIFY(current->hasFocus());
+        tree->setData({root}, {edited});
+        QTest::qWait(30);
+        QTreeWidget *rebuilt = qobject_cast<QTreeWidget *>(tree->findChild<QTabWidget *>()->currentWidget());
+        QVERIFY(rebuilt && rebuilt->hasFocus());
     }
 
     // "Só em execução" também tira a aba da pasta RAIZ que não tem nada rodando, em vez de deixar uma aba vazia.

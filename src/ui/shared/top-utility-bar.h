@@ -12,12 +12,11 @@ class QMenu;
 class QMenuBar;
 class QToolButton;
 class QMouseEvent;
-class QComboBox;
 
 namespace kai::ui {
 
 // Barra de menu superior horizontal, estilo CopyQ: um QMenuBar real com
-// menus Arquivo/Item/Configurações/Processos/Ajuda, precedido pelo logo do
+// menus Arquivo/Exibir/Configurações/Ajuda, precedido pelo logo do
 // Kai à esquerda e seguido, à direita, pelos botões modernos de janela
 // (minimizar / maximizar-restaurar / fechar) — a janela usa
 // Qt::FramelessWindowHint, então esta barra também faz as vezes de title
@@ -32,17 +31,12 @@ public:
     // Atualiza o glifo do botão maximizar/restaurar conforme o estado.
     void setMaximized(bool maximized);
 
-    // Popula o seletor de environments (pacotes) no topo-direito e marca o
-    // ativo. Chamado pela MainWindow ao carregar/alterar os pacotes.
-    void setEnvironments(const QStringList &ids, const QStringList &names, const QString &activeId);
-
-    // O botão de IA só existe na barra quando há um provedor configurado.
-    void setAiAvailable(bool available);
-
-    // Reaplica o estilo local do seletor de environments (raio/cores dos
-    // tokens). Ele tem QSS próprio, fora do stylesheet global, então sem isto
-    // trocar "Cantos" nas Configurações não chegava nele até reiniciar.
+    // Recolore os ícones da barra com o tema atual.
     void refreshStyle();
+
+    // O ponto (em coordenadas da barra) é área de arrastar a janela: vazio, o logo ou o espaço do menu sem item; os
+    // botões e os itens de menu não.
+    bool isDragArea(const QPoint &posInBar) const;
 
     // O menu Exibir (painéis e layout): populado pela MainWindow quando abre.
     QMenu *viewMenu() const { return m_viewMenu; }
@@ -59,12 +53,7 @@ signals:
     void logsRequested();
     // Esquece os cookies guardados pelas requisições HTTP desta sessão.
     void clearCookiesRequested();
-    void newFolderRequested();
-    void newCommandRequested();
-    void newCollectionRequested();
-    void newNoteRequested();
     void settingsRequested();
-    void aiChatRequested();
     void helpRequested();
     void manifestoRequested();
     // "Ajuda" -> "Tela de Boas-Vindas" (pedido do usuário: "traga uma
@@ -72,11 +61,6 @@ signals:
     // qualquer momento, mesmo com comandos já cadastrados.
     void showWelcomeRequested();
     void runHistoryRequested();
-
-    // Environments como pacotes selecionáveis (feedback do usuário, vibe
-    // CopyQ/Insomnia): trocar o pacote ativo e abrir a tela de gestão.
-    void environmentSelected(const QString &environmentId);
-    void manageEnvironmentsRequested();
 
     // Menu único (pedido do usuário: "queria um menu unificado para
     // exportação, não 3") — o escopo (global/pasta/comando) é escolhido
@@ -108,11 +92,7 @@ private:
 
     QMenuBar *m_menuBar = nullptr;
     QMenu *m_viewMenu = nullptr;
-    QLabel *m_environmentIcon = nullptr;
     QVector<QPair<QAction *, QString>> m_menuIcons;   // ação + nome do ícone Lucide
-    QComboBox *m_environmentSelector = nullptr;
-    QToolButton *m_manageEnvironmentsButton = nullptr;
-    QToolButton *m_aiButton = nullptr;
     QToolButton *m_minimizeButton = nullptr;
     QToolButton *m_maximizeButton = nullptr;
     QToolButton *m_closeButton = nullptr;

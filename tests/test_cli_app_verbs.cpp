@@ -73,6 +73,12 @@ private slots:
         QCOMPARE(a.argument, QStringLiteral("pack.yml"));
         QCOMPARE(a.only, (QStringList{QStringLiteral("commands"), QStringLiteral("actions")}));
 
+        const cli::ImportRequest rec = cli::parseImportArgs({QStringLiteral("-r"), QStringLiteral("dir")});
+        QVERIFY(rec.error.isEmpty() && rec.recursive);
+        QCOMPARE(rec.argument, QStringLiteral("dir"));
+        QVERIFY(cli::parseImportArgs({QStringLiteral("dir"), QStringLiteral("--recursive")}).recursive);
+        QVERIFY(!cli::parseImportArgs({QStringLiteral("-r"), QStringLiteral("--only"), QStringLiteral("commands")}).error.isEmpty());
+
         const cli::ImportRequest b = cli::parseImportArgs({QStringLiteral("--only=collections"), QStringLiteral("dir")});
         QVERIFY(b.error.isEmpty());
         QCOMPARE(b.argument, QStringLiteral("dir"));

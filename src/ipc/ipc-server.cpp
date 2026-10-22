@@ -27,6 +27,9 @@ IpcServer::IpcServer(QObject *parent)
     : QObject(parent)
     , m_server(new QLocalServer(this))
 {
+    // Sem isto, um Kai elevado (instalador rodando como admin e abrindo o app) cria a pipe só com ACL de admin e o
+    // CLI normal do mesmo usuário recebe "Access denied" ("Kai não está em execução").
+    m_server->setSocketOptions(QLocalServer::UserAccessOption);
     connect(m_server, &QLocalServer::newConnection, this, &IpcServer::handleNewConnection);
 }
 
@@ -205,6 +208,12 @@ void IpcServer::dispatchRequest(QLocalSocket *conn, const QByteArray &line)
                 bool ok = false; QString message;
                 emit killRequested(arg, ok, message);
                 reply["ok"] = ok; reply["message"] = message;
+            } else if (cmd == QStringLiteral("import-tree")) {
+                bool ok = false;
+                QString message;
+                emit importTreeRequested(req.value(QStringLiteral("path")).toString(), ok, message);
+                reply["ok"] = ok;
+                reply["message"] = message;
             } else if (cmd == QStringLiteral("import")) {
                 bool ok = false;
                 QString message;

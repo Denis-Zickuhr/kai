@@ -64,7 +64,7 @@ ShortcutsManagerWidget::ShortcutsManagerWidget(QWidget *parent)
         m_table->verticalHeader()->setDefaultSectionSize(rowHeight);
     }
     layout->addWidget(m_table, 1);
-    m_table->setMinimumHeight(320);
+    m_table->setMinimumHeight(200);
 }
 
 void ShortcutsManagerWidget::setShortcuts(const QMap<QString, QStringList> &shortcuts)
@@ -202,7 +202,10 @@ void ShortcutsManagerWidget::setFilterText(const QString &query)
         }
         bool visible = true;
         if (!trimmed.isEmpty()) {
-            const QString haystack = utils::tr(spec.labelKey) + QLatin1Char(' ') + utils::tr(spec.descriptionKey);
+            QString haystack = utils::tr(spec.labelKey) + QLatin1Char(' ') + utils::tr(spec.descriptionKey);
+            for (const QString &seq : m_shortcuts.value(spec.id)) {
+                haystack += QLatin1Char(' ') + QKeySequence(seq).toString(QKeySequence::NativeText);
+            }
             visible = FuzzyMatcher::score(trimmed, haystack) >= 0;
         }
         m_table->setRowHidden(row, !visible);

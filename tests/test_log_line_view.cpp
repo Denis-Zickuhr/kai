@@ -14,6 +14,26 @@ class TestLogLineView : public QObject {
     Q_OBJECT
 
 private slots:
+    void logfmtLineBecomesAStructuredEntry()
+    {
+        const LogLineEntry e = LogLineModel::parseLine(
+            QStringLiteral("time=2026-01-10T12:00:00Z level=warn msg=\"slow \\\"query\\\" a=b\" duration_ms=1840 empty="));
+        QVERIFY(e.structured);
+        QCOMPARE(e.level, QStringLiteral("warn"));
+        QCOMPARE(e.message, QStringLiteral("slow \"query\" a=b"));
+        QCOMPARE(e.timestampText, QStringLiteral("2026-01-10T12:00:00Z"));
+        QCOMPARE(e.extraFields.value(QStringLiteral("duration_ms")).toString(), QStringLiteral("1840"));
+        QVERIFY(e.extraFields.contains(QStringLiteral("empty")));
+    }
+
+    void plainTextWithAnEqualsSignIsNotLogfmt()
+    {
+        QVERIFY(!LogLineModel::parseLine(QStringLiteral("retries = 3")).structured);
+        QVERIFY(!LogLineModel::parseLine(QStringLiteral("export PATH=/usr/bin now")).structured);
+        QVERIFY(!LogLineModel::parseLine(QStringLiteral("a=1 b=2")).structured); // nenhum nível, mensagem ou hora
+        QVERIFY(!LogLineModel::parseLine(QStringLiteral("level=info msg=\"unterminated")).structured);
+    }
+
     // Cards colapsados têm todos a mesma altura; expandir cresce só aquele card, e o clique no chevron (no começo da linha)
     // é o que alterna — o resto da linha só seleciona.
     void expandingACardGrowsOnlyThatCardAndTheChevronToggles()

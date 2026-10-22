@@ -69,6 +69,8 @@ signals:
     // `kai import`: caminho de um kai.yml, ou da pasta dele.
     // `only`: categorias do pacote a importar (vazio = tudo); ver MainWindow::cliImportSelection.
     void importRequested(const QString &path, const QStringList &only, bool &ok, QString &message);
+    // `kai import --recursive <pasta>`: todos os projetos abaixo da pasta.
+    void importTreeRequested(const QString &path, bool &ok, QString &message);
     // `kai raise`: notificação (level = info|warning|error; título opcional).
     void raiseRequested(const QString &level, const QString &title, const QString &message,
                         bool &ok, QString &reply);

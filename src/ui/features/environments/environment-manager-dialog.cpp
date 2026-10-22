@@ -25,10 +25,17 @@
 #include <QStackedWidget>
 #include <QKeyEvent>
 #include <QTimer>
+#include <QSplitter>
+#include <QStyledItemDelegate>
+#include <QPainter>
+#include <QToolButton>
+#include <QMessageBox>
 
-#include "ui/shared/key-value-editor-widget.h"
+#include "ui/shared/adaptive-button.h"
+#include "ui/features/environments/variables-editor-widget.h"
 #include "ui/features/environments/dynamic-vars-inspector-widget.h"
-#include "ui/shared/collapsible-section-card.h"
+#include "ui/shared/table-utils.h"
+#include "ui/features/environments/variable-list-view.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
@@ -43,80 +50,91 @@ QString makeEnvId()
     return QStringLiteral("env_") + QUuid::createUuid().toString(QUuid::Id128).left(12);
 }
 
-// Card de um pacote na sidebar (mockup do usuário): bolinha de status
-// (accent se ativo, muted senão) + nome em negrito + pill "ATIVO" (só no
-// pacote ativo de verdade, não no selecionado para edição — os dois
-// conceitos são independentes: dá pra EDITAR um pacote sem ele estar
-// ativo) + legenda com a contagem de variáveis. A borda de "selecionado"
-// (cartão em edição) é aplicada via propriedade dinâmica "selected" —
-// atualizada por refreshCardSelection() sem reconstruir os cartões.
-QWidget *buildEnvCard(QWidget *parent, const core::Environment &env, bool isActive)
-{
-    auto *card = new QWidget(parent);
-    card->setObjectName(QStringLiteral("envCard"));
-    card->setAttribute(Qt::WA_StyledBackground, true);
-    card->setProperty("selected", false);
-    // Qualificado por objectName (#envCard) mesmo os filhos sendo só
-    // QLabel (sem inputs) — mesmo padrão do resto do app após o bug de
-    // cascata em setStyleSheet() sem seletor (ver dialog-utils.h).
-    card->setStyleSheet(QStringLiteral(
-        "QWidget#envCard { border: 1px solid transparent; border-radius: %1px; }"
-        "QWidget#envCard[selected=\"true\"] { border: 1px solid %2; background-color: %3; }")
-        .arg(tk::radiusMd()).arg(tk::accent()).arg(tk::surface()));
+constexpr int kEnvNameRole = Qt::UserRole + 1;
+constexpr int kEnvCountRole = Qt::UserRole + 2;
+constexpr int kEnvActiveRole = Qt::UserRole + 3;
+constexpr int kEnvRowHeight = 52;
+constexpr int kStackBelowWidth = 640;
+constexpr int kControlH = 30;
 
-    auto *layout = new QVBoxLayout(card);
-    layout->setContentsMargins(tk::space(2), tk::space(2), tk::space(2), tk::space(2));
-    layout->setSpacing(tk::space(1));
+// Uma linha da lista de pacotes: bolinha (accent se ativo), nome em negrito, "N variáveis" embaixo e a etiqueta
+// ATIVO à direita. Mesmo desenho da lista do histórico.
+class EnvItemDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
 
-    auto *topRow = new QHBoxLayout();
-    topRow->setSpacing(tk::space(2));
-
-    auto *dot = new QLabel(card);
-    const int dotSize = tk::space(2) + 2;
-    dot->setFixedSize(dotSize, dotSize);
-    dot->setStyleSheet(QStringLiteral("background-color: %1; border-radius: %2px;")
-        .arg(isActive ? tk::accent() : tk::mutedFg()).arg(dotSize / 2));
-    topRow->addWidget(dot, 0, Qt::AlignVCenter);
-
-    auto *nameLabel = new QLabel(env.name, card);
-    QFont nameFont = nameLabel->font();
-    nameFont.setBold(true);
-    nameLabel->setFont(nameFont);
-    topRow->addWidget(nameLabel, 1);
-
-    if (isActive) {
-        auto *pill = new QLabel(utils::tr(QStringLiteral("env.badge.active")), card);
-        pill->setObjectName(QStringLiteral("envActivePill"));
-        pill->setAttribute(Qt::WA_StyledBackground, true);
-        QColor tint(tk::accent());
-        tint.setAlphaF(0.18);
-        pill->setStyleSheet(QStringLiteral(
-            "QLabel#envActivePill { background-color: rgba(%1,%2,%3,%4); color: %5; border-radius: %6px;"
-            " padding: 1px %7px; font-weight: 600; font-size: %8pt; }")
-            .arg(tint.red()).arg(tint.green()).arg(tint.blue()).arg(tint.alpha())
-            .arg(tk::accent()).arg(tk::radiusSm()).arg(tk::space(2)).arg(tk::fontSizeSmallPt()));
-        topRow->addWidget(pill, 0, Qt::AlignVCenter);
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override
+    {
+        return QSize(100, kEnvRowHeight);
     }
-    layout->addLayout(topRow);
 
-    auto *caption = new QLabel(utils::tr(QStringLiteral("env.vars.count")).arg(env.vars.size()), card);
-    caption->setStyleSheet(QStringLiteral("color: %1; font-size: %2pt;")
-        .arg(tk::mutedFg()).arg(tk::fontSizeSmallPt()));
-    caption->setContentsMargins(dotSize + tk::space(2), 0, 0, 0); // alinha sob o nome
-    layout->addWidget(caption);
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const QRect box = option.rect.adjusted(tk::space(1), 2, -tk::space(1), -2);
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hover = option.state & QStyle::State_MouseOver;
+        if (selected || hover) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(selected ? tk::selBg() : tk::hoverBg()));
+            painter->drawRoundedRect(box, tk::radiusMd(), tk::radiusMd());
+        }
+        const bool active = index.data(kEnvActiveRole).toBool();
+        const int dot = 8;
+        const QPoint dotCenter(box.left() + tk::space(3), box.center().y());
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(active ? tk::accent() : tk::mutedFg()));
+        painter->drawEllipse(dotCenter, dot / 2, dot / 2);
 
-    return card;
-}
+        int right = box.right() - tk::space(2);
+        if (active) {
+            QFont tagFont = option.font;
+            tagFont.setPointSizeF(qMax<qreal>(7.0, tagFont.pointSizeF() * 0.8));
+            tagFont.setBold(true);
+            const QString tag = utils::tr(QStringLiteral("env.badge.active"));
+            const QFontMetrics tagMetrics(tagFont);
+            const int tagWidth = tagMetrics.horizontalAdvance(tag) + tk::space(3);
+            const QRect tagRect(right - tagWidth, box.center().y() - (tagMetrics.height() + 4) / 2, tagWidth,
+                                tagMetrics.height() + 4);
+            QColor tint(tk::accent());
+            tint.setAlphaF(0.18);
+            painter->setBrush(tint);
+            painter->drawRoundedRect(tagRect, tk::radiusSm(), tk::radiusSm());
+            painter->setFont(tagFont);
+            painter->setPen(QColor(tk::accent()));
+            painter->drawText(tagRect, Qt::AlignCenter, tag);
+            right = tagRect.left() - tk::space(2);
+        }
+
+        const int textLeft = dotCenter.x() + dot + tk::space(2);
+        const int textWidth = qMax(0, right - textLeft);
+        QFont title = option.font;
+        title.setBold(true);
+        painter->setFont(title);
+        painter->setPen(QColor(tk::fg()));
+        const QFontMetrics titleMetrics(title);
+        const QRect titleRect(textLeft, box.top() + tk::space(1) + 1, textWidth, titleMetrics.height());
+        painter->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          titleMetrics.elidedText(index.data(kEnvNameRole).toString(), Qt::ElideRight, textWidth));
+        QFont meta = option.font;
+        meta.setPointSizeF(meta.pointSizeF() * 0.9);
+        painter->setFont(meta);
+        painter->setPen(QColor(tk::mutedFg()));
+        const QFontMetrics metaMetrics(meta);
+        const QRect metaRect(textLeft, titleRect.bottom() + 2, textWidth, metaMetrics.height());
+        painter->drawText(metaRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          metaMetrics.elidedText(utils::tr(QStringLiteral("env.vars.count")).arg(index.data(kEnvCountRole).toInt()),
+                                                 Qt::ElideRight, textWidth));
+        painter->restore();
+    }
+};
 
 QPushButton *makeIconTextButton(QWidget *parent, const QString &iconName, const QString &text)
 {
-    auto *button = new QPushButton(text, parent);
+    auto *button = new AdaptiveButton(text, parent);
     button->setIcon(LucideIcons::icon(iconName, QColor(tk::fg()), 16));
-    // Reforça a largura mínima pelo próprio sizeHint: num QHBoxLayout apertado
-    // (sidebar estreita), o botão podia ser espremido abaixo do necessário
-    // pro texto caber, cortando-o sem reticências (QPushButton não elide
-    // texto sozinho) — visto na captura de tela de verificação.
-    button->setMinimumWidth(button->sizeHint().width());
+    makeCompactButton(button, kControlH);
     return button;
 }
 } // namespace
@@ -155,7 +173,7 @@ EnvironmentManagerDialog::EnvironmentManagerDialog(const QVector<core::Environme
         setEmbedded(true);
         return;
     }
-    resize(760, 500);
+    resize(720, 480);
     centerOnParent(this);
 }
 
@@ -167,13 +185,12 @@ void EnvironmentManagerDialog::setEmbedded(bool embedded)
     if (m_buttonBox) {
         m_buttonBox->setVisible(!embedded);
     }
-    // Num painel (meia janela, uma lateral) o nome e o interruptor "ativo" empilham em vez de brigar por largura, e a
-    // lista de pacotes fica mais estreita.
-    if (m_topRow) {
-        m_topRow->setDirection(embedded ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    if (layout()) {
+        const int margin = embedded ? tk::space(2) : tk::space(4);
+        layout()->setContentsMargins(margin, margin, margin, embedded ? margin : tk::space(3));
     }
     if (m_list) {
-        m_list->setMinimumWidth(embedded ? 170 : 240);
+        m_list->setMinimumWidth(embedded ? 160 : 180);
     }
 }
 
@@ -245,190 +262,119 @@ void EnvironmentManagerDialog::setData(const QVector<core::Environment> &environ
 
 void EnvironmentManagerDialog::setupUi()
 {
+    setObjectName(QStringLiteral("variablesDialog"));
     auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(tk::space(4), tk::space(4), tk::space(4), tk::space(3));
+    outer->setSpacing(tk::space(2));
 
-    // A 2ª aba ("Variáveis Dinâmicas") só existe quando quem chama passou um
-    // EnvironmentManager — feedback do usuário: aba isolada dos PACOTES
-    // (diferente de misturar as dinâmicas na tabela de variáveis de um
-    // pacote — ver discussão de design: mistura config estática autorada
-    // com estado efêmero/computado, invalidando export/import limpo).
-    // Sem envManager (chamador antigo que não passou), o diálogo continua
-    // exatamente como antes: sem QTabWidget, corpo direto no diálogo.
-    QWidget *packagesHost = this;
+    // --- Segmentado: Pacotes | Dinâmicas (só com o EnvironmentManager vivo) ---
+    QPushButton *packagesButton = nullptr;
+    QPushButton *dynamicButton = nullptr;
     if (m_envManager) {
-        // Segmented control (pills), NÃO QTabWidget/QTabBar — mesmo padrão
-        // já comprovado em CommandEditorDialog (comentário lá: "substitui
-        // as abas tradicionais do QTabWidget, cujo sublinhado cortava a
-        // caixa"). 1ª tentativa aqui usou QTabWidget com QSS local e ainda
-        // saiu como pill nativa do SO (feedback do usuário, print) — troca
-        // definitiva pro mecanismo que já funciona no resto do app, em vez
-        // de insistir num 2º QSS pra QTabBar.
-        auto *switcher = new QWidget(this);
-        switcher->setObjectName(QStringLiteral("envTabSwitcher"));
-        switcher->setAttribute(Qt::WA_StyledBackground, true);
-        switcher->setStyleSheet(QStringLiteral(
-            "QWidget#envTabSwitcher { background-color: %1; border-radius: %2px; }")
-            .arg(tk::bg()).arg(tk::radiusMd()));
-        auto *switcherLayout = new QHBoxLayout(switcher);
-        switcherLayout->setContentsMargins(2, 2, 2, 2);
-        switcherLayout->setSpacing(2);
-        const QString segmentCss = QStringLiteral(
-            "QPushButton { border: none; border-radius: %1px; padding: %2px %3px; font-weight: 600;"
-            " background: transparent; color: %4; }"
-            "QPushButton:checked { background-color: %5; color: %6; }")
-            .arg(tk::radiusSm()).arg(tk::space(1)).arg(tk::space(3))
-            .arg(tk::mutedFg()).arg(tk::accent()).arg(tk::bg());
-        auto *packagesButton = new QPushButton(utils::tr(QStringLiteral("env.tab.packages")), switcher);
-        auto *dynamicVarsButton = new QPushButton(utils::tr(QStringLiteral("env.tab.dynamic_vars")), switcher);
-        for (QPushButton *btn : {packagesButton, dynamicVarsButton}) {
-            btn->setCheckable(true);
-            btn->setCursor(Qt::PointingHandCursor);
-            btn->setStyleSheet(segmentCss);
+        auto *segmented = new QWidget(this);
+        segmented->setObjectName(QStringLiteral("envSegments"));
+        segmented->setAttribute(Qt::WA_StyledBackground, true);
+        auto *segmentLayout = new QHBoxLayout(segmented);
+        segmentLayout->setContentsMargins(2, 2, 2, 2);
+        segmentLayout->setSpacing(2);
+        packagesButton = new QPushButton(utils::tr(QStringLiteral("env.tab.packages")), segmented);
+        dynamicButton = new QPushButton(utils::tr(QStringLiteral("env.tab.dynamic_vars")), segmented);
+        for (QPushButton *button : {packagesButton, dynamicButton}) {
+            button->setCheckable(true);
+            button->setCursor(Qt::PointingHandCursor);
+            button->setFocusPolicy(Qt::NoFocus);
+            segmentLayout->addWidget(button);
         }
         packagesButton->setChecked(true);
-        switcherLayout->addWidget(packagesButton);
-        switcherLayout->addWidget(dynamicVarsButton);
-        // Não estica pra ocupar a largura do diálogo inteiro (pedido do
-        // usuário: "cuidado com o espaçamento horizontal") — largura pelo
-        // conteúdo dos 2 botões, alinhado à esquerda.
-        auto *switcherRow = new QHBoxLayout();
-        switcherRow->addWidget(switcher, 0, Qt::AlignLeft);
-        switcherRow->addStretch();
-        outer->addLayout(switcherRow);
-
-        auto *pages = new QStackedWidget(this);
-        outer->addWidget(pages, 1);
-
-        packagesHost = new QWidget(pages);
-        pages->addWidget(packagesHost);
-
-        m_dynamicVarsInspector = new DynamicVarsInspectorWidget(
-            *m_envManager, m_allFolders, m_loadPersisted, m_savePersisted, pages);
-        pages->addWidget(m_dynamicVarsInspector);
-
-        connect(packagesButton, &QPushButton::clicked, this, [dynamicVarsButton, pages, packagesHost](bool) {
-            dynamicVarsButton->setChecked(false);
-            pages->setCurrentWidget(packagesHost);
-        });
-        connect(dynamicVarsButton, &QPushButton::clicked, this,
-                [this, packagesButton, pages]() {
-            packagesButton->setChecked(false);
-            pages->setCurrentWidget(m_dynamicVarsInspector);
-            // As dinâmicas podem ter mudado desde a abertura do diálogo (um
-            // comando rodou antes desta aba ser vista pela 1ª vez).
-            m_dynamicVarsInspector->refresh();
-        });
+        auto *segmentRow = new QHBoxLayout();
+        segmentRow->addWidget(segmented);
+        segmentRow->addStretch(1);
+        outer->addLayout(segmentRow);
     }
 
-    QHBoxLayout *body = nullptr;
-    if (m_envManager) {
-        body = new QHBoxLayout(packagesHost); // packagesHost = página "Pacotes" do QStackedWidget
-    } else {
-        body = new QHBoxLayout();
-        outer->addLayout(body, 1); // sem switcher: corpo direto no diálogo, como antes
-    }
+    auto *pages = new QStackedWidget(this);
+    outer->addWidget(pages, 1);
 
-    // --- Coluna esquerda: cabeçalho + lista de cartões + ações ---
-    auto *leftCol = new QVBoxLayout();
-    leftCol->setSpacing(tk::space(2));
+    // --- Página "Pacotes": lista | detalhe ---
+    m_splitter = new QSplitter(Qt::Horizontal, pages);
+    m_splitter->setObjectName(QStringLiteral("envSplitter"));
+    m_splitter->setChildrenCollapsible(false);
+    pages->addWidget(m_splitter);
 
-    auto *sidebarHeader = new QHBoxLayout();
-    auto *sidebarTitle = new QLabel(utils::tr(QStringLiteral("env.sidebar.title")), this);
-    sidebarTitle->setStyleSheet(QStringLiteral(
-        "color: %1; font-size: %2pt; font-weight: 600; letter-spacing: 0.5px;")
-        .arg(tk::mutedFg()).arg(tk::fontSizeSmallPt()));
-    sidebarHeader->addWidget(sidebarTitle);
-    sidebarHeader->addStretch();
-    auto *newButton = makeIconTextButton(this, QStringLiteral("plus"), utils::tr(QStringLiteral("env.action.new")));
+    auto *listCard = new QWidget(m_splitter);
+    listCard->setObjectName(QStringLiteral("envListCard"));
+    listCard->setAttribute(Qt::WA_StyledBackground, true);
+    auto *listLayout = new QVBoxLayout(listCard);
+    listLayout->setContentsMargins(tk::space(2), tk::space(3), tk::space(2), tk::space(2));
+    listLayout->setSpacing(tk::space(2));
+
+    auto *listHeader = new QHBoxLayout();
+    listHeader->setContentsMargins(tk::space(1), 0, 0, 0);
+    auto *listTitle = new QLabel(utils::tr(QStringLiteral("env.sidebar.title")), listCard);
+    listTitle->setObjectName(QStringLiteral("envListTitle"));
+    listHeader->addWidget(listTitle, 1);
+    auto *newButton = makeIconTextButton(listCard, QStringLiteral("plus"), utils::tr(QStringLiteral("env.action.new")));
+    newButton->setProperty("kaiRole", QStringLiteral("primary"));
+    newButton->setIcon(LucideIcons::icon(QStringLiteral("plus"), QColor(tk::buttonFg()), 16));
     connect(newButton, &QPushButton::clicked, this, &EnvironmentManagerDialog::handleNewEnvironment);
-    sidebarHeader->addWidget(newButton);
-    leftCol->addLayout(sidebarHeader);
+    listHeader->addWidget(newButton);
+    listLayout->addLayout(listHeader);
 
-    m_list = new QListWidget(this);
+    m_list = new QListWidget(listCard);
     m_list->setObjectName(QStringLiteral("envPackageList"));
-    m_list->setMinimumWidth(240);
     m_list->setFrameShape(QFrame::NoFrame);
-    // Zera o padding de item herdado do QSS legado ("QListWidget::item {
-    // padding: 6px 8px }"): com um itemWidget (o cartão do pacote), esse
-    // padding é aplicado POR FORA do widget e come pixels da altura,
-    // cortando o nome em negrito (relatado). O cartão já traz suas próprias
-    // margens internas.
-    m_list->setStyleSheet(QStringLiteral(
-        "QListWidget#envPackageList::item { padding: 0px; margin: 0px; }"));
+    m_list->setMouseTracking(true);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_list->setSpacing(tk::space(1));
+    m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_list->setItemDelegate(new EnvItemDelegate(m_list));
+    m_list->setMinimumWidth(180);
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int) { handleSelectionChanged(); });
-    leftCol->addWidget(m_list, 1);
+    listLayout->addWidget(m_list, 1);
+    m_splitter->addWidget(listCard);
 
-    auto *listButtons = new QHBoxLayout();
-    m_dupButton = makeIconTextButton(this, QStringLiteral("copy"), utils::tr(QStringLiteral("env.action.duplicate")));
-    m_delButton = makeIconTextButton(this, QStringLiteral("trash-2"), utils::tr(QStringLiteral("env.action.delete")));
-    connect(m_dupButton, &QPushButton::clicked, this, &EnvironmentManagerDialog::handleDuplicateEnvironment);
-    connect(m_delButton, &QPushButton::clicked, this, &EnvironmentManagerDialog::handleDeleteEnvironment);
-    listButtons->addWidget(m_dupButton);
-    listButtons->addWidget(m_delButton);
-    leftCol->addLayout(listButtons);
+    auto *detailCard = new QWidget(m_splitter);
+    detailCard->setObjectName(QStringLiteral("envDetailCard"));
+    detailCard->setAttribute(Qt::WA_StyledBackground, true);
+    auto *detail = new QVBoxLayout(detailCard);
+    detail->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
+    detail->setSpacing(tk::space(2));
 
-    body->addLayout(leftCol);
+    auto *titleRow = new QHBoxLayout();
+    titleRow->setSpacing(tk::space(3));
+    m_nameField = new QLineEdit(detailCard);
+    m_nameField->setFixedHeight(kControlH);
+    m_nameField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px %1px; border-radius: %2px; }")
+        .arg(tk::space(3)).arg(tk::radiusMdForHeight(kControlH)));
+    titleRow->addWidget(layout_helpers::wrapWithLabel(detailCard, utils::tr(QStringLiteral("env.field.name")), m_nameField), 1);
 
-    // --- Coluna direita: nome + toggle ativo + variáveis do pacote selecionado ---
-    auto *rightCol = new QVBoxLayout();
-    rightCol->setSpacing(tk::space(3));
-
-    m_topRow = new QBoxLayout(QBoxLayout::LeftToRight);
-    auto *topRow = m_topRow;
-    m_nameField = new QLineEdit(this);
-    topRow->addWidget(layout_helpers::wrapWithLabel(this, utils::tr(QStringLiteral("env.field.name")), m_nameField), 1);
-
-    // Toggle de status em destaque — substitui o antigo botão ambíguo
-    // "Ativar este pacote" (feedback do usuário). Checkbox no padrão
-    // kaiRole="switch" já usado no Settings, embrulhado com o mesmo
-    // helper de rótulo do campo de nome pra ficarem visualmente pareados.
-    m_activeToggle = new QCheckBox(this);
+    m_activeToggle = new QCheckBox(detailCard);
     m_activeToggle->setProperty("kaiRole", QStringLiteral("switch"));
     connect(m_activeToggle, &QCheckBox::toggled, this, &EnvironmentManagerDialog::handleActiveToggled);
-    auto *toggleField = layout_helpers::wrapWithLabel(this, utils::tr(QStringLiteral("env.field.active_toggle")), m_activeToggle);
-    topRow->addWidget(toggleField, 0);
+    titleRow->addWidget(layout_helpers::wrapWithLabel(detailCard, utils::tr(QStringLiteral("env.field.active_toggle")),
+                                                      m_activeToggle), 0, Qt::AlignBottom);
 
-    rightCol->addLayout(topRow);
+    m_dupButton = makeIconButton(detailCard, QStringLiteral("copy"), utils::tr(QStringLiteral("env.action.duplicate")),
+                                 QColor(tk::mutedFg()));
+    m_delButton = makeIconButton(detailCard, QStringLiteral("trash-2"), utils::tr(QStringLiteral("env.action.delete")),
+                                 QColor(tk::errorFg()));
+    connect(m_dupButton, &QToolButton::clicked, this, &EnvironmentManagerDialog::handleDuplicateEnvironment);
+    connect(m_delButton, &QToolButton::clicked, this, &EnvironmentManagerDialog::handleDeleteEnvironment);
+    auto *actionsBox = new QHBoxLayout();
+    actionsBox->setSpacing(tk::space(1));
+    actionsBox->addWidget(m_dupButton);
+    actionsBox->addWidget(m_delButton);
+    titleRow->addLayout(actionsBox);
+    titleRow->setAlignment(actionsBox, Qt::AlignBottom);
+    detail->addLayout(titleRow);
 
-    auto *varsCard = new CollapsibleSectionCard(utils::tr(QStringLiteral("env.vars.card.title")), this);
-    varsCard->setActionButtonText(utils::tr(QStringLiteral("keyvalue.add")));
-    varsCard->setAlwaysShowBody(true); // a linha de adição rápida continua útil com 0 variáveis
-    // Mesmo reforço de largura mínima do botão de ação do cabeçalho (ver
-    // makeIconTextButton) — o cabeçalho do card fica bem cheio (título +
-    // subtítulo + badge + botão) e o botão "+Add" cortava sem reticências.
-    if (auto *actionButton = varsCard->findChild<QPushButton *>()) {
-        actionButton->setMinimumWidth(actionButton->sizeHint().width());
-    }
-    // Expandido por padrão (diferente do Hooks/Params do Command Editor,
-    // que nascem colapsados de propósito): aqui a tabela de variáveis É o
-    // conteúdo principal do painel direito, não uma seção auxiliar — o
-    // mockup do usuário mostra a tabela sempre visível, nunca atrás de um
-    // chevron fechado. Achado na verificação visual: sem isto, o painel
-    // abria só com o cabeçalho do card e um vão vazio enorme embaixo.
-    varsCard->setExpanded(true, false);
+    m_meta = new QLabel(detailCard);
+    m_meta->setObjectName(QStringLiteral("envMeta"));
+    detail->addWidget(m_meta);
 
-    m_varsEditor = new KeyValueEditorWidget(varsCard,
-        utils::tr(QStringLiteral("env.field.name")), utils::tr(QStringLiteral("keyvalue.header.value")));
-    m_varsEditor->enableSecretColumn(utils::tr(QStringLiteral("env.field.secret")));
-    m_varsEditor->setShowOwnAddButton(false); // "+Nova Variável" já vive no cabeçalho do card
-    m_varsEditor->setValueColumnVisible(true); // chave+valor lado a lado (mockup, estilo Postman)
-    m_varsEditor->setMonospaceFont(true);
-    m_varsEditor->setSecretRevealEnabled(true);
-    m_varsEditor->setInlineAddRowEnabled(true);
-    varsCard->setBody(m_varsEditor);
-    connect(varsCard, &CollapsibleSectionCard::actionTriggered,
-            m_varsEditor, &KeyValueEditorWidget::handleAddRowClicked);
-    connect(m_varsEditor, &KeyValueEditorWidget::changed, this, [this, varsCard]() {
-        varsCard->setCount(m_varsEditor->values().size());
-    });
-    rightCol->addWidget(varsCard, 1);
-
-    // Importar um arquivo .env no ambiente selecionado (KEY=VALUE por linha).
-    auto *importEnvButton = new QPushButton(utils::tr(QStringLiteral("env.import_dotenv")), this);
-    importEnvButton->setToolTip(utils::tr(QStringLiteral("env.import_dotenv.tip")));
-    connect(importEnvButton, &QPushButton::clicked, this, [this]() {
+    m_varsEditor = new VariablesEditorWidget(detailCard);
+    auto *importButton = makeIconTextButton(m_varsEditor, QStringLiteral("download"), utils::tr(QStringLiteral("env.import_dotenv")));
+    importButton->setToolTip(utils::tr(QStringLiteral("env.import_dotenv.tip")));
+    connect(importButton, &QPushButton::clicked, this, [this]() {
         if (currentIndex() < 0) {
             return;
         }
@@ -447,11 +393,34 @@ void EnvironmentManagerDialog::setupUi()
         QMessageBox::information(this, utils::tr(QStringLiteral("env.import_dotenv")),
                                  utils::tr(QStringLiteral("env.import_dotenv.done")).arg(merged));
     });
-    rightCol->addWidget(importEnvButton, 0, Qt::AlignLeft);
+    m_varsEditor->addToolbarWidget(importButton);
+    detail->addWidget(m_varsEditor, 1);
+    m_splitter->addWidget(detailCard);
 
-    body->addLayout(rightCol, 1);
+    m_splitter->setStretchFactor(0, 0);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setSizes({240, 520});
 
-    // --- Rodapé: OK/Cancelar ---
+    // --- Página "Dinâmicas" ---
+    if (m_envManager) {
+        m_dynamicVarsInspector = new DynamicVarsInspectorWidget(
+            *m_envManager, m_allFolders, m_loadPersisted, m_savePersisted, pages);
+        pages->addWidget(m_dynamicVarsInspector);
+        connect(packagesButton, &QPushButton::clicked, this, [pages, packagesButton, dynamicButton, this]() {
+            packagesButton->setChecked(true);
+            dynamicButton->setChecked(false);
+            pages->setCurrentWidget(m_splitter);
+        });
+        connect(dynamicButton, &QPushButton::clicked, this, [pages, packagesButton, dynamicButton, this]() {
+            packagesButton->setChecked(false);
+            dynamicButton->setChecked(true);
+            pages->setCurrentWidget(m_dynamicVarsInspector);
+            // As dinâmicas podem ter mudado desde a abertura (um comando rodou antes desta aba ser vista).
+            m_dynamicVarsInspector->refresh();
+        });
+    }
+
+    // --- Rodapé: OK/Cancelar (só como diálogo) ---
     m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     stripDialogButtonIcons(m_buttonBox);
     connect(m_buttonBox, &QDialogButtonBox::accepted, this, [this]() {
@@ -461,7 +430,65 @@ void EnvironmentManagerDialog::setupUi()
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     outer->addWidget(m_buttonBox);
     connect(m_nameField, &QLineEdit::textEdited, this, [this]() { scheduleChanged(); });
-    connect(m_varsEditor, &KeyValueEditorWidget::changed, this, [this]() { scheduleChanged(); });
+    connect(m_varsEditor, &VariablesEditorWidget::changed, this, [this]() {
+        updateMeta();
+        scheduleChanged();
+    });
+    applyStyle();
+}
+
+// Cartões, segmentado e rótulos seguem os tokens (cores e raio da preferência de cantos): nunca um raio fixo.
+void EnvironmentManagerDialog::applyStyle()
+{
+    const int radius = tk::radiusMd();
+    const int small = tk::radiusSm();
+    const QString card = QStringLiteral("QWidget#%1 { background-color: %2; border: 1px solid %3; border-radius: %4px; }");
+    setStyleSheet(
+        card.arg(QStringLiteral("envListCard"), tk::surface(), tk::borderColor()).arg(radius)
+        + card.arg(QStringLiteral("envDetailCard"), tk::surface(), tk::borderColor()).arg(radius)
+        + QStringLiteral("QListWidget#envPackageList { background: transparent; border: none; outline: none; }")
+        + QStringLiteral("QLabel#envListTitle { background: transparent; color: %1; font-size: %2pt; font-weight: 600;"
+                         " letter-spacing: 0.5px; }").arg(tk::mutedFg()).arg(tk::fontSizeSmallPt())
+        + QStringLiteral("QLabel#envMeta { background: transparent; color: %1; font-size: %2pt; }")
+              .arg(tk::mutedFg()).arg(tk::fontSizeSmallPt())
+        + QStringLiteral("QWidget#envSegments { background-color: %1; border-radius: %2px; }").arg(tk::bg()).arg(radius)
+        + QStringLiteral("QWidget#envSegments QPushButton { border: none; border-radius: %1px; padding: %2px %3px;"
+                         " font-weight: 600; background: transparent; color: %4; min-height: 0px; }"
+                         "QWidget#envSegments QPushButton:checked { background-color: %5; color: %6; }"
+                         "QWidget#envSegments QPushButton:hover:!checked { background-color: %7; }")
+              .arg(small).arg(tk::space(1)).arg(tk::space(3)).arg(tk::mutedFg(), tk::accent(), tk::bg(), tk::hoverBg()));
+}
+
+void EnvironmentManagerDialog::updateOrientation()
+{
+    if (!m_splitter) {
+        return;
+    }
+    const Qt::Orientation wanted = width() < kStackBelowWidth ? Qt::Vertical : Qt::Horizontal;
+    if (m_splitter->orientation() != wanted) {
+        m_splitter->setOrientation(wanted);
+        m_splitter->setSizes(wanted == Qt::Vertical ? QList<int>{180, 360} : QList<int>{240, 520});
+    }
+}
+
+void EnvironmentManagerDialog::updateMeta()
+{
+    if (m_meta) {
+        m_meta->setText(utils::tr(QStringLiteral("env.vars.count")).arg(m_varsEditor ? m_varsEditor->values().size() : 0));
+    }
+}
+
+void EnvironmentManagerDialog::resizeEvent(QResizeEvent *event)
+{
+    QDialog::resizeEvent(event);
+    updateOrientation();
+}
+
+void EnvironmentManagerDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    applyStyle();
+    updateOrientation();
 }
 
 int EnvironmentManagerDialog::currentIndex() const
@@ -476,38 +503,13 @@ void EnvironmentManagerDialog::reloadList()
     m_list->clear();
     for (const core::Environment &e : m_environments) {
         auto *item = new QListWidgetItem(m_list);
-        auto *card = buildEnvCard(m_list, e, e.id == m_activeEnvironmentId);
-        // Ativa o layout ANTES de ler o sizeHint: um QWidget recém-criado
-        // devolve um sizeHint que ainda não contabilizou o layout/fonte
-        // (nome em negrito), então a altura vinha curta e o nome saía
-        // cortado na vertical (relatado). Com o layout ativado, o
-        // sizeHint reflete a altura real necessária; o qMax com o
-        // minimumSizeHint é um cinto de segurança extra.
-        if (card->layout()) {
-            card->layout()->activate();
-        }
-        // Altura = sizeHint real + uma folga vertical fixa. Mesmo com o
-        // layout ativado, o QListWidget aplica seu próprio padding de item
-        // (QSS) por fora do widget, comendo alguns pixels e cortando o nome
-        // em negrito na base (relatado, persistente). A folga (space(2))
-        // garante margem suficiente para o texto respirar dentro da linha.
-        QSize hint = card->sizeHint().expandedTo(card->minimumSizeHint());
-        hint.setHeight(hint.height() + utils::tokens::space(2));
-        item->setSizeHint(hint);
-        m_list->setItemWidget(item, card);
+        item->setData(kEnvNameRole, e.name);
+        item->setData(kEnvCountRole, e.vars.size());
+        item->setData(kEnvActiveRole, e.id == m_activeEnvironmentId);
+        item->setToolTip(e.name);
     }
     if (keep >= 0 && keep < m_list->count()) {
         m_list->setCurrentRow(keep);
-    }
-    // A troca de currentRow acima está com sinais bloqueados (não dispara
-    // handleSelectionChanged) — a borda de "selecionado" precisa ser
-    // reaplicada manualmente nos cartões recém-criados.
-    for (int i = 0; i < m_list->count(); ++i) {
-        if (QWidget *card = m_list->itemWidget(m_list->item(i))) {
-            card->setProperty("selected", i == keep);
-            card->style()->unpolish(card);
-            card->style()->polish(card);
-        }
     }
 }
 
@@ -528,21 +530,13 @@ void EnvironmentManagerDialog::handleSelectionChanged()
     const int index = currentIndex();
     m_editingIndex = index;
 
-    // Atualiza a borda de "selecionado" nos cartões da sidebar.
-    for (int i = 0; i < m_list->count(); ++i) {
-        if (QWidget *card = m_list->itemWidget(m_list->item(i))) {
-            card->setProperty("selected", i == index);
-            card->style()->unpolish(card);
-            card->style()->polish(card);
-        }
-    }
-
     if (index < 0 || index >= m_environments.size()) {
         m_nameField->clear();
-        m_varsEditor->setValues({});
+        m_varsEditor->setValuesWithSecrets({}, {});
         m_nameField->setEnabled(false);
         m_varsEditor->setEnabled(false);
         m_activeToggle->setEnabled(false);
+        updateMeta();
         return;
     }
     m_nameField->setEnabled(true);
@@ -557,6 +551,7 @@ void EnvironmentManagerDialog::handleSelectionChanged()
         const QSignalBlocker blocker(m_activeToggle);
         m_activeToggle->setChecked(e.id == m_activeEnvironmentId);
     }
+    updateMeta();
 }
 
 void EnvironmentManagerDialog::handleNewEnvironment()

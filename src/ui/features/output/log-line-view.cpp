@@ -1,5 +1,7 @@
 #include "ui/features/output/log-line-view.h"
 
+#include <optional>
+
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
@@ -104,6 +106,73 @@ QString jsonValueToDisplayString(const QJsonValue &v)
     return QString();
 }
 
+// logfmt ("level=info msg=\"server up\" port=8080"): a linha inteira é uma sequência de pares chave=valor, o valor
+// opcionalmente entre aspas (com \" e \\). Conservador de propósito, pra texto comum com um "=" não virar card: toda
+// palavra tem que ser um par bem formado, são precisos ao menos dois pares e um deles tem que ser nível, mensagem ou
+// hora. Os valores ficam texto, como vieram.
+std::optional<QJsonObject> parseLogfmt(const QString &line)
+{
+    if (!line.contains(QLatin1Char('='))) {
+        return std::nullopt;
+    }
+    QJsonObject obj;
+    const int n = line.size();
+    int i = 0;
+    int pairs = 0;
+    bool known = false;
+    while (i < n) {
+        while (i < n && line.at(i).isSpace()) {
+            ++i;
+        }
+        if (i >= n) {
+            break;
+        }
+        const int keyStart = i;
+        while (i < n && line.at(i) != QLatin1Char('=') && !line.at(i).isSpace() && line.at(i) != QLatin1Char('"')) {
+            ++i;
+        }
+        if (i >= n || line.at(i) != QLatin1Char('=') || i == keyStart) {
+            return std::nullopt; // palavra solta, ou valor sem chave
+        }
+        const QString key = line.mid(keyStart, i - keyStart);
+        ++i; // '='
+        QString value;
+        if (i < n && line.at(i) == QLatin1Char('"')) {
+            ++i;
+            bool closed = false;
+            while (i < n) {
+                const QChar c = line.at(i++);
+                if (c == QLatin1Char('\\') && i < n) {
+                    const QChar next = line.at(i++);
+                    value += next == QLatin1Char('n') ? QChar(u'\n') : next == QLatin1Char('t') ? QChar(u'\t') : next;
+                } else if (c == QLatin1Char('"')) {
+                    closed = true;
+                    break;
+                } else {
+                    value += c;
+                }
+            }
+            if (!closed || (i < n && !line.at(i).isSpace())) {
+                return std::nullopt;
+            }
+        } else {
+            const int valueStart = i;
+            while (i < n && !line.at(i).isSpace()) {
+                ++i;
+            }
+            value = line.mid(valueStart, i - valueStart);
+        }
+        const QString lower = key.toLower();
+        known = known || levelKeys().contains(lower) || messageKeys().contains(lower) || timeKeys().contains(lower);
+        obj.insert(key, value);
+        ++pairs;
+    }
+    if (pairs < 2 || !known) {
+        return std::nullopt;
+    }
+    return obj;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- LogLineModel
@@ -150,19 +219,26 @@ LogLineEntry LogLineModel::parseLine(const QString &rawLine)
     // objeto JSON completo e válido, sem lixo depois do "}", ainda conta
     // como estruturado; texto comum que só MENCIONA um "{" no meio
     // continua caindo fora (fromJson rejeita qualquer sobra após o objeto).
+    QJsonObject obj;
+    bool parsed = false;
     const int braceIdx = cleaned.indexOf(QLatin1Char('{'));
-    if (braceIdx < 0) {
-        return entry; // não parece objeto JSON — nem tenta (evita custo de parse à toa)
+    if (braceIdx >= 0) {
+        QJsonParseError err;
+        const QJsonDocument doc = QJsonDocument::fromJson(cleaned.mid(braceIdx).toUtf8(), &err);
+        if (err.error == QJsonParseError::NoError && doc.isObject()) {
+            obj = doc.object();
+            parsed = true;
+        }
     }
-    const QString candidate = cleaned.mid(braceIdx);
-
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(candidate.toUtf8(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+    if (!parsed) {
+        if (const std::optional<QJsonObject> logfmt = parseLogfmt(cleaned)) {
+            obj = *logfmt;
+            parsed = true;
+        }
+    }
+    if (!parsed) {
         return entry;
     }
-
-    const QJsonObject obj = doc.object();
     entry.structured = true;
 
     // Mapa minúsculo->chave original pra reconhecer os aliases sem depender
@@ -344,7 +420,12 @@ void LogLineModel::appendLine(const QString &line)
             m_jsonAccumInString = false;
             m_jsonAccumEscaped = false;
         } else {
-            insertRawLine(line);
+            LogLineEntry attempt = parseLine(line); // sem "{": ainda pode ser logfmt
+            if (attempt.structured) {
+                insertEntry(attempt);
+            } else {
+                insertRawLine(line);
+            }
             return;
         }
     }

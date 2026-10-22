@@ -453,6 +453,7 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     QString pendingEcho;
     bool stripEcho = false;
     std::optional<StdinForwarder> stdinForwarder;
+    std::optional<InterruptForwarder> interruptForwarder;
     if (runProfile.forwardInput && !inheritTerminal) {
         stdinForwarder.emplace([&pipeline, &pendingEcho, &stripEcho](const QString &text) {
             engine::ProcessRunner *runner = pipeline.activeProcessRunner();
@@ -464,6 +465,16 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
             }
         });
         stripEcho = !stdinForwarder->isTty();
+        // Com o stdin num pipe (WSL) o Ctrl+C chega como sinal, não como tecla: vira ^C no terminal do comando.
+        interruptForwarder.emplace([&pipeline, &pendingEcho, &stripEcho]() {
+            engine::ProcessRunner *runner = pipeline.activeProcessRunner();
+            if (runner && runner->isRunning()) {
+                runner->writeRaw(QStringLiteral("\x03"));
+                if (stripEcho) {
+                    pendingEcho += QStringLiteral("^C"); // o tty do Linux já mostrou o ^C
+                }
+            }
+        });
     }
     QObject::connect(&pipeline, &engine::ExecutionPipeline::logMessage, &pipeline,
         [&outFilter, &errFilter, &pendingEcho, &stripEcho, interactive = stdinForwarder.has_value()](

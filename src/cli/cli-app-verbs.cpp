@@ -111,6 +111,9 @@ ImportRequest parseImportArgs(const QStringList &argsAfterVerb)
                 return req;
             }
             list = argsAfterVerb.at(++i);
+        } else if (a == QStringLiteral("-r") || a == QStringLiteral("--recursive")) {
+            req.recursive = true;
+            continue;
         } else if (a.startsWith(QStringLiteral("--only="))) {
             list = a.mid(7);
         } else if (a.startsWith(QStringLiteral("--"))) {
@@ -131,6 +134,9 @@ ImportRequest parseImportArgs(const QStringList &argsAfterVerb)
             return req;
         }
     }
+    if (req.recursive && !req.only.isEmpty()) {
+        req.error = utils::tr(QStringLiteral("cli.import.only_needs_package"));
+    }
     return req;
 }
 
@@ -144,6 +150,19 @@ int runImportVerb(const QStringList &args)
         return 2;
     }
     const QString argument = parsed.argument;
+    if (parsed.recursive) {
+        const QFileInfo root(QDir(QDir::currentPath()).filePath(argument.isEmpty() ? QStringLiteral(".") : argument));
+        if (!root.isDir()) {
+            err() << utils::tr(QStringLiteral("cli.import.not_folder")).arg(QDir::toNativeSeparators(root.absoluteFilePath()))
+                  << "\n";
+            err().flush();
+            return 2;
+        }
+        QJsonObject treeRequest;
+        treeRequest[QStringLiteral("cmd")] = QStringLiteral("import-tree");
+        treeRequest[QStringLiteral("path")] = QDir::cleanPath(root.absoluteFilePath());
+        return printAppReply(requestApp(treeRequest));
+    }
     const QString target = resolveImportTarget(argument, QDir::currentPath());
     if (target.isEmpty()) {
         err() << utils::tr(QStringLiteral("cli.import.not_found"))

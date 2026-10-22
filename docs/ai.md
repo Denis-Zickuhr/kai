@@ -43,7 +43,7 @@ The prompt carries the relevant sections of the Kai manifesto, so the model know
 
 ## 3. Chat
 
-The **✨** button at the top right (or the **AI assistant** shortcut, unset by default — Settings → Shortcuts) opens the chat — a [panel](layout.md) docked on the right (move, float or close it like any other; it only exists while a provider is configured):
+**View → AI chat** (or the **AI assistant** shortcut, unset by default — Settings → Shortcuts) opens the chat — a [panel](layout.md) docked on the right (move, float or close it like any other; it only exists while a provider is configured):
 
 - a list of **conversations** on the left (saved, deletable one by one);
 - the **provider picker** at the top, with a **Local / Remote** badge (remote means what the assistant reads is sent to that host) and a *Secrets hidden* badge when that is on;
@@ -63,6 +63,27 @@ You can switch provider in the middle of a conversation. Kai warns first: the hi
 - `run_command` runs through Kai's normal pipeline — it shows in the process list, the history and the Output panel as if you had clicked it. Interactive-terminal and KIP commands are refused there (they need you at the keyboard): for those the assistant uses `run_in_app`, which — after your approval — **opens the command in the Kai window** as if you had clicked it (parameter form, interactive terminal or KIP screen) and you continue there. It does not see the output.
 - The assistant can **ask you** a question with options when a decision is really yours.
 - Anything that comes from a tool — command output, logs, file contents, variable values — is **data, never instructions**: the fixed system prompt says so, and the real boundary is that nothing changes or runs without your approval.
+
+### Configuration tools
+
+Kai's whole configuration is reachable through a small set of generic tools, in the chat and for external agents (MCP). Reads run without asking; **every change shows an approval card with a before → after preview** and takes effect live, like the Settings dialog.
+
+| Tool | Does | Approval |
+|---|---|---|
+| `kai_settings_list` | Discovers the settings: key, type, allowed values or range, description, current value. Filter by `group` (`appearance`, `layout`, `window`, `output`, `behavior`, `notifications`, `kip`, `interpreters`, `shortcuts`) or `query`; paged with `offset`. | none |
+| `kai_settings_get` | Current value of the given `keys`. | none |
+| `kai_settings_set` | `changes`: `{ key: value }`. **All-or-nothing**: if any value is invalid nothing is saved and every reason is returned. | card |
+| `kai_theme_list` / `kai_theme_set` | Installed themes and the active one / switch it (`name`). Corner style, density and language are settings: `appearance.corner_style` (`sharp`, `soft`, `rounded`), `appearance.density`, `appearance.language`. | none / card |
+| `kai_layout_get` | The panel layout: grid size, each cell's panels (`zone` is `"row,col"`, zero-based), sizes, floating and closed panels, panel ids, presets and saved perspectives. | none |
+| `kai_layout_apply` | Exactly one of `preset`, `perspective` or `ops` (applied in order, all-or-nothing). | card |
+| `kai_run_profile_list` / `_get` | Run profiles (terminal targets): `name`, `template`, `shell` (`auto`, `posix`, `powershell`, `cmd`), `use_pty`, `default`, `icon`; `_get` also says how many commands/folders use it. | none |
+| `kai_run_profile_set` | Create or update by `name` (only the given fields change; a new one needs `template`; `default: true` takes the default from the others; `rename_to` renames). | card |
+| `kai_run_profile_delete` | Delete a profile. Refused while a command or folder still uses it. | danger card |
+
+`ops` of `kai_layout_apply`: `place` (`view`, `zone`, `index?`), `close`, `open` (`view`, `zone?`), `float` (`view`, `x`, `y`, `w`, `h`, `always_on_top?`), `activate`, `maximize` (empty `view` restores), `grid` (`cols`, `rows`, `expansion`: `vertical`/`horizontal`; 1 to 5 each), `zone_size` (`zone`, `size`), `line_size` (`line`, `size`) with sizes as fractions from 0.02 to 1, `collapse` (`zone`, `collapsed`), `split` (`zone`, `split`), `tabs_always` (`on`). Shrinking the grid never loses a panel: they move to the nearest cell.
+
+- Not reachable here, on purpose: **AI provider profiles, API keys and the MCP token** (they stay in `ai.json`; a key-like name is refused with a clear message), **environments and secret values** (use the environment tools), and anything outside `settings.json` and `layout.json`.
+- Setting the language is saved at once but fully applied after restarting Kai. Settings changes are not in the *Undo* list: the result of each call carries the previous values (`from`), so the assistant can put them back.
 
 ### Privacy
 

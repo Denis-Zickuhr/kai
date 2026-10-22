@@ -1,5 +1,5 @@
 #include "ui/features/settings/tabs/appearance-tab.h"
-#include "ui/shared/dialog-utils.h"
+#include "ui/features/settings/tabs/settings-form.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
@@ -26,23 +26,23 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
                               const QString &currentThemeName, QWidget *parent)
     : QWidget(parent)
 {
+    namespace sf = settings_form;
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 16, 16, 16);
-    layout->setSpacing(14);
+    layout->setContentsMargins(sf::kPageMargin, sf::kPageMargin, sf::kPageMargin, sf::kPageMargin);
+    layout->setSpacing(sf::kPageSpacing);
+
+    QGridLayout *grid = nullptr;
 
     // --- Grupo: Tema ---
-    auto *themeGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.theme")), this);
-    auto *themeRow = new QHBoxLayout(themeGroup);
-    themeRow->setContentsMargins(12, 14, 12, 12);
-    themeRow->setSpacing(10);
+    auto *themeGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.theme")), &grid);
+    auto *themeRow = new QWidget(themeGroup);
+    themeRow->setObjectName(QStringLiteral("themeRow"));
+    themeRow->setStyleSheet(QStringLiteral("QWidget#themeRow { background: transparent; }"));
+    auto *themeRowLayout = new QHBoxLayout(themeRow);
+    themeRowLayout->setContentsMargins(0, 0, 0, 0);
+    themeRowLayout->setSpacing(utils::tokens::space(2));
 
-    auto *themeCol = new QVBoxLayout();
-    themeCol->setSpacing(4);
-    auto *themeLabel = new QLabel(utils::tr(QStringLiteral("settings.active_theme")), themeGroup);
-    themeLabel->setProperty("kaiRole", QStringLiteral("caption"));
-    themeCol->addWidget(themeLabel);
-
-    m_themeField = new QComboBox(themeGroup);
+    m_themeField = new QComboBox(themeRow);
     m_themeField->addItems(themes);
     const int themeIndex = m_themeField->findText(currentThemeName);
     if (themeIndex >= 0) {
@@ -51,23 +51,18 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
         m_themeField->addItem(currentThemeName);
         m_themeField->setCurrentText(currentThemeName);
     }
-    themeCol->addWidget(m_themeField);
-    themeRow->addLayout(themeCol, 1);
+    themeRowLayout->addWidget(m_themeField, 1);
 
-    auto *importButton = new QPushButton(utils::tr(QStringLiteral("settings.theme.import")), themeGroup);
+    auto *importButton = new QPushButton(utils::tr(QStringLiteral("settings.theme.import")), themeRow);
     importButton->setIcon(LucideIcons::icon(QStringLiteral("upload"), QColor(utils::tokens::mutedFg()), 14));
     importButton->setToolTip(utils::tr(QStringLiteral("settings.theme.import.tip")));
     connect(importButton, &QPushButton::clicked, this, &AppearanceTab::importThemeClicked);
-    themeRow->addWidget(importButton, 0, Qt::AlignBottom);
-
+    themeRowLayout->addWidget(importButton);
+    sf::addField(grid, themeGroup, utils::tr(QStringLiteral("settings.active_theme")), themeRow);
     layout->addWidget(themeGroup);
 
-
     // --- Grupo: Janela ---
-    auto *windowGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.window")), this);
-    auto *windowForm = new QFormLayout(windowGroup);
-    windowForm->setSpacing(10);
-    windowForm->setContentsMargins(12, 14, 12, 12);
+    auto *windowGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.window")), &grid);
 
     m_windowModeField = new QComboBox(windowGroup);
     m_windowModeField->addItem(utils::tr(QStringLiteral("settings.window.size")), QStringLiteral("size"));
@@ -78,9 +73,16 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
         const int idx = m_windowModeField->findData(currentSettings.windowMode);
         m_windowModeField->setCurrentIndex(idx >= 0 ? idx : 0);
     }
-    windowForm->addRow(utils::tr(QStringLiteral("settings.window.open_as")), m_windowModeField);
+    sf::addField(grid, windowGroup, utils::tr(QStringLiteral("settings.window.open_as")), m_windowModeField);
 
-    m_windowPresetField = new QComboBox(windowGroup);
+    auto *sizeRow = new QWidget(windowGroup);
+    sizeRow->setObjectName(QStringLiteral("windowSizeRow"));
+    sizeRow->setStyleSheet(QStringLiteral("QWidget#windowSizeRow { background: transparent; }"));
+    auto *sizeLayout = new QHBoxLayout(sizeRow);
+    sizeLayout->setContentsMargins(0, 0, 0, 0);
+    sizeLayout->setSpacing(utils::tokens::space(2));
+
+    m_windowPresetField = new QComboBox(sizeRow);
     m_windowPresetField->addItem(utils::tr(QStringLiteral("settings.window.custom")), QSize());
     const QVector<QSize> presets = {
         QSize(1024, 640), QSize(1280, 760), QSize(1440, 900),
@@ -89,14 +91,6 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
     for (const QSize &p : presets) {
         m_windowPresetField->addItem(utils::tr(QStringLiteral("settings.window.size_format")).arg(p.width()).arg(p.height()), p);
     }
-    windowForm->addRow(utils::tr(QStringLiteral("settings.window.size_label")), m_windowPresetField);
-
-    auto *sizeRow = new QWidget(windowGroup);
-    sizeRow->setObjectName(QStringLiteral("windowSizeRow"));
-    sizeRow->setStyleSheet(QStringLiteral("QWidget#windowSizeRow { background: transparent; }"));
-    auto *sizeLayout = new QHBoxLayout(sizeRow);
-    sizeLayout->setContentsMargins(0, 0, 0, 0);
-    sizeLayout->setSpacing(8);
 
     m_windowWidthField = new QSpinBox(sizeRow);
     m_windowWidthField->setRange(720, 10000);
@@ -110,11 +104,12 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
     m_windowHeightField->setValue(currentSettings.windowHeight);
     m_windowHeightField->setSuffix(QStringLiteral(" px"));
 
+    sizeLayout->addWidget(m_windowPresetField, 1);
     sizeLayout->addWidget(new QLabel(utils::tr(QStringLiteral("settings.window.width")), sizeRow));
-    sizeLayout->addWidget(m_windowWidthField, 1);
+    sizeLayout->addWidget(m_windowWidthField);
     sizeLayout->addWidget(new QLabel(utils::tr(QStringLiteral("settings.window.height")), sizeRow));
-    sizeLayout->addWidget(m_windowHeightField, 1);
-    windowForm->addRow(QString(), sizeRow);
+    sizeLayout->addWidget(m_windowHeightField);
+    sf::addField(grid, windowGroup, utils::tr(QStringLiteral("settings.window.size_label")), sizeRow);
 
     connect(m_windowPresetField, &QComboBox::currentIndexChanged, this, [this](int) {
         const QSize chosen = m_windowPresetField->currentData().toSize();
@@ -126,67 +121,32 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
 
     auto updateSizeEnabled = [this, sizeRow]() {
         const QString mode = m_windowModeField->currentData().toString();
-        const bool usesSize = (mode == QStringLiteral("size") || mode == QStringLiteral("remember"));
-        sizeRow->setEnabled(usesSize);
-        m_windowPresetField->setEnabled(usesSize);
+        sizeRow->setEnabled(mode == QStringLiteral("size") || mode == QStringLiteral("remember"));
     };
     connect(m_windowModeField, &QComboBox::currentIndexChanged, this, [updateSizeEnabled](int) { updateSizeEnabled(); });
     updateSizeEnabled();
 
-    m_autoHideField = new QCheckBox(utils::tr(QStringLiteral("settings.window.auto_hide")), windowGroup);
-    m_autoHideField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_autoHideField->setChecked(currentSettings.autoHideOnFocusLoss);
-    m_autoHideField->setToolTip(utils::tr(QStringLiteral("settings.window.auto_hide.tip")));
-    windowForm->addRow(QString(), m_autoHideField);
-
-    m_startVisibleField = new QCheckBox(utils::tr(QStringLiteral("settings.window.start_visible")), windowGroup);
-    m_startVisibleField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_startVisibleField->setChecked(currentSettings.startVisible);
-    m_startVisibleField->setToolTip(utils::tr(QStringLiteral("settings.window.start_visible.tip")));
-    windowForm->addRow(QString(), m_startVisibleField);
-
-
+    m_autoHideField = sf::addSwitch(grid, windowGroup, utils::tr(QStringLiteral("settings.window.auto_hide")),
+        currentSettings.autoHideOnFocusLoss, utils::tr(QStringLiteral("settings.window.auto_hide.tip")));
+    m_startVisibleField = sf::addSwitch(grid, windowGroup, utils::tr(QStringLiteral("settings.window.start_visible")),
+        currentSettings.startVisible, utils::tr(QStringLiteral("settings.window.start_visible.tip")));
     layout->addWidget(windowGroup);
 
     // --- Grupo: Efeitos Visuais (FX) ---
-    auto *fxGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.fx")), this);
-    auto *fxLayout = new QVBoxLayout(fxGroup);
-    fxLayout->setSpacing(8);
-    fxLayout->setContentsMargins(12, 14, 12, 12);
-
-    auto *fxHint = layout_helpers::makeHintBanner(fxGroup, utils::tr(QStringLiteral("settings.fx.hint")));
-    fxLayout->addWidget(fxHint);
-
-    m_fxShadowsField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.shadows")), fxGroup);
-    m_fxShadowsField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_fxShadowsField->setChecked(currentSettings.fxShadows);
-    fxLayout->addWidget(m_fxShadowsField);
-
-    m_fxTranslucencyField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.translucency")), fxGroup);
-    m_fxTranslucencyField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_fxTranslucencyField->setChecked(currentSettings.fxTranslucency);
-    fxLayout->addWidget(m_fxTranslucencyField);
-
-    m_fxBlurField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.blur")), fxGroup);
-    m_fxBlurField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_fxBlurField->setChecked(currentSettings.fxBlur);
-    m_fxBlurField->setToolTip(utils::tr(QStringLiteral("settings.fx.blur.hint")));
-    fxLayout->addWidget(m_fxBlurField);
-
-    m_fxAnimationsField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.animations")), fxGroup);
-    m_fxAnimationsField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_fxAnimationsField->setChecked(currentSettings.fxAnimations);
-    fxLayout->addWidget(m_fxAnimationsField);
-
-    // Gradientes de tema (pedido do usuário): cada tema já define os pares
-    // de cor pra janela/header/sidebar/badges — este switch é só o
-    // interruptor mestre pra quem prefere um visual mais chapado/sólido.
-    m_gradientsEnabledField = new QCheckBox(utils::tr(QStringLiteral("settings.fx.gradients")), fxGroup);
-    m_gradientsEnabledField->setProperty("kaiRole", QStringLiteral("switch"));
-    m_gradientsEnabledField->setChecked(currentSettings.gradientsEnabled);
-    m_gradientsEnabledField->setToolTip(utils::tr(QStringLiteral("settings.fx.gradients.hint")));
-    fxLayout->addWidget(m_gradientsEnabledField);
-
+    auto *fxGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.fx")), &grid);
+    fxGroup->setToolTip(utils::tr(QStringLiteral("settings.fx.hint")));
+    m_fxShadowsField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.shadows")),
+                                     currentSettings.fxShadows);
+    m_fxTranslucencyField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.translucency")),
+                                          currentSettings.fxTranslucency);
+    m_fxBlurField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.blur")),
+                                  currentSettings.fxBlur, utils::tr(QStringLiteral("settings.fx.blur.hint")));
+    m_fxAnimationsField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.animations")),
+                                        currentSettings.fxAnimations);
+    // Interruptor mestre dos gradientes de tema, para quem prefere um visual mais chapado.
+    m_gradientsEnabledField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.gradients")),
+                                            currentSettings.gradientsEnabled,
+                                            utils::tr(QStringLiteral("settings.fx.gradients.hint")));
     layout->addWidget(fxGroup);
     layout->addStretch();
 }

@@ -2,7 +2,7 @@
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/shortcut-capture-field.h"
 #include "ui/shared/shortcuts-manager-widget.h"
-#include "ui/shared/collapsible-section-card.h"
+#include "ui/features/settings/tabs/settings-form.h"
 #include "ui/shared/fuzzy-search.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/translation-manager.h"
@@ -10,8 +10,8 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QFrame>
+#include <QLabel>
 #include <QPushButton>
 #include <QColor>
 
@@ -21,16 +21,15 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 18, 20, 18);
-    layout->setSpacing(12);
+    layout->setContentsMargins(settings_form::kPageMargin, settings_form::kPageMargin,
+                               settings_form::kPageMargin, settings_form::kPageMargin);
+    layout->setSpacing(settings_form::kPageSpacing);
 
-    // Busca ao vivo + "Restaurar Padrões" lado a lado (mockup enviado pelo
-    // usuário — o botão de restaurar faltava nesta tela até agora).
-    // Reaproveita FuzzySearchBar (mesmo componente/algoritmo da busca
-    // principal do app).
+    // Busca ao vivo (por ação ou por combinação de teclas) + "Restaurar Padrões".
     auto *searchRow = new QHBoxLayout();
-    searchRow->setSpacing(8);
+    searchRow->setSpacing(utils::tokens::space(2));
     auto *searchField = new FuzzySearchBar(this);
+    searchField->setObjectName(QStringLiteral("shortcutsSearch"));
     searchField->setPlaceholderText(utils::tr(QStringLiteral("settings.shortcuts.search.placeholder")));
     searchRow->addWidget(searchField, 1);
     auto *resetButton = new QPushButton(utils::tr(QStringLiteral("settings.shortcuts.reset")), this);
@@ -38,41 +37,35 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     searchRow->addWidget(resetButton);
     layout->addLayout(searchRow);
 
-    // Atalho GLOBAL do SO (mostra/esconde o Kai) fica À PARTE da tabela —
-    // usa QHotkey (registro no sistema operacional), uma máquina
-    // completamente diferente dos QShortcut do Shortcuts Manager v2 logo
-    // abaixo, então não faz sentido fingir que é "mais uma linha". Usa a
-    // borda neutra padrão do tema (a borda de accent foi removida a pedido
-    // do usuário).
-    auto *globalGroup = new QGroupBox(utils::tr(QStringLiteral("settings.group.global_shortcut")), this);
-    auto *globalForm = new QFormLayout(globalGroup);
-    globalForm->addRow(layout_helpers::makeHintBanner(globalGroup,
-        utils::tr(QStringLiteral("settings.shortcut.global.hint"))));
-    m_hotkeyField = new ShortcutCaptureField(currentSettings.globalHotkey, globalGroup);
-    globalForm->addRow(utils::tr(QStringLiteral("settings.shortcut.global")), m_hotkeyField);
-    layout->addWidget(globalGroup);
+    // Atalho GLOBAL do SO (mostra/esconde o Kai): usa QHotkey, uma máquina diferente dos
+    // QShortcut da tabela, então fica numa linha à parte.
+    auto *globalRow = new QHBoxLayout();
+    globalRow->setSpacing(utils::tokens::space(2));
+    auto *globalLabel = new QLabel(utils::tr(QStringLiteral("settings.shortcut.global")), this);
+    globalLabel->setToolTip(utils::tr(QStringLiteral("settings.shortcut.global.hint")));
+    m_hotkeyField = new ShortcutCaptureField(currentSettings.globalHotkey, this);
+    m_hotkeyField->setToolTip(utils::tr(QStringLiteral("settings.shortcut.global.hint")));
+    globalRow->addWidget(globalLabel);
+    globalRow->addWidget(m_hotkeyField, 1);
+    layout->addLayout(globalRow);
 
-    // Shortcuts Manager v2 (pedido do usuário): tabela rolável com TODAS
-    // as ações, atalhos atuais como chips removíveis, "+" pra adicionar
-    // mais um (multi-binding) — ver ShortcutsManagerWidget. Envolvida num
-    // CollapsibleSectionCard (pedido do usuário: poder colapsar/expandir a
-    // tabela; o card já dá fundo surface2 + borda arredondada que segue a
-    // preferência de canto, uniformizando a cor de fundo).
+    // Tabela sempre à mostra: recolhida por padrão a busca filtrava linhas invisíveis.
     m_shortcutsManager = new ShortcutsManagerWidget(this);
     m_shortcutsManager->setShortcuts(currentSettings.shortcuts);
-    auto *shortcutsCard = new CollapsibleSectionCard(
-        utils::tr(QStringLiteral("settings.shortcuts.table_title")), this);
-    shortcutsCard->setAlwaysShowBody(true);
-    shortcutsCard->setShowCountBadge(false); // a tabela é fixa: o selo "0" no cabeçalho não contava nada
-    shortcutsCard->setExpanded(false, false); // colapsado por padrão (pedido do usuário)
-    shortcutsCard->setBody(m_shortcutsManager);
+    auto *tableCard = new QFrame(this);
+    tableCard->setObjectName(QStringLiteral("shortcutsCard"));
+    tableCard->setStyleSheet(QStringLiteral(
+        "QFrame#shortcutsCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }")
+        .arg(utils::tokens::surface2(), utils::tokens::borderColor()).arg(utils::tokens::radiusLg()));
+    auto *cardLayout = new QVBoxLayout(tableCard);
+    cardLayout->setContentsMargins(4, 4, 4, 4);
+    cardLayout->addWidget(m_shortcutsManager);
     connect(searchField, &FuzzySearchBar::queryChanged, m_shortcutsManager, &ShortcutsManagerWidget::setFilterText);
     connect(resetButton, &QPushButton::clicked, this, [this]() {
         m_shortcutsManager->resetToDefaults();
         m_hotkeyField->setKeySequenceString(core::SettingsData().globalHotkey);
     });
-    layout->addWidget(shortcutsCard, 0, Qt::AlignTop);
-    layout->addStretch(1);
+    layout->addWidget(tableCard, 1);
     // sem wrapPage: a própria tabela já rola internamente (SettingsDialog
     // adiciona esta aba direto ao QStackedWidget, sem QScrollArea).
 }

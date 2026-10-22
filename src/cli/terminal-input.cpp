@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QStringDecoder>
 
+#include <cerrno>
 #include <mutex>
 #include <thread>
 
@@ -10,6 +11,8 @@
 #include <windows.h>
 #else
 #include <QSocketNotifier>
+#include <csignal>
+#include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -135,6 +138,116 @@ bool StdinForwarder::isTty() const
 {
     return d->isTty();
 }
+
+namespace {
+// Um só ouvinte por processo (o kai roda um comando por vez); o handler do sistema roda fora da thread principal
+// (Windows) ou dentro de um sinal (Unix), então só enfileira/escreve num pipe.
+#ifdef Q_OS_WIN
+std::mutex g_interruptMutex;
+InterruptForwarderPrivate *g_interruptTarget = nullptr;
+#else
+int g_interruptPipe[2] = {-1, -1};
+void onSigint(int)
+{
+    const char byte = 1;
+    const int saved = errno;
+    if (g_interruptPipe[1] >= 0) {
+        [[maybe_unused]] const ssize_t n = ::write(g_interruptPipe[1], &byte, 1);
+    }
+    errno = saved;
+}
+#endif
+} // namespace
+
+class InterruptForwarderPrivate {
+public:
+    explicit InterruptForwarderPrivate(InterruptForwarder::Sink sink)
+        : m_sink(std::move(sink))
+    {
+#ifdef Q_OS_WIN
+        {
+            std::lock_guard<std::mutex> lock(g_interruptMutex);
+            g_interruptTarget = this;
+        }
+        ::SetConsoleCtrlHandler(&InterruptForwarderPrivate::onConsoleCtrl, TRUE);
+#else
+        if (::pipe(g_interruptPipe) != 0) {
+            return;
+        }
+        for (const int fd : g_interruptPipe) {
+            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        }
+        m_notifier = std::make_unique<QSocketNotifier>(g_interruptPipe[0], QSocketNotifier::Read);
+        QObject::connect(m_notifier.get(), &QSocketNotifier::activated, m_notifier.get(), [this]() {
+            char buffer[16];
+            while (::read(g_interruptPipe[0], buffer, sizeof(buffer)) > 0) {
+                m_sink();
+            }
+        });
+        struct sigaction action {};
+        action.sa_handler = &onSigint;
+        sigemptyset(&action.sa_mask);
+        ::sigaction(SIGINT, &action, &m_previous);
+        m_installed = true;
+#endif
+    }
+
+    ~InterruptForwarderPrivate()
+    {
+#ifdef Q_OS_WIN
+        ::SetConsoleCtrlHandler(&InterruptForwarderPrivate::onConsoleCtrl, FALSE);
+        std::lock_guard<std::mutex> lock(g_interruptMutex);
+        g_interruptTarget = nullptr;
+#else
+        if (m_installed) {
+            ::sigaction(SIGINT, &m_previous, nullptr);
+        }
+        m_notifier.reset();
+        for (int &fd : g_interruptPipe) {
+            if (fd >= 0) {
+                ::close(fd);
+                fd = -1;
+            }
+        }
+#endif
+    }
+
+    InterruptForwarderPrivate(const InterruptForwarderPrivate &) = delete;
+    InterruptForwarderPrivate &operator=(const InterruptForwarderPrivate &) = delete;
+
+private:
+#ifdef Q_OS_WIN
+    static BOOL WINAPI onConsoleCtrl(DWORD type)
+    {
+        if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT) {
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(g_interruptMutex);
+        if (g_interruptTarget && QCoreApplication::instance()) {
+            // Fila da thread principal: o contexto é o QCoreApplication, que vive até o fim do processo.
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+                std::lock_guard<std::mutex> inner(g_interruptMutex);
+                if (g_interruptTarget) {
+                    g_interruptTarget->m_sink();
+                }
+            }, Qt::QueuedConnection);
+        }
+        return TRUE; // engolido: o kai espera o comando terminar
+    }
+#else
+    struct sigaction m_previous {};
+    bool m_installed = false;
+    std::unique_ptr<QSocketNotifier> m_notifier;
+#endif
+    InterruptForwarder::Sink m_sink;
+};
+
+InterruptForwarder::InterruptForwarder(Sink sink)
+    : d(std::make_unique<InterruptForwarderPrivate>(std::move(sink)))
+{
+}
+
+InterruptForwarder::~InterruptForwarder() = default;
 
 QString stripPendingEcho(const QString &output, QString &pendingEcho)
 {

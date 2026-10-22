@@ -1,6 +1,9 @@
 #include "ui/features/environments/dynamic-vars-inspector-widget.h"
 
-#include "ui/shared/table-utils.h"
+#include "ui/features/environments/variable-list-view.h"
+#include "ui/shared/adaptive-button.h"
+#include "ui/shared/lucide-icons.h"
+#include "ui/shared/search-line-edit.h"
 #include "ui/shared/dialog-utils.h"
 #include "utils/design-tokens.h"
 #include "utils/translation-manager.h"
@@ -28,18 +31,7 @@ namespace kai::ui {
 namespace tk = utils::tokens;
 
 namespace {
-// Tabela SOMENTE-LEITURA, mesmo padrão de ExecutionConditionsEditorWidget/
-// EnvExtractorsEditorWidget (feedback do usuário: "a tabela de variáveis
-// precisa seguir o padrão da de cima nos botões" — lápis+lixeira inline,
-// não uma lixeira solta). "Nome" traz o 🔒 embutido quando persistente
-// (mesmo glifo de EnvExtractorsEditorWidget) — Valor/Persiste NÃO são mais
-// colunas próprias (feedback do usuário: "quero apenas o nome da var, a
-// label [pill do projeto] e o botão de excluir/editar"); o valor aparece
-// no formulário de edição.
-constexpr int kColVar = 0;
-constexpr int kColScope = 1;
-constexpr int kColActions = 2;
-constexpr int kColumnCount = 3;
+constexpr int kControlH = 30;
 
 // Escopo Global usa a chave literal do combo/tabela; "" internamente.
 const QString kAllScopesData = QStringLiteral("__all__");
@@ -61,27 +53,6 @@ QColor colorForScope(const QString &scopeKey)
     return QColor::fromHsl(hue, 140, 150);
 }
 
-QWidget *makePill(const QString &text, const QColor &color)
-{
-    auto *label = new QLabel(text);
-    label->setStyleSheet(QStringLiteral(
-        "QLabel { background-color: rgba(%1, %2, %3, 38); color: %4;"
-        " border-radius: %5px; padding: 2px 8px; font-weight: 600; font-size: 11px; }")
-        .arg(color.red()).arg(color.green()).arg(color.blue())
-        .arg(color.name()).arg(tk::radiusSm()));
-    // Alinhado à ESQUERDA (não mais centralizado): projetos com nome
-    // desambiguado por caminho ("Luzzoo  (Clientes / Luzzoo)") numa coluna
-    // apertada ficavam CENTRALIZADOS sem elidir — o Qt simplesmente corta o
-    // que não cabe dos dois lados igualmente, então o que sobrava visível
-    // era o MEIO do texto, não o início (achado real: "poderia melhorar de
-    // deixar a label mais inteligente e exibir o começo da label, ao invés
-    // do meio"). Alinhado à esquerda, o corte acontece só no final —
-    // sempre o começo (a parte mais identificável: o nome do projeto)
-    // continua visível. Tooltip com o texto completo cobre o resto.
-    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    label->setToolTip(text);
-    return label;
-}
 } // namespace
 
 DynamicVarsInspectorWidget::DynamicVarsInspectorWidget(
@@ -109,19 +80,27 @@ void DynamicVarsInspectorWidget::setupUi()
     auto *filterRow = new QHBoxLayout();
     filterRow->setSpacing(tk::space(2));
 
-    m_filterField = new QLineEdit(this);
+    m_filterField = new SearchLineEdit(this);
+    m_filterField->setFixedHeight(kControlH);
+    m_filterField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }")
+        .arg(tk::radiusMdForHeight(kControlH)));
     m_filterField->setPlaceholderText(utils::tr(QStringLiteral("dynamic_vars.filter.placeholder")));
     connect(m_filterField, &QLineEdit::textChanged, this, [this](const QString &) { rebuildTable(); });
     filterRow->addWidget(m_filterField, 1);
 
     m_scopeField = new QComboBox(this);
+    m_scopeField->setFixedHeight(kControlH);
+    m_scopeField->setMinimumWidth(tk::space(30));
+    m_scopeField->setStyleSheet(QStringLiteral("QComboBox { min-height: 0px; padding: 0px %1px; border-radius: %2px; }")
+        .arg(tk::space(3)).arg(tk::radiusMdForHeight(kControlH)));
     connect(m_scopeField, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         rebuildTable();
         m_resetScopeButton->setVisible(m_scopeField->currentData().toString() != kAllScopesData);
     });
     filterRow->addWidget(m_scopeField);
 
-    m_resetScopeButton = new QPushButton(utils::tr(QStringLiteral("dynamic_vars.reset_scope")), this);
+    m_resetScopeButton = new AdaptiveButton(utils::tr(QStringLiteral("dynamic_vars.reset_scope")), this);
+    m_resetScopeButton->setIcon(LucideIcons::icon(QStringLiteral("rotate-ccw"), QColor(tk::mutedFg()), 16));
     connect(m_resetScopeButton, &QPushButton::clicked, this, [this]() {
         const QString data = m_scopeField->currentData().toString();
         const QString scopeKey = (data == kGlobalScopeData) ? QString() : data;
@@ -132,9 +111,11 @@ void DynamicVarsInspectorWidget::setupUi()
         resetScope(scopeKey);
     });
     m_resetScopeButton->setVisible(false);
+    makeCompactButton(m_resetScopeButton, kControlH);
     filterRow->addWidget(m_resetScopeButton);
 
-    auto *resetAllButton = new QPushButton(utils::tr(QStringLiteral("dynamic_vars.reset_all")), this);
+    auto *resetAllButton = new AdaptiveButton(utils::tr(QStringLiteral("dynamic_vars.reset_all")), this);
+    resetAllButton->setIcon(LucideIcons::icon(QStringLiteral("trash-2"), QColor(tk::mutedFg()), 16));
     connect(resetAllButton, &QPushButton::clicked, this, [this]() {
         if (!confirmYesNo(this, utils::tr(QStringLiteral("dynamic_vars.reset_all")),
                           utils::tr(QStringLiteral("dynamic_vars.reset_all.confirm")))) {
@@ -142,25 +123,20 @@ void DynamicVarsInspectorWidget::setupUi()
         }
         resetAll();
     });
+    makeCompactButton(resetAllButton, kControlH);
     filterRow->addWidget(resetAllButton);
 
     layout->addLayout(filterRow);
 
-    m_table = new QTableWidget(0, kColumnCount, this);
-    configureTable(m_table, {
-        {utils::tr(QStringLiteral("dynamic_vars.column.variable")), 320, true},
-        {utils::tr(QStringLiteral("dynamic_vars.column.scope")), 160, false},
-        {QString(), rowActionsColumnWidth(), false},
+    m_list = new VariableListView(this);
+    m_list->setEmptyText(utils::tr(QStringLiteral("dynamic_vars.empty")));
+    connect(m_list, &VariableListView::editRequested, this, [this](int i) {
+        if (i >= 0 && i < m_shown.size()) editRowViaForm(m_shown.at(i));
     });
-    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    // Ver comentário equivalente em EnvExtractorsEditorWidget/
-    // ParameterEditorWidget — stretchLastSection + Stretch explícito
-    // competindo pelo espaço sobrando.
-    m_table->horizontalHeader()->setStretchLastSection(false);
-    m_table->horizontalHeader()->setSectionResizeMode(kColVar, QHeaderView::Stretch);
-    layout->addWidget(m_table);
+    connect(m_list, &VariableListView::deleteRequested, this, [this](int i) {
+        if (i >= 0 && i < m_shown.size()) removeVarAt(m_shown.at(i));
+    });
+    layout->addWidget(m_list, 1);
 }
 
 void DynamicVarsInspectorWidget::rebuildScopeCombo()
@@ -273,28 +249,18 @@ void DynamicVarsInspectorWidget::rebuildTable()
         filtered << row;
     }
 
-    // ZERA antes de repopular — ver comentário equivalente em
-    // ParameterEditorWidget::rebuildTable (causa real do ícone fantasma:
-    // setCellWidget não solta de vez o widget antigo quando a contagem de
-    // linhas não muda entre chamadas — aqui é ainda mais provável, já que
-    // rebuildTable() roda a cada tecla digitada no filtro).
-    m_table->setRowCount(0);
-    m_table->setRowCount(filtered.size());
-    for (int i = 0; i < filtered.size(); ++i) {
-        const RowInfo &row = filtered.at(i);
-        // Nome + 🔒 embutido quando persistente — mesmo glifo/convenção de
-        // EnvExtractorsEditorWidget::summaryFor. Valor NÃO é mais coluna
-        // própria (feedback do usuário) — só aparece no editar.
-        const QString nameText = row.persisted ? row.varName + QStringLiteral("  🔒") : row.varName;
-        auto *nameItem = new QTableWidgetItem(nameText);
-        nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
-        nameItem->setToolTip(row.value); // valor completo no hover, sem precisar editar só pra ver
-        m_table->setItem(i, kColVar, nameItem);
-        m_table->setCellWidget(i, kColScope, makePill(row.scopeLabel, colorForScope(row.scopeKey)));
-        m_table->setCellWidget(i, kColActions, makeRowActionsCell(m_table,
-            [this, row]() { editRowViaForm(row); },
-            [this, row]() { removeVarAt(row); }));
+    m_shown = filtered;
+    QVector<VariableRowSpec> specs;
+    for (const RowInfo &row : std::as_const(filtered)) {
+        VariableRowSpec spec;
+        spec.key = row.varName;
+        spec.value = row.value;
+        spec.persisted = row.persisted;
+        spec.pill = row.scopeLabel;
+        spec.pillColor = colorForScope(row.scopeKey);
+        specs.append(spec);
     }
+    m_list->setRows(specs);
 }
 
 void DynamicVarsInspectorWidget::removeVarAt(const RowInfo &row)

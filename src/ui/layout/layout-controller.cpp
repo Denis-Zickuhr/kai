@@ -223,7 +223,7 @@ void LayoutController::populateViewMenu(QMenu *menu)
     }
     menu->addSeparator();
 
-    // Mover/flutuar/maximizar cada painel que está na janela.
+    // Mover/flutuar cada painel que está na janela.
     QMenu *panelMenu = menu->addMenu(utils::tr(QStringLiteral("menu.view.panel_position")));
     for (const QString &id : model.placedViews()) {
         QMenu *sub = panelMenu->addMenu(LucideIcons::icon(registry->icon(id), QColor(tk::mutedFg()), 16),

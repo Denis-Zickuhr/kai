@@ -100,6 +100,7 @@ if [[ ! -f "$COM" ]]; then
 fi
 cp "$COM" "$DIST/kai.com"
 cp -r "$SRC/assets" "$DIST/assets"
+cp -r "$SRC/sample" "$DIST/assets/samples"
 
 # AVISOS DE LICENÇA junto do binário. Obrigatório, não cortesia: o QHotkey é
 # BSD-3 e está linkado ESTATICAMENTE no kai.exe, e a licença exige reproduzir o

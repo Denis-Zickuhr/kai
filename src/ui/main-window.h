@@ -38,7 +38,7 @@
 #include "ui/shared/top-utility-bar.h"
 #include "ui/shared/action-sidebar.h"
 #include "ui/features/history/process-list-dialog.h"
-#include "ui/features/output/log-viewer-dialog.h"
+#include "ui/features/output/logs-panel.h"
 #include "ui/layout/layout-model.h"
 #include "utils/theme-manager.h"
 
@@ -96,6 +96,8 @@ public:
     // diálogo (pasta-pai = raiz). `message` = resumo ou erro.
     // `only` vazio = tudo; ver cliImportSelection.
     bool importProjectFromCli(const QString &path, const QStringList &only, QString &message);
+    // `kai import --recursive <pasta>`: importa cada projeto (kai.yml) abaixo da pasta, a própria inclusa.
+    bool importProjectTreeFromCli(const QString &rootDirectory, QString &message);
     // A pasta do Kai (projeto ou subpasta) cujo diretório de trabalho contém `directory`, a mais funda; vazio = nenhuma.
     QString enclosingFolderIdFor(const QString &directory) const;
     // `kai attach <nome|pid>`: espelha a saída de um processo que JÁ está
@@ -219,6 +221,10 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     bool event(QEvent *e) override;
+#if defined(Q_OS_WIN)
+    // Snap, redimensionar pelas bordas e arrastar pela barra de título com o comportamento nativo do Windows.
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
+#endif
     // Filtro instalado no container central: intercepta movimento/clique
     // do mouse nas bordas para iniciar o resize nativo, já que o container
     // cobre a área da janela e receberia os eventos antes da MainWindow.
@@ -226,6 +232,8 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
+    // Pára tudo o que está rodando (pelo mesmo caminho do botão Parar de cada comando).
+    void stopAllRunning();
     // Põe a saída de um comando num painel próprio: um app KIP vira mini app (`kip:`), o resto um espelho (`run:`).
     void openRunPanel(const QString &commandId);
     void pinKipPanel(const QString &commandId);
@@ -297,14 +305,14 @@ private slots:
     void deleteFolderWithDialog(const QString &folderId);
     void handleQuickEditBodyRequested(const QString &commandId);
     void handleSettingsRequested();
-    // IA (roadmap A10): abre o chat e mostra/esconde o botão da barra conforme haja provedor configurado.
+    // IA (roadmap A10): abre o chat; sem provedor configurado o painel do chat não existe.
     void showAiChat();
     void refreshAiAvailability();
     // Config corrompida foi restaurada de backup (ConfigManager::
     // configRecovered) — hoje só logava; vira notificação opcional.
     void handleConfigRecovered(const QString &filePath, const QString &backupPath);
-    // Environments (pacotes selecionáveis): trocar o ativo pelo seletor do
-    // topo e abrir a tela de gestão (criar/editar/excluir).
+    // Environments (pacotes selecionáveis): trocar o ativo (bandeja, paleta, painel Variáveis) e abrir a tela de gestão
+    // (criar/editar/excluir).
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
     void saveEnvironmentsFromPanel();
@@ -398,9 +406,14 @@ private:
     // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
     QWidget *createMirrorPanel(const QString &commandId, bool kip);
     void forEachMirror(const QString &commandId, const std::function<void(RunMirrorPanel *)> &action);
-    // Um app KIP aberto num painel próprio (`run:`/`kip:`) vive SÓ ali, como uma aba do app: a Saída padrão não ganha
-    // guia dele, não se conecta a ele ao rodar nem ao selecionar. Fechar o painel devolve a guia à Saída.
-    bool kipLivesInPanel(const QString &commandId) const;
+    // Um comando aberto num painel próprio (`run:`/`kip:`) vive SÓ ali, como uma aba dele: a Saída padrão não ganha
+    // guia, não se conecta a ele ao rodar nem ao selecionar. Fechar o painel devolve a guia à Saída. Exceção: o terminal
+    // interativo (PTY) só existe na Saída, então esse comando continua espelhado (a guia fica).
+    bool livesInPanel(const QString &commandId) const;
+    static bool panelOwnsOutput(const core::Command &command);
+    // Pai dos diálogos que abrem ao rodar: uma janela flutuante fixada (sempre no topo) cobriria um diálogo filho da
+    // janela principal; filho dela, o diálogo fica acima.
+    QWidget *dialogParent();
     // O id do painel de um comando: um app KIP vira mini app (`kip:`, volta ao reiniciar); o resto, espelho (`run:`).
     QString panelIdForCommand(const QString &commandId) const;
     // "Abrir com o Kai" do painel de um app KIP (preferência pessoal, SettingsData::kipPanelAutoStart).
@@ -408,8 +421,12 @@ private:
     void setKipPanelAutoStart(const QString &commandId, bool on);
     // Ao iniciar: roda os apps KIP com painel e "Abrir com o Kai" ligado (inertes: esperam o usuário na tela inicial).
     void autoStartKipPanels();
-    void revealKipPanel(const QString &commandId);
-    void moveKipOutOfOutput(const QString &commandId);
+    void revealCommandPanel(const QString &commandId);
+    void moveOutOfOutput(const QString &commandId);
+    // Faixa com os botões de execução (executar, parar, forçar, reiniciar, body) no cabeçalho da Saída de um comando que vive
+    // fora da árvore — painel ou janela destacada, onde não há a árvore pra agir.
+    ActionSidebar *makeCommandActionStrip(const QString &commandId);
+    void refreshCommandActionStrips();
     void setMirrorStatus(const QString &commandId, ExecutionStatus status);
     ExecutionStatus executionStatusFor(const QString &commandId) const;
     // O painel Documento: criado com o app, registrado como um painel qualquer do quadro.
@@ -445,6 +462,7 @@ private:
     // Windows 11: cantos nativos do DWM aceitos (sem máscara nem raio no QSS) e o
     // último estilo de cantos aplicado (-1 = reaplicar).
     bool m_nativeCorners = false;
+    bool m_nativeSnap = false; // Windows: as bordas e o arraste da barra são do sistema (ver native-window-snap.h)
     int m_nativeCornerStyle = -1;
     void setWelcomeMode(bool welcome);
     bool m_welcomeMode = false;
@@ -496,9 +514,8 @@ private:
     // precisar de um ponto de chamada dedicado por handler.
     void updateWelcomeScreenVisibility();
     // Aplica as vars do environment ativo no EnvironmentManager (escopo
-    // global) e atualiza o seletor do topo.
+    // global).
     void applyActiveEnvironment();
-    void refreshEnvironmentSelector();
     // Abre o formulário de parâmetros (se o comando tiver) e então executa.
     void promptParamsAndRun(core::Command command);
     // Roda o script de uma lista dinâmica (Parameter::optionsScript) e entrega o resultado ao `dialog`.
@@ -515,6 +532,17 @@ private:
     // resolvida pelo ImportDialog em handleImportRequested) — mesma lógica
     // de sempre, só sem o picker próprio.
     void importProjectFromDirectory(const QString &directory);
+    void importProjectTreeFromDirectory(const QString &directory);
+    struct TreeImportOutcome {
+        int imported = 0;
+        QStringList failures; // "pasta: motivo"
+    };
+    // Importa cada pasta de `directories` (pais antes dos filhos) como projeto. `rootProjectPath` é o PROJECT_PATH da
+    // raiz; o das demais é ele + o caminho relativo. Um projeto dentro de outro entra dentro dele; os demais em
+    // `parentFolderId` (vazio = raiz).
+    TreeImportOutcome importProjectTree(const QString &rootDirectory, const QStringList &directories,
+                                        const QString &rootProjectPath, bool detectGeneric,
+                                        const QString &parentFolderId);
     // Anexa um projeto já lido (ids únicos, grava, coleções, árvore) — o
     // mesmo fim do import pelo diálogo e pelo CLI. false se a gravação falhou.
     bool mergeImportedProject(ProjectImportResult importResult, const QString &parentFolderId);
@@ -550,6 +578,13 @@ private:
     // Reflete o painel maximizado no DockHost (a Saída maximizada é o modo foco) no flag, no chevron e nas configurações.
     void syncCommandsCollapsed();
     void showQuickRun();
+    // Comandos executados há pouco, mais recente primeiro (para o menu da bandeja).
+    void noteRecentCommand(const QString &commandId);
+    QStringList m_recentCommandIds;
+    bool m_recentSeeded = false;
+    // Da bandeja, com o Kai oculto: a busca abre no meio da tela sob o cursor, sem trazer a janela.
+    void showQuickRunFromTray();
+    QuickRunPopup *preparedQuickRun();
     QuickRunPopup *m_quickRun = nullptr;
     // Ctrl+K: a mesma janelinha do "+", mas com comandos, pastas, notas, ambientes e ações.
     void showCommandPalette();
@@ -592,6 +627,10 @@ private:
     void updateFocusActions();
     QSet<QString> m_docSourceFolders; // fontes de documentação (refreshDocSources)
     bool m_smartFocus = false; // Configurações → Foco inteligente (desligado: a Saída e o Documento só vêm quando pedidos)
+    bool m_inlineActions = false; // Configurações → Ações inline (botões do item na linha da árvore)
+    // O item que já estava selecionado enquanto a árvore é reconstruída (um comando editado, pelo agente ou por um diálogo):
+    // a árvore o seleciona de novo, e isso não é uma navegação, então nada passa à frente nem muda de painel.
+    QString m_restoredSelectionId;
     quint64 m_docSourcesToken = 0;
     // A memória do leitor de documentos (posições, rascunhos, recentes) e as marcas de "não salvo" na árvore de comandos.
     DocSessionStore *m_docStore = nullptr;
@@ -636,6 +675,8 @@ private:
     void updateRunningCommandStatus();
     void appendToCommandLog(const QString &commandId, const QString &text);
     QStringList availableThemeNames() const;
+    // Grava e aplica as configurações como o diálogo faz, sem diálogo (ferramentas de configuração da IA).
+    bool applySettingsFromAgent(const core::SettingsData &settings, QString &error);
     QString resolveTargetFolderId() const;
     // Garante ID ÚNICO pra uma pasta nova (bug relatado: 2 pastas com o
     // MESMO NOME geravam o MESMO id via FolderEditorDialog::
@@ -843,6 +884,7 @@ private:
     layout::DockHost *m_dock = nullptr;
     layout::LayoutStore *m_layoutStore = nullptr;
     layout::LayoutController *m_layoutController = nullptr;
+    QVector<QPointer<ActionSidebar>> m_commandStrips; // as faixas de ação dos painéis/janelas de comando (propriedade kaiCommandId)
     QHash<QString, QPointer<RunMirrorPanel>> m_mirrors; // por id do painel (`run:<id>` / `kip:<id>`)
     // Modo foco: a lista de comandos some e a Saída (com as guias dos programas ativos) ocupa tudo — é o painel Saída
     // maximizado no DockHost. O chevron fica no começo da barra de guias.
@@ -867,7 +909,6 @@ private:
     QSystemTrayIcon *m_trayIcon = nullptr;
     std::unique_ptr<QHotkey> m_globalHotkey;
     ProcessListDialog *m_processListDialog = nullptr;
-    LogViewerDialog *m_logViewerDialog = nullptr;
 
     // Estado do arraste da janela frameless (custom title bar).
     // Detecção de borda para resize da janela frameless: retorna as

@@ -160,7 +160,9 @@ QString buildModernStylesheet()
     // --- Botões: primário (accent) vs neutro, via propriedade kaiRole ---
     qss += QStringLiteral(
         "QPushButton { background-color: %1; color: %2; border: 1px solid %3;"
-        " border-radius: %4px; padding: %5px %6px; min-height: %7px; font-weight: 500; }\n"
+        " border-radius: %4px; padding: %5px %6px; min-height: %7px; font-weight: 500;"
+        " outline: none; }\n"
+        "QPushButton:focus { border: 1px solid %11; }\n"
         "QPushButton:hover { background-color: %8; }\n"
         "QPushButton:pressed { background-color: %9; }\n"
         "QPushButton:disabled { color: %10; border-color: %3; }\n"
@@ -659,19 +661,19 @@ QString buildModernStylesheet()
         "#outputStatusBadge[kaiState=\"skipped\"] { background-color: %1; }\n")
         .arg(hex(shiftToward(QColor(bg), QColor(tk::warningFg()), 0.38)));
 
-    // --- Navegação lateral (Settings em blocos): item selecionado com faixa
-    //     de accent à esquerda, estilo painel de preferências moderno. ---
+    // --- Navegação lateral (Settings em blocos): item selecionado em destaque arredondado. Sem faixa
+    //     de accent à esquerda: uma borda lateral num item com raio desenhava um arco torto. ---
     qss += QStringLiteral(
         "QListWidget#settingsNav { background-color: %1; border: none;"
         " border-right: 1px solid %2; padding: %3px %4px; outline: none; }\n"
         "QListWidget#settingsNav::item { padding: %5px %6px; border-radius: %7px;"
-        " color: %8; border-left: 2px solid transparent; }\n"
+        " color: %8; }\n"
         "QListWidget#settingsNav::item:hover { background-color: %9; color: %10; }\n"
         "QListWidget#settingsNav::item:selected { background-color: %11;"
-        " color: %10; border-left: 2px solid %12; font-weight: %13; }\n")
+        " color: %10; font-weight: %12; }\n")
         .arg(surface).arg(border).arg(tk::space(2)).arg(tk::space(1))
         .arg(padY).arg(padX).arg(rSm).arg(muted).arg(hover).arg(fg)
-        .arg(sel).arg(accent).arg(wTitle);
+        .arg(sel).arg(wTitle);
 
     // --- Moldura dos painéis principais (caixa de comandos e Saída) = "panelCard":
     // a MESMA borda de 1px + raio dos tokens nos dois; o miolo mantém a cor de

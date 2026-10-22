@@ -1,3 +1,4 @@
+#include "core/project-format.h"
 #include "core/folder-actions.h"
 #include "core/working-dir.h"
 #include "ui/features/docs/document-panel.h"
@@ -13,6 +14,7 @@
 #include "ui/features/ai/main-window-agent-host.h"
 #include "ui/features/ai/mcp-bridge.h"
 #include "core/folder-nesting.h"
+#include "core/project-tree-scan.h"
 
 #include "core/http-collection-import.h"
 #include "core/http-resolve.h"
@@ -22,6 +24,7 @@
 #include "ui/external-run-session.h"
 #include "ui/shared/notification-gate.h"
 #include "ui/shared/native-window-corners.h"
+#include "ui/shared/native-window-snap.h"
 #include "ui/shared/expand-collapse-bar.h"
 #include "ui/shared/panel-metrics.h"
 #include "ui/app-stylesheet.h"
@@ -127,6 +130,7 @@
 #include <QUrl>
 #include <QRegularExpression>
 #include <functional>
+#include "ui/shared/tray-menu.h"
 #include "ui/shared/window-translucency.h"
 #include "ui/shared/file-dialogs.h"
 
@@ -249,6 +253,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_outputMaxLogSizeChars = qMax(1, initialSettings.outputMaxLogSizeKb) * 1024;
     m_globalActions = initialSettings.globalActions;
     m_smartFocus = initialSettings.smartFocus;
+    m_inlineActions = initialSettings.inlineActions;
 
     setupUi();
     setupToolbar();
@@ -481,14 +486,7 @@ void MainWindow::setupUi()
         engine::HttpCookieStore::clear();
         QToolTip::showText(QCursor::pos(), utils::tr(QStringLiteral("http.cookies.cleared")));
     });
-    connect(m_topBar, &TopUtilityBar::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
-    connect(m_topBar, &TopUtilityBar::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
-    connect(m_topBar, &TopUtilityBar::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
-    connect(m_topBar, &TopUtilityBar::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_topBar, &TopUtilityBar::settingsRequested, this, &MainWindow::handleSettingsRequested);
-    connect(m_topBar, &TopUtilityBar::aiChatRequested, this, &MainWindow::showAiChat);
-    connect(m_topBar, &TopUtilityBar::environmentSelected, this, &MainWindow::handleEnvironmentSelected);
-    connect(m_topBar, &TopUtilityBar::manageEnvironmentsRequested, this, &MainWindow::handleManageEnvironmentsRequested);
     connect(m_topBar, &TopUtilityBar::runHistoryRequested, this, &MainWindow::handleRunHistoryRequested);
     connect(m_topBar, &TopUtilityBar::helpRequested, this, &MainWindow::handleHelpRequested);
     connect(m_topBar, &TopUtilityBar::manifestoRequested, this, [this]() {
@@ -627,7 +625,11 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::selectionChanged, this,
         [this](const QString &itemId, bool isFolder) {
             if (isNoteId(itemId)) {
-                handleNoteSelected(itemId);
+                if (itemId == m_restoredSelectionId) {
+                    handleCommandSelectionChanged(itemId, true); // só as barras: a nota não vem para a frente
+                } else {
+                    handleNoteSelected(itemId);
+                }
                 return;
             }
             handleCommandSelectionChanged(itemId, isFolder);
@@ -665,6 +667,7 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::commandOutputRequested, this, &MainWindow::showCommandOutput);
     connect(m_commandTree, &CommandTreeWidget::documentRequested, this, &MainWindow::showDocumentFor);
     m_commandTree->setOutputMarksEnabled(!m_smartFocus);
+    m_commandTree->setInlineActionsEnabled(m_inlineActions);
 
     m_actionSidebar = new ActionSidebar(central);
     connect(m_actionSidebar, &ActionSidebar::playSelectedRequested, this, &MainWindow::triggerPlaySelected);
@@ -682,6 +685,9 @@ void MainWindow::setupUi()
             [this]() { showDocumentFor(m_commandTree->currentSelectionId()); });
 
     m_terminalDrawer = new TerminalDrawer(central);
+    connect(m_terminalDrawer, &TerminalDrawer::detachedPanelCreated, this, [this](OutputPanel *panel, const QString &commandId) {
+        panel->addHeaderWidget(makeCommandActionStrip(commandId));
+    });
     connect(m_terminalDrawer, &TerminalDrawer::commandEntered, this, &MainWindow::handleTerminalInputEntered);
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::saveAsNoteRequested, this,
             [this]() { saveOutputAsNote(m_connectedTerminalCommandId); });
@@ -712,6 +718,7 @@ void MainWindow::setupUi()
     });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabContextRequested, this, &MainWindow::showOutputTabMenu);
     // Puxar uma guia para fora da barra a transforma num painel arrastável (`run:<id>`): ver DockHost::beginViewDrag.
+    m_terminalDrawer->outputTabs()->setExternalDragAllowed([this]() { return m_dock && m_dock->editMode(); });
     connect(m_terminalDrawer->outputTabs(), &OutputTabsBar::tabDragStarted, this, [this](const QString &) {
         if (m_dock) {
             m_dock->beginViewDrag();
@@ -772,9 +779,7 @@ void MainWindow::setupUi()
     // A janela destacada recebe o mesmo quando é do comando de origem.
     connectPipelineAuxSignals(m_pipeline);
     connect(m_terminalDrawer, &TerminalDrawer::closeRequested, this, &MainWindow::handleTerminalCloseRequested);
-    // Persiste o estado colapsado do terminal entre sessões
-    // (feedback do usuário: lembrar se o terminal estava colapsado). Ao
-    // alternar, grava terminal_collapsed em settings.json.
+    // O colapso da Saída não tem mais botão (só a tela de boas-vindas e o modo foco o usam): não é lembrado entre sessões.
     connect(m_terminalDrawer, &TerminalDrawer::expandedChanged, this,
         [this](bool expanded) {
             if (expanded) {
@@ -784,9 +789,6 @@ void MainWindow::setupUi()
             } else if (m_commandsCollapsed) {
                 setCommandsCollapsed(false); // a tela nunca fica com os dois recolhidos
             }
-            core::SettingsData settings = m_configManager.loadSettings();
-            settings.terminalCollapsed = !expanded;
-            m_configManager.saveSettings(settings);
         });
     // Painel de Saída sempre visível (feedback do usuário: a
     // caixa da Saída deve sempre estar visível, nunca escondida do
@@ -959,18 +961,92 @@ void MainWindow::setupTrayIcon()
     m_trayIcon->setIcon(loadAppIcon());
     m_trayIcon->setToolTip(utils::tr(QStringLiteral("mainwindow.tray.tooltip")));
 
-    auto *menu = new QMenu();
-
-    auto *toggleAction = menu->addAction(utils::tr(QStringLiteral("tray.toggle")));
-    connect(toggleAction, &QAction::triggered, this, &MainWindow::toggleVisibility);
-
-    auto *importAction = menu->addAction(utils::tr(QStringLiteral("tray.import")));
-    connect(importAction, &QAction::triggered, this, &MainWindow::handleImportRequested);
-
-    menu->addSeparator();
-
-    auto *quitAction = menu->addAction(utils::tr(QStringLiteral("tray.quit")));
-    connect(quitAction, &QAction::triggered, qApp, &QCoreApplication::quit);
+    auto *menu = new TrayMenu();
+    // Estado lido a cada abertura: nada fica desatualizado e nada roda em segundo plano.
+    connect(menu, &QMenu::aboutToShow, this, [this, menu]() {
+        const core::SettingsData settings = m_configManager.loadSettings();
+        TrayMenu::State state;
+        for (const QString &id : m_processManager->trackedCommandIds()) {
+            if (m_processManager->statusOf(id) == engine::ProcessStatus::Running) {
+                ++state.runningCount;
+            }
+        }
+        state.notificationsEnabled = settings.notificationsEnabled;
+        for (const core::Environment &e : settings.environments) {
+            state.environmentIds << e.id;
+            state.environmentNames << (e.name.isEmpty() ? e.id : e.name);
+        }
+        // Contagem e "Parar tudo" valem para qualquer execução (em segundo plano, do pipeline, ações de pasta).
+        state.runningCount = 0;
+        for (auto it = m_commandsById.cbegin(); it != m_commandsById.cend(); ++it) {
+            if (isCommandRunning(it.key())) {
+                ++state.runningCount;
+            }
+        }
+        if (!m_recentSeeded) {
+            m_recentSeeded = true;
+            for (const core::RunRecord &record : m_runHistory.load()) {
+                if (!m_recentCommandIds.contains(record.commandId)) {
+                    m_recentCommandIds.append(record.commandId);
+                }
+                if (m_recentCommandIds.size() >= 8) {
+                    break;
+                }
+            }
+        }
+        for (const QString &id : std::as_const(m_recentCommandIds)) {
+            const auto found = m_commandsById.constFind(id);
+            if (found == m_commandsById.constEnd() || found->hidden || core::isFolderActionCommandId(id)) {
+                continue;
+            }
+            state.recentIds << id;
+            state.recentNames << found->name;
+            if (state.recentIds.size() >= 5) {
+                break;
+            }
+        }
+        state.activeEnvironmentId = settings.activeEnvironmentId;
+        state.themes = availableThemeNames();
+        state.activeTheme = settings.activeTheme;
+        menu->rebuild(state);
+    });
+    connect(menu, &TrayMenu::toggleRequested, this, &MainWindow::toggleVisibility);
+    connect(menu, &TrayMenu::importRequested, this, &MainWindow::handleImportRequested);
+    connect(menu, &TrayMenu::quitRequested, qApp, &QCoreApplication::quit);
+    // Configurações, importar e a busca rápida abrem sozinhos: a janela principal só aparece por "Mostrar/Ocultar".
+    connect(menu, &TrayMenu::quickRunRequested, this, &MainWindow::showQuickRunFromTray);
+    connect(menu, &TrayMenu::stopAllRequested, this, &MainWindow::stopAllRunning);
+    connect(menu, &TrayMenu::recentCommandChosen, this, &MainWindow::handleCommandActivated);
+    connect(menu, &TrayMenu::notificationsHistoryRequested, this, [this]() {
+        showAndRaise();
+        handleNotificationHistoryRequested();
+    });
+    connect(menu, &TrayMenu::notificationsToggled, this, [this](bool enabled) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        settings.notificationsEnabled = enabled;
+        if (!m_configManager.saveSettings(settings)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Falha ao persistir o estado das notificações."));
+        }
+    });
+    connect(menu, &TrayMenu::environmentChosen, this, &MainWindow::handleEnvironmentSelected);
+    connect(menu, &TrayMenu::themeChosen, this, [this](const QString &themeName) {
+        core::SettingsData settings = m_configManager.loadSettings();
+        if (settings.activeTheme == themeName) {
+            return;
+        }
+        if (!m_themeManager->loadTheme(themeName)) {
+            utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado pela bandeja.").arg(themeName));
+            return;
+        }
+        settings.activeTheme = themeName;
+        m_configManager.saveSettings(settings);
+    });
+    connect(menu, &TrayMenu::settingsRequested, this, &MainWindow::handleSettingsRequested);
+    // Logs e histórico de notificações são painéis do quadro: precisam da janela.
+    connect(menu, &TrayMenu::logsRequested, this, [this]() {
+        showAndRaise();
+        handleLogsRequested();
+    });
 
     m_trayIcon->setContextMenu(menu);
     connect(m_trayIcon, &QSystemTrayIcon::activated, this, &MainWindow::handleTrayIconActivated);
@@ -1524,7 +1600,8 @@ void MainWindow::applyActionGroupPlacement()
         }
     };
     // Ordem de exibição pedida pelo usuário: Execução, Exibição, Item.
-    place(m_actionSidebar, settings.executionActionsPlacement);
+    // Com as ações inline os botões de execução ficam na linha do item: o grupo seria redundante.
+    place(m_actionSidebar, settings.inlineActions ? QStringLiteral("hidden") : settings.executionActionsPlacement);
     place(m_expandCollapseBar, settings.displayActionsPlacement);
     place(m_itemActionsBar, settings.itemActionsPlacement);
 
@@ -1875,6 +1952,7 @@ void MainWindow::registerPanelViews()
     constexpr int kNotificationsMinWidth = 400;
     constexpr int kVariablesMinWidth = 520;
     constexpr int kAiChatMinWidth = 360;
+    constexpr int kLogsMinWidth = 360;
     const auto base = [](const QString &id, const char *titleKey, const char *icon, Home home) {
         ViewSpec spec;
         spec.id = id;
@@ -1949,6 +2027,11 @@ void MainWindow::registerPanelViews()
     };
     m_viewRegistry->registerView(variables);
 
+    ViewSpec logs = base(view_id::kLogs, "layout.view.logs", "scroll-text", Home::Secondary);
+    logs.minWidth = kLogsMinWidth;
+    logs.factory = [this]() -> QWidget * { return wrapInPanelCard(new LogsPanel, QSize(kLogsMinWidth, 240)); };
+    m_viewRegistry->registerView(logs);
+
     // O chat de IA só existe com um provedor configurado (sem provedor: nenhum botão, nenhum painel, nenhuma rede).
     m_aiConfigured = m_configManager.loadAiSettings().isConfigured();
     ViewSpec aiChat = base(view_id::kAiChat, "layout.view.ai_chat", "sparkles", Home::Secondary);
@@ -2004,48 +2087,122 @@ QWidget *MainWindow::createMirrorPanel(const QString &commandId, bool kip)
     const QString name = it != m_commandsById.constEnd() ? it->name : commandId;
     const auto kind = kip ? RunMirrorPanel::Kind::Kip : RunMirrorPanel::Kind::Run;
     auto *panel = new RunMirrorPanel(commandId, name, kind);
+    const bool kipCommand = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command;
+    const bool ownsOutput = it != m_commandsById.constEnd() && panelOwnsOutput(*it);
+    panel->setFormattedOutput(it != m_commandsById.constEnd() && it->formattedOutput && !kipCommand);
+    panel->setAcceptsInput(ownsOutput && !kipCommand);
+    panel->output()->addHeaderWidget(makeCommandActionStrip(commandId));
     OutputPanel *embedded = m_terminalDrawer->embeddedPanel();
     panel->applyBarHeight(embedded->barHeight());
     panel->seed(embedded, m_commandLogs.value(commandId));
     panel->setInitialStatus(executionStatusFor(commandId));
     // Fixado (`kip:`) ou a guia de um app KIP puxada para um painel (`run:`): o painel é a view KIP da sessão. Uma view
     // interativa por sessão: enquanto ele existe, a Saída embutida mostra o cartão "rodando em outro painel".
-    const bool kipCommand = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command;
-    if (kipCommand) {
-        if (engine::KipSession *session = kipSessionFor(commandId)) {
-            panel->bindKipSession(session, !m_kipAutoStarted.contains(commandId));
+    if (ownsOutput) {
+        if (kipCommand) {
+            if (engine::KipSession *session = kipSessionFor(commandId)) {
+                panel->bindKipSession(session, !m_kipAutoStarted.contains(commandId));
+            }
+            m_terminalDrawer->setKipPinned(commandId, true);
+        } else {
+            // Sem a Saída por perto, o campo de resposta do painel fala com o processo do comando.
+            OutputPanel *output = panel->output();
+            connect(output, &OutputPanel::commandEntered, this, [this, commandId](const QString &text) {
+                if (engine::ProcessRunner *runner = runnerForCommandId(commandId); runner && runner->isRunning()) {
+                    runner->writeToStdin(text);
+                }
+            });
+            connect(output, &OutputPanel::interruptRequested, this, [this, commandId]() {
+                if (engine::ProcessRunner *runner = runnerForCommandId(commandId); runner && runner->isRunning()) {
+                    runner->writeRaw(QStringLiteral("\x03"));
+                }
+            });
+            connect(output, &OutputPanel::eofRequested, this, [this, commandId]() {
+                if (engine::ProcessRunner *runner = runnerForCommandId(commandId); runner && runner->isRunning()) {
+                    runner->writeRaw(QStringLiteral("\x04"));
+                }
+            });
         }
-        m_terminalDrawer->setKipPinned(commandId, true);
         // O painel some (fechado, comando apagado): se não sobrou outro painel do mesmo comando, a Saída embutida volta a
         // poder mostrar a view. O contexto é a própria Saída (não a janela): ao fechar o app o painel morre durante a
         // destruição da janela.
         TerminalDrawer *drawer = m_terminalDrawer;
         const QString otherKey = (kip ? layout::view_id::kRunPrefix : layout::view_id::kKipPrefix) + commandId;
         const QString ownKey = (kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId;
-        connect(panel, &QObject::destroyed, drawer, [this, drawer, commandId, otherKey, ownKey]() {
+        connect(panel, &QObject::destroyed, drawer, [this, drawer, commandId, otherKey, ownKey, kipCommand]() {
             // Durante o `destroyed` o QPointer do mapa ainda aponta para o painel: tira-o antes de perguntar quem sobrou.
             m_mirrors.remove(ownKey);
             const auto other = m_mirrors.constFind(otherKey);
             const bool stillInPanel = other != m_mirrors.constEnd() && other.value();
-            drawer->setKipPinned(commandId, stillInPanel);
-            // Sem painel, o app volta a ser da Saída: a guia reaparece (sem tomar a frente) se há o que mostrar.
-            if (!stillInPanel && (kipSessionFor(commandId) || isCommandRunning(commandId))) {
+            if (kipCommand) {
+                drawer->setKipPinned(commandId, stillInPanel);
+            }
+            // Sem painel, o comando volta a ser da Saída: a guia reaparece (sem tomar a frente) se há o que mostrar.
+            const bool hasSomething = kipCommand ? (kipSessionFor(commandId) || isCommandRunning(commandId))
+                                                 : hasOutputToShow(commandId);
+            if (!stillInPanel && hasSomething) {
                 if (!m_outputTabOrder.contains(commandId)) m_outputTabOrder.append(commandId);
                 refreshOutputTabs();
             }
         });
         // Depois do arraste que criou o painel (a barra de guias não pode mudar no meio dele).
-        QTimer::singleShot(0, this, [this, commandId]() { moveKipOutOfOutput(commandId); });
+        QTimer::singleShot(0, this, [this, commandId]() { moveOutOfOutput(commandId); });
     }
     connect(panel, &RunMirrorPanel::runRequested, this, [this](const QString &id) { handleCommandActivated(id); });
     m_mirrors.insert((kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId, panel);
     return panel;
 }
 
-bool MainWindow::kipLivesInPanel(const QString &commandId) const
+ActionSidebar *MainWindow::makeCommandActionStrip(const QString &commandId)
+{
+    auto *strip = new ActionSidebar();
+    strip->setProperty("kaiCommandId", commandId);
+    strip->setOrientation(Qt::Horizontal);
+    strip->setFocusActions(false, false, false);
+    strip->applyAccentColor(QColor(utils::tokens::accent()));
+    connect(strip, &ActionSidebar::playSelectedRequested, this, [this, commandId]() { handleCommandActivated(commandId); });
+    connect(strip, &ActionSidebar::stopSelectedRequested, this, [this, commandId]() { handleKillCommandRequested(commandId); });
+    connect(strip, &ActionSidebar::forceStopSelectedRequested, this,
+            [this, commandId]() { handleKillCommandRequested(commandId, /*force=*/true); });
+    connect(strip, &ActionSidebar::resetSelectedRequested, this, [this, commandId]() { handleResetCommandRequested(commandId); });
+    connect(strip, &ActionSidebar::editBodySelectedRequested, this,
+            [this, commandId]() { handleQuickEditBodyRequested(commandId); });
+    m_commandStrips.append(strip);
+    refreshCommandActionStrips();
+    return strip;
+}
+
+void MainWindow::refreshCommandActionStrips()
+{
+    m_commandStrips.removeIf([](const QPointer<ActionSidebar> &strip) { return strip.isNull(); });
+    for (const QPointer<ActionSidebar> &strip : std::as_const(m_commandStrips)) {
+        const QString id = strip->property("kaiCommandId").toString();
+        const auto found = m_commandsById.constFind(id);
+        const bool known = found != m_commandsById.constEnd();
+        strip->setRowContext(known, known, isCommandRunning(id), m_failedCommandIds.contains(id),
+                             known && found->type == core::CommandType::Http);
+    }
+}
+
+bool MainWindow::panelOwnsOutput(const core::Command &command)
+{
+    return (command.kip && command.type == core::CommandType::Command) || !command.interactiveTerminal;
+}
+
+QWidget *MainWindow::dialogParent()
+{
+    if (m_dock) {
+        if (layout::FloatingViewWindow *pinned = m_dock->frontPinnedWindow()) {
+            return pinned;
+        }
+    }
+    return this;
+}
+
+bool MainWindow::livesInPanel(const QString &commandId) const
 {
     const auto it = m_commandsById.constFind(commandId);
-    if (it == m_commandsById.constEnd() || !it->kip || it->type != core::CommandType::Command) {
+    if (it == m_commandsById.constEnd() || !panelOwnsOutput(*it)) {
         return false;
     }
     for (const QString &prefix : {layout::view_id::kRunPrefix, layout::view_id::kKipPrefix}) {
@@ -2058,7 +2215,7 @@ bool MainWindow::kipLivesInPanel(const QString &commandId) const
     return false;
 }
 
-void MainWindow::revealKipPanel(const QString &commandId)
+void MainWindow::revealCommandPanel(const QString &commandId)
 {
     for (const QString &prefix : {layout::view_id::kRunPrefix, layout::view_id::kKipPrefix}) {
         if (isViewPlaced(prefix + commandId)) {
@@ -2068,9 +2225,9 @@ void MainWindow::revealKipPanel(const QString &commandId)
     }
 }
 
-void MainWindow::moveKipOutOfOutput(const QString &commandId)
+void MainWindow::moveOutOfOutput(const QString &commandId)
 {
-    if (!kipLivesInPanel(commandId)) {
+    if (!livesInPanel(commandId)) {
         return;
     }
     const int index = m_outputTabOrder.indexOf(commandId);
@@ -2101,6 +2258,7 @@ void MainWindow::forEachMirror(const QString &commandId, const std::function<voi
 void MainWindow::setMirrorStatus(const QString &commandId, ExecutionStatus status)
 {
     forEachMirror(commandId, [status](RunMirrorPanel *panel) { panel->setStatus(status); });
+    refreshCommandActionStrips();
 }
 
 ExecutionStatus MainWindow::executionStatusFor(const QString &commandId) const
@@ -2362,7 +2520,7 @@ QString MainWindow::folderPathOf(const QString &folderId) const
     return names.join(QStringLiteral(" / "));
 }
 
-void MainWindow::showQuickRun()
+QuickRunPopup *MainWindow::preparedQuickRun()
 {
     if (!m_quickRun) {
         m_quickRun = new QuickRunPopup(this);
@@ -2380,9 +2538,56 @@ void MainWindow::showQuickRun()
     }
     m_quickRun->refreshStyle();
     m_quickRun->setEntries(entries);
+    return m_quickRun;
+}
+
+void MainWindow::stopAllRunning()
+{
+    QStringList running;
+    for (auto it = m_commandsById.cbegin(); it != m_commandsById.cend(); ++it) {
+        if (isCommandRunning(it.key())) {
+            running << it.key();
+        }
+    }
+    for (const QString &id : m_processManager->trackedCommandIds()) {
+        if (!running.contains(id) && isCommandRunning(id)) {
+            running << id;
+        }
+    }
+    for (const QString &id : running) {
+        handleKillCommandRequested(id);
+    }
+}
+
+void MainWindow::noteRecentCommand(const QString &commandId)
+{
+    m_recentCommandIds.removeAll(commandId);
+    m_recentCommandIds.prepend(commandId);
+    while (m_recentCommandIds.size() > 8) {
+        m_recentCommandIds.removeLast();
+    }
+}
+
+void MainWindow::showQuickRun()
+{
+    QuickRunPopup *popup = preparedQuickRun();
     OutputTabsBar *bar = m_terminalDrawer->outputTabs();
     const QRect anchor = bar->quickRunRect().isValid() ? bar->quickRunRect() : bar->rect();
-    m_quickRun->openBelow(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
+    popup->openBelow(bar->mapToGlobal(QPoint(anchor.left(), bar->height())));
+}
+
+void MainWindow::showQuickRunFromTray()
+{
+    if (isVisible() && !isMinimized()) {
+        showQuickRun();
+        return;
+    }
+    QuickRunPopup *popup = preparedQuickRun();
+    const QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    popup->openOnScreen(screen->availableGeometry());
 }
 
 // "Ir para o comando" (painel de processos, notificações): a árvore precisa estar à vista, então o painel Comandos volta
@@ -2487,6 +2692,7 @@ void MainWindow::showCommandPalette()
         {"view_document", "layout.view.document", ""},
         {"view_processes", "layout.view.processes", ""},
         {"view_variables", "layout.view.variables", ""},
+        {"view_logs", "layout.view.logs", ""},
         {"maximize_panel", "menu.view.maximize_panel", "action.maximize_panel"},
         {"rearrange_panels", "menu.view.rearrange", "action.rearrange_panels"},
         {"restore_layout", "menu.view.restore_layout", "action.restore_layout"},
@@ -2577,6 +2783,7 @@ void MainWindow::runPaletteAction(const QString &actionId)
         {QStringLiteral("view_document"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kDocument); }},
         {QStringLiteral("view_processes"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kProcesses); }},
         {QStringLiteral("view_variables"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kVariables); }},
+        {QStringLiteral("view_logs"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kLogs); }},
         {QStringLiteral("view_ai_chat"), [](MainWindow *w) { w->showAiChat(); }},
         {QStringLiteral("maximize_panel"), [](MainWindow *w) { w->m_layoutController->toggleMaximizeFocused(); }},
         {QStringLiteral("rearrange_panels"), [](MainWindow *w) { w->m_dock->setEditMode(!w->m_dock->editMode()); }},
@@ -3092,7 +3299,9 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     // recoloridos com o accent do tema (IconPickerWidget::iconForName) pegarem
     // a nova cor no live-reload — senão só atualizariam ao reabrir o app.
     if (m_commandTree) {
+        m_restoredSelectionId = m_commandTree->currentSelectionId();
         m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+        m_restoredSelectionId.clear();
         m_commandTree->refreshTreeConnectorColor(QColor(utils::tokens::accent()));
     }
 }
@@ -3115,13 +3324,10 @@ void MainWindow::loadConfig()
     // anterior (dynamic-vars.json) — ANTES de qualquer comando poder rodar.
     m_envManager.seedPersistedDynamicVars(m_configManager.loadPersistedDynamicVars());
 
-    // Restaura o estado colapsado do terminal salvo na sessão anterior
-    //. Como setExpanded emite expandedChanged (que persiste),
-    // usamos o mesmo valor já salvo — idempotente, não regrava nada
-    // diferente.
-    m_terminalDrawer->setExpanded(!settings.terminalCollapsed);
-    // A lista de comandos recolhida também volta como estava (nunca junto com a Saída recolhida).
-    if (settings.commandsCollapsed && !settings.terminalCollapsed) {
+    // Sem botão para reabrir, a Saída sempre nasce expandida (um "recolhido" gravado por versões antigas é ignorado).
+    m_terminalDrawer->setExpanded(true);
+    // A lista de comandos recolhida (modo foco) volta como estava.
+    if (settings.commandsCollapsed) {
         m_restoringUiState = true;
         setCommandsCollapsed(true);
         m_restoringUiState = false;
@@ -3378,7 +3584,7 @@ bool MainWindow::hasOutputToShow(const QString &commandId) const
 
 void MainWindow::ensureOutputTab(const QString &commandId)
 {
-    if (commandId.isEmpty() || !m_commandsById.contains(commandId) || kipLivesInPanel(commandId)) {
+    if (commandId.isEmpty() || !m_commandsById.contains(commandId) || livesInPanel(commandId)) {
         return;
     }
     if (!m_outputTabOrder.contains(commandId)) {
@@ -3412,7 +3618,7 @@ void MainWindow::refreshOutputTabs()
         }
     }
 
-    m_outputTabOrder.removeIf([this](const QString &id) { return kipLivesInPanel(id); });
+    m_outputTabOrder.removeIf([this](const QString &id) { return livesInPanel(id); });
     QVector<OutputTabInfo> tabs;
     for (const QString &id : std::as_const(m_outputTabOrder)) {
         const auto cmdIt = m_commandsById.constFind(id);
@@ -3487,8 +3693,8 @@ void MainWindow::activateOutputTab(const QString &tabId)
 // sem executar nem selecionar.
 void MainWindow::showCommandOutput(const QString &commandId)
 {
-    if (kipLivesInPanel(commandId)) {
-        revealKipPanel(commandId);
+    if (livesInPanel(commandId)) {
+        revealCommandPanel(commandId);
         return;
     }
     if (m_connectedTerminalCommandId != commandId) {
@@ -3941,8 +4147,9 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     if (m_expandCollapseBar) {
         m_expandCollapseBar->setSelectedHidden(hasSelection && isHidden);
     }
-    // Sem o foco inteligente, navegar só muda o alvo das ações: a Saída e o Documento ficam no que já mostram.
-    if (!m_smartFocus) {
+    // Sem o foco inteligente, navegar só muda o alvo das ações: a Saída e o Documento ficam no que já mostram. O mesmo vale
+    // para o item que a árvore reconstruída selecionou de novo (ver m_restoredSelectionId).
+    if (!m_smartFocus || (hasSelection && itemId == m_restoredSelectionId)) {
         return;
     }
 
@@ -3972,9 +4179,9 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
         return;
     }
     // App KIP com painel próprio: selecionar mostra o painel; a Saída não se conecta a ele.
-    if (kipLivesInPanel(itemId)) {
+    if (livesInPanel(itemId)) {
         followDocumentToCommand(itemId);
-        revealKipPanel(itemId);
+        revealCommandPanel(itemId);
         return;
     }
     // Um comando é da Saída: ela passa à frente do Documento (que, por trás, acompanha a pasta do comando).
@@ -4628,6 +4835,7 @@ void MainWindow::updateRunningCommandStatus()
             m_itemActionsBar->setRowContext(hasSelection);
         }
     }
+    refreshCommandActionStrips();
     // Título da janela destacada reflete o estado do comando de ORIGEM, para
     // servir de monitor ("está rodando ou não?") mesmo com outro selecionado.
     if (m_terminalDrawer->hasDetachedWindow()) {
@@ -4660,7 +4868,9 @@ void MainWindow::reloadCommandTree()
     }
     rebuildActionCommands();
     m_commandTree->setGlobalActions(m_globalActions);
+    m_restoredSelectionId = m_commandTree->currentSelectionId();
     m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+    m_restoredSelectionId.clear();
     refreshDocSources();
     // O painel de variáveis, se já foi aberto, acompanha as pastas.
     if (m_environmentsPanel) {
@@ -4674,6 +4884,7 @@ void MainWindow::reloadCommandTree()
             const auto found = panel ? m_commandsById.constFind(panel->commandId()) : m_commandsById.constEnd();
             if (found != m_commandsById.constEnd()) {
                 panel->setName(found->name);
+                panel->setFormattedOutput(found->formattedOutput && !(found->kip && found->type == core::CommandType::Command));
                 renamed = true;
                 ++it;
             } else {
@@ -4805,8 +5016,8 @@ void MainWindow::handleCommandActivated(const QString &commandId)
     // execuções depois que o processo já terminou/foi parado.
     if (m_processManager->isTracked(commandId)
         && m_processManager->statusOf(commandId) == engine::ProcessStatus::Running) {
-        if (kipLivesInPanel(commandId)) {
-            revealKipPanel(commandId); // o app já está aberto no painel dele
+        if (livesInPanel(commandId)) {
+            revealCommandPanel(commandId); // o app já está aberto no painel dele
         } else {
             reconnectTerminalToCommand(commandId);
         }
@@ -4849,7 +5060,7 @@ void MainWindow::promptParamsAndRun(core::Command command)
         // Comando parametrizado: coleta os valores via
         // formulário antes de disparar o pipeline. Pré-preenche com os
         // últimos valores informados (feedback do usuário).
-        ParameterFormDialog dialog(command.params, this, command.lastParamValues, command.paramUsageHistory,
+        ParameterFormDialog dialog(command.params, dialogParent(), command.lastParamValues, command.paramUsageHistory,
             m_collections, command.description,
             hasCollectionParam ? m_configManager.loadCollectionFilters() : QMap<QString, core::CollectionFilterState>{});
         // Listas dinâmicas (Parameter::optionsScript): o diálogo pede, o script roda no contexto do comando
@@ -5168,6 +5379,10 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
         }
     }
 
+    if (!m_scheduledRun && !core::isFolderActionCommandId(command.id)) {
+        noteRecentCommand(command.id);
+    }
+
     // Ação de pasta: execução própria (pipeline e ambiente à parte, em paralelo).
     if (core::isFolderActionCommandId(command.id)) {
         startFolderAction(command, paramValues);
@@ -5185,7 +5400,7 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
         m_silentRunIds.remove(command.id);
     }
     // App KIP com painel próprio: a execução é do painel; a Saída padrão fica como está.
-    const bool inPanel = kipLivesInPanel(command.id);
+    const bool inPanel = livesInPanel(command.id);
     const bool quiet = (m_quietRun && (command.hidden || silent) && !command.kip) || inPanel;
     if (quiet) {
         m_quietRunIds.insert(command.id);
@@ -5246,7 +5461,7 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
             m_kipAutoStarted.insert(command.id);
         } else {
             m_kipAutoStarted.remove(command.id);
-            revealKipPanel(command.id);
+            revealCommandPanel(command.id);
         }
     }
     // SEM autofoco (feedback do usuário: rodar um comando não deve roubar o
@@ -5336,8 +5551,10 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
     // cmd rodando, não quero isso".
     // Uma ação de pasta nunca puxa a Saída sozinha: só o clique no ícone a conecta.
     // Um comando oculto em segundo plano também não puxa a Saída (nem expande nem cria guia).
+    // Um comando com painel próprio nunca puxa a Saída (ele já rodava quando o painel nasceu e segue falando).
     if (m_connectedTerminalCommandId.isEmpty() && !m_commandTree->currentSelectionIsFolder()
-        && !core::isFolderActionCommandId(commandId) && !m_quietRunIds.contains(commandId)) {
+        && !core::isFolderActionCommandId(commandId) && !m_quietRunIds.contains(commandId)
+        && !livesInPanel(commandId)) {
         m_connectedTerminalCommandId = commandId;
     m_terminalDrawer->setCurrentCommandId(commandId);
     // Prompt "user@<caminho>": mostra o diretório de execução do comando
@@ -5911,9 +6128,9 @@ void MainWindow::startFolderAction(const core::Command &command, const QMap<QStr
     m_failedCommandIds.remove(actionId);
     m_commandLogs[actionId].clear();
     m_openedLastLinkForRun.remove(actionId);
-    if (kipLivesInPanel(actionId)) {
+    if (livesInPanel(actionId)) {
         forEachMirror(actionId, [](RunMirrorPanel *panel) { panel->beginRun(); });
-        revealKipPanel(actionId);
+        revealCommandPanel(actionId);
     } else {
         m_connectedTerminalCommandId = actionId;
         prepareDrawerForRun(command);
@@ -6410,7 +6627,11 @@ void MainWindow::handleImportRequested()
     }
     switch (dialog.kind()) {
     case ImportDialog::Kind::Project:
-        importProjectFromDirectory(dialog.path());
+        if (dialog.recursive()) {
+            importProjectTreeFromDirectory(dialog.path());
+        } else {
+            importProjectFromDirectory(dialog.path());
+        }
         break;
     case ImportDialog::Kind::OpenApi:
         importOpenApiFromFile(dialog.path());
@@ -6463,6 +6684,82 @@ void MainWindow::importProjectFromDirectory(const QString &directory)
         QMessageBox::warning(this, utils::tr(QStringLiteral("mainwindow.import_project.title")),
             utils::tr(QStringLiteral("mainwindow.import_project.save_failed")));
     }
+}
+
+MainWindow::TreeImportOutcome MainWindow::importProjectTree(const QString &rootDirectory, const QStringList &directories,
+                                                            const QString &rootProjectPath, bool detectGeneric,
+                                                            const QString &parentFolderId)
+{
+    TreeImportOutcome outcome;
+    const QDir root(rootDirectory);
+    const QChar separator = rootProjectPath.contains(QLatin1Char('\\')) && !rootProjectPath.contains(QLatin1Char('/'))
+        ? QLatin1Char('\\') : QLatin1Char('/');
+    for (const QString &directory : directories) {
+        const QString relative = root.relativeFilePath(directory);
+        QString projectPath = rootProjectPath;
+        if (relative != QLatin1String(".")) {
+            QString suffix = relative;
+            suffix.replace(QLatin1Char('/'), separator);
+            projectPath = rootProjectPath + (rootProjectPath.endsWith(separator) ? QString() : QString(separator)) + suffix;
+        }
+        const ProjectImportResult result = m_projectSelector->importFromDirectory(directory, projectPath, detectGeneric);
+        if (!result.success) {
+            outcome.failures << QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(directory), result.errorMessage);
+            continue;
+        }
+        const QString enclosing = enclosingFolderIdFor(directory);
+        if (!mergeImportedProject(result, enclosing.isEmpty() ? parentFolderId : enclosing)) {
+            outcome.failures << QStringLiteral("%1: %2").arg(
+                QDir::toNativeSeparators(directory), utils::tr(QStringLiteral("mainwindow.import_project.save_failed")));
+            continue;
+        }
+        ++outcome.imported;
+    }
+    return outcome;
+}
+
+void MainWindow::importProjectTreeFromDirectory(const QString &directory)
+{
+    const QString title = utils::tr(QStringLiteral("mainwindow.import_project.title"));
+    if (core::findProjectDirectories(directory).isEmpty()) {
+        QMessageBox::warning(this, title,
+            utils::tr(QStringLiteral("import.recursive.none")).arg(QDir::toNativeSeparators(directory)));
+        return;
+    }
+    ProjectImportOptionsDialog optionsDialog(directory, m_commandsData.folders, this);
+    if (optionsDialog.exec() != QDialog::Accepted || optionsDialog.directory().isEmpty()) {
+        return;
+    }
+    const QString root = optionsDialog.directory();
+    LoadingScope loading(m_loadingOverlay, utils::tr(QStringLiteral("mainwindow.import_project.loading")));
+    const TreeImportOutcome outcome = importProjectTree(root, core::findProjectDirectories(root),
+        optionsDialog.projectPath(), optionsDialog.detectGenericDefinitions(), optionsDialog.parentFolderId());
+    QString text = utils::tr(QStringLiteral("import.recursive.done")).arg(outcome.imported);
+    if (!outcome.failures.isEmpty()) {
+        text += QStringLiteral("\n\n") + outcome.failures.join(QLatin1Char('\n'));
+    }
+    if (outcome.failures.isEmpty()) {
+        QMessageBox::information(this, title, text);
+    } else {
+        QMessageBox::warning(this, title, text);
+    }
+}
+
+bool MainWindow::importProjectTreeFromCli(const QString &rootDirectory, QString &message)
+{
+    const QStringList directories = core::findProjectDirectories(rootDirectory);
+    if (directories.isEmpty()) {
+        message = utils::tr(QStringLiteral("import.recursive.none")).arg(QDir::toNativeSeparators(rootDirectory));
+        return false;
+    }
+    const QString root = QFileInfo(rootDirectory).absoluteFilePath();
+    const TreeImportOutcome outcome =
+        importProjectTree(root, directories, utils::toPosixPath(root), false, QString());
+    message = utils::tr(QStringLiteral("import.recursive.done")).arg(outcome.imported);
+    if (!outcome.failures.isEmpty()) {
+        message += QStringLiteral("\n") + outcome.failures.join(QLatin1Char('\n'));
+    }
+    return outcome.failures.isEmpty();
 }
 
 QString MainWindow::folderDisplayName(const QString &folderId) const
@@ -6727,6 +7024,21 @@ QJsonArray MainWindow::runningProcessItems()
     return items;
 }
 
+// kai.yml com cabeçalho de export de pasta (scope "folder") é o arquivo de projeto dessa pasta: entra como projeto.
+static bool isProjectFile(const QString &path)
+{
+    if (QFileInfo(path).fileName().toLower() != QStringLiteral("kai.yml")) {
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    bool ok = false;
+    const QString json = core::yamlTextToJsonText(QString::fromUtf8(file.readAll()), &ok, nullptr);
+    return ok && core::isFolderScopeExport(QJsonDocument::fromJson(json.toUtf8()).object());
+}
+
 bool MainWindow::importProjectFromCli(const QString &path, const QStringList &only, QString &message)
 {
     // `kai import [arquivo|pasta]`: um pacote exportado (cabeçalho kai_export: comandos, ações, coleções, perfis...)
@@ -6734,7 +7046,7 @@ bool MainWindow::importProjectFromCli(const QString &path, const QStringList &on
     // CLI, ver cliImportSelection) escolhe as categorias. Qualquer outro kai.yml é um PROJETO: o mesmo import do
     // diálogo de projeto, pasta-pai = raiz e PROJECT_PATH no formato que o diálogo sugere (utils::toPosixPath).
     const QFileInfo info(path);
-    if (info.isFile()) {
+    if (info.isFile() && !isProjectFile(info.absoluteFilePath())) {
         core::ConfigManager::ImportResult package;
         QString readError;
         bool isPackage = false;
@@ -8447,19 +8759,79 @@ QStringList MainWindow::availableThemeNames() const
     return names;
 }
 
+bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, QString &error)
+{
+    const core::SettingsData old = m_configManager.loadSettings();
+    if (!m_configManager.saveSettings(newSettings)) {
+        error = QStringLiteral("The settings could not be saved.");
+        return false;
+    }
+    m_outputMaxLogSizeChars = qMax(1, newSettings.outputMaxLogSizeKb) * 1024;
+    if (newSettings.smartFocus != old.smartFocus) {
+        m_smartFocus = newSettings.smartFocus;
+        m_commandTree->setOutputMarksEnabled(!m_smartFocus);
+        m_commandTree->refreshRowMarks();
+    }
+    m_inlineActions = newSettings.inlineActions;
+    m_commandTree->setInlineActionsEnabled(m_inlineActions);
+    core::setKipSettings(newSettings.kip);
+    if (newSettings.activeTheme != old.activeTheme && !m_themeManager->loadTheme(newSettings.activeTheme)) {
+        utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado (pedido da IA).").arg(newSettings.activeTheme));
+    }
+    if (newSettings.uiDensity != old.uiDensity || newSettings.uiCornerStyle != old.uiCornerStyle
+        || newSettings.treeConnectorStyle != old.treeConnectorStyle || newSettings.fxShadows != old.fxShadows
+        || newSettings.fxTranslucency != old.fxTranslucency || newSettings.fxBlur != old.fxBlur
+        || newSettings.fxAnimations != old.fxAnimations || newSettings.autoHideOnFocusLoss != old.autoHideOnFocusLoss
+        || newSettings.gradientsEnabled != old.gradientsEnabled) {
+        applyAppearanceSettings();
+    }
+    if (newSettings.commandsBackgroundImage != old.commandsBackgroundImage
+        || newSettings.commandsBackgroundOpacity != old.commandsBackgroundOpacity) {
+        m_commandTree->setBackground(newSettings.commandsBackgroundImage, newSettings.commandsBackgroundOpacity);
+    }
+    if (newSettings.windowMode != old.windowMode || newSettings.windowWidth != old.windowWidth
+        || newSettings.windowHeight != old.windowHeight) {
+        if (isFullScreen() || isMaximized()) {
+            showNormal();
+        }
+        applyWindowGeometryPreference();
+    }
+    if (newSettings.language != old.language) {
+        utils::TranslationManager::instance().loadLanguage(newSettings.language);
+    }
+    if (newSettings.autostart != old.autostart
+        && !utils::AutostartManager::setEnabled(newSettings.autostart, QCoreApplication::applicationFilePath())) {
+        utils::Logger::warning(kLogTag, QStringLiteral("Não foi possível alterar o autostart do Kai (pedido da IA)."));
+    }
+    if (newSettings.shortcuts != old.shortcuts) {
+        setupActionShortcuts();
+    }
+    if (newSettings.executionActionsPlacement != old.executionActionsPlacement
+        || newSettings.displayActionsPlacement != old.displayActionsPlacement
+        || newSettings.itemActionsPlacement != old.itemActionsPlacement
+        || newSettings.inlineActions != old.inlineActions
+        || newSettings.showHiddenCommands != old.showHiddenCommands) {
+        applyActionGroupPlacement();
+    }
+    return true;
+}
+
 void MainWindow::handleSettingsRequested()
 {
     const core::SettingsData currentSettings = m_configManager.loadSettings();
     SettingsDialog dialog(currentSettings, availableThemeNames(), m_themeManager->themesDirPath(),
         m_commandsData, m_collections,
-        [this]() { persistCommands(); }, [this]() { persistCollections(); }, this);
+        [this]() { persistCommands(); }, [this]() { persistCollections(); },
+        &m_notes, [this]() { persistNotes(); }, this);
     // O layout dos painéis não depende do OK/Cancelar: restaurar vale na hora (e dá para continuar editando).
     connect(&dialog, &SettingsDialog::restoreLayoutRequested, this, &MainWindow::restoreDefaultLayout);
-    // A grade (colunas, linhas, expansão) também vale na hora.
+    // A grade (colunas, linhas, expansão, tamanhos do modo Ajustar) vale ao confirmar com OK; Cancelar descarta.
     if (m_dock) {
         dialog.setLayoutModel(m_dock->model());
         connect(&dialog, &SettingsDialog::gridChangeRequested, this,
                 [this](int cols, int rows, int expansion) { m_dock->setGrid(cols, rows, layout::Expansion(expansion)); });
+        connect(&dialog, &SettingsDialog::zoneSpanRequested, this,
+                [this](int row, int col, int colSpan, int rowSpan) { m_dock->setZoneSpan(layout::Zone{row, col}, colSpan, rowSpan); });
     }
 
     if (dialog.exec() != QDialog::Accepted) {
@@ -8476,6 +8848,8 @@ void MainWindow::handleSettingsRequested()
     m_smartFocus = newSettings.smartFocus;
     refreshDocSources();
     m_commandTree->setOutputMarksEnabled(!m_smartFocus);
+    m_inlineActions = newSettings.inlineActions;
+    m_commandTree->setInlineActionsEnabled(m_inlineActions);
     m_commandTree->refreshRowMarks();
     // Perfis de IA: ficam no ai.json (chaves de API), nunca no settings.json.
     if (dialog.aiSettingsChanged()) {
@@ -8576,6 +8950,7 @@ void MainWindow::handleSettingsRequested()
     if (newSettings.executionActionsPlacement != currentSettings.executionActionsPlacement
         || newSettings.displayActionsPlacement != currentSettings.displayActionsPlacement
         || newSettings.itemActionsPlacement != currentSettings.itemActionsPlacement
+        || newSettings.inlineActions != currentSettings.inlineActions
         || newSettings.showHiddenCommands != currentSettings.showHiddenCommands) {
         applyActionGroupPlacement();
     }
@@ -8594,9 +8969,8 @@ void MainWindow::applyActiveEnvironment()
         }
     }
     m_envManager.setGlobalVars(vars);
-    refreshEnvironmentSelector();
     refreshDocSources(); // o diretório da documentação pode depender das variáveis
-    // O ativo mudou por outro caminho (a barra de cima, a importação): o painel Variáveis acompanha.
+    // O ativo mudou por outro caminho (a bandeja, a paleta, a importação): o painel Variáveis acompanha.
     if (m_environmentsPanel && !m_savingEnvironmentsFromPanel) {
         m_environmentsPanel->setData(settings.environments, settings.activeEnvironmentId);
     }
@@ -8605,7 +8979,6 @@ void MainWindow::applyActiveEnvironment()
 void MainWindow::refreshAiAvailability()
 {
     const core::AiSettings ai = m_configManager.loadAiSettings();
-    m_topBar->setAiAvailable(ai.isConfigured());
     m_aiConfigured = ai.isConfigured();
     // Sem provedor, o painel do chat deixa de existir (e some do quadro); com um, volta a poder ser aberto.
     if (m_dock) {
@@ -8626,21 +8999,6 @@ void MainWindow::showAiChat()
         return;
     }
     m_layoutController->focusView(layout::view_id::kAiChat);
-}
-
-void MainWindow::refreshEnvironmentSelector()
-{
-    if (!m_topBar) {
-        return;
-    }
-    const core::SettingsData settings = m_configManager.loadSettings();
-    QStringList ids;
-    QStringList names;
-    for (const core::Environment &e : settings.environments) {
-        ids << e.id;
-        names << e.name;
-    }
-    m_topBar->setEnvironments(ids, names, settings.activeEnvironmentId);
 }
 
 void MainWindow::handleEnvironmentSelected(const QString &environmentId)
@@ -8670,7 +9028,7 @@ QStringList MainWindow::availableDynamicVarNames() const
     return names;
 }
 
-// A tela de gestão dos ambientes é o painel Variáveis: o seletor da barra de cima só o traz para a frente.
+// A tela de gestão dos ambientes é o painel Variáveis: este pedido só o traz para a frente.
 void MainWindow::handleManageEnvironmentsRequested()
 {
     showAndRaise();
@@ -8708,7 +9066,7 @@ void MainWindow::saveEnvironmentsFromPanel()
 void MainWindow::handleKipSessionStarted(const QString &commandId, engine::KipSession *session)
 {
     // Com painel próprio, a sessão é só do painel: a Saída padrão nem a recebe.
-    if (!kipLivesInPanel(commandId)) {
+    if (!livesInPanel(commandId)) {
         m_terminalDrawer->bindKipSession(commandId, session);
     }
     // O painel do comando (fixado ou a guia puxada para um painel) ganha a view da sessão que começou.
@@ -9153,12 +9511,7 @@ void MainWindow::handleNotificationHistoryRequested()
 
 void MainWindow::handleLogsRequested()
 {
-    if (!m_logViewerDialog) {
-        m_logViewerDialog = new LogViewerDialog(this);
-    }
-    m_logViewerDialog->show();
-    m_logViewerDialog->raise();
-    m_logViewerDialog->activateWindow();
+    m_layoutController->focusView(layout::view_id::kLogs);
 }
 
 void MainWindow::handleHelpRequested()
@@ -9280,6 +9633,25 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
     QMainWindow::mousePressEvent(event);
 }
 
+#if defined(Q_OS_WIN)
+bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
+{
+    if (m_nativeSnap) {
+        const auto isCaptionAt = [this](const QPoint &pos) {
+            if (!m_topBar) {
+                return false;
+            }
+            const QPoint inBar = m_topBar->mapFrom(this, pos);
+            return m_topBar->rect().contains(inBar) && m_topBar->isDragArea(inBar);
+        };
+        if (handleNativeSnapMessage(this, eventType, message, result, isCaptionAt)) {
+            return true;
+        }
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif
+
 bool MainWindow::event(QEvent *e)
 {
     // Mantém o glifo do botão maximizar/restaurar em sincronia com o
@@ -9337,7 +9709,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *e)
         }
     };
 
-    if (!isMaximized() && isActiveWindow()
+    if (!m_nativeSnap && !isMaximized() && isActiveWindow()
         && (e->type() == QEvent::MouseMove || e->type() == QEvent::MouseButtonPress)) {
         auto *w = qobject_cast<QWidget *>(watched);
         if (w && w->window() == this) {
@@ -9394,8 +9766,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         QWidget *fw = QApplication::focusWidget();
         const bool alreadyInTree = fw && (m_commandTree->isAncestorOf(fw) || fw == m_commandTree);
         if (!alreadyInTree) {
+            const bool hadSelection = !m_commandTree->currentSelectionId().isEmpty();
             m_commandTree->focusFirstVisibleItem();
-            return; // consumido
+            // A seta que trouxe o foco não pode se perder (era a "primeira tecla comida"): vai para a árvore, a não ser
+            // que não houvesse seleção e o primeiro item tenha acabado de ser selecionado por causa dela.
+            if (QWidget *target = QApplication::focusWidget();
+                hadSelection && target && m_commandTree->isAncestorOf(target)) {
+                QApplication::sendEvent(target, event);
+            }
+            return;
         }
     }
     QMainWindow::keyPressEvent(event);
@@ -9404,6 +9783,9 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
+    // Windows: devolve ao sistema as bordas e o arraste da barra (snap, Win+setas). Reaplicado a cada exibição porque
+    // trocar os hints da janela recria a janela nativa.
+    m_nativeSnap = enableNativeSnap(this);
     updateWindowShape(); // a janela nativa existe agora: aplica os cantos nativos (Windows)
     // Prioriza a navegação por seta: ao exibir a janela, foca a árvore de
     // comandos e seleciona o primeiro item visível, para que ↑/↓ naveguem

@@ -115,6 +115,8 @@ public:
     void refreshRowMarks() { refreshActionViews(); }
     // Com as marcas ligadas (sem o foco inteligente) a coluna de status ganha o espaço delas, ao lado do tempo.
     void setOutputMarksEnabled(bool enabled);
+    // Ações inline: botões do item logo depois do nome, na linha sob o mouse e na selecionada.
+    void setInlineActionsEnabled(bool enabled);
 
     // Bug real reportado: "ao re-rodar um comando via double click ou
     // enter, esse tempo não reseta". Causa: setRunningCommandIds() só
@@ -366,6 +368,7 @@ private:
     QVector<core::Collection> m_collections;
     QVector<core::Note> m_notes;
     QSet<QString> m_runningCommandIds;
+    bool m_inlineActions = false;
     QVector<core::GlobalAction> m_globalActions;
     QMap<QString, core::SyncDrift> m_syncDrift;
     QSet<QString> m_draftFolderIds; // já com as pastas-pai

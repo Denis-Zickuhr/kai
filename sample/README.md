@@ -42,8 +42,13 @@ config.
   `@timestamp`...), nested fields/unicode/very long messages, a JSON broken across
   several physical lines (rebuilt into one card), a run that ends in ERROR/FATAL
   (first-error notification), a live stream (filters, search, follow) and a
-  5,000-line volume test. Command 9 is the same as 1 with normal output, to compare.
+  5,000-line volume test. Commands 9–12 do the same for **logfmt** (`key=value` lines):
+  plain, mixed with JSON and plain text, quoting/escapes/aliases/unicode, and a live
+  stream. Commands 13 and 14 repeat 9 and 1 with normal output, to compare.
   Needs `bash`.
+- **`sample/stop`** — "Kai Stop Test": a Go bridge that runs a script on its own pty
+  (exits 130 on Ctrl+C, dies on SIGTERM) and a `docker compose up`, to check that Stop
+  ends everything. Needs `bash` and Go or Docker. See its own README.
 
 ## Usage
 

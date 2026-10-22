@@ -72,7 +72,7 @@ echo "Deploying to " . getenv("TARGET");
 
 ### Which interpreter
 
-- **Settings → Languages** holds the global interpreters: `python3`, `node` and `php`
+- **Settings → General** holds the global interpreters: `python3`, `node` and `php`
   by default (on Windows without a terminal target, Python defaults to
   `python`).
 - A command can override it: **Interpreter** field (`interpreter` in

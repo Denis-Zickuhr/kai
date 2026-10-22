@@ -70,6 +70,8 @@ target_compile_options(vterm PRIVATE -w)
 # Compartilhada entre o binário principal e os testes, para evitar
 # recompilar as mesmas fontes duas vezes.
 add_library(kai-core STATIC
+    src/utils/action-shortcuts.h
+    src/utils/action-shortcuts.cpp
     src/core/models.h
     src/core/models.cpp
     src/core/note-files.h
@@ -130,6 +132,8 @@ add_library(kai-core STATIC
     src/core/kip-settings.cpp
     src/core/ipc-endpoint.h
     src/core/ipc-endpoint.cpp
+    src/core/project-tree-scan.h
+    src/core/project-tree-scan.cpp
     src/core/interpreter-settings.h
     src/core/interpreter-settings.cpp
     src/core/kip-screen-state.h
@@ -162,6 +166,8 @@ add_library(kai-core STATIC
     src/utils/autostart-manager.cpp
     src/utils/theme-manager.h
     src/utils/theme-manager.cpp
+    src/utils/qt-builtin-translator.h
+    src/utils/qt-builtin-translator.cpp
     src/utils/translation-manager.h
     src/utils/translation-manager.cpp
     src/utils/cron-expression.h
@@ -214,6 +220,8 @@ add_library(kai-engine STATIC
     src/engine/ai/ai-prompts.cpp
     src/engine/ai/manifesto-library.h
     src/engine/ai/manifesto-library.cpp
+    src/engine/ai/sample-library.h
+    src/engine/ai/sample-library.cpp
     src/engine/ai/command-json.h
     src/engine/ai/command-json.cpp
     src/engine/ai/agent-tool-host.h
@@ -221,18 +229,21 @@ add_library(kai-engine STATIC
     src/engine/ai/agent-toolbox-internal.h
     src/engine/ai/agent-toolbox.cpp
     src/engine/ai/agent-toolbox-tools.cpp
+    src/engine/ai/agent-toolbox-files.cpp
+    src/engine/ai/agent-file-sandbox.h
+    src/engine/ai/agent-file-sandbox.cpp
+    src/engine/ai/agent-toolbox-settings.h
+    src/engine/ai/agent-toolbox-settings.cpp
     src/engine/kip-modules/kip-modules.qrc
 )
 
 target_include_directories(kai-engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(kai-engine PUBLIC kai-core Qt6::Core Qt6::Network)
+target_link_libraries(kai-engine PUBLIC kai-core Qt6::Core Qt6::Gui Qt6::Network)
 
 # --- Biblioteca "kai-ui": widgets Qt ---
 add_library(kai-ui STATIC
     src/utils/design-tokens.h
     src/utils/design-tokens.cpp
-    src/utils/action-shortcuts.h
-    src/utils/action-shortcuts.cpp
     src/ui/app-stylesheet.h
     src/ui/app-stylesheet.cpp
     src/ui/features/collections/export-dialog.h
@@ -385,6 +396,8 @@ add_library(kai-ui STATIC
     src/ui/features/command-editor/output-responders-editor-widget.cpp
     src/ui/features/command-editor/folder-actions-view.h
     src/ui/features/command-editor/folder-actions-view.cpp
+    src/ui/features/command-editor/inline-row-actions.h
+    src/ui/features/command-editor/inline-row-actions.cpp
     src/ui/features/command-editor/hooks-editor-widget.h
     src/ui/features/command-editor/hooks-editor-widget.cpp
     src/ui/features/command-editor/execution-conditions-editor-widget.h
@@ -393,6 +406,10 @@ add_library(kai-ui STATIC
     src/ui/features/environments/env-extractors-editor-widget.cpp
     src/ui/features/environments/declared-env-vars-editor-widget.h
     src/ui/features/environments/declared-env-vars-editor-widget.cpp
+    src/ui/features/environments/variable-list-view.h
+    src/ui/features/environments/variable-list-view.cpp
+    src/ui/features/environments/variables-editor-widget.h
+    src/ui/features/environments/variables-editor-widget.cpp
     src/ui/features/environments/dynamic-vars-inspector-widget.h
     src/ui/features/environments/dynamic-vars-inspector-widget.cpp
     src/ui/features/collections/project-detection-strategy.h
@@ -422,6 +439,8 @@ add_library(kai-ui STATIC
     src/ui/shared/window-translucency.cpp
     src/ui/shared/dialog-frame.h
     src/ui/shared/dialog-frame.cpp
+    src/ui/shared/native-window-snap.h
+    src/ui/shared/native-window-snap.cpp
     src/ui/shared/native-window-corners.h
     src/ui/shared/native-window-corners.cpp
     src/ui/shared/app-window-frame.h
@@ -440,8 +459,7 @@ add_library(kai-ui STATIC
     src/ui/features/settings/tabs/terminals-tab.h
     src/ui/features/settings/tabs/terminals-tab.cpp
     src/ui/features/settings/tabs/notifications-tab.h
-    src/ui/features/settings/tabs/languages-tab.h
-    src/ui/features/settings/tabs/languages-tab.cpp
+    src/ui/features/settings/tabs/settings-form.h
     src/ui/features/settings/tabs/actions-tab.h
     src/ui/features/settings/tabs/actions-tab.cpp
     src/ui/features/settings/tabs/kip-tab.h
@@ -458,6 +476,8 @@ add_library(kai-ui STATIC
     src/ui/shared/json-syntax-highlighter.cpp
     src/ui/shared/lucide-icons.h
     src/ui/shared/lucide-icons.cpp
+    src/ui/shared/tray-menu.h
+    src/ui/shared/tray-menu.cpp
     src/ui/shared/icon-picker-widget.h
     src/ui/shared/icon-picker-widget.cpp
     src/ui/shared/icon-picker-dialog.h
@@ -488,8 +508,8 @@ add_library(kai-ui STATIC
     src/ui/shared/shortcut-capture-field.cpp
     src/ui/features/history/process-list-dialog.h
     src/ui/features/history/process-list-dialog.cpp
-    src/ui/features/output/log-viewer-dialog.h
-    src/ui/features/output/log-viewer-dialog.cpp
+    src/ui/features/output/logs-panel.h
+    src/ui/features/output/logs-panel.cpp
     src/ui/features/kip/kip-chips.h
     src/ui/features/kip/kip-chips.cpp
     src/ui/features/kip/kip-blocks.h
@@ -522,6 +542,8 @@ add_library(kai-ui STATIC
     src/ui/features/settings/tabs/ai-tab.cpp
     src/ui/layout/layout-model.h
     src/ui/layout/layout-model.cpp
+    src/ui/layout/layout-ops.h
+    src/ui/layout/layout-ops.cpp
     src/ui/layout/layout-store.h
     src/ui/layout/layout-store.cpp
     src/ui/layout/view-registry.h
@@ -536,6 +558,8 @@ add_library(kai-ui STATIC
     src/ui/layout/floating-view-window.cpp
     src/ui/layout/dock-host.h
     src/ui/layout/dock-host.cpp
+    src/ui/layout/fit-board.h
+    src/ui/layout/fit-board.cpp
     src/ui/layout/panel-card.h
     src/ui/layout/panel-card.cpp
     src/ui/layout/layout-controller.h
@@ -556,6 +580,10 @@ add_library(kai-ui STATIC
     src/ui/shared/tab-strip-background.cpp
     src/ui/shared/item-actions-bar.h
     src/ui/shared/item-actions-bar.cpp
+    src/ui/shared/adaptive-button.h
+    src/ui/shared/adaptive-button.cpp
+    src/ui/shared/search-line-edit.h
+    src/ui/shared/search-line-edit.cpp
     src/ui/shared/combo-popup-filter.h
     src/ui/shared/combo-popup-filter.cpp
     src/ui/shared/key-trace-filter.h

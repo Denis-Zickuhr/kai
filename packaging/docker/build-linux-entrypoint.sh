@@ -34,6 +34,7 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 
 cp "$BIN" "$APPDIR/usr/bin/kai"
 cp -r "$SRC/assets" "$APPDIR/usr/bin/assets"
+cp -r "$SRC/sample" "$APPDIR/usr/bin/assets/samples"
 
 # .desktop e ícone exigidos pelo formato AppImage.
 cat > "$APPDIR/usr/share/applications/kai.desktop" <<'DESKTOP'
@@ -88,6 +89,7 @@ else
     mkdir -p "$OUT/kai-linux"
     cp "$BIN" "$OUT/kai-linux/kai"
     cp -r "$SRC/assets" "$OUT/kai-linux/assets"
+    cp -r "$SRC/sample" "$OUT/kai-linux/assets/samples"
 fi
 
 echo "==> Artefatos Linux em $OUT:"

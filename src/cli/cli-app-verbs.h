@@ -37,6 +37,7 @@ RaiseRequest parseRaiseArgs(const QStringList &argsAfterVerb);
 struct ImportRequest {
     QString argument;   // o arquivo/pasta (vazio = pasta atual)
     QStringList only;   // categorias do pacote (vazio = tudo)
+    bool recursive = false; // -r/--recursive: todos os projetos abaixo da pasta
     QString error;      // não vazio = uso inválido (mensagem já traduzida)
 };
 ImportRequest parseImportArgs(const QStringList &argsAfterVerb);

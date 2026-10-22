@@ -2,6 +2,8 @@
 
 #include <QWidget>
 
+#include <optional>
+
 #include "core/config-manager.h"
 #include "ui/layout/layout-model.h"
 
@@ -41,12 +43,17 @@ public:
 
     // O layout de agora: preenche os campos da grade e a miniatura (que mostra como ficaria com os valores escolhidos).
     void setLayoutModel(const layout::LayoutModel &model);
+    // O rascunho da grade (colunas, linhas, modo, tamanhos Fit) difere do layout de agora?
+    bool gridDirty() const;
+    // Confirma o rascunho: emite gridChangeRequested (e um zoneSpanRequested por célula esticada). Descartar = não chamar.
+    void commitGrid();
 
 signals:
     void restoreLayoutRequested();
-    // A grade mudou: vale na hora, como o restaurar (não espera o OK).
-    // `expansion` é um layout::Expansion como inteiro.
+    // A grade foi confirmada (só no OK; Cancelar descarta o rascunho). `expansion` é um layout::Expansion como inteiro.
     void gridChangeRequested(int cols, int rows, int expansion);
+    // Modo Fit, depois do anterior: quanto a célula (linha, coluna) ocupa.
+    void zoneSpanRequested(int row, int col, int colSpan, int rowSpan);
 
 private:
     QComboBox *m_densityField = nullptr;
@@ -62,7 +69,9 @@ private:
     QSpinBox *m_gridRows = nullptr;
     QComboBox *m_gridExpansion = nullptr;
     GridPreview *m_gridPreview = nullptr;
+    QList<layout::Zone> changedSpans() const;
     layout::LayoutModel m_layoutModel;
+    layout::LayoutModel m_initialModel;
     bool m_syncingGrid = false;
 };
 
@@ -79,9 +88,19 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
+signals:
+    // Modo Fit: o usuário arrastou uma célula para ocupar colunas × linhas.
+    void spanChanged(kai::ui::layout::Zone zone, int colSpan, int rowSpan);
 
 private:
+    QRectF cellBox(const layout::FitCell &cell) const;
+    layout::Zone zoneAtPoint(const QPointF &pos) const;
     layout::LayoutModel m_model;
+    std::optional<layout::Zone> m_dragZone;
 };
 
 } // namespace kai::ui

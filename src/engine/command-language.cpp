@@ -198,7 +198,8 @@ QString nodeBootstrap(const QString &code, bool withKip)
     // O código vira o corpo de uma função async: `await` no topo funciona e
     // `return` encerra. O "\n" antes do fecho evita que um comentário `//` na
     // última linha engula o `})()`. Falha = rejeição não tratada = exit 1.
-    // Os módulos viram globais E ficam acessíveis por require('kai'/'kip').
+    // Os módulos viram globais E ficam acessíveis por require('kai'/'kip'). `require` é global sob `node -e`, mas num
+    // arquivo (.cjs, comando enorme) é local do módulo: expô-lo mantém o código do usuário igual nos dois modos.
     const QVector<InjectedModule> modules = injectedModules(core::CommandLanguage::Node, withKip);
     QStringList names;
     for (const InjectedModule &module : modules) {
@@ -211,6 +212,7 @@ QString nodeBootstrap(const QString &code, bool withKip)
         "[%2].forEach((n,i)=>{const m={exports:{}};"
         "new Function('module','exports','require',__kp[i])(m,m.exports,require);"
         "__kr[n]=m.exports;globalThis[n]=m.exports});"
+        "globalThis.require=require;"
         "require('vm').runInThisContext('(async()=>{'+__kp[__kp.length-1]+'\\n})()',"
         "{filename:'kai-command.js'})")
         .arg(packPayload(modules, code), names.join(QLatin1Char(',')));

@@ -1,4 +1,5 @@
 #include <QTest>
+#include <QFileInfo>
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonArray>
@@ -155,7 +156,9 @@ private slots:
         QProcessEnvironment env;
         env.insert(QStringLiteral("KAI_IPC_SOCKET"), QStringLiteral("/tmp/kai-no-such-socket-xyz"));
         env.insert(QStringLiteral("KAI_EXE"), QString()); // sem CLI
-        env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
+        // O interpretador pode morar fora de /usr/bin (ex.: /usr/local/bin num runner de CI).
+        const QString interpreterDir = QFileInfo(QStandardPaths::findExecutable(interpreter(lang))).absolutePath();
+        env.insert(QStringLiteral("PATH"), interpreterDir + QStringLiteral(":/usr/bin:/bin"));
         const QString out = runCode(lang, code, env);
         QVERIFY2(out.contains(QStringLiteral("ERR")) && out.contains(QStringLiteral("not reachable")), qPrintable(out));
     }

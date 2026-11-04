@@ -1,0 +1,7 @@
+{"log": {"entries": [
+          {"request": {"method": "POST", "url": "https://x.test/api/items?a=1",
+            "headers": [{"name": ":authority", "value": "x.test"}, {"name": "Cookie", "value": "sid=1"}, {"name": "Host", "value": "x.test"},
+                        {"name": "Content-Type", "value": "application/json"}, {"name": "Accept", "value": "*/*"}],
+            "postData": {"mimeType": "application/json", "text": "{\"k\": 1}"}}},
+          {"request": {"method": "GET", "url": "https://x.test/"}}
+        ]}}

@@ -1,0 +1,48 @@
+commands:
+  - command: "echo \"Open the documentation of this project (notebook icon in the tree).\""
+    name: "1. Say hello"
+    type: "command"
+icon: "notebook"
+notes:
+  - content: |
+      # Reminders
+
+      - Collapse the JSON note below.
+      - Try the YAML and XML ones too.
+    name: "Reminders"
+    type: "markdown"
+  - content: |
+      {
+        "service": "billing",
+        "retry": { "attempts": 3, "backoff": [1, 2, 4] },
+        "targets": [
+          { "name": "primary", "url": "https://a.example.dev" },
+          { "name": "backup", "url": "https://b.example.dev" }
+        ]
+      }
+    name: "Billing config"
+    type: "json"
+  - content: |
+      deploy:
+        strategy: rolling
+        steps:
+          - build
+          - test
+          - release
+      notify:
+        channel: ops
+    name: "Deploy plan"
+    type: "yaml"
+  - content: |
+      <catalog>
+        <book id="1">
+          <title>Kai</title>
+          <authors>
+            <author>A</author>
+            <author>B</author>
+          </authors>
+        </book>
+      </catalog>
+    name: "Catalog"
+    type: "xml"
+project_name: "Kai Docs & Notes"

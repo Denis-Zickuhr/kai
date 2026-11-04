@@ -1,0 +1,3 @@
+// VERSIONINFO do kai.com (shim de console). Mesmos ProductName/ProductVersion do kai.exe.
+#define KAI_RC_ORIGINAL "kai.com"
+#include "version-info.rc"

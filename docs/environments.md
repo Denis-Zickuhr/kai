@@ -1,0 +1,31 @@
+# Environments (variable packages)
+
+Global variables live in **packages** (Insomnia/Postman vibe). Only one is
+**active** at a time, and it feeds the Global scope.
+
+## Switching packages
+
+- The **Variables** panel (View → Variables), the tray menu, or the command palette (**Ctrl+K**).
+- From the CLI: `kai env use Prod` (see [cli.md](cli.md)).
+
+## Managing them
+
+The **Variables** panel (View menu) is the screen to **create / duplicate /
+rename / delete** packages and edit their variables.
+
+## Import a `.env` file
+
+**Import .env…** (below the variable list) adds the `KEY=VALUE` lines of a `.env` file to the selected package. It understands `export KEY=VALUE`, quoted values (`"…"` with `\n` escapes, `'…'` literal) and `#` comments; nothing is expanded. Variables that already exist are updated. Mark the sensitive ones as secret afterwards.
+
+## Secret variables
+
+Check the **Secret** column to mask the value in the UI (useful for
+tokens/passwords). The value is still used for interpolation.
+
+> Migration: an old `settings.json` (with only `global_env_vars`)
+> automatically becomes an active **"Global"** package — nothing is lost.
+
+## Persistence
+
+`~/.config/kai/settings.json` → the `environments` and
+`active_environment_id` keys.

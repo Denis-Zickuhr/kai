@@ -1,0 +1,2 @@
+Hello from the Kai sample.
+This file is uploaded by the multipart and binary examples.

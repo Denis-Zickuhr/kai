@@ -1,0 +1,1044 @@
+#include "core/models.h"
+
+#include <QJsonArray>
+#include <QRegularExpression>
+#include <QUuid>
+
+#include <algorithm>
+
+namespace kai::core {
+
+namespace {
+
+void writeWorkingDir(QJsonObject &obj, WorkingDirMode mode, const QString &path)
+{
+    if (mode == WorkingDirMode::Custom && !path.isEmpty()) {
+        obj["working_dir"] = path;
+    } else if (mode == WorkingDirMode::None) {
+        obj["working_dir"] = QJsonValue(QJsonValue::Null);
+    }
+}
+
+// Ausente/vazio = herdar; null = nenhum; texto = próprio.
+void readWorkingDir(const QJsonObject &obj, WorkingDirMode &mode, QString &path)
+{
+    mode = WorkingDirMode::Inherit;
+    path.clear();
+    if (!obj.contains("working_dir")) {
+        return;
+    }
+    const QJsonValue v = obj.value("working_dir");
+    if (v.isNull()) {
+        mode = WorkingDirMode::None;
+        return;
+    }
+    const QString text = v.toString().trimmed();
+    static const QRegularExpression projectPathOnly(QStringLiteral(R"(^\{\{\s*PROJECT_PATH\s*\}\}$)"));
+    if (text.isEmpty() || projectPathOnly.match(text).hasMatch()) {
+        return;
+    }
+    mode = WorkingDirMode::Custom;
+    path = text;
+}
+
+} // namespace
+
+QString parameterTypeToString(ParameterType type)
+{
+    switch (type) {
+    case ParameterType::Text:   return QStringLiteral("text");
+    case ParameterType::Select: return QStringLiteral("select");
+    case ParameterType::Bool:   return QStringLiteral("bool");
+    case ParameterType::File:   return QStringLiteral("file");
+    case ParameterType::Number:   return QStringLiteral("number");
+    case ParameterType::Textarea: return QStringLiteral("textarea");
+    case ParameterType::Json:     return QStringLiteral("json");
+    case ParameterType::Date:     return QStringLiteral("date");
+    case ParameterType::Grid:     return QStringLiteral("grid");
+    }
+    return QStringLiteral("text");
+}
+
+ParameterType parameterTypeFromString(const QString &value)
+{
+    if (value == QStringLiteral("select"))   return ParameterType::Select;
+    if (value == QStringLiteral("bool"))     return ParameterType::Bool;
+    if (value == QStringLiteral("file"))     return ParameterType::File;
+    if (value == QStringLiteral("number"))   return ParameterType::Number;
+    if (value == QStringLiteral("textarea")) return ParameterType::Textarea;
+    if (value == QStringLiteral("json"))     return ParameterType::Json;
+    if (value == QStringLiteral("date"))     return ParameterType::Date;
+    if (value == QStringLiteral("grid"))     return ParameterType::Grid;
+    return ParameterType::Text;
+}
+
+QJsonObject GridColumn::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (!label.isEmpty()) obj["label"] = label;
+    obj["type"] = parameterTypeToString(type);
+    if (!defaultValue.isEmpty()) obj["default"] = defaultValue;
+    if (!options.isEmpty()) obj["options"] = QJsonArray::fromStringList(options);
+    if (type == ParameterType::Date && dateMode != QStringLiteral("date")) obj["date_mode"] = dateMode;
+    return obj;
+}
+
+GridColumn GridColumn::fromJson(const QJsonObject &obj)
+{
+    GridColumn c;
+    c.name = obj.value("name").toString();
+    c.label = obj.value("label").toString();
+    c.type = parameterTypeFromString(obj.value("type").toString());
+    const QJsonValue defaultVal = obj.value("default");
+    c.defaultValue = defaultVal.isBool() ? (defaultVal.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
+                                          : defaultVal.toString();
+    for (const QJsonValue &v : obj.value("options").toArray()) {
+        c.options << v.toString();
+    }
+    c.dateMode = obj.value("date_mode").toString(QStringLiteral("date"));
+    return c;
+}
+
+QJsonObject Parameter::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (!label.isEmpty()) obj["label"] = label;
+    obj["type"] = parameterTypeToString(type);
+    if (!defaultValue.isEmpty()) obj["default"] = defaultValue;
+    if (!options.isEmpty()) {
+        obj["options"] = QJsonArray::fromStringList(options);
+    }
+    if (multiSelect) {
+        obj["multi_select"] = true;
+    }
+    if (!collectionId.isEmpty()) {
+        obj["collection_id"] = collectionId;
+    } else if (!collectionName.isEmpty()) {
+        obj["collection_name"] = collectionName;
+    }
+    if ((!collectionId.isEmpty() || !collectionName.isEmpty()) && !collectionDisplayField.isEmpty()) {
+        obj["collection_display_field"] = collectionDisplayField;
+    }
+    if (!optionsScript.isEmpty()) {
+        obj["options_script"] = optionsScript;
+    }
+    if (filePathFormat != QStringLiteral("native")) {
+        obj["file_path_format"] = filePathFormat;
+    }
+    if (pickMode != QStringLiteral("file")) {
+        obj["pick_mode"] = pickMode;
+    }
+    if (pickMode == QStringLiteral("folder")) {
+        obj["pick_folder"] = true;
+    }
+    if (optional) {
+        obj["optional"] = true;
+    }
+    if (required) {
+        obj["required"] = true;
+    }
+    if (dateMode != QStringLiteral("date")) {
+        obj["date_mode"] = dateMode;
+    }
+    if (dateRange) {
+        obj["date_range"] = true;
+    }
+    if (dateFormat != QStringLiteral("iso_date")) {
+        obj["date_format"] = dateFormat;
+    }
+    if (!dateFormatCustom.isEmpty()) {
+        obj["date_format_custom"] = dateFormatCustom;
+    }
+    if (!group.isEmpty()) {
+        obj["group"] = group;
+    }
+    if (!step.isEmpty()) {
+        obj["step"] = step;
+    }
+    if (type == ParameterType::Grid) {
+        QJsonArray columns;
+        for (const GridColumn &column : gridColumns) {
+            columns.append(column.toJson());
+        }
+        obj["columns"] = columns;
+        if (!gridRowTemplate.isEmpty()) obj["row_template"] = gridRowTemplate;
+        if (!gridRowTemplate.isEmpty() && gridRowSeparator != QStringLiteral(",")) obj["row_separator"] = gridRowSeparator;
+    }
+    if (!description.isEmpty()) obj["description"] = description;
+    return obj;
+}
+
+Parameter Parameter::fromJson(const QJsonObject &obj)
+{
+    Parameter p;
+    p.name = obj.value("name").toString();
+    p.label = obj.value("label").toString();
+    p.type = parameterTypeFromString(obj.value("type").toString());
+    const QJsonValue defaultVal = obj.value("default");
+    p.defaultValue = defaultVal.isBool() ? (defaultVal.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
+                                          : defaultVal.toString();
+    for (const QJsonValue &v : obj.value("options").toArray()) {
+        p.options << v.toString();
+    }
+    p.multiSelect = obj.value("multi_select").toBool(false);
+    p.collectionId = obj.value("collection_id").toString();
+    if (p.collectionId.isEmpty()) {
+        p.collectionName = obj.value("collection_name").toString();
+    }
+    p.collectionDisplayField = obj.value("collection_display_field").toString();
+    p.optionsScript = obj.value("options_script").toString();
+    p.filePathFormat = obj.value("file_path_format").toString(QStringLiteral("native"));
+    p.pickFolder = obj.value("pick_folder").toBool(false);
+    // pick_mode tem prioridade; sem ele, deriva de pick_folder (arquivos antigos).
+    if (obj.contains(QStringLiteral("pick_mode"))) {
+        p.pickMode = obj.value("pick_mode").toString(QStringLiteral("file"));
+    } else {
+        p.pickMode = p.pickFolder ? QStringLiteral("folder") : QStringLiteral("file");
+    }
+    p.optional = obj.value("optional").toBool(false);
+    p.required = obj.value("required").toBool(false);
+    p.dateMode = obj.value("date_mode").toString(QStringLiteral("date"));
+    p.dateRange = obj.value("date_range").toBool(false);
+    p.dateFormat = obj.value("date_format").toString(QStringLiteral("iso_date"));
+    p.dateFormatCustom = obj.value("date_format_custom").toString();
+    p.group = obj.value("group").toString();
+    p.step = obj.value("step").toString();
+    for (const QJsonValue &v : obj.value("columns").toArray()) {
+        p.gridColumns.append(GridColumn::fromJson(v.toObject()));
+    }
+    p.gridRowTemplate = obj.value("row_template").toString();
+    p.gridRowSeparator = obj.value("row_separator").toString(QStringLiteral(","));
+    p.description = obj.value("description").toString();
+    return p;
+}
+
+QJsonObject EnvExtractor::toJson() const
+{
+    QJsonObject obj;
+    if (!name.isEmpty()) obj["name"] = name;
+    obj["json_path"] = jsonPath;
+    obj["env_var"] = envVar;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
+    return obj;
+}
+
+EnvExtractor EnvExtractor::fromJson(const QJsonObject &obj)
+{
+    EnvExtractor e;
+    e.name = obj.value("name").toString();
+    e.jsonPath = obj.value("json_path").toString();
+    e.envVar = obj.value("env_var").toString();
+    e.persist = obj.value("persist").toBool(false);
+    e.scope = obj.value("scope").toString(QStringLiteral("project"));
+    return e;
+}
+
+QJsonObject DeclaredEnvVar::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (persist) obj["persist"] = true;
+    if (scope != QStringLiteral("project")) {
+        obj["scope"] = scope;
+    }
+    return obj;
+}
+
+DeclaredEnvVar DeclaredEnvVar::fromJson(const QJsonObject &obj)
+{
+    DeclaredEnvVar d;
+    d.name = obj.value("name").toString();
+    d.persist = obj.value("persist").toBool(false);
+    d.scope = obj.value("scope").toString(QStringLiteral("project"));
+    return d;
+}
+
+QJsonObject OutputResponder::toJson() const
+{
+    QJsonObject obj;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
+    obj["name"] = name;
+    if (!pattern.isEmpty()) obj["pattern"] = pattern;
+    if (!response.isEmpty()) obj["response"] = response;
+    if (limitTriggers) obj["limit_triggers"] = true;
+    if (maxTriggers != 1) obj["max_triggers"] = maxTriggers;
+    return obj;
+}
+
+OutputResponder OutputResponder::fromJson(const QJsonObject &obj)
+{
+    OutputResponder r;
+    r.enabled = obj.value("enabled").toBool(true);
+    r.name = obj.value("name").toString();
+    r.pattern = obj.value("pattern").toString();
+    r.response = obj.value("response").toString();
+    r.limitTriggers = obj.value("limit_triggers").toBool(false);
+    r.maxTriggers = obj.value("max_triggers").toInt(1);
+    return r;
+}
+
+QString httpMethodToString(HttpMethod method)
+{
+    switch (method) {
+    case HttpMethod::Get:    return QStringLiteral("GET");
+    case HttpMethod::Post:   return QStringLiteral("POST");
+    case HttpMethod::Put:    return QStringLiteral("PUT");
+    case HttpMethod::Patch:  return QStringLiteral("PATCH");
+    case HttpMethod::Delete: return QStringLiteral("DELETE");
+    case HttpMethod::Query:  return QStringLiteral("QUERY");
+    case HttpMethod::Head:   return QStringLiteral("HEAD");
+    case HttpMethod::Options: return QStringLiteral("OPTIONS");
+    case HttpMethod::Custom: return QStringLiteral("CUSTOM");
+    }
+    return QStringLiteral("GET");
+}
+
+HttpMethod httpMethodFromString(const QString &value)
+{
+    const QString upper = value.toUpper();
+    if (upper == QStringLiteral("POST"))   return HttpMethod::Post;
+    if (upper == QStringLiteral("PUT"))    return HttpMethod::Put;
+    if (upper == QStringLiteral("PATCH"))  return HttpMethod::Patch;
+    if (upper == QStringLiteral("DELETE")) return HttpMethod::Delete;
+    if (upper == QStringLiteral("QUERY"))  return HttpMethod::Query;
+    if (upper == QStringLiteral("HEAD"))   return HttpMethod::Head;
+    if (upper == QStringLiteral("OPTIONS")) return HttpMethod::Options;
+    return HttpMethod::Get;
+}
+
+QString HttpConfig::methodName() const
+{
+    if (method == HttpMethod::Custom) {
+        return customMethod.trimmed().isEmpty() ? QStringLiteral("GET") : customMethod.trimmed().toUpper();
+    }
+    return httpMethodToString(method);
+}
+
+void HttpConfig::setMethodName(const QString &name)
+{
+    const QString upper = name.trimmed().toUpper();
+    method = httpMethodFromString(upper);
+    if (method == HttpMethod::Get && upper != QStringLiteral("GET") && !upper.isEmpty()) {
+        method = HttpMethod::Custom;
+    }
+    customMethod = method == HttpMethod::Custom ? upper : QString();
+}
+
+QJsonObject HttpConfig::toJson() const
+{
+    QJsonObject obj;
+    obj["method"] = methodName();
+    obj["url"] = url;
+
+    if (!headers.isEmpty()) obj["headers"] = httpEntriesToJson(headers);
+    if (!queryParams.isEmpty()) obj["query_params"] = httpEntriesToJson(queryParams);
+    if (!auth.isDefault()) obj["auth"] = auth.toJson();
+    if (bodyType != HttpBodyType::Raw) obj["body_type"] = httpBodyTypeToString(bodyType);
+    if (!body.isEmpty()) obj["body"] = body;
+    if (!graphqlVariables.isEmpty()) obj["graphql_variables"] = graphqlVariables;
+    if (!formFields.isEmpty()) obj["form_fields"] = httpEntriesToJson(formFields);
+    if (!bodyFile.isEmpty()) obj["body_file"] = bodyFile;
+    if (!options.isEmpty()) obj["options"] = options.toJson();
+    if (!responseFile.isEmpty()) obj["response_file"] = responseFile;
+
+    if (!envExtractors.isEmpty()) {
+        QJsonArray extractorsArr;
+        for (const EnvExtractor &e : envExtractors) {
+            extractorsArr.append(e.toJson());
+        }
+        obj["env_extractors"] = extractorsArr;
+    }
+    if (!assertions.isEmpty()) {
+        QJsonArray assertionsArr;
+        for (const ExecutionCondition &c : assertions) {
+            assertionsArr.append(c.toJson());
+        }
+        obj["assertions"] = assertionsArr;
+    }
+    return obj;
+}
+
+HttpConfig HttpConfig::fromJson(const QJsonObject &obj)
+{
+    HttpConfig cfg;
+    cfg.setMethodName(obj.value("method").toString());
+    cfg.url = obj.value("url").toString();
+
+    cfg.headers = httpEntriesFromJson(obj.value("headers"));
+    cfg.queryParams = httpEntriesFromJson(obj.value("query_params"));
+    cfg.auth = HttpAuth::fromJson(obj.value("auth").toObject());
+    cfg.bodyType = httpBodyTypeFromString(obj.value("body_type").toString());
+    cfg.body = obj.value("body").toString();
+    cfg.graphqlVariables = obj.value("graphql_variables").toString();
+    cfg.formFields = httpEntriesFromJson(obj.value("form_fields"));
+    cfg.bodyFile = obj.value("body_file").toString();
+    cfg.options = HttpOptions::fromJson(obj.value("options").toObject());
+    cfg.responseFile = obj.value("response_file").toString();
+
+    for (const QJsonValue &v : obj.value("env_extractors").toArray()) {
+        cfg.envExtractors << EnvExtractor::fromJson(v.toObject());
+    }
+    for (const QJsonValue &v : obj.value("assertions").toArray()) {
+        cfg.assertions << ExecutionCondition::fromJson(v.toObject());
+    }
+    return cfg;
+}
+
+QJsonObject ExecutionCondition::toJson() const
+{
+    QJsonObject obj;
+    if (!name.isEmpty()) obj["name"] = name;
+    if (!left.isEmpty()) obj["left"] = left;
+    if (!op.isEmpty()) obj["op"] = op;
+    if (!right.isEmpty()) obj["right"] = right;
+    if (!enabled) obj["enabled"] = false; // default é true — só grava a exceção
+    return obj;
+}
+
+ExecutionCondition ExecutionCondition::fromJson(const QJsonObject &obj)
+{
+    ExecutionCondition c;
+    c.name = obj.value("name").toString();
+    c.left = obj.value("left").toString();
+    c.op = obj.value("op").toString(QStringLiteral("exists"));
+    c.right = obj.value("right").toString();
+    c.enabled = obj.value("enabled").toBool(true);
+    return c;
+}
+
+QJsonObject Hooks::toJson() const
+{
+    QJsonObject obj;
+    if (!pre.isEmpty()) obj["pre"] = QJsonArray::fromStringList(pre);
+    if (!post.isEmpty()) obj["post"] = QJsonArray::fromStringList(post);
+    if (!cleanup.isEmpty()) obj["cleanup"] = QJsonArray::fromStringList(cleanup);
+    return obj;
+}
+
+Hooks Hooks::fromJson(const QJsonObject &obj)
+{
+    Hooks h;
+    for (const QJsonValue &v : obj.value("pre").toArray()) {
+        h.pre << v.toString();
+    }
+    for (const QJsonValue &v : obj.value("cleanup").toArray()) {
+        h.cleanup.append(v.toString());
+    }
+    for (const QJsonValue &v : obj.value("post").toArray()) {
+        h.post << v.toString();
+    }
+    return h;
+}
+
+QString commandTypeToString(CommandType type)
+{
+    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("command");
+}
+
+CommandType commandTypeFromString(const QString &value)
+{
+    // "shell" (nome anterior) e valor desconhecido caem em Command.
+    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Command;
+}
+
+QString commandLanguageToString(CommandLanguage language)
+{
+    switch (language) {
+        case CommandLanguage::Python: return QStringLiteral("python");
+        case CommandLanguage::Node:   return QStringLiteral("node");
+        case CommandLanguage::Php:    return QStringLiteral("php");
+        case CommandLanguage::Native: break;
+    }
+    return QStringLiteral("native");
+}
+
+CommandLanguage commandLanguageFromString(const QString &value)
+{
+    const QString v = value.trimmed().toLower();
+    if (v == QStringLiteral("python")) return CommandLanguage::Python;
+    if (v == QStringLiteral("node"))   return CommandLanguage::Node;
+    if (v == QStringLiteral("php"))    return CommandLanguage::Php;
+    return CommandLanguage::Native;
+}
+
+QString cliWorkingDirToString(CliWorkingDir mode)
+{
+    return mode == CliWorkingDir::Invocation ? QStringLiteral("invocation") : QStringLiteral("default");
+}
+
+CliWorkingDir cliWorkingDirFromString(const QString &value)
+{
+    return value.trimmed().toLower() == QStringLiteral("invocation") ? CliWorkingDir::Invocation
+                                                                     : CliWorkingDir::Default;
+}
+
+QJsonObject Command::toJson() const
+{
+    // Omite chaves no default: fromJson() trata toda chave ausente como seu default, então é
+    // equivalente na releitura e deixa o arquivo enxuto para quem edita/versiona à mão.
+    QJsonObject obj;
+    obj["id"] = id;
+    obj["folder_id"] = folderId;
+    obj["name"] = name;
+    if (!description.isEmpty()) obj["description"] = description;
+    obj["type"] = commandTypeToString(type);
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    obj["command"] = command;
+    if (language != CommandLanguage::Native) obj["language"] = commandLanguageToString(language);
+    if (!interpreter.isEmpty()) obj["interpreter"] = interpreter;
+    writeWorkingDir(obj, workingDirMode, workingDir);
+    if (isBackground) obj["is_background"] = true;
+    if (compactOutput) obj["compact_output"] = true;
+    if (hideOnRun) obj["hide_on_run"] = true;
+    if (ignoreExitCode) obj["ignore_exit_code"] = true;
+    if (hidden) obj["hidden"] = true;
+    if (captureEnv) obj["capture_env"] = true;
+    if (!declaredEnvVars.isEmpty()) {
+        QJsonArray declaredArr;
+        for (const DeclaredEnvVar &d : declaredEnvVars) {
+            declaredArr.append(d.toJson());
+        }
+        obj["declared_env_vars"] = declaredArr;
+    }
+    if (openLastLink) obj["open_last_link"] = true;
+    if (interactiveTerminal) obj["interactive_terminal"] = true;
+    if (formattedOutput) obj["formatted_output"] = true;
+    if (kip) obj["kip"] = true;
+    if (kipOpenInWindow) obj["kip_window"] = true;
+    if (kipAutoCloseWindow) obj["kip_auto_close"] = true;
+    if (kipAutoCloseDelaySec != 2) obj["kip_auto_close_delay_sec"] = kipAutoCloseDelaySec;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (autoRun) obj["auto_run"] = true;
+    if (autoRunDelaySec != 0) obj["auto_run_delay_sec"] = autoRunDelaySec;
+    if (!cronExpression.isEmpty()) obj["cron_expression"] = cronExpression;
+    if (cronNotifyOnRun) obj["cron_notify_on_run"] = true;
+    if (order != -1) obj["order"] = order;
+
+    if (httpConfig.has_value()) {
+        obj["http_config"] = httpConfig->toJson();
+    }
+
+    if (!params.isEmpty()) {
+        QJsonArray paramsArr;
+        for (const Parameter &p : params) {
+            paramsArr.append(p.toJson());
+        }
+        obj["params"] = paramsArr;
+    }
+    if (!hooks.pre.isEmpty() || !hooks.post.isEmpty() || !hooks.cleanup.isEmpty()) {
+        obj["hooks"] = hooks.toJson();
+    }
+
+    if (!executionConditions.isEmpty()) {
+        QJsonArray conditionsArr;
+        for (const ExecutionCondition &c : executionConditions) {
+            conditionsArr.append(c.toJson());
+        }
+        obj["execution_conditions"] = conditionsArr;
+    }
+    if (conditionCombinator != QStringLiteral("and")) obj["condition_combinator"] = conditionCombinator;
+    if (conditionSkipBehavior != QStringLiteral("success")) obj["condition_skip_behavior"] = conditionSkipBehavior;
+
+    if (!responders.isEmpty()) {
+        QJsonArray respArr;
+        for (const OutputResponder &r : responders) {
+            respArr.append(r.toJson());
+        }
+        obj["responders"] = respArr;
+    }
+
+    if (!lastParamValues.isEmpty()) {
+        QJsonObject lastParamsObj;
+        for (auto it = lastParamValues.constBegin(); it != lastParamValues.constEnd(); ++it) {
+            lastParamsObj[it.key()] = it.value();
+        }
+        obj["last_param_values"] = lastParamsObj;
+    }
+
+    if (!kipLastValues.isEmpty()) obj["kip_last_values"] = kipLastValues;
+
+    if (!paramUsageHistory.isEmpty()) {
+        QJsonObject usageObj;
+        for (auto it = paramUsageHistory.constBegin(); it != paramUsageHistory.constEnd(); ++it) {
+            usageObj[it.key()] = QJsonArray::fromStringList(it.value());
+        }
+        obj["param_usage_history"] = usageObj;
+    }
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
+    if (cliWorkingDir != CliWorkingDir::Default) obj["cli_working_dir"] = cliWorkingDirToString(cliWorkingDir);
+    return obj;
+}
+
+Command Command::fromJson(const QJsonObject &obj)
+{
+    Command c;
+    c.id = obj.value("id").toString();
+    c.folderId = obj.value("folder_id").toString();
+    c.name = obj.value("name").toString();
+    c.description = obj.value("description").toString();
+    c.type = commandTypeFromString(obj.value("type").toString());
+    c.icon = obj.value("icon").toString();
+    c.command = obj.value("command").toString();
+    c.language = commandLanguageFromString(obj.value("language").toString());
+    c.interpreter = obj.value("interpreter").toString();
+    readWorkingDir(obj, c.workingDirMode, c.workingDir);
+    c.isBackground = obj.value("is_background").toBool(false);
+    c.compactOutput = obj.value("compact_output").toBool(false);
+    c.hideOnRun = obj.value("hide_on_run").toBool(false);
+    c.ignoreExitCode = obj.value("ignore_exit_code").toBool(false);
+    c.hidden = obj.value("hidden").toBool(false);
+    c.captureEnv = obj.value("capture_env").toBool(false);
+    for (const QJsonValue &v : obj.value("declared_env_vars").toArray()) {
+        c.declaredEnvVars << DeclaredEnvVar::fromJson(v.toObject());
+    }
+    c.openLastLink = obj.value("open_last_link").toBool(false);
+    c.interactiveTerminal = obj.value("interactive_terminal").toBool(false);
+    c.formattedOutput = obj.value("formatted_output").toBool(false);
+    c.kip = obj.value("kip").toBool(false);
+    c.kipOpenInWindow = obj.value("kip_window").toBool(false);
+    c.kipAutoCloseWindow = obj.value("kip_auto_close").toBool(false);
+    c.kipAutoCloseDelaySec = qBound(0, obj.value("kip_auto_close_delay_sec").toInt(2), 60);
+    c.terminalTarget = obj.value("terminal_target").toString();
+    c.autoRun = obj.value("auto_run").toBool(false);
+    c.autoRunDelaySec = obj.value("auto_run_delay_sec").toInt(0);
+    c.cronExpression = obj.value("cron_expression").toString();
+    c.cronNotifyOnRun = obj.value("cron_notify_on_run").toBool(false);
+    c.order = obj.value("order").toInt(-1);
+
+    if (obj.contains("http_config") && obj.value("http_config").isObject()) {
+        c.httpConfig = HttpConfig::fromJson(obj.value("http_config").toObject());
+    }
+
+    for (const QJsonValue &v : obj.value("params").toArray()) {
+        c.params << Parameter::fromJson(v.toObject());
+    }
+
+    c.hooks = Hooks::fromJson(obj.value("hooks").toObject());
+
+    for (const QJsonValue &v : obj.value("execution_conditions").toArray()) {
+        c.executionConditions << ExecutionCondition::fromJson(v.toObject());
+    }
+    c.conditionCombinator = obj.value("condition_combinator").toString(QStringLiteral("and"));
+    c.conditionSkipBehavior = obj.value("condition_skip_behavior").toString(QStringLiteral("success"));
+
+    for (const QJsonValue &v : obj.value("responders").toArray()) {
+        c.responders << OutputResponder::fromJson(v.toObject());
+    }
+    const QJsonObject lastParamsObj = obj.value("last_param_values").toObject();
+    for (auto it = lastParamsObj.constBegin(); it != lastParamsObj.constEnd(); ++it) {
+        c.lastParamValues[it.key()] = it.value().toString();
+    }
+    c.kipLastValues = obj.value("kip_last_values").toObject();
+    const QJsonObject usageObj = obj.value("param_usage_history").toObject();
+    for (auto it = usageObj.constBegin(); it != usageObj.constEnd(); ++it) {
+        QStringList values;
+        for (const QJsonValue &v : it.value().toArray()) {
+            values << v.toString();
+        }
+        c.paramUsageHistory[it.key()] = values;
+    }
+    c.cliPath = obj.value("cli_path").toString();
+    c.cliWorkingDir = cliWorkingDirFromString(obj.value("cli_working_dir").toString());
+    return c;
+}
+
+QJsonObject Folder::toJson() const
+{
+    // Omite chaves no default (como Command::toJson).
+    QJsonObject obj;
+    obj["id"] = id;
+    obj["name"] = name;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (parentId.has_value()) obj["parent_id"] = parentId.value();
+    if (isProject) obj["is_project"] = true;
+    writeWorkingDir(obj, workingDirMode, workingDir);
+    if (order != -1) obj["order"] = order;
+    if (hidden) obj["hidden"] = true;
+    if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
+    if (!httpDefaults.isEmpty()) obj["http_defaults"] = httpDefaults.toJson();
+    if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
+    if (!cliDescription.isEmpty()) obj["cli_description"] = cliDescription;
+    if (!actions.isEmpty()) obj["actions"] = QJsonArray::fromStringList(actions);
+    if (!expansionActions.isEmpty()) obj["expansion_actions"] = QJsonArray::fromStringList(expansionActions);
+    if (!actionGroups.isEmpty()) {
+        QJsonObject groups;
+        for (auto it = actionGroups.constBegin(); it != actionGroups.constEnd(); ++it) {
+            groups[it.key()] = it.value();
+        }
+        obj["action_groups"] = groups;
+    }
+    if (!groupIcons.isEmpty()) {
+        QJsonObject icons;
+        for (auto it = groupIcons.constBegin(); it != groupIcons.constEnd(); ++it) {
+            icons[it.key()] = it.value();
+        }
+        obj["group_icons"] = icons;
+    }
+
+    if (!envVars.isEmpty()) {
+        QJsonObject envObj;
+        for (auto it = envVars.constBegin(); it != envVars.constEnd(); ++it) {
+            envObj[it.key()] = it.value();
+        }
+        obj["env_vars"] = envObj;
+    }
+    if (!secretEnvKeys.isEmpty()) {
+        QStringList names(secretEnvKeys.cbegin(), secretEnvKeys.cend());
+        names.sort();
+        obj["secret_env_keys"] = QJsonArray::fromStringList(names);
+    }
+    return obj;
+}
+
+Folder Folder::fromJson(const QJsonObject &obj)
+{
+    Folder f;
+    f.id = obj.value("id").toString();
+    f.name = obj.value("name").toString();
+    f.icon = obj.value("icon").toString();
+
+    const QJsonValue parentVal = obj.value("parent_id");
+    if (parentVal.isString()) {
+        f.parentId = parentVal.toString();
+    }
+
+    f.isProject = obj.value("is_project").toBool(false);
+
+    readWorkingDir(obj, f.workingDirMode, f.workingDir);
+
+    f.order = obj.value("order").toInt(-1);
+    f.hidden = obj.value("hidden").toBool(false);
+    f.terminalTarget = obj.value("terminal_target").toString();
+    f.cliPath = obj.value("cli_path").toString();
+    f.cliDescription = obj.value("cli_description").toString();
+    // Ordem de cadastro preservada; vazio e repetido não fazem sentido.
+    for (const QJsonValue &v : obj.value("actions").toArray()) {
+        const QString commandId = v.toString().trimmed();
+        if (!commandId.isEmpty() && !f.actions.contains(commandId)) {
+            f.actions.append(commandId);
+        }
+    }
+    const QJsonObject groupsObj = obj.value("action_groups").toObject();
+    for (auto it = groupsObj.constBegin(); it != groupsObj.constEnd(); ++it) {
+        const QString group = it.value().toString().trimmed();
+        if (!it.key().isEmpty() && !group.isEmpty()) {
+            f.actionGroups.insert(it.key(), group);
+        }
+    }
+    const QJsonObject groupIconsObj = obj.value("group_icons").toObject();
+    for (auto it = groupIconsObj.constBegin(); it != groupIconsObj.constEnd(); ++it) {
+        const QString icon = it.value().toString().trimmed();
+        if (!it.key().isEmpty() && !icon.isEmpty()) {
+            f.groupIcons.insert(it.key(), icon);
+        }
+    }
+    for (const QJsonValue &v : obj.value("expansion_actions").toArray()) {
+        const QString commandId = v.toString().trimmed();
+        if (!commandId.isEmpty() && !f.expansionActions.contains(commandId)) {
+            f.expansionActions.append(commandId);
+        }
+    }
+
+    const QJsonObject envObj = obj.value("env_vars").toObject();
+    for (auto it = envObj.constBegin(); it != envObj.constEnd(); ++it) {
+        f.envVars[it.key()] = it.value().toString();
+    }
+    f.httpDefaults = HttpDefaults::fromJson(obj.value("http_defaults").toObject());
+    // Um nome secreto sempre existe como variável (num arquivo ele vem sem valor: cada instalação preenche).
+    for (const QJsonValue &v : obj.value("secret_env_keys").toArray()) {
+        const QString name = v.toString().trimmed();
+        if (!name.isEmpty()) {
+            f.secretEnvKeys.insert(name);
+            if (!f.envVars.contains(name)) {
+                f.envVars.insert(name, QString());
+            }
+        }
+    }
+
+    // MIGRAÇÃO idempotente: o diretório da pasta-projeto morava em "project_path" e na variável
+    // PROJECT_PATH; agora é o diretório de trabalho da pasta e PROJECT_PATH é calculada na execução.
+    if (f.workingDirMode == WorkingDirMode::Inherit) {
+        const QString legacyProjectPath = obj.value("project_path").toString().trimmed();
+        const QString legacyEnv = f.isProject ? f.envVars.value(QStringLiteral("PROJECT_PATH")).trimmed() : QString();
+        const QString migrated = !legacyProjectPath.isEmpty() ? legacyProjectPath : legacyEnv;
+        if (!migrated.isEmpty()) {
+            f.workingDirMode = WorkingDirMode::Custom;
+            f.workingDir = migrated;
+        }
+    }
+    if (f.isProject && f.workingDirMode == WorkingDirMode::Custom
+        && f.envVars.value(QStringLiteral("PROJECT_PATH")).trimmed() == f.workingDir) {
+        f.envVars.remove(QStringLiteral("PROJECT_PATH"));
+    }
+    return f;
+}
+
+QString collectionFieldTypeToString(CollectionFieldType type)
+{
+    switch (type) {
+    case CollectionFieldType::Text:   return QStringLiteral("text");
+    case CollectionFieldType::Key:    return QStringLiteral("key");
+    case CollectionFieldType::Value:  return QStringLiteral("value");
+    case CollectionFieldType::Email:  return QStringLiteral("email");
+    case CollectionFieldType::Number: return QStringLiteral("number");
+    case CollectionFieldType::Url:    return QStringLiteral("url");
+    case CollectionFieldType::Bool:   return QStringLiteral("bool");
+    }
+    return QStringLiteral("text");
+}
+
+CollectionFieldType collectionFieldTypeFromString(const QString &value)
+{
+    if (value == QStringLiteral("key"))    return CollectionFieldType::Key;
+    if (value == QStringLiteral("value"))  return CollectionFieldType::Value;
+    if (value == QStringLiteral("email"))  return CollectionFieldType::Email;
+    if (value == QStringLiteral("number")) return CollectionFieldType::Number;
+    if (value == QStringLiteral("url"))    return CollectionFieldType::Url;
+    if (value == QStringLiteral("bool"))   return CollectionFieldType::Bool;
+    return CollectionFieldType::Text; // tipo desconhecido/novo -> fallback seguro
+}
+
+QJsonObject CollectionField::toJson() const
+{
+    QJsonObject obj;
+    obj["name"] = name;
+    if (!label.isEmpty()) obj["label"] = label;
+    obj["type"] = collectionFieldTypeToString(type);
+    if (!visible) obj["visible"] = false; // default é true — só grava a exceção
+    if (secret) obj["secret"] = true; // default é false — só grava a exceção
+    return obj;
+}
+
+CollectionField CollectionField::fromJson(const QJsonObject &obj)
+{
+    CollectionField f;
+    f.name = obj.value("name").toString();
+    f.label = obj.value("label").toString();
+    f.type = collectionFieldTypeFromString(obj.value("type").toString());
+    f.visible = obj.value("visible").toBool(true);
+    f.secret = obj.value("secret").toBool(false);
+    return f;
+}
+
+QJsonObject CollectionEntry::toJson() const
+{
+    QJsonObject obj;
+    obj["id"] = id;
+    QJsonObject valuesObj;
+    for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
+        valuesObj[it.key()] = it.value();
+    }
+    obj["values"] = valuesObj;
+    if (favorite) obj["favorite"] = true;
+    return obj;
+}
+
+CollectionEntry CollectionEntry::fromJson(const QJsonObject &obj)
+{
+    CollectionEntry e;
+    e.id = obj.value("id").toString();
+    const QJsonObject valuesObj = obj.value("values").toObject();
+    for (auto it = valuesObj.constBegin(); it != valuesObj.constEnd(); ++it) {
+        e.values[it.key()] = it.value().toString();
+    }
+    // Tags legadas (obj["tags"]) foram removidas e são ignoradas.
+    e.favorite = obj.value("favorite").toBool(false);
+    return e;
+}
+
+QVector<CollectionField> Collection::defaultSchema()
+{
+    return {
+        {QStringLiteral("key"), QStringLiteral("Chave"), CollectionFieldType::Key},
+        {QStringLiteral("value"), QStringLiteral("Valor"), CollectionFieldType::Value},
+    };
+}
+
+QJsonObject Collection::toJson() const
+{
+    QJsonObject obj;
+    obj["id"] = id;
+    obj["folder_id"] = folderId;
+    obj["name"] = name;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (order != -1) obj["order"] = order;
+    if (!sourcePath.isEmpty()) obj["source_path"] = sourcePath;
+    if (hidden) obj["hidden"] = true;
+
+    if (!schema.isEmpty()) {
+        QJsonArray schemaArr;
+        for (const CollectionField &field : schema) {
+            schemaArr.append(field.toJson());
+        }
+        obj["schema"] = schemaArr;
+    }
+
+    if (!entries.isEmpty()) {
+        QJsonArray entriesArr;
+        for (const CollectionEntry &entry : entries) {
+            entriesArr.append(entry.toJson());
+        }
+        obj["entries"] = entriesArr;
+    }
+    return obj;
+}
+
+QStringList Note::types()
+{
+    return {QStringLiteral("markdown"), QStringLiteral("text"), QStringLiteral("json"), QStringLiteral("yaml"),
+            QStringLiteral("xml")};
+}
+
+QString Note::normalizedType(const QString &type)
+{
+    const QString lower = type.trimmed().toLower();
+    if (lower == QLatin1String("md")) {
+        return QStringLiteral("markdown");
+    }
+    if (lower == QLatin1String("txt")) {
+        return QStringLiteral("text");
+    }
+    if (lower == QLatin1String("yml")) {
+        return QStringLiteral("yaml");
+    }
+    return types().contains(lower) ? lower : QStringLiteral("markdown");
+}
+
+QString Note::extensionForType(const QString &type)
+{
+    const QString t = normalizedType(type);
+    if (t == QLatin1String("text")) return QStringLiteral("txt");
+    if (t == QLatin1String("json")) return QStringLiteral("json");
+    if (t == QLatin1String("yaml")) return QStringLiteral("yml");
+    if (t == QLatin1String("xml")) return QStringLiteral("xml");
+    return QStringLiteral("md");
+}
+
+QString Note::typeForExtension(const QString &extension)
+{
+    const QString ext = extension.trimmed().toLower();
+    if (ext == QLatin1String("txt")) return QStringLiteral("text");
+    if (ext == QLatin1String("json")) return QStringLiteral("json");
+    if (ext == QLatin1String("yml") || ext == QLatin1String("yaml")) return QStringLiteral("yaml");
+    if (ext == QLatin1String("xml")) return QStringLiteral("xml");
+    return QStringLiteral("markdown");
+}
+
+QJsonObject Note::toJson() const
+{
+    QJsonObject obj;
+    obj["id"] = id;
+    obj["folder_id"] = folderId;
+    obj["name"] = name;
+    if (!icon.isEmpty()) obj["icon"] = icon;
+    if (order >= 0) obj["order"] = order;
+    obj["type"] = normalizedType(type);
+    obj["content"] = content;
+    // `local` ausente = local (o padrão); só grava quando a nota sincroniza.
+    if (!local) obj["local"] = false;
+    if (hidden) obj["hidden"] = true;
+    return obj;
+}
+
+Note Note::fromJson(const QJsonObject &obj)
+{
+    Note note;
+    note.id = obj.value("id").toString();
+    note.folderId = obj.value("folder_id").toString();
+    note.name = obj.value("name").toString();
+    note.icon = obj.value("icon").toString();
+    note.order = obj.value("order").toInt(-1);
+    note.type = normalizedType(obj.value("type").toString());
+    note.content = obj.value("content").toString();
+    note.local = obj.value("local").toBool(true);
+    note.hidden = obj.value("hidden").toBool(false);
+    return note;
+}
+
+Collection Collection::fromJson(const QJsonObject &obj)
+{
+    Collection c;
+    c.id = obj.value("id").toString();
+    c.folderId = obj.value("folder_id").toString();
+    c.name = obj.value("name").toString();
+    c.icon = obj.value("icon").toString();
+    c.order = obj.value("order").toInt(-1);
+    c.sourcePath = obj.value("source_path").toString();
+    c.hidden = obj.value("hidden").toBool(false);
+
+    for (const QJsonValue &v : obj.value("schema").toArray()) {
+        c.schema.append(CollectionField::fromJson(v.toObject()));
+    }
+    // Coleção sem schema (corrompida/antiga) recebe o default para nunca ficar sem colunas.
+    if (c.schema.isEmpty()) {
+        c.schema = Collection::defaultSchema();
+    }
+
+    for (const QJsonValue &v : obj.value("entries").toArray()) {
+        CollectionEntry e = CollectionEntry::fromJson(v.toObject());
+        // Entrada sem id (kai.yml escrito à mão) ganha um aqui; sem isso, várias colidiriam em "".
+        if (e.id.isEmpty()) {
+            e.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        c.entries.append(e);
+    }
+    return c;
+}
+
+QString resolveCollectionDisplayField(const Collection &collection, const QString &configured)
+{
+    // ESCOLHA EXPLÍCITA sempre vence, mesmo sendo Key (ignorá-la era o bug). O auto-fallback abaixo
+    // (que evita Key) só vale quando nada foi configurado.
+    if (!configured.isEmpty()) {
+        const bool exists = std::any_of(collection.schema.constBegin(), collection.schema.constEnd(),
+            [&configured](const CollectionField &f) { return f.name == configured; });
+        if (exists) {
+            return configured;
+        }
+        // `configured` não existe mais no schema (removido/renomeado): cai no auto-fallback.
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type == CollectionFieldType::Value) {
+            return f.name;
+        }
+    }
+    for (const CollectionField &f : collection.schema) {
+        if (f.type != CollectionFieldType::Key) {
+            return f.name;
+        }
+    }
+    return collection.schema.isEmpty() ? QString() : collection.schema.first().name;
+}
+
+int bindPendingCollectionReferences(QVector<Command> &commands, const QVector<Collection> &collections)
+{
+    QMap<QString, QString> idByName;
+    QSet<QString> ambiguous;
+    for (const Collection &c : collections) {
+        if (idByName.contains(c.name)) {
+            ambiguous.insert(c.name);
+        }
+        idByName.insert(c.name, c.id);
+    }
+    int bound = 0;
+    for (Command &command : commands) {
+        for (Parameter &param : command.params) {
+            if (!param.collectionId.isEmpty() || param.collectionName.isEmpty()) {
+                continue;
+            }
+            if (idByName.contains(param.collectionName) && !ambiguous.contains(param.collectionName)) {
+                param.collectionId = idByName.value(param.collectionName);
+                param.collectionName.clear();
+                ++bound;
+            }
+        }
+    }
+    return bound;
+}
+
+} // namespace kai::core

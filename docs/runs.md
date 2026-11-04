@@ -1,0 +1,20 @@
+# Run history
+
+Menu **File → Run History** (it opens as the **History** [panel](layout.md), in the Output's cell by default, as a tab — move it wherever you like). Lists the latest runs (Shell and HTTP)
+with:
+
+- **Timestamp** and **duration**
+- **Status** (✓ success / ✗ failure)
+- **Type** (shell/http) and command name
+- **Saved output** (stdout/stderr, truncated)
+
+## Actions
+
+- Select a run → see the full output.
+- **Re-run** → fires the command again.
+- **Clear** → wipes the history.
+
+## Persistence
+
+`~/.config/kai/runs.json` — keeps up to 200 records (most recent first);
+each run's output is capped so it never grows unbounded.

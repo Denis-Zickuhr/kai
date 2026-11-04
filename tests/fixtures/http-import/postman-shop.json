@@ -1,0 +1,119 @@
+{
+  "info": {
+    "name": "Shop",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{TOKEN}}"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base",
+      "value": "https://api.test"
+    }
+  ],
+  "item": [
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Off",
+                "value": "1",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/users?x=1",
+              "query": [
+                {
+                  "key": "x",
+                  "value": "1"
+                },
+                {
+                  "key": "y",
+                  "value": "2",
+                  "disabled": true
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"id\": \"{{$guid}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "url": "{{base}}/login",
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "username",
+              "value": "u"
+            },
+            {
+              "key": "password",
+              "value": "p"
+            }
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "a",
+              "value": "1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Upload",
+      "request": {
+        "method": "POST",
+        "url": "{{base}}/up",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "t",
+              "value": "x",
+              "type": "text"
+            },
+            {
+              "key": "f",
+              "type": "file",
+              "src": "/tmp/a.png"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

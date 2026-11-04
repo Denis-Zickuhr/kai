@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux build + tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build \
+            qt6-base-dev qt6-svg-dev qt6-base-dev-tools libgl1-mesa-dev libxkbcommon-dev
+      - name: Configure
+        run: cmake -B build-dev -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAI_SHARED_LIBS=ON
+      - name: Build
+        run: cmake --build build-dev --parallel
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build-dev --output-on-failure --timeout 300
+
+  windows:
+    name: Windows cross-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (MinGW, same image as the release build)
+        run: |
+          mkdir -p dist && chmod 777 dist
+          docker compose build build-windows
+          docker compose run --rm build-windows

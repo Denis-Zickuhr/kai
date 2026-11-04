@@ -1,0 +1,438 @@
+#include <QTest>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QDir>
+#include <QStandardPaths>
+
+#include <algorithm>
+
+#include "core/config-manager.h"
+
+using namespace kai::core;
+
+// Persistência e Recuperação de Configuração Corrompida.
+class TestConfigManager : public QObject {
+    Q_OBJECT
+
+private slots:
+    void init()
+    {
+        // Isola cada teste num diretório de config temporário (não toca no ~/.config/kai real).
+        m_tempDir = std::make_unique<QTemporaryDir>();
+        QVERIFY(m_tempDir->isValid());
+        qputenv("XDG_CONFIG_HOME", m_tempDir->path().toUtf8());
+    }
+
+    void cleanup()
+    {
+        m_tempDir.reset();
+    }
+
+    // doc-usage.json: o contador de uso das pastas volta como foi gravado; sem arquivo, vazio; contagens inválidas somem.
+    void docUsageRoundTripsAndStartsEmpty()
+    {
+        ConfigManager manager;
+        QVERIFY(manager.loadDocUsage().isEmpty());
+        QMap<QString, int> usage{{QStringLiteral("f1"), 3}, {QStringLiteral("f2"), 1}, {QStringLiteral("gone"), 0}};
+        QVERIFY(manager.saveDocUsage(usage));
+        const QMap<QString, int> loaded = manager.loadDocUsage();
+        QCOMPARE(loaded.value(QStringLiteral("f1")), 3);
+        QCOMPARE(loaded.value(QStringLiteral("f2")), 1);
+        QVERIFY(!loaded.contains(QStringLiteral("gone")));
+    }
+
+    // O recolhido da lista de comandos é lembrado nas configurações (padrão: aberta).
+    void commandsCollapsedIsRememberedInSettings()
+    {
+        ConfigManager manager;
+        SettingsData settings = manager.loadSettings();
+        QVERIFY(!settings.commandsCollapsed);
+        settings.commandsCollapsed = true;
+        QVERIFY(manager.saveSettings(settings));
+        QVERIFY(manager.loadSettings().commandsCollapsed);
+    }
+
+    // escreve JSON inválido em commands.json, espera que o Kai crie
+    // backup .bak.[TIMESTAMP], restaure estado vazio e não crashe.
+    void corruptedCommandsFileIsRecoveredWithBackup()
+    {
+        ConfigManager manager;
+        const QString path = manager.commandsFilePath();
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArrayLiteral(R"({"folders": [invalido...})"));
+        file.close();
+
+        QSignalSpy recoveredSpy(&manager, &ConfigManager::configRecovered);
+
+        const CommandsData data = manager.loadCommands();
+
+        QCOMPARE(data.folders.size(), 0);
+        QCOMPARE(data.commands.size(), 0);
+        QCOMPARE(recoveredSpy.count(), 1);
+
+        const QString backupPath = recoveredSpy.at(0).at(1).toString();
+        QVERIFY(!backupPath.isEmpty());
+        QVERIFY(QFile::exists(backupPath));
+        QVERIFY(backupPath.contains(QStringLiteral("commands.json.bak.")));
+    }
+
+    void corruptedSettingsFileIsRecoveredWithBackup()
+    {
+        ConfigManager manager;
+        const QString path = manager.settingsFilePath();
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArrayLiteral("{ this is not json"));
+        file.close();
+
+        QSignalSpy recoveredSpy(&manager, &ConfigManager::configRecovered);
+
+        const SettingsData data = manager.loadSettings();
+
+        // Recuperação devolve os DEFAULTS do modelo (tema padrão "kai-dark").
+        QCOMPARE(data.activeTheme, QStringLiteral("kai-dark"));
+        QCOMPARE(recoveredSpy.count(), 1);
+    }
+
+    // Round-trip: salvar e recarregar deve preservar os dados (valida a
+    // escrita atômica tmp+rename).
+    void saveAndLoadRoundTripPreservesData()
+    {
+        ConfigManager manager;
+
+        Folder folder;
+        folder.id = "f_test";
+        folder.name = "Test Folder";
+        folder.envVars["PORT"] = "8080";
+
+        Command cmd;
+        cmd.id = "c_test";
+        cmd.folderId = "f_test";
+        cmd.name = "Echo";
+        cmd.command = "echo hello";
+
+        CommandsData data;
+        data.folders << folder;
+        data.commands << cmd;
+
+        QVERIFY(manager.saveCommands(data));
+        QVERIFY(QFile::exists(manager.commandsFilePath()));
+
+        const CommandsData reloaded = manager.loadCommands();
+        QCOMPARE(reloaded.folders.size(), 1);
+        QCOMPARE(reloaded.commands.size(), 1);
+        QCOMPARE(reloaded.folders.at(0).name, QStringLiteral("Test Folder"));
+        QCOMPARE(reloaded.commands.at(0).command, QStringLiteral("echo hello"));
+    }
+
+    void loadingMissingFileReturnsEmptyStateWithoutCrash()
+    {
+        ConfigManager manager;
+        const CommandsData data = manager.loadCommands();
+        QCOMPARE(data.folders.size(), 0);
+        QCOMPARE(data.commands.size(), 0);
+    }
+
+    // Dois comandos com o MESMO id no commands.json (ex: importação/versão antiga): o load preserva ambos, renomeando o
+    // segundo para um id único (senão um sobrescrevia o outro no mapa id->comando e params/hooks "sumiam"). O PRIMEIRO mantém o id.
+    void loadDeduplicatesRepeatedCommandIds()
+    {
+        ConfigManager manager;
+        const QString path = manager.commandsFilePath();
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+        const QString json = QStringLiteral(R"({
+            "folders": [],
+            "commands": [
+                {"id": "c_dup", "name": "A", "type": "shell", "command": "x",
+                 "params": [{"name": "t", "type": "text", "label": "T", "default": ""}]},
+                {"id": "c_dup", "name": "B", "type": "shell", "command": "y", "params": []}
+            ]
+        })");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(json.toUtf8());
+        file.close();
+
+        const CommandsData data = manager.loadCommands();
+        QCOMPARE(data.commands.size(), 2);
+        QVERIFY(data.commands.at(0).id != data.commands.at(1).id);
+        QCOMPARE(data.commands.at(0).id, QStringLiteral("c_dup"));
+        QCOMPARE(data.commands.at(0).params.size(), 1);
+    }
+
+    // As opções de exibição da Saída persistem em settings.json entre sessões (round-trip dos 6 campos).
+    void outputViewOptionsRoundTrip()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        s.outputLineNumbers = true;
+        s.outputWrap = true;
+        s.outputTimestamps = true;
+        s.outputAutoScroll = false;
+        s.outputCompact = true;
+        s.outputFontSize = 14;
+        QVERIFY(manager.saveSettings(s));
+
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.outputLineNumbers, true);
+        QCOMPARE(loaded.outputWrap, true);
+        QCOMPARE(loaded.outputTimestamps, true);
+        QCOMPARE(loaded.outputAutoScroll, false);
+        QCOMPARE(loaded.outputCompact, true);
+        QCOMPARE(loaded.outputFontSize, 14);
+    }
+
+    // O sabor de shell do alvo de terminal persiste.
+    void terminalTargetShellFlavorRoundTrip()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        TerminalProfile t;
+        t.name = QStringLiteral("PS");
+        t.commandTemplate = QStringLiteral("powershell.exe -Command {{command}}");
+        t.shell = ShellFlavor::PowerShell;
+        t.usePty = false;
+        s.terminalProfiles = {t};
+        QVERIFY(manager.saveSettings(s));
+
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
+        const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
+            [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
+        QVERIFY(it != loaded.terminalProfiles.constEnd());
+        QCOMPARE(it->shell, ShellFlavor::PowerShell);
+        QCOMPARE(it->usePty, false);
+    }
+
+    // Nenhum perfil "Default" é criado sozinho: apagar o último perfil o deixa apagado.
+    void noTerminalProfileIsAutoCreated()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        s.terminalProfiles.clear();
+        QVERIFY(manager.saveSettings(s));
+        QVERIFY(manager.loadSettings().terminalProfiles.isEmpty());
+    }
+
+    // Migração: um alvo PowerShell antigo com a gambiarra $l[2..] é reescrito na carga. O alvo legado é gravado via API
+    // (saveSettings) e o padrão legado é forçado no template para simular a config antiga.
+    void legacyPowerShellTemplateIsMigratedOnLoad()
+    {
+        ConfigManager manager;
+        SettingsData s = manager.loadSettings();
+        TerminalProfile legacy;
+        legacy.name = QStringLiteral("PS");
+        legacy.shell = ShellFlavor::PowerShell;
+        legacy.commandTemplate =
+            QStringLiteral("powershell.exe -Command \"$l=$c.Split([char]10);"
+                           "$c=[string]::Join([char]10,$l[2..($l.Length-1)]);Invoke-Expression($c)\"");
+        s.terminalProfiles = {legacy};
+        QVERIFY(manager.saveSettings(s));
+
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.terminalProfiles.size(), 1);
+        const auto it = std::find_if(loaded.terminalProfiles.constBegin(), loaded.terminalProfiles.constEnd(),
+            [](const TerminalProfile &t) { return t.name == QStringLiteral("PS"); });
+        QVERIFY(it != loaded.terminalProfiles.constEnd());
+        QVERIFY2(!it->commandTemplate.contains(QStringLiteral("[2..")),
+                 "o template PowerShell legado não foi migrado (ainda tem $l[2..])");
+    }
+
+    // Atalho padrão de "Focar saída" trocou de Ctrl+` para Ctrl+' (a crase é
+    // tecla morta no ABNT2). Quem salvou as Configurações com o padrão antigo
+    // é migrado UMA vez; depois disso, escolher Ctrl+` de propósito fica.
+    void focusOutputShortcutMigratesFromBacktickOnce()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+`"]}, "focus_output_shortcut": "Ctrl+`"})");
+        file.close();
+
+        SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.shortcuts.value(QStringLiteral("action.focus_output")), QStringList{QStringLiteral("Ctrl+'")});
+        QCOMPARE(loaded.focusOutputShortcut, QStringLiteral("Ctrl+'"));
+
+        loaded.shortcuts[QStringLiteral("action.focus_output")] = {QStringLiteral("Ctrl+`")};
+        QVERIFY(manager.saveSettings(loaded));
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+`")});
+    }
+
+    // Outro atalho qualquer escolhido pelo usuário nunca é tocado.
+    void focusOutputShortcutMigrationKeepsCustomChoice()
+    {
+        ConfigManager manager;
+        QFile file(manager.settingsFilePath());
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"shortcuts_v2": {"action.focus_output": ["Ctrl+Shift+O"]}})");
+        file.close();
+        QCOMPARE(manager.loadSettings().shortcuts.value(QStringLiteral("action.focus_output")),
+                 QStringList{QStringLiteral("Ctrl+Shift+O")});
+    }
+
+    // Notificações: os 6 toggles sobrevivem ao ciclo salvar->carregar; o default de instalação nova é o opt-in seguro
+    // (master switch desligado, sucesso de background desligado também).
+    void notificationSettingsRoundTrip()
+    {
+        ConfigManager manager;
+
+        const SettingsData defaults = manager.loadSettings();
+        QVERIFY(!defaults.notificationsEnabled);
+        QVERIFY(defaults.notifyOnCommandFailure);
+        QVERIFY(defaults.notifyOnBackgroundProcessCrash);
+        QVERIFY(!defaults.notifyOnBackgroundProcessSuccess);
+        QVERIFY(defaults.notifyOnConfigRecovered);
+        QVERIFY(!defaults.notifyEvenWhenFocused);
+
+        SettingsData s = defaults;
+        s.notificationsEnabled = true;
+        s.notifyOnCommandFailure = false;
+        s.notifyOnBackgroundProcessCrash = false;
+        s.notifyOnBackgroundProcessSuccess = true;
+        s.notifyOnConfigRecovered = false;
+        s.notifyEvenWhenFocused = true;
+        QVERIFY(manager.saveSettings(s));
+
+        const SettingsData loaded = manager.loadSettings();
+        QVERIFY(loaded.notificationsEnabled);
+        QVERIFY(!loaded.notifyOnCommandFailure);
+        QVERIFY(!loaded.notifyOnBackgroundProcessCrash);
+        QVERIFY(loaded.notifyOnBackgroundProcessSuccess);
+        QVERIFY(!loaded.notifyOnConfigRecovered);
+        QVERIFY(loaded.notifyEvenWhenFocused);
+    }
+
+    void interpreterSettingsRoundTripAndDefaultWhenAbsent()
+    {
+        ConfigManager manager;
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.interpreters.python, QStringLiteral("python3"));
+        QCOMPARE(defaults.interpreters.node, QStringLiteral("node"));
+        QCOMPARE(defaults.interpreters.php, QStringLiteral("php"));
+
+        SettingsData s = defaults;
+        s.interpreters.python = QStringLiteral("uv run python");
+        s.interpreters.node = QStringLiteral("/opt/node/bin/node");
+        s.interpreters.php = QStringLiteral("/usr/bin/php8.3 -d memory_limit=1G");
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = ConfigManager().loadSettings();
+        QCOMPARE(loaded.interpreters.python, QStringLiteral("uv run python"));
+        QCOMPARE(loaded.interpreters.node, QStringLiteral("/opt/node/bin/node"));
+        QCOMPARE(loaded.interpreters.php, QStringLiteral("/usr/bin/php8.3 -d memory_limit=1G"));
+    }
+
+private:
+    std::unique_ptr<QTemporaryDir> m_tempDir;
+
+private slots:
+
+    // Densidade, estilo de canto e flags de efeito sobrevivem ao ciclo salvar->carregar.
+    void kipSettingsRoundTripAndAreClamped()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
+        ConfigManager manager;
+        // Padrões quando o arquivo não tem o objeto "kip".
+        const SettingsData defaults = manager.loadSettings();
+        QCOMPARE(defaults.kip.handshakeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.changeTimeoutSec, 10);
+        QCOMPARE(defaults.kip.cancelGraceSec, 3);
+        QVERIFY(defaults.kip.rememberAnswers);
+        QVERIFY(defaults.kip.expandDetailsOnFailure);
+        QCOMPARE(defaults.kip.detachedWindowMode, QStringLiteral("preference")); // segue a preferência geral
+
+        SettingsData s = defaults;
+        s.kip.detachedWindowMode = QStringLiteral("fullscreen");
+        s.kip.handshakeTimeoutSec = 30;
+        s.kip.changeTimeoutSec = 4;
+        s.kip.cancelGraceSec = 9;
+        s.kip.rememberAnswers = false;
+        s.kip.expandDetailsOnFailure = false;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.kip, s.kip);
+
+        // Valores absurdos (arquivo editado à mão) viram valores dentro dos limites.
+        s.kip.handshakeTimeoutSec = 100000;
+        s.kip.cancelGraceSec = -5;
+        QVERIFY(manager.saveSettings(s));
+        const SettingsData clamped = manager.loadSettings();
+        QCOMPARE(clamped.kip.handshakeTimeoutSec, KipSettings::kMaxTimeoutSec);
+        QCOMPARE(clamped.kip.cancelGraceSec, KipSettings::kMinGraceSec);
+
+        // Um modo desconhecido (arquivo editado à mão) volta a seguir a preferência geral.
+        s.kip.detachedWindowMode = QStringLiteral("sideways");
+        QVERIFY(manager.saveSettings(s));
+        QCOMPARE(manager.loadSettings().kip.detachedWindowMode, QStringLiteral("preference"));
+    }
+
+    void appearanceSettingsRoundTrip()
+    {
+        ConfigManager manager;
+
+        SettingsData s;
+        s.activeTheme = QStringLiteral("kai-liquid");
+        s.uiDensity = QStringLiteral("compact");
+        s.uiCornerStyle = 2;
+        s.fxShadows = true;
+        s.fxTranslucency = true;
+        s.fxBlur = true;
+        s.fxAnimations = true;
+        QVERIFY(manager.saveSettings(s));
+
+        const SettingsData loaded = manager.loadSettings();
+        QCOMPARE(loaded.activeTheme, QStringLiteral("kai-liquid"));
+        QCOMPARE(loaded.uiDensity, QStringLiteral("compact"));
+        QCOMPARE(loaded.uiCornerStyle, 2);
+        QVERIFY(loaded.fxShadows);
+        QVERIFY(loaded.fxTranslucency);
+        QVERIFY(loaded.fxBlur);
+        QVERIFY(loaded.fxAnimations);
+    }
+
+    // Os filtros de coleções (incluindo exibir favoritos) ficam em arquivo separado (collection-filters.json), id -> config,
+    // igual dynamic-vars.json; não toca em collections.json (dado autorado da coleção).
+    void collectionFiltersRoundTripByCollectionId()
+    {
+        ConfigManager manager;
+
+        QMap<QString, CollectionFilterState> data;
+        CollectionFilterState a;
+        a.search = QStringLiteral("alice");
+        a.favoritesOnly = true;
+        data[QStringLiteral("col1")] = a;
+        CollectionFilterState b;
+        b.search = QStringLiteral("");
+        b.favoritesOnly = false;
+        data[QStringLiteral("col2")] = b;
+        QVERIFY(manager.saveCollectionFilters(data));
+
+        QVERIFY(!QFile::exists(manager.collectionsFilePath()));
+
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QCOMPARE(loaded.size(), 2);
+        QCOMPARE(loaded.value(QStringLiteral("col1")).search, QStringLiteral("alice"));
+        QVERIFY(loaded.value(QStringLiteral("col1")).favoritesOnly);
+        QCOMPARE(loaded.value(QStringLiteral("col2")).search, QString());
+        QVERIFY(!loaded.value(QStringLiteral("col2")).favoritesOnly);
+    }
+
+    void loadingMissingCollectionFiltersFileReturnsEmptyMapWithoutCrash()
+    {
+        ConfigManager manager;
+        const QMap<QString, CollectionFilterState> loaded = manager.loadCollectionFilters();
+        QVERIFY(loaded.isEmpty());
+    }
+};
+
+QTEST_MAIN(TestConfigManager)
+#include "test_config_manager.moc"

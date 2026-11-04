@@ -1,0 +1,281 @@
+#include <QTest>
+#include "core/yaml-bridge.h"
+#include <QTabWidget>
+#include <QTabBar>
+#include <QTreeWidget>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QToolButton>
+#include <QPushButton>
+#include <QLineEdit>
+#include <QSignalSpy>
+#include <QMenu>
+#include <QTimer>
+
+#include "ui/features/command-editor/command-tree-widget.h"
+#include "ui/features/collections/project-selector.h"
+#include "ui/shared/item-actions-bar.h"
+#include "ui/features/collections/folder-editor-dialog.h"
+
+using namespace kai::ui;
+using namespace kai::core;
+
+class TestTabNavigation : public QObject {
+    Q_OBJECT
+
+private:
+    static QVector<Folder> makeRootFolders()
+    {
+        Folder one;
+        one.id = QStringLiteral("f_one");
+        one.name = QStringLiteral("Uma");
+        one.icon = QStringLiteral("home");
+
+        Folder two;
+        two.id = QStringLiteral("f_two");
+        two.name = QStringLiteral("Duas");
+        two.icon = QStringLiteral("database");
+
+        Folder three;
+        three.id = QStringLiteral("f_three");
+        three.name = QStringLiteral("Tres");
+        three.icon = QStringLiteral("terminal");
+        three.isProject = true; // ainda deve ser uma aba normal
+
+        return {one, two, three};
+    }
+
+private slots:
+    void rootFoldersBecomeIconTabs()
+    {
+        CommandTreeWidget widget;
+        widget.setData(makeRootFolders(), {});
+
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        QVERIFY(tabWidget != nullptr);
+        QCOMPARE(tabWidget->count(), 3);
+        QCOMPARE(tabWidget->tabText(0), QStringLiteral("Uma"));
+        QCOMPARE(tabWidget->tabText(1), QStringLiteral("Duas"));
+        QCOMPARE(tabWidget->tabText(2), QStringLiteral("Tres"));
+        QVERIFY(!tabWidget->tabBar()->tabIcon(0).isNull());
+        QVERIFY(!tabWidget->tabBar()->tabIcon(1).isNull());
+        QVERIFY(!tabWidget->tabBar()->tabIcon(2).isNull());
+    }
+
+    // Regressão: a tab bar não tinha menu de contexto para editar a pasta raiz. O menu real (showTabContextMenu) abre um
+    // QMenu::exec() bloqueante, que travou sob QT_QPA_PLATFORM=offscreen; verifica só a fiação: a tab bar aceita o evento
+    // de contexto.
+    void rootTabAcceptsCustomContextMenu()
+    {
+        CommandTreeWidget widget;
+        widget.setData(makeRootFolders(), {});
+
+        auto *tabBar = widget.findChild<QTabBar *>();
+        QVERIFY(tabBar != nullptr);
+        QCOMPARE(tabBar->contextMenuPolicy(), Qt::CustomContextMenu);
+    }
+
+    void selectNextTabWrapsAroundCircularly()
+    {
+        CommandTreeWidget widget;
+        widget.setData(makeRootFolders(), {});
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        QVERIFY(tabWidget != nullptr);
+
+        tabWidget->setCurrentIndex(0);
+        widget.selectNextTab();
+        QCOMPARE(tabWidget->currentIndex(), 1);
+        widget.selectNextTab();
+        QCOMPARE(tabWidget->currentIndex(), 2);
+        widget.selectNextTab();
+        QCOMPARE(tabWidget->currentIndex(), 0);
+    }
+
+    void selectPreviousTabWrapsAroundCircularly()
+    {
+        CommandTreeWidget widget;
+        widget.setData(makeRootFolders(), {});
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        QVERIFY(tabWidget != nullptr);
+
+        tabWidget->setCurrentIndex(0);
+        widget.selectPreviousTab();
+        QCOMPARE(tabWidget->currentIndex(), 2);
+        widget.selectPreviousTab();
+        QCOMPARE(tabWidget->currentIndex(), 1);
+        widget.selectPreviousTab();
+        QCOMPARE(tabWidget->currentIndex(), 0);
+    }
+
+    void importedProjectBecomesNormalFolder()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QFile kaiJson(directory.filePath(QStringLiteral("kai.yml")));
+        QVERIFY(kaiJson.open(QIODevice::WriteOnly));
+        kaiJson.write(kai::core::jsonTextToYamlText(QString::fromUtf8(R"json({
+            "project_name": "Projeto Importado",
+            "icon": "database",
+            "commands": [{"name": "Build", "type": "shell", "command": "echo ok"}]
+        })json")).toUtf8());
+        kaiJson.close();
+
+        ProjectSelector selector;
+        const ProjectImportResult result = selector.importFromDirectory(directory.path());
+        QVERIFY(result.success);
+        // Todo projeto importado nasce marcado como projeto (fronteira de escopo de variáveis dinâmicas; ver
+        // EnvironmentManager::setDynamicVarScope); a aba continua normal.
+        QVERIFY(result.folder.isProject);
+        QCOMPARE(result.folder.workingDir, directory.path());
+        QCOMPARE(result.commands.size(), 1);
+    }
+
+    void currentRootFolderIdReflectsActiveTab()
+    {
+        CommandTreeWidget widget;
+        widget.setData(makeRootFolders(), {});
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        QVERIFY(tabWidget != nullptr);
+
+        tabWidget->setCurrentIndex(0);
+        QCOMPARE(widget.currentRootFolderId(), QStringLiteral("f_one"));
+
+        tabWidget->setCurrentIndex(2);
+        QCOMPARE(widget.currentRootFolderId(), QStringLiteral("f_three"));
+    }
+
+    void itemActionsBarEditFolderButtonIsAlwaysEnabled()
+    {
+        // A pasta raiz da aba atual não aparece como item navegável, então este botão (grupo "Item") fica sempre
+        // habilitado, mesmo sem seleção na árvore.
+        ItemActionsBar bar;
+
+        bool signalEmitted = false;
+        QObject::connect(&bar, &ItemActionsBar::editCurrentFolderRequested,
+                          [&signalEmitted]() { signalEmitted = true; });
+
+        QPushButton *editFolderButton = nullptr;
+        for (auto *button : bar.findChildren<QPushButton *>()) {
+            if (button->toolTip() == QStringLiteral("Edit Current Folder (tab)")) {
+                editFolderButton = button;
+                break;
+            }
+        }
+        QVERIFY(editFolderButton != nullptr);
+        QVERIFY(editFolderButton->isEnabled());
+
+        editFolderButton->click();
+        QVERIFY(signalEmitted);
+    }
+
+    void itemActionsBarNewFolderAndNewCommandButtonsAreAlwaysEnabled()
+    {
+        // Botões fixos do grupo "Item" (ItemActionsBar): sempre habilitados, independente de seleção.
+        ItemActionsBar bar;
+
+        bool newFolderEmitted = false;
+        bool newCommandEmitted = false;
+        QObject::connect(&bar, &ItemActionsBar::newFolderRequested,
+                          [&newFolderEmitted]() { newFolderEmitted = true; });
+        QObject::connect(&bar, &ItemActionsBar::newCommandRequested,
+                          [&newCommandEmitted]() { newCommandEmitted = true; });
+
+        QPushButton *newFolderButton = nullptr;
+        QPushButton *newCommandButton = nullptr;
+        for (auto *button : bar.findChildren<QPushButton *>()) {
+            if (button->toolTip() == QStringLiteral("New Folder")) {
+                newFolderButton = button;
+            } else if (button->toolTip() == QStringLiteral("New Command")) {
+                newCommandButton = button;
+            }
+        }
+        QVERIFY(newFolderButton != nullptr);
+        QVERIFY(newCommandButton != nullptr);
+        QVERIFY(newFolderButton->isEnabled());
+        QVERIFY(newCommandButton->isEnabled());
+
+        newFolderButton->click();
+        newCommandButton->click();
+        QVERIFY(newFolderEmitted);
+        QVERIFY(newCommandEmitted);
+    }
+
+    // O grupo "Item" também tem o botão de Nova Nota (ícone de caderno), sempre habilitado.
+    void itemActionsBarHasANewNoteButton()
+    {
+        ItemActionsBar bar;
+        bool emitted = false;
+        QObject::connect(&bar, &ItemActionsBar::newNoteRequested, [&emitted]() { emitted = true; });
+        QPushButton *noteButton = nullptr;
+        for (auto *button : bar.findChildren<QPushButton *>()) {
+            if (button->toolTip() == QStringLiteral("New Note")) {
+                noteButton = button;
+            }
+        }
+        QVERIFY(noteButton != nullptr);
+        QVERIFY(noteButton->isEnabled());
+        QVERIFY(!noteButton->icon().isNull());
+        noteButton->click();
+        QVERIFY(emitted);
+    }
+
+    void firstItemIsSelectedNotJustCurrentWhenEnteringTab()
+    {
+        // Regressão: ao entrar numa aba o primeiro item era "corrente" (↑/↓ navegavam) mas não estava selecionado, e o QSS
+        // pinta ::item:selected. O primeiro comando da aba ativa tem de nascer selecionado.
+        Folder root;
+        root.id = QStringLiteral("f_root");
+        root.name = QStringLiteral("Raiz");
+
+        Command c1;
+        c1.id = QStringLiteral("c_1");
+        c1.folderId = root.id;
+        c1.name = QStringLiteral("Primeiro");
+        c1.type = CommandType::Command;
+        c1.command = QStringLiteral("echo 1");
+
+        Command c2;
+        c2.id = QStringLiteral("c_2");
+        c2.folderId = root.id;
+        c2.name = QStringLiteral("Segundo");
+        c2.type = CommandType::Command;
+        c2.command = QStringLiteral("echo 2");
+
+        CommandTreeWidget widget;
+        widget.setData({root}, {c1, c2});
+
+        auto *tabWidget = widget.findChild<QTabWidget *>();
+        QVERIFY(tabWidget != nullptr);
+        auto *tree = qobject_cast<QTreeWidget *>(tabWidget->currentWidget());
+        QVERIFY(tree != nullptr);
+
+        QVERIFY(tree->currentItem() != nullptr);
+        QVERIFY(tree->currentItem()->isSelected());
+        QCOMPARE(tree->selectedItems().size(), 1);
+    }
+
+    void folderEditorDialogPreselectsSuggestedParent()
+    {
+        Folder folderA;
+        folderA.id = QStringLiteral("f_a");
+        folderA.name = QStringLiteral("Pasta A");
+
+        Folder folderB;
+        folderB.id = QStringLiteral("f_b");
+        folderB.name = QStringLiteral("Pasta B");
+
+        FolderEditorDialog dialog({folderA, folderB}, nullptr, nullptr, QStringLiteral("f_b"));
+
+        auto *nameField = dialog.findChild<QLineEdit *>();
+        QVERIFY(nameField != nullptr);
+        nameField->setText(QStringLiteral("Subpasta Nova"));
+
+        const Folder built = dialog.buildFolder();
+        QVERIFY(built.parentId.has_value());
+        QCOMPARE(built.parentId.value(), QStringLiteral("f_b"));
+    }
+};
+
+QTEST_MAIN(TestTabNavigation)
+#include "test_tab_navigation.moc"

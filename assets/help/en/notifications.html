@@ -1,0 +1,23 @@
+<h2>Notifications &amp; logs</h2>
+<h3>What Kai notifies</h3>
+<p>Notifications are native desktop notifications (system tray). If your system has no tray icon, they simply won't appear. Under <b>Settings → Notifications</b> there is a master switch and one per event:</p>
+<ul>
+<li>A command <b>failed</b> to run — covers pre-hooks, the main command (error, crash or HTTP ≥ 400) and post-hooks, including runs started by <a href='help://scheduling'>auto-run</a>.</li>
+<li>A background process <b>crashed</b> or exited with an error.</li>
+<li>A background process <b>finished successfully</b> (off by default).</li>
+<li>A corrupted configuration file was <b>restored from a backup</b>.</li>
+<li>The <b>first ERROR line</b> in a <a href='help://output'>formatted output</a> — once per run (off by default).</li>
+<li><b>Notify even while the Kai window is focused</b> — by default Kai stays quiet when you are already looking at it, since the tree already shows the red badge.</li>
+</ul>
+<p>A command stopped on purpose (Stop, kill, reset) is not a failure and never notifies.</p>
+<h3>Send your own</h3>
+<ul>
+<li>From a script in the terminal: <code>kai raise --level warning --title Backup "disk almost full"</code>.</li>
+<li>From Python or Node (<code>kai</code> module): <code>kai.notify("done", title="Backup")</code> — see <a href='help://languages'>Python, Node &amp; PHP</a>.</li>
+<li>From a KIP program: the <code>notify</code> message.</li>
+<li>For a scheduled command: <b>Notify when executed</b> (see <a href='help://scheduling'>Schedules</a>).</li>
+</ul>
+<h3>The history</h3>
+<p>The status line at the bottom shows how many notifications are <b>unread</b>; click it to open the history and read them. They are kept between sessions.</p>
+<h3>Application logs</h3>
+<p><b>File → Logs</b> opens Kai's own log (what Kai itself did — not your commands' output). Filter by minimum level (Debug, Info, Warning, Error), see the path of the log file, or clear the view. It is the first place to look when something misbehaves.</p>

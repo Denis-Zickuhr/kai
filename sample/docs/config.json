@@ -1,0 +1,23 @@
+{
+  "name": "kai-demo",
+  "version": "1.0.0",
+  "servers": [
+    {
+      "host": "api.example.dev",
+      "ports": [80, 443],
+      "tags": { "env": "prod", "region": "eu" }
+    },
+    {
+      "host": "staging.example.dev",
+      "ports": [8080],
+      "tags": { "env": "staging", "region": "us" }
+    }
+  ],
+  "features": {
+    "darkMode": true,
+    "limits": {
+      "requests": 1000,
+      "burst": [10, 20, 30]
+    }
+  }
+}

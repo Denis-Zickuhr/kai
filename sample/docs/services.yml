@@ -1,0 +1,22 @@
+name: demo
+services:
+  - name: api
+    image: example/api:1.4
+    ports:
+      - 80
+      - 443
+    env:
+      LOG_LEVEL: info
+      REGION: eu
+  - name: worker
+    image: example/worker:2.0
+    env:
+      QUEUE: jobs
+volumes:
+- data
+- cache
+# comment between top-level keys
+
+notes: |
+  A block scalar
+  also folds.

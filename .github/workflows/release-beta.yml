@@ -1,0 +1,79 @@
+name: Release (beta)
+
+# Unsigned pre-release. Tag vX.Y.Z-beta.N on the beta branch.
+on:
+  push:
+    tags: ['v*-beta.*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      pre: ${{ steps.v.outputs.pre }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: v
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]] || { echo "Bad beta tag: $GITHUB_REF_NAME"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/beta || { echo "Tag is not on the beta branch"; exit 1; }
+          CORE="$(grep -oP 'project\(kai VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)"
+          [[ "$VERSION" == "$CORE-"* ]] || { echo "Tag $VERSION does not match CMakeLists.txt ($CORE)"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pre=${VERSION#*-}" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build \
+            qt6-base-dev qt6-svg-dev qt6-base-dev-tools libgl1-mesa-dev libxkbcommon-dev
+      - run: |
+          cmake -B build-dev -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAI_SHARED_LIBS=ON \
+            -DKAI_VERSION_PRERELEASE=${{ needs.verify.outputs.pre }}
+          cmake --build build-dev --parallel
+      - env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build-dev --output-on-failure --timeout 300
+
+  package:
+    needs: [verify, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      KAI_VERSION_PRERELEASE: ${{ needs.verify.outputs.pre }}
+      KAI_BUILD_INSTALLER: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build Windows (portable + installer) and Linux (AppImage)
+        run: |
+          mkdir -p dist && chmod 777 dist
+          docker compose build build-windows build-linux
+          docker compose run --rm build-windows
+          docker compose run --rm build-linux
+      - name: Name the artifacts
+        run: |
+          mkdir out
+          cp dist/kai-setup.exe "out/kai-$VERSION-setup.exe"
+          (cd dist/kai-windows && zip -qr "../../out/kai-$VERSION-windows-x86_64.zip" .)
+          cp dist/Kai-x86_64.AppImage "out/kai-$VERSION-linux-x86_64.AppImage"
+          (cd out && sha256sum * > SHA256SUMS)
+      - name: Publish pre-release
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --prerelease --verify-tag \
+            --title "Kai $VERSION" \
+            --notes "Beta build, not code-signed. Windows may show a SmartScreen warning."

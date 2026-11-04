@@ -1,0 +1,24 @@
+<h2>Schedules &amp; auto-run</h2>
+<p>A command can start by itself — on a schedule, or when Kai starts. Both options are in the command editor's <b>Configuration</b> tab and go through the same pipeline as a click: hooks, conditions, notifications and run history all apply.</p>
+<h3>Schedule (CRON)</h3>
+<p>Type a standard 5-field cron expression: <code>minute hour day-of-month month day-of-week</code>.</p>
+<pre>0 9 * * 1-5      # 9:00, Monday to Friday
+*/15 * * * *     # every 15 minutes
+30 2 1 * *       # 2:30 on the 1st of each month
+0 8 * * mon,fri  # 8:00 on Mondays and Fridays</pre>
+<p>Supported: <code>*</code>, lists (<code>1,2,3</code>), ranges (<code>1-5</code>), steps (<code>*/15</code>) and day/month names (<code>mon</code>, <code>jan</code>). The editor shows a plain-language reading under the field (<i>Weekdays at 09:00</i>). As in classic cron, when both day-of-month and day-of-week are set, either one matching fires it.</p>
+<div class='tip'><b>Times are evaluated in UTC, not in your local time zone.</b> If you are at UTC−3, <code>0 9 * * *</code> fires at 06:00 local time.</div>
+<ul>
+<li><b>Notify when executed</b> sends a <a href='help://notifications'>notification</a> with the result at every run; off by default so a frequent schedule doesn't spam you.</li>
+<li>Kai has to be running (it lives in the tray) for a schedule to fire.</li>
+</ul>
+<h3>Run when Kai starts</h3>
+<p><b>Run when Kai starts</b> fires the command automatically after the <b>Delay</b> you set (seconds). It uses the <b>last values</b> of the parameters; if a required parameter has no history, the command is skipped and the reason is logged (the boot never stops to ask a question).</p>
+<pre>- name: "Sync"
+  type: "command"
+  command: "./sync.sh"
+  is_background: true
+  auto_run: true
+  auto_run_delay_sec: 5</pre>
+<h3>Not combinable with</h3>
+<p><a href='help://kip'>KIP</a> commands can't be scheduled or auto-run (they need a screen to talk to).</p>

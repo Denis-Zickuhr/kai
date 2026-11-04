@@ -1,0 +1,72 @@
+<h2>Python, Node &amp; PHP</h2>
+<p>A command's text can be <b>code</b> instead of a shell line. Pick the <b>Language</b> at the top right of the command field: <b>Native (shell)</b> (the default), <b>Python</b>, <b>Node</b> or <b>PHP</b>. No <code>python3 -c "..."</code>, no heredoc: you write the code, Kai builds the call.</p>
+<pre>import os
+for f in os.listdir('.'):
+    print(f, os.path.getsize(f))</pre>
+<h3>How it runs</h3>
+<p>Kai hands the code to the interpreter encoded, so there are <b>no quoting problems</b> (any quote, <code>$</code>, backtick or newline works) and <b>stdin stays free</b>: <code>input()</code> works and so does <a href='help://kip'>KIP</a>. The call is just one more shell line, so it goes through <a href='help://terminal_targets'>execution profiles</a> such as WSL.</p>
+<ul>
+<li>Python output is unbuffered and UTF-8 — there is no <code>flush</code> to forget.</li>
+<li>Node code runs inside an async function: top-level <code>await</code> works and <code>return</code> ends the script. An uncaught error exits with code 1.</li>
+<li>PHP runs through <code>php -r</code>; a leading <code>&lt;?php</code> is accepted and ignored. A <code>namespace</code> or <code>declare(strict_types=1)</code> at the top of your code works.</li>
+<li><b>Exit code</b> decides success as usual (<code>sys.exit(3)</code>, <code>process.exitCode = 3</code>, <code>exit(3)</code>).</li>
+</ul>
+<h3>Variables and parameters</h3>
+<p><code>{{VAR}}</code> collides with real code (<code>f"{{x}}"</code>, dictionaries, JS template strings), so the code of these languages is <b>never interpolated</b> (Python, Node, PHP). Variables and <a href='help://parameters'>parameters</a> arrive as <b>environment variables</b>, with the usual precedence:</p>
+<pre>import os
+print("Deploying to", os.environ["TARGET"])</pre>
+<pre>console.log("Deploying to", process.env.TARGET);</pre>
+<pre>echo "Deploying to " . getenv("TARGET");</pre>
+<h3>Which interpreter</h3>
+<ul>
+<li><b>Settings → Languages</b> holds the global ones: <code>python3</code>, <code>node</code> and <code>php</code> by default (on Windows without an execution profile, Python defaults to <code>python</code>).</li>
+<li>A command can override it in its <b>Interpreter</b> field.</li>
+<li>The value is a <b>shell line resolved where the command runs</b>: on a WSL profile it is the WSL's <code>python3</code>, and a login shell already loads pyenv and nvm. It can have arguments (<code>uv run python</code>); quote paths with spaces yourself.</li>
+</ul>
+<h3>The <code>kai</code> module: talk to the app</h3>
+<p>Every Python/Node command has a <code>kai</code> module injected (nothing to install) — the same things the <a href='help://cli'>kai CLI</a> does:</p>
+<pre>import kai
+kai.notify("Backup finished", title="Backup", level="info")   # tray notification + history
+kai.commands()              # names of the registered commands
+kai.env.list(); kai.env.active(); kai.env.use("Prod")
+kai.run("Deploy")           # start another command (fire and forget)
+kai.ps(); kai.kill("api")   # tracked processes: {id, name, pid, status}
+kai.show()                  # bring the window to the front
+kai.import_project("/path/to/kai.yml")</pre>
+<pre>await kai.notify('Backup finished', { title: 'Backup', level: 'info' });
+console.log(await kai.commands(), await kai.env.active());
+await kai.env.use('Prod');
+await kai.run('Deploy');</pre>
+<p>In Node <code>kai</code> is a global (and <code>require('kai')</code>) and every call returns a promise. Failures raise <code>kai.Error</code>. Kai exports <code>KAI_IPC_SOCKET</code>; when the socket can't be reached (a script in WSL under a Windows Kai) the module falls back to the <code>kai</code> CLI for notify, show, run, env.use and kill.</p>
+<h3>The <code>kip</code> module: turn the command into an app</h3>
+<p>With <b>KIP</b> turned on, the command text is the whole program and a <code>kip</code> module is injected too (<code>import kip</code>; in Node the global <code>kip</code>; in PHP the class <code>Kip</code>):</p>
+<pre>import kip
+v = kip.prompt([{"name": "env", "type": "select", "options": ["dev", "prod"]}],
+               id="where", title="Where to?")
+kip.progress(50, "Deploying...")
+kip.done(title="Deployed to " + v["env"])</pre>
+<pre>$v = Kip::prompt([['name' => 'env', 'type' => 'select', 'options' => ['dev', 'prod']]],
+                 ['id' => 'where', 'title' => 'Where to?']);
+Kip::progress(50, 'Deploying...');
+Kip::done('Deployed to ' . $v['env']);</pre>
+<p>Back raises <code>kip.Back</code> (<code>KipBack</code> in PHP), Cancel exits with code 130, <code>hello</code> is sent for you. Full reference in <a href='help://kip'>KIP</a>. Without KIP the module still exists and tells you what to turn on when you use it. PHP has no <code>kai</code> module.</p>
+<h3>Scripts you run as files</h3>
+<p>The modules above are injected into the code of a Python/Node/PHP <i>command</i>. A script that runs as a <b>file</b> — your own <code>tool.py</code>, called from a Native command with <b>KIP</b> on (<code>python3 tool.py</code>, <code>node tool.js</code>, <code>php tool.php</code>) — has no such bootstrap, so Kai gives it the same modules from disk. It keeps them in a folder of its own in the temp folder (<code>kai-run/modules-…</code>) and exports where they are, <b>in front of</b> whatever you already have in those variables:</p>
+<ul>
+<li><b>Python</b>: <code>PYTHONPATH</code> → <code>import kip</code>, <code>import kai</code>.</li>
+<li><b>Node</b>: <code>NODE_PATH</code> → <code>require('kip')</code>, <code>require('kai')</code>. CommonJS only: <code>import</code> in ES modules ignores <code>NODE_PATH</code>.</li>
+<li><b>PHP</b>: <code>PHP_INI_SCAN_DIR</code> → the class <code>Kip</code> is already there, no <code>require</code>. <code>php -r</code> does not read it: use <code>require getenv('KAI_MODULES') . '/kip.php';</code>.</li>
+<li><b>Any</b>: <code>KAI_MODULES</code> is the folder itself.</li>
+</ul>
+<p>Only a <b>Native command with KIP on</b> gets them, so a <code>kai</code> or <code>kip</code> package of your own project is never shadowed by a shell command that did not ask for KIP (Python/Node/PHP commands always have them). They do not cross an execution profile (WSL, Docker, SSH): there the variables are not passed, and the code of a Python/Node/PHP command still gets the modules injected as always. With KIP off, <code>kip</code> is a stub that explains what to turn on.</p>
+<h3>The shell is Native</h3>
+<p>There are no bash, sh or PowerShell languages: <b>Native</b> already is a shell script (bash, and sh where there is no bash), with <code>{{VAR}}</code> and <code>{% if %}</code> replaced as always. With <b>KIP</b> on, in a POSIX shell (Linux, macOS, WSL and other POSIX profiles), Kai defines a <code>kip</code> function before the text runs — the same verbs as <code>kai kip</code>, with no <code>kai</code> binary:</p>
+<pre>kip prompt --id p --field text name Name --required
+kip recv                          # the answer lands in $KIP_MSG
+kip done --title "Hello, $(kip get "$KIP_MSG" values.name)!"</pre>
+<p>It needs <code>awk</code> (and <code>base64</code> + <code>gzip</code>) where the command runs. Verbs and limits in <a href='help://kip'>KIP</a>, section 5b. Old files with <code>language: bash|sh|pwsh</code> still load, as Native.</p>
+<h3>Very long commands</h3>
+<p>A command that does not fit the system's command line (Windows <code>cmd.exe</code> cuts at 8191 characters; Linux at about 128 KB) needs nothing from you: Kai writes the text to a file of its own in the temp folder (<code>kai-run</code>, cleaned after a few days) and runs it from there — the shell for a Native command, the interpreter for Python, Node and PHP. It applies locally (on Windows too, for Python/Node/PHP) and to WSL. On a <b>WSL profile</b> the variables of the environment (Global, Folder, Dynamic, Parameters — a big JWT is enough) travel inside the command text, so they count too: when the line plus the variables does not fit, the file also carries the <code>export</code>s and the line is just <code>. 'file'</code>, whatever the size of the token. The file is readable by you only. On Docker/SSH profiles, where that file would not exist, the command goes as it is (with a warning when it is too long).</p>
+<h3>Limits</h3>
+<p><b>Export variables</b> does not apply to Python, Node and PHP (there is no <code>export</code>): use KIP's <code>set_env</code>. Everything else — background, hooks, conditions, profiles, schedules — works as for any command.</p>
+<div class='tip'>A long example using both modules ships with Kai: <code>sample/languages/showcase.py</code>.</div>

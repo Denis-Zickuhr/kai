@@ -408,7 +408,7 @@ private slots:
         QVERIFY(after.at(2).onlyProjects);
     }
 
-    // O card "Ações e Atalhos" (tabela fixa) não pode ter selo de contagem ("0").
+    // O card dos atalhos (tabela fixa, um QFrame simples) não pode ter selo de contagem ("0").
     void shortcutsCardHasNoUselessCountBadge()
     {
         QTemporaryDir themes;
@@ -416,17 +416,9 @@ private slots:
         CommandsData data;
         QVector<Collection> collections;
         SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), data, collections, []() {}, []() {});
-        const QString title = kai::utils::tr(QStringLiteral("settings.shortcuts.table_title"));
-        CollapsibleSectionCard *shortcutsCard = nullptr;
-        for (auto *card : dialog.findChildren<CollapsibleSectionCard *>()) {
-            for (auto *label : card->findChildren<QLabel *>()) {
-                if (label->text() == title) shortcutsCard = card;
-            }
-        }
+        auto *shortcutsCard = dialog.findChild<QFrame *>(QStringLiteral("shortcutsCard"));
         QVERIFY(shortcutsCard);
-        auto *badge = shortcutsCard->findChild<QLabel *>(QStringLiteral("sectionCountBadge"));
-        QVERIFY(badge);
-        QVERIFY(badge->isHidden());
+        QVERIFY(!shortcutsCard->findChild<QLabel *>(QStringLiteral("sectionCountBadge")));
     }
 };
 

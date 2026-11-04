@@ -42,14 +42,9 @@ IpcServer::~IpcServer()
 
 bool IpcServer::start()
 {
-    // Socket órfão de um crash faz o listen falhar com AddressInUseError mesmo sem ninguém escutando: tenta conectar;
-    // se conseguir há instância viva, senão remove o órfão e tenta de novo.
+    // Sonda ANTES de escutar: o listen() do Qt 6.4 no Linux assume um socket já em uso em vez de falhar, então ele
+    // sozinho não garante instância única. Conectou = há instância viva; recusado/inexistente = órfão (ou nada).
     const QString name = ipcSocketName();
-    if (m_server->listen(name)) {
-        utils::Logger::info(kLogTag, QStringLiteral("IPC escutando em '%1'.").arg(name));
-        return true;
-    }
-
     QLocalSocket probe;
     probe.connectToServer(name);
     if (probe.waitForConnected(1500)) {
@@ -67,6 +62,11 @@ bool IpcServer::start()
         return false;
     }
 
+    // Socket órfão de um crash faz o listen falhar com AddressInUseError mesmo sem ninguém escutando.
+    if (m_server->listen(name)) {
+        utils::Logger::info(kLogTag, QStringLiteral("IPC escutando em '%1'.").arg(name));
+        return true;
+    }
     QLocalServer::removeServer(name);
     if (m_server->listen(name)) {
         utils::Logger::info(kLogTag,

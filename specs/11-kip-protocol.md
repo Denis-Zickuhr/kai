@@ -991,21 +991,11 @@ Changes after trying KIP on a real desktop (Windows + WSL). They supersede the p
   object names (`adv_command_editor.kip`, `adv_command_editor.kip_window`) and the §15 exclusions still disable
   the competing controls in the Configuration tab. The global preferences stay in Settings → KIP.
 
-## 24. A real program: `packaging/release.sh --kip`
+## 24. A real program: pipelines with KIP steps
 
-Kai's release orchestrator got a `--kip` flag (and a *Publish a release (KIP)* command in `kai.yml`). Design:
-the script already had three phases (questions → plan + confirmation → execution), so KIP replaces the I/O of
-each one without touching the logic: the form fills the same `ARG_*` variables the flags fill (flags become the
-form's defaults); phase 1 became a function (`resolve_plan`) that can run again on every attempt and in a
-subshell as a *probe*, so every terminal validation (semver, existing tag, missing `gh`…) becomes an
-`invalid`; the plan is a `confirm` with `danger:true` when it pushes or publishes and `back:true` to reopen
-the form; the execution reports a `steps` checklist and ends in `done` (open the Release, reveal `dist/`,
-copy the version) or an error card with the log tail. Details worth reusing: the protocol goes to fd 3 and
-everything else to stderr; `docker compose run -T`; long children run in the background + `wait` so Cancel's
-SIGTERM can kill them; stdin is redirected to `/dev/null` during execution so children cannot swallow
-messages; `GIT_TERMINAL_PROMPT=0`. Without `--kip` the output and effects are byte-identical to the previous
-script (checked by running both against the same sandboxes), and `tests/test_release_kip.cpp` drives the real
-script in a throw-away repository with a local `origin` and fake `docker`/`gh`.
+The release script's own KIP mode was removed in `1.0.0-beta.2` together with its test. The reference for a real
+multi-step KIP flow is now `sample/pipeline-kip` (wizard, danger confirmation with `back`, `steps` checklist, `set_env`
+handed to the following pipeline steps); see spec 13 §4.
 
 ## 25. `kip` function injected into native shell commands
 

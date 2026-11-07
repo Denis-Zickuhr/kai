@@ -46,6 +46,21 @@ QString readManifesto(const QStringList &files)
     return parts.join(QStringLiteral("\n\n---\n\n")) + QLatin1Char('\n');
 }
 
+// Chaves literais (o teste de i18n só enxerga texto escrito no código, não chaves montadas com .arg()).
+QString tabKeyFor(const QString &id)
+{
+    if (id == QLatin1String("kip")) return QStringLiteral("manifesto.tab.kip");
+    if (id == QLatin1String("pipeline")) return QStringLiteral("manifesto.tab.pipeline");
+    return QStringLiteral("manifesto.tab.kai");
+}
+
+QString descKeyFor(const QString &id)
+{
+    if (id == QLatin1String("kip")) return QStringLiteral("manifesto.kip.desc");
+    if (id == QLatin1String("pipeline")) return QStringLiteral("manifesto.pipeline.desc");
+    return QStringLiteral("manifesto.kai.desc");
+}
+
 QString mutedStyle()
 {
     return QStringLiteral("color: %1; background: transparent; border: none;").arg(tk::mutedFg());
@@ -88,7 +103,7 @@ ManifestoDialog::ManifestoDialog(QWidget *parent)
         pageLayout->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
         pageLayout->setSpacing(tk::space(2));
 
-        auto *description = new QLabel(utils::tr(QStringLiteral("manifesto.%1.desc").arg(id)), page);
+        auto *description = new QLabel(utils::tr(descKeyFor(id)), page);
         description->setWordWrap(true);
         description->setStyleSheet(mutedStyle());
         pageLayout->addWidget(description);
@@ -114,7 +129,7 @@ ManifestoDialog::ManifestoDialog(QWidget *parent)
         preview->setPlaceholderText(utils::tr(QStringLiteral("manifesto.loading")));
         pageLayout->addWidget(preview, 1);
 
-        m_tabs->addTab(page, utils::tr(QStringLiteral("manifesto.tab.%1").arg(id)));
+        m_tabs->addTab(page, utils::tr(tabKeyFor(id)));
 
         m_buttons.insert(source.id, button);
         m_status.insert(source.id, status);

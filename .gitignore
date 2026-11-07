@@ -36,3 +36,6 @@ Testing/
 .Trash-*/
 *.bundle
 OSS-RELEASE-PLAN.md
+
+# Runtime state written by the samples
+sample/*/.state/

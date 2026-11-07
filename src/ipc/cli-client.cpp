@@ -38,6 +38,7 @@ void printUsage()
           << kai::utils::tr(QStringLiteral("cli.usage.paths_global")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.paths_detached")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.paths_window")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.paths_from")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.paths_flags")) << "\n"
           << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.section.instance")) << "\n"

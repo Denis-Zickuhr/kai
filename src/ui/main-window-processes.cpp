@@ -118,7 +118,7 @@ void MainWindow::showFolderActionMenu(const QString &commandId, const QString &f
 void MainWindow::startFolderAction(const core::Command &command, const QMap<QString, QString> &paramValues)
 {
     const QString actionId = command.id;
-    const bool isKip = command.kip && command.type == core::CommandType::Command;
+    const bool isKip = core::showsKipView(command);
     if (m_actionRuns.find(actionId) != m_actionRuns.end()) {
         reconnectTerminalToCommand(actionId);
         m_commandTree->setFocusedAction(actionId);
@@ -209,7 +209,7 @@ void MainWindow::handleActionFinished(const QString &actionId, const engine::Pip
     if (run) {
         // O pipeline ainda está na pilha (é ele quem emite este sinal): o lambda vazio segura o `run` (ambiente e
         // comandos que o pipeline aponta) até o próximo ciclo.
-        if (command.kip && command.type == core::CommandType::Command) {
+        if (core::showsKipView(command)) {
             m_keptKipPipelines[actionId] = run->pipeline; // mantém a sessão KIP e o estado final da view
         } else {
             run->pipeline->deleteLater();
@@ -405,6 +405,13 @@ void MainWindow::handleKillCommandRequested(const QString &commandId, bool force
 {
     // Os cleanup hooks não rodam aqui de propósito: rodariam antes de o processo morrer e de novo no abort() do
     // pipeline. A fonte única é o término real do processo (ver runCleanupHooks()).
+
+    // Uma pipeline para pelo próprio runner: ele encerra o passo em curso (grupo de processos) e termina cancelada.
+    if (isRunbookRunning(commandId)) {
+        m_runbooks[commandId]->stop();
+        updateRunningCommandStatus();
+        return;
+    }
 
     // Gracioso: SIGTERM, espera o tempo de Configurações -> Geral, SIGKILL. Forçado: SIGKILL direto.
     if (force) {

@@ -13,6 +13,7 @@ void CommandEditorDialog::buildRespondersTab()
 {
     auto *respLayout = addNavPage(utils::tr(QStringLiteral("command.tab.responders")), QStringLiteral("webhook"));
     const int respNavRow = m_sideNav->count() - 1;
+    m_navRowResponders = respNavRow;
     auto *respCard = new CollapsibleSectionCard(utils::tr(QStringLiteral("command.group.responders")), this);
     respCard->setEmptyStateText(utils::tr(QStringLiteral("responders.empty_state")));
     respCard->setActionButtonText(utils::tr(QStringLiteral("responders.add")));

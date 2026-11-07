@@ -218,10 +218,14 @@ void MainWindow::handleKipAnswersRemembered(const QString &commandId, const QJso
 }
 
 ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
-                                                 const QMap<QString, QString> &paramValues,
+                                                 const QMap<QString, QString> &incomingParams,
                                                  QString &errorMessage, bool openOutputWindow,
                                                  const QString &invocationDir)
 {
+    QMap<QString, QString> paramValues = incomingParams;
+    engine::RunbookRunner::Options runbookOptions;
+    runbookOptions.fromStep = paramValues.take(QStringLiteral("__pipeline_from"));
+    runbookOptions.onlyStep = paramValues.take(QStringLiteral("__pipeline_only"));
     const auto commandIt = m_commandsById.constFind(commandId);
     if (commandIt == m_commandsById.constEnd()) {
         errorMessage = utils::tr(QStringLiteral("cli.error.command_not_found")).arg(commandId);
@@ -236,6 +240,10 @@ ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
         errorMessage = utils::tr(QStringLiteral("cli.stream.already_running")).arg(command.name);
         return nullptr;
     }
+    if (command.type == core::CommandType::Pipeline
+        && (!runbookOptions.fromStep.isEmpty() || !runbookOptions.onlyStep.isEmpty())) {
+        m_pendingRunbookOptions.insert(command.id, runbookOptions);
+    }
 
     auto *session = new ExternalRunSession(command.id, [this, id = command.id](const QString &text) {
         engine::ProcessRunner *runner = runnerFor(id);
@@ -249,7 +257,7 @@ ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
 
     // KIP via `kai -g`: roda como um clique e traz o app à frente, salvo se a view abre na janela própria
     // (`-w` ou `kip_window`): é ela que o usuário vê.
-    if (command.kip && command.type == core::CommandType::Command) {
+    if (core::showsKipView(command)) {
         if (!openOutputWindow && !command.kipOpenInWindow) {
             showAndRaise("kai -g: KIP");
         }
@@ -293,8 +301,23 @@ ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
         QStringLiteral("Executando '%1' a pedido do CLI (sessão externa).").arg(command.name));
     // Adiado: quem chamou ainda vai conectar os sinais da sessão, e um pipeline que termina de forma síncrona
     // (ex: condição de execução não satisfeita) emitiria `finished` no vazio.
-    QMetaObject::invokeMethod(this, [this, command, paramValues, openOutputWindow]() {
+    QMetaObject::invokeMethod(this, [this, command, paramValues, openOutputWindow, session]() {
         runCommandWithParams(command, paramValues);
+        // Uma pipeline não passa pelo m_pipeline: o término e o log chegam do runner dela.
+        if (command.type == core::CommandType::Pipeline) {
+            const auto rb = m_runbooks.find(command.id);
+            if (rb != m_runbooks.end() && rb->second) {
+                connect(rb->second.get(), &engine::RunbookRunner::logLine, session,
+                    [session](const QString &text, bool isError) { session->publishOutput(text, isError); });
+                connect(rb->second.get(), &engine::RunbookRunner::finished, session,
+                    [session](const engine::RunbookResult &result) {
+                        session->publishFinished(result.exitCode, result.message);
+                    });
+                if (rb->second->isFinished()) { // uma definição inválida termina dentro do start()
+                    session->publishFinished(rb->second->result().exitCode, rb->second->result().message);
+                }
+            }
+        }
         // A janela copia o estado da Saída embutida, que o run acima acabou de conectar.
         if (openOutputWindow && m_connectedTerminalCommandId == command.id) {
             m_terminalDrawer->showDetachedOutput();

@@ -1,0 +1,35 @@
+<h2>Pipelines</h2>
+<p>Uma <b>pipeline</b> é um comando cujo corpo é uma lista de <b>passos</b>. Cada passo roda <i>outro</i> comando seu, com verificações, perguntas, novas tentativas e decisões opcionais. A execução é uma tela guiada: um checklist com log ao vivo por passo.</p>
+<p>Escolha <b>Pipeline</b> como tipo no editor do comando e adicione os passos na aba <b>Passos</b>. Uma pipeline nunca começa sozinha: sem agendamento, sem auto-run.</p>
+<h3>O que um passo faz</h3>
+<ul>
+<li><b>Executar</b> — o comando, por nome ou <code>Pasta/Nome</code>. Pode ser um comando <a href='help://kip'>KIP</a>: a tela dele assume enquanto roda.</li>
+<li><b>Verificar</b> — um comando cuja saída 0 significa "já feito": o passo é pulado como <i>Já está ok</i> e conferido de novo após a execução.</li>
+<li><b>Confirmar</b> e <b>Perguntar</b> — uma pergunta antes do passo; as respostas são <code>{{ask.nome}}</code>. Respostas secretas são mascaradas.</li>
+<li><b>Quando</b> — condições; falso pula o passo.</li>
+<li><b>Aguardar até</b> — repete um comando até sair 0, ou estourar o tempo.</li>
+<li><b>Capturar</b> — lê valores da saída: <code>NOME: stdout:regex</code>, <code>json:caminho</code>, <code>exit</code>, <code>status</code>.</li>
+</ul>
+<h3>Quando um passo falha</h3>
+<p><b>Tentativas extras</b> repetem o passo (podendo perguntar de novo). Depois <b>Ao falhar</b> decide: <code>abort</code>, <code>continue</code>, <code>ask</code> (Tentar de novo / Pular / Abortar) ou <code>goto:&lt;id do passo&gt;</code> para pular <i>para frente</i>, por exemplo até um rollback.</p>
+<pre>- name: "Ship"
+  type: "pipeline"
+  steps:
+    - id: build
+      run: "steps/build"
+      check: "steps/is-built"
+    - id: health
+      run: "steps/noop"
+      wait_until: { check: "steps/health", timeout: 60 }
+      on_fail: "goto:rollback"
+    - id: rollback
+      run: "steps/rollback"
+      when:
+        - { left: "{{steps.health.ok}}", op: "eq", right: "false" }</pre>
+<div class='tip'>Coloque os comandos dos passos numa subpasta e marque-os como <b>Ocultos</b>. Todo passo deixa <code>{{steps.&lt;id&gt;.ok}}</code> e <code>{{steps.&lt;id&gt;.exit}}</code>.</div>
+<h3>Executando</h3>
+<ul>
+<li><b>Parar</b> encerra o passo atual de verdade e a execução fica <i>cancelada</i>.</li>
+<li>Quando a execução termina, clique com o botão direito num passo e escolha <b>Rodar daqui</b> para retomar, mantendo os valores capturados.</li>
+<li>Pelo terminal: <code>kai -g &lt;caminho&gt;</code>, com <code>--from &lt;passo&gt;</code> ou <code>--only &lt;passo&gt;</code>.</li>
+</ul>

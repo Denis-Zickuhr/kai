@@ -51,6 +51,8 @@ for this command and links to the Exportable variables), or in
   auto-replies or `capture_env`, and cannot be used as a hook. The editor
   disables those controls; files get validator warnings (`kai validate`).
   `declared_env_vars` stays available (see `set_env`).
+- It *can* be a step of a [pipeline](pipelines.md): its screen replaces the pipeline's checklist while it runs, and its
+  `done` decides the step (`error` fails it; `success`/`warning` pass, with the text as the step's detail).
 
 ## 2. Transport
 

@@ -43,6 +43,13 @@ QString stripNonSgrControl(const QString &text)
     return cleaned;
 }
 
+// Cursor n linhas acima (ESC[nA, n opcional = 1).
+const QRegularExpression &cursorUpPattern()
+{
+    static const QRegularExpression pattern(escLeadIn() + QStringLiteral("\\[([0-9]*)A"));
+    return pattern;
+}
+
 const QRegularExpression &urlPattern()
 {
     static const QRegularExpression pattern(QStringLiteral(R"(https?://[^\s]+)"));
@@ -143,63 +150,79 @@ QVector<AnsiSegment> AnsiTextParser::parse(const QString &rawInput)
         }
     }
 
-    int lastPos = 0;
-    const QRegularExpression &pattern = sgrPattern();
-    QRegularExpressionMatchIterator it = pattern.globalMatch(input);
+    // O texto entre dois "cursor acima" (ESC[nA) segue o caminho de sempre; cada ESC[nA vira um segmento de controle.
+    auto parsePiece = [&](const QString &piece) {
+        int lastPos = 0;
+        const QRegularExpression &pattern = sgrPattern();
+        QRegularExpressionMatchIterator it = pattern.globalMatch(piece);
 
-    while (it.hasNext()) {
-        const QRegularExpressionMatch match = it.next();
+        while (it.hasNext()) {
+            const QRegularExpressionMatch match = it.next();
 
-        if (match.capturedStart() > lastPos) {
-            const QString text = stripNonSgrControl(input.mid(lastPos, match.capturedStart() - lastPos));
+            if (match.capturedStart() > lastPos) {
+                const QString text = stripNonSgrControl(piece.mid(lastPos, match.capturedStart() - lastPos));
+                if (!text.isEmpty()) {
+                    appendTextWithLinkDetection(segments, text, m_currentFormat);
+                }
+            }
+
+            const QString paramsStr = match.captured(1);
+            const QStringList params = paramsStr.isEmpty()
+                ? QStringList{QStringLiteral("0")}
+                : paramsStr.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+
+            for (const QString &paramStr : params) {
+                bool ok = false;
+                const int code = paramStr.toInt(&ok);
+                if (!ok) {
+                    continue;
+                }
+
+                if (code == 0) {
+                    resetFormat();
+                } else if (code == 1) {
+                    m_currentFormat.setFontWeight(QFont::Bold);
+                } else if (code == 22) {
+                    m_currentFormat.setFontWeight(QFont::Normal);
+                } else if (code >= 30 && code <= 37) {
+                    m_currentFormat.setForeground(ansiColorFor(code - 30, false));
+                } else if (code >= 90 && code <= 97) {
+                    m_currentFormat.setForeground(ansiColorFor(code - 90, true));
+                } else if (code >= 40 && code <= 47) {
+                    m_currentFormat.setBackground(ansiColorFor(code - 40, false));
+                } else if (code >= 100 && code <= 107) {
+                    m_currentFormat.setBackground(ansiColorFor(code - 100, true));
+                } else if (code == 39) {
+                    m_currentFormat.setForeground(m_defaultFormat.foreground());
+                } else if (code == 49) {
+                    m_currentFormat.clearBackground();
+                }
+                // Demais códigos SGR (itálico, underline, etc.) são ignorados.
+            }
+
+            lastPos = match.capturedEnd();
+        }
+
+        if (lastPos < piece.size()) {
+            const QString text = stripNonSgrControl(piece.mid(lastPos));
             if (!text.isEmpty()) {
                 appendTextWithLinkDetection(segments, text, m_currentFormat);
             }
         }
+    };
 
-        const QString paramsStr = match.captured(1);
-        const QStringList params = paramsStr.isEmpty()
-            ? QStringList{QStringLiteral("0")}
-            : paramsStr.split(QLatin1Char(';'), Qt::SkipEmptyParts);
-
-        for (const QString &paramStr : params) {
-            bool ok = false;
-            const int code = paramStr.toInt(&ok);
-            if (!ok) {
-                continue;
-            }
-
-            if (code == 0) {
-                resetFormat();
-            } else if (code == 1) {
-                m_currentFormat.setFontWeight(QFont::Bold);
-            } else if (code == 22) {
-                m_currentFormat.setFontWeight(QFont::Normal);
-            } else if (code >= 30 && code <= 37) {
-                m_currentFormat.setForeground(ansiColorFor(code - 30, false));
-            } else if (code >= 90 && code <= 97) {
-                m_currentFormat.setForeground(ansiColorFor(code - 90, true));
-            } else if (code >= 40 && code <= 47) {
-                m_currentFormat.setBackground(ansiColorFor(code - 40, false));
-            } else if (code >= 100 && code <= 107) {
-                m_currentFormat.setBackground(ansiColorFor(code - 100, true));
-            } else if (code == 39) {
-                m_currentFormat.setForeground(m_defaultFormat.foreground());
-            } else if (code == 49) {
-                m_currentFormat.clearBackground();
-            }
-            // Demais códigos SGR (itálico, underline, etc.) são ignorados.
-        }
-
-        lastPos = match.capturedEnd();
+    const QRegularExpression &moveUp = cursorUpPattern();
+    int from = 0;
+    QRegularExpressionMatchIterator upIt = moveUp.globalMatch(input);
+    while (upIt.hasNext()) {
+        const QRegularExpressionMatch m = upIt.next();
+        parsePiece(input.mid(from, m.capturedStart() - from));
+        AnsiSegment up;
+        up.moveUpLines = qMax(1, m.captured(1).toInt());
+        segments.append(up);
+        from = m.capturedEnd();
     }
-
-    if (lastPos < input.size()) {
-        const QString text = stripNonSgrControl(input.mid(lastPos));
-        if (!text.isEmpty()) {
-            appendTextWithLinkDetection(segments, text, m_currentFormat);
-        }
-    }
+    parsePiece(input.mid(from));
 
     return segments;
 }

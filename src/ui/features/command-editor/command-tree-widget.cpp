@@ -1,6 +1,8 @@
 #include "ui/features/command-editor/command-tree-widget.h"
 
 #include <QHBoxLayout>
+#include <QPointer>
+#include <QScrollBar>
 
 #include <QTimer>
 
@@ -299,6 +301,14 @@ void CommandTreeWidget::rebuildTabs()
     const QWidget *focused = QApplication::focusWidget();
     const bool keepsFocus = !focused || isAncestorOf(focused);
 
+    // O rebuild recria as árvores: a posição de rolagem de cada raiz volta no fim (excluir/editar não joga ao topo).
+    QHash<QString, int> scrollByRootId;
+    for (auto it = m_treesByRootId.constBegin(); it != m_treesByRootId.constEnd(); ++it) {
+        if (it.value()) {
+            scrollByRootId.insert(it.key(), it.value()->verticalScrollBar()->value());
+        }
+    }
+
     m_tabWidget->clear();
     m_treesByRootId.clear();
 
@@ -407,6 +417,22 @@ void CommandTreeWidget::rebuildTabs()
             tree->setFocus();
         }
     }
+
+    // Depois da seleção (que rola até o item): devolve a rolagem de antes. Adiado também, pois o intervalo da barra só
+    // existe depois do layout.
+    auto restoreScroll = [scrollByRootId](const QMap<QString, QPointer<QTreeWidget>> &trees) {
+        for (auto it = trees.constBegin(); it != trees.constEnd(); ++it) {
+            if (it.value() && scrollByRootId.contains(it.key())) {
+                it.value()->verticalScrollBar()->setValue(scrollByRootId.value(it.key()));
+            }
+        }
+    };
+    QMap<QString, QPointer<QTreeWidget>> newTrees;
+    for (auto it = m_treesByRootId.constBegin(); it != m_treesByRootId.constEnd(); ++it) {
+        newTrees.insert(it.key(), it.value());
+    }
+    restoreScroll(newTrees);
+    QTimer::singleShot(0, this, [restoreScroll, newTrees]() { restoreScroll(newTrees); });
 
     // O rebuild recria os QTreeWidget, perdendo o estilo de setBackground.
     applyBackgroundStyle();

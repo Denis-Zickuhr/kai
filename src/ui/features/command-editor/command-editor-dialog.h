@@ -33,6 +33,7 @@ class HttpOptionsEditorWidget;
 class KeyValueEditorWidget;
 class ParameterEditorWidget;
 class OutputRespondersEditorWidget;
+class PipelineStepsEditorWidget;
 class HooksEditorWidget;
 class ExecutionConditionsEditorWidget;
 class EnvExtractorsEditorWidget;
@@ -97,7 +98,8 @@ private:
     void setupUi(const core::Command *existingCommand);
     // Troca Shell/HTTP e sincroniza o segmented control (cobre trocas programáticas: comando
     // HTTP existente, cURL).
-    void setExecutionMode(bool isHttp);
+    // `isPipeline` (spec 13) é o terceiro modo: o corpo são os passos (aba Passos), sem comando nem HTTP.
+    void setExecutionMode(bool isHttp, bool isPipeline = false);
     void populateFolderCombo(const QVector<core::Folder> &allFolders, const QString &selectedFolderId);
 
     // Uma aba do sidebar por método (tabs/*.cpp), cada um chama addNavPage(); setupUi() só
@@ -115,6 +117,7 @@ private:
     void buildDeclaredEnvVarsTab();
     void buildParamsTab();
     void buildRespondersTab();
+    void buildStepsTab();
     void buildConditionsTab();
     void buildHooksTab();
     void buildCliTab();
@@ -166,6 +169,7 @@ private:
     QStackedWidget *m_tabWidget = nullptr;
     QPushButton *m_commandModeButton = nullptr;
     QPushButton *m_httpModeButton = nullptr;
+    QPushButton *m_pipelineModeButton = nullptr;
 
     QLineEdit *m_nameField = nullptr;
     QLineEdit *m_cliPathField = nullptr;
@@ -205,9 +209,11 @@ private:
     QPushButton *m_kipForgetButton = nullptr;
     QComboBox *m_terminalTargetField = nullptr;
     QWidget *m_terminalProfileFieldWrapper = nullptr;
+    QWidget *m_configCard = nullptr; // caixa do corpo do tipo; a pipeline não tem corpo aqui (os passos têm aba própria)
     ParameterEditorWidget *m_paramsEditor = nullptr;
     QStringList m_availableDynamicVarNames; // ver setAvailableDynamicVarNames
     OutputRespondersEditorWidget *m_respondersEditor = nullptr;
+    PipelineStepsEditorWidget *m_stepsEditor = nullptr;
     QWidget *m_respondersCard = nullptr; // aba inteira de auto-respostas (desabilitada com KIP)
     QCheckBox *m_autoRunField = nullptr;
     QSpinBox *m_autoRunDelayField = nullptr;
@@ -248,6 +254,8 @@ private:
     int m_navRowDeclaredEnvVars = -1;
     int m_navRowConfiguration = -1;
     int m_navRowKip = -1;
+    int m_navRowSteps = -1;
+    int m_navRowResponders = -1;
 };
 
 } // namespace kai::ui

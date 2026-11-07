@@ -92,7 +92,7 @@ const QVector<HelpTopicGroup> &helpTopicGroups()
         {QStringLiteral("commands"),
          {QStringLiteral("commands_shell"), QStringLiteral("languages"), QStringLiteral("commands_http"),
           QStringLiteral("parameters"), QStringLiteral("collections"), QStringLiteral("responders"),
-          QStringLiteral("hooks"), QStringLiteral("scheduling")}},
+          QStringLiteral("hooks"), QStringLiteral("scheduling"), QStringLiteral("pipelines")}},
         {QStringLiteral("variables"),
          {QStringLiteral("variables"), QStringLiteral("dynamic_vars"), QStringLiteral("environments")}},
         {QStringLiteral("interfaces"), {QStringLiteral("kip"), QStringLiteral("output"), QStringLiteral("layout")}},

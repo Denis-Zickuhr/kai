@@ -13,6 +13,7 @@ namespace kai::cli {
 //   -d/--detached dispara e devolve o terminal
 //   -n/--notify   notificação na bandeja ao terminar
 //   -w/--window   saída numa janela desacoplada do app (só com comandos do app, -g)
+//   --from <passo> / --only <passo>   pipeline: começa neste passo / roda só ele (precisa de -g: pipelines rodam pelo app)
 //   --dry-run     mostra o que seria executado sem executar
 //   --json        listagem/--dry-run em JSON
 struct CliFlags {
@@ -22,8 +23,12 @@ struct CliFlags {
     bool window = false;
     bool dryRun = false;
     bool json = false;
+    QString fromStep; // pipeline: começa neste passo
+    QString onlyStep; // pipeline: roda só este passo
 
-    bool any() const { return global || detached || notify || window || dryRun || json; }
+    bool any() const {
+        return global || detached || notify || window || dryRun || json || !fromStep.isEmpty() || !onlyStep.isEmpty();
+    }
 };
 
 struct LocalExecutionOutcome {

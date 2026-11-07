@@ -336,6 +336,16 @@ void MainWindow::handleNewFolderRequested()
 
 void MainWindow::handleNewCommandRequested()
 {
+    createCommandFlow(false);
+}
+
+void MainWindow::handleNewPipelineRequested()
+{
+    createCommandFlow(true);
+}
+
+void MainWindow::createCommandFlow(bool asPipeline)
+{
     QString targetFolderId = resolveTargetFolderId();
 
     if (targetFolderId.isEmpty()) {
@@ -366,6 +376,12 @@ void MainWindow::handleNewCommandRequested()
     bool advanced = (settings.commandCreationMode == QStringLiteral("advanced"));
     bool hasDraft = false;      // há rascunho para transportar entre modos
     core::Command draft;        // rascunho preservado no swap
+    if (asPipeline) {
+        // "Nova pipeline": o formulário abre já no tipo Pipeline; o JSON cru não tem esse atalho.
+        draft.type = core::CommandType::Pipeline;
+        hasDraft = true;
+        advanced = false;
+    }
     bool committed = false;     // usuário confirmou (OK), não só trocou de modo
 
     while (true) {

@@ -29,6 +29,7 @@
 #include "ui/shared/adaptive-button.h"
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/search-line-edit.h"
+#include "ui/shared/token-style.h"
 #include "ui/shared/lucide-icons.h"
 #include "ui/shared/panel-metrics.h"
 #include "ui/shared/tinted-badge.h"
@@ -399,8 +400,9 @@ void NotificationHistoryDialog::setupUi()
     m_searchField->setPlaceholderText(utils::tr(QStringLiteral("notifications.search.placeholder")));
     m_searchField->setMinimumWidth(200);
     m_searchField->setFixedHeight(tk::controlHeight());
-    m_searchField->setStyleSheet(QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }")
-        .arg(tk::radiusMdForHeight(tk::controlHeight())));
+    bindFieldStyle(m_searchField, [](int radius) {
+        return QStringLiteral("QLineEdit, QLineEdit:focus { min-height: 0px; padding: 0px; border-radius: %1px; }").arg(radius);
+    });
     connect(m_searchField, &QLineEdit::textChanged, this, [this]() { reload(); });
     top->addWidget(m_searchField);
     outer->addLayout(top);

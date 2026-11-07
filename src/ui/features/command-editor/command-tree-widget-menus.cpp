@@ -233,7 +233,7 @@ void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &glo
             if (isCommand) {
                 for (const core::Command &command : std::as_const(m_commands)) {
                     if (command.id == itemId) {
-                        if (command.kip && command.type == core::CommandType::Command) {
+                        if (core::showsKipView(command)) {
                             pinAction = addIconAction(&menu, QStringLiteral("pin"), accent,
                                                       utils::tr(QStringLiteral("ctx.command.pin_panel")));
                         }
@@ -359,6 +359,8 @@ void CommandTreeWidget::addCreationActions(
                                        utils::tr(QStringLiteral("ctx.new.folder")));
     QAction *newCommand = addIconAction(menu, QStringLiteral("square-terminal"), accent,
                                         utils::tr(QStringLiteral("ctx.new.command")));
+    QAction *newPipeline = addIconAction(menu, QStringLiteral("list-checks"), accent,
+                                         utils::tr(QStringLiteral("ctx.new.pipeline")));
     QAction *newCollection = addIconAction(menu, QStringLiteral("database"), accent,
                                            utils::tr(QStringLiteral("ctx.new.collection")));
     QAction *newNote = addIconAction(menu, QStringLiteral("notebook"), accent,
@@ -368,6 +370,8 @@ void CommandTreeWidget::addCreationActions(
     newFolder->setData(QStringLiteral("new-folder"));
     newCommand->setData(QStringLiteral("new-command"));
     newCollection->setData(QStringLiteral("new-collection"));
+    newPipeline->setData(QStringLiteral("new-pipeline"));
+    newPipeline->setProperty("kaiCreation", true);
     // Distingue estas ações no roteador de escolha de criação.
     newFolder->setProperty("kaiCreation", true);
     newCommand->setProperty("kaiCreation", true);
@@ -382,6 +386,7 @@ void CommandTreeWidget::handleCreationChoice(QAction *chosen)
     const QString kind = chosen->data().toString();
     if (kind == QStringLiteral("new-folder")) emit newFolderRequested();
     else if (kind == QStringLiteral("new-command")) emit newCommandRequested();
+    else if (kind == QStringLiteral("new-pipeline")) emit newPipelineRequested();
     else if (kind == QStringLiteral("new-collection")) emit newCollectionRequested();
     else if (kind == QStringLiteral("new-note")) emit newNoteRequested();
 }

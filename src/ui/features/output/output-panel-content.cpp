@@ -1,3 +1,4 @@
+#include <QTextBlock>
 #include <QTextDocumentFragment>
 #include "ui/features/output/output-panel.h"
 #include "ui/shared/json-viewer-widget.h"
@@ -225,9 +226,25 @@ void OutputPanel::appendChunkNow(const QString &rawTextIn, bool isError)
 
     QTextCursor cursor(m_outputView->document());
     cursor.movePosition(QTextCursor::End);
+    // Uma saída grande (docker, build) vira milhares de segmentos: cada insertText fora de um bloco de edição refaz o
+    // layout e o undo; em lote é uma operação só.
+    cursor.beginEditBlock();
 
     const QVector<AnsiSegment> segments = m_parser.parse(text);
     for (const AnsiSegment &segment : segments) {
+        if (segment.moveUpLines > 0) {
+            // "Cursor n linhas acima" (animação do docker compose up): as n últimas linhas serão redesenhadas, então saem
+            // daqui em vez de acumular um quadro novo a cada atualização.
+            QTextBlock target = m_outputView->document()->lastBlock();
+            for (int i = 0; i < segment.moveUpLines && target.previous().isValid(); ++i) {
+                target = target.previous();
+            }
+            cursor.setPosition(target.position());
+            cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+            cursor.removeSelectedText();
+            m_atLineStart = true;
+            continue;
+        }
         if (segment.text.isEmpty()) {
             continue;
         }
@@ -273,6 +290,7 @@ void OutputPanel::appendChunkNow(const QString &rawTextIn, bool isError)
         }
         cursor.insertText(chunk.mid(last), fmt);
     }
+    cursor.endEditBlock();
 
     if (m_options.autoScroll && wasAtBottom && bar) {
         bar->setValue(bar->maximum());
@@ -340,7 +358,10 @@ void OutputPanel::detectJsonInOutput()
         return;
     }
     constexpr int kTailChars = 256 * 1024; // o mesmo teto de JsonViewerWidget::extractJsonBlock
-    if (m_outputView->document()->characterCount() <= kTailChars) {
+    // Acima disto a detecção é adiada (250 ms) em vez de copiar e varrer o texto inteiro a cada lote de 16 ms: numa
+    // saída longa (docker) isso travava a GUI.
+    constexpr int kImmediateChars = 32 * 1024;
+    if (m_outputView->document()->characterCount() <= kImmediateChars) {
         detectJsonInText(m_outputView->toPlainText());
         return;
     }

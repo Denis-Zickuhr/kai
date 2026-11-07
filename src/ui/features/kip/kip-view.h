@@ -128,6 +128,11 @@ private:
     QTimer m_changeTimer;
     QString m_pendingChangeField;
 
+    // Faixa "passos da pipeline" (só num passo KIP de pipeline): lê os passos da sessão pai.
+    void refreshPipelineStrip();
+    QPointer<engine::KipSession> m_stripParent;
+    QLabel *m_pipelineStrip = nullptr;
+
     QLabel *m_title = nullptr;
     QLabel *m_version = nullptr;
     KipSpinner *m_spinner = nullptr;

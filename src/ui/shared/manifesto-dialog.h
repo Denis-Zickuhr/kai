@@ -24,7 +24,7 @@ class ManifestoDialog : public QDialog {
 
 public:
     struct Source {
-        QString id;          // "kai" | "kip"
+        QString id;          // "kai" | "kip" | "pipeline"
         QStringList files;   // arquivos de assets/manifesto/, concatenados na ordem
     };
     static const QVector<Source> &sources();

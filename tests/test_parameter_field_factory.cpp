@@ -226,15 +226,15 @@ private slots:
         QVERIFY(line);
         QCOMPARE(line->echoMode(), QLineEdit::Password);
         QCOMPARE(b.editor->value(), QJsonValue(QStringLiteral("hunter2"))); // o valor real continua acessível
-        QAction *toggle = nullptr;
-        for (QAction *a : line->actions()) {
-            if (a->isCheckable()) toggle = a;
-        }
+        auto *toggle = line->findChild<QToolButton *>(QStringLiteral("secretToggle"));
         QVERIFY(toggle);
         toggle->setChecked(true);
         QCOMPARE(line->echoMode(), QLineEdit::Normal);
         toggle->setChecked(false);
         QCOMPARE(line->echoMode(), QLineEdit::Password);
+        // Centrado na altura do campo (a ação trailing do QLineEdit ficava torta com o padding do QSS).
+        line->resize(240, 48);
+        QCOMPARE(toggle->y(), (line->height() - toggle->height()) / 2);
     }
 
     void textareaEditorReadsAndWritesMultilineText()

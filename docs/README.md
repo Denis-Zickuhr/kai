@@ -25,6 +25,7 @@ The order below is the order of the in-app **Help** (menu **Help**, which has a 
 | Collections | [collections.md](collections.md) |
 | Auto-replies | [responders.md](responders.md) |
 | Hooks & execution conditions | [hooks.md](hooks.md) |
+| Pipelines (guided multi-step routines) | [pipelines.md](pipelines.md) |
 | Schedules & auto-run | [scheduling.md](scheduling.md) |
 
 **Variables & environments**

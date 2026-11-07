@@ -29,6 +29,7 @@ signals:
     void editCurrentFolderRequested();
     void newFolderRequested();
     void newCommandRequested();
+    void newPipelineRequested();
     void newCollectionRequested();
     void newNoteRequested();
     void editSelectedRequested();
@@ -43,6 +44,7 @@ private:
     QPushButton *m_btnEditFolder{nullptr};
     QPushButton *m_btnNewFolder{nullptr};
     QPushButton *m_btnNewCommand{nullptr};
+    QPushButton *m_btnNewPipeline{nullptr};
     QPushButton *m_btnNewCollection{nullptr};
     QPushButton *m_btnNewNote{nullptr};
     QPushButton *m_btnEditSelected{nullptr};

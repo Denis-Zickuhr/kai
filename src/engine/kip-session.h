@@ -64,11 +64,18 @@ public:
     void setWslDistro(const QString &distro) { m_wslDistro = distro; }
     const QString &wslDistro() const { return m_wslDistro; }
 
+    // Ações por item do checklist (`steps`) oferecidas pela view — só quem dirige a sessão sem processo (a pipeline) liga.
+    bool stepActionsEnabled() const { return m_stepActionsEnabled; }
+    void setStepActionsEnabled(bool enabled);
+
     // Dispara o processo (e o relógio do handshake). O comando já vem
     // interpolado/embrulhado pelo pipeline.
     void start(const QString &command, const QString &workingDir, const QMap<QString, QString> &env);
 
     const core::KipScreenState &screen() const { return m_screen; }
+    // Passo KIP de uma pipeline: a sessão da pipeline (pai), para a view mostrar os passos já feitos acima da tela.
+    void setParentSession(KipSession *parent) { m_parentSession = parent; }
+    KipSession *parentSession() const { return m_parentSession.data(); }
     core::KipSessionState state() const { return m_screen.sessionState(); }
     const QVector<KipTraceEntry> &trace() const { return m_trace; }
     // Log: stderr + stdout que não é protocolo + avisos do Kai.
@@ -102,6 +109,8 @@ public slots:
     void setDiffViewPreference(const QString &view);
     // Cancel: manda `cancel`, espera a graça e então stop().
     void cancel();
+    // A view pediu uma ação sobre um item do checklist (ex.: "run_from"); quem dirige a sessão decide.
+    void requestStepAction(const QString &stepId, const QString &action);
 
     // Entradas vindas do processo. Públicas de propósito: permitem dirigir a
     // sessão SEM processo (testes e pré-visualizações da view), e é por aqui
@@ -120,6 +129,10 @@ signals:
     void answersRemembered(const QJsonObject &remembered);
     void protocolTrace(const kai::engine::KipTraceEntry &entry);
     void logLine(const QString &text, bool isError);
+    // Toda linha que iria ao programa (resposta, change, cancel...), SEM redação de segredos. Quem dirige a sessão sem
+    // processo (o RunbookRunner) é o "programa" e lê as respostas daqui.
+    void lineSent(const QByteArray &line);
+    void stepActionRequested(const QString &stepId, const QString &action);
     // Fim da sessão: processo encerrado e resultado calculado (uma vez).
     void finished(const kai::engine::KipOutcome &outcome);
 
@@ -147,6 +160,7 @@ private:
     void stopTimers();
 
     QPointer<ProcessRunner> m_runner;
+    QPointer<KipSession> m_parentSession;
     core::KipScreenState m_screen;
     core::KipLineBuffer m_lines;
     QVector<KipTraceEntry> m_trace;
@@ -167,6 +181,7 @@ private:
     bool m_helloSeen = false;
     bool m_doneSeen = false;
     bool m_cancelRequested = false;
+    bool m_stepActionsEnabled = false;
     int m_changeSeq = 0;
 };
 

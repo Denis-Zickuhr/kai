@@ -19,6 +19,8 @@
 #include <QJsonParseError>
 
 #include <QLineEdit>
+#include <QToolButton>
+#include <QEvent>
 
 #include <QMenu>
 
@@ -232,16 +234,59 @@ QLineEdit *makeTextField(QWidget *parent, const QString &initial, const QString 
     return field;
 }
 
+namespace {
+// Mantém o botão do olho centrado na altura REAL do campo: a ação "trailing" do QLineEdit segue o retângulo do texto e,
+// com o padding do QSS, ficava torta (colada embaixo) num campo alto.
+class SecretToggleLayout : public QObject {
+public:
+    SecretToggleLayout(QLineEdit *field, QToolButton *button) : QObject(field), m_field(field), m_button(button)
+    {
+        field->installEventFilter(this);
+        place();
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched == m_field && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+            place();
+        }
+        return false;
+    }
+
+private:
+    void place()
+    {
+        const int side = m_button->width();
+        m_button->move(m_field->width() - side - tk::space(2), (m_field->height() - m_button->height()) / 2);
+    }
+
+    QLineEdit *m_field;
+    QToolButton *m_button;
+};
+} // namespace
+
 QLineEdit *makeSecretField(QWidget *parent, const QString &initial, const QString &placeholder)
 {
     auto *field = new QLineEdit(initial, parent);
     field->setPlaceholderText(placeholder);
     field->setEchoMode(QLineEdit::Password);
-    auto *toggle = field->addAction(LucideIcons::icon(QStringLiteral("eye"), QColor(tk::mutedFg()), 16),
-                                    QLineEdit::TrailingPosition);
+
+    auto *toggle = new QToolButton(field);
+    toggle->setObjectName(QStringLiteral("secretToggle"));
     toggle->setCheckable(true);
+    toggle->setAutoRaise(true);
+    toggle->setCursor(Qt::PointingHandCursor);
+    toggle->setFocusPolicy(Qt::NoFocus);
+    toggle->setFixedSize(24, 24);
+    toggle->setIconSize(QSize(16, 16));
+    toggle->setIcon(LucideIcons::icon(QStringLiteral("eye"), QColor(tk::mutedFg()), 16));
     toggle->setToolTip(utils::tr(QStringLiteral("kip.field.secret.show")));
-    QObject::connect(toggle, &QAction::toggled, field, [field, toggle](bool shown) {
+    toggle->setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; padding: 0; }"));
+    // Reserva o espaço do botão para o texto digitado não passar por baixo dele.
+    field->setTextMargins(0, 0, toggle->width() + tk::space(2), 0);
+    new SecretToggleLayout(field, toggle);
+
+    QObject::connect(toggle, &QToolButton::toggled, field, [field, toggle](bool shown) {
         field->setEchoMode(shown ? QLineEdit::Normal : QLineEdit::Password);
         toggle->setIcon(LucideIcons::icon(shown ? QStringLiteral("eye-off") : QStringLiteral("eye"),
                                           QColor(tk::mutedFg()), 16));

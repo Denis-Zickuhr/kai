@@ -51,6 +51,43 @@ private:
     QString m_full;
 };
 
+// Pílula (escopo da variável) que cabe no espaço da linha: largura natural até o teto e, passando dele, reticências no
+// lugar do corte seco do QLabel.
+class ElidedPill : public QLabel {
+public:
+    explicit ElidedPill(const QString &full, QWidget *parent) : QLabel(full, parent), m_full(full) {}
+
+    QSize sizeHint() const override
+    {
+        const QSize base = QLabel::sizeHint();
+        return QSize(fontMetrics().horizontalAdvance(m_full) + chromeWidth(), base.height());
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(tk::space(12), QLabel::minimumSizeHint().height());
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        const QString elided = fontMetrics().elidedText(m_full, Qt::ElideRight, qMax(0, width() - chromeWidth()));
+        if (elided != text()) {
+            setText(elided);
+        }
+    }
+
+private:
+    // Padding + borda que o QSS soma ao texto.
+    int chromeWidth() const
+    {
+        return QLabel::sizeHint().width() - fontMetrics().horizontalAdvance(text());
+    }
+
+    QString m_full;
+};
+
 class VariableRow : public QWidget {
     Q_OBJECT
 
@@ -82,9 +119,9 @@ public:
         layout->addWidget(valueLabel, 3);
 
         if (!spec.pill.isEmpty()) {
-            auto *pill = new QLabel(spec.pill, this);
+            auto *pill = new ElidedPill(spec.pill, this);
             pill->setToolTip(spec.pill);
-            pill->setMaximumWidth(tk::space(40));
+            pill->setMaximumWidth(tk::space(48));
             bindTokenStyle(pill, [=, this]() { return QStringLiteral(
                 "QLabel { background-color: rgba(%1, %2, %3, 38); color: %4; border: none; border-radius: %5px;"
                 " padding: 1px %6px; font-weight: 600; font-size: %7pt; }")

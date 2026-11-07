@@ -108,6 +108,13 @@ void ExecutionPipeline::runSingleCommand(const core::Command &command, std::func
         return;
     }
 
+    if (command.type == core::CommandType::Pipeline) {
+        // Uma pipeline roda pelo RunbookRunner (spec 13); nunca como shell vazio nem como hook.
+        onDone(false, utils::tr(QStringLiteral("execution_pipeline.pipeline_not_runnable"))
+            .arg(command.name.isEmpty() ? command.id : command.name));
+        return;
+    }
+
     if (command.type == core::CommandType::Http) {
         if (!command.httpConfig.has_value()) {
             onDone(false, QStringLiteral("Comando HTTP '%1' sem http_config.").arg(command.id));

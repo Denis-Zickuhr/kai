@@ -1,4 +1,5 @@
 #include "ui/features/ai/ai-tool-card.h"
+#include "ui/shared/token-style.h"
 
 #include "ui/features/ai/ai-chat-widgets.h"
 #include "ui/features/ai/ai-ui-text.h"
@@ -125,9 +126,11 @@ AiToolCard::AiToolCard(const core::AiToolCall &call, QWidget *parent)
     m_toggle->setFixedSize(24, 24);
     m_toggle->setToolTip(utils::tr(QStringLiteral("ai.card.details")));
     m_toggle->setVisible(false);
-    m_toggle->setStyleSheet(QStringLiteral(
-        "QToolButton { background: transparent; border: 1px solid transparent; border-radius: %1px; padding: 0; min-height: 24px; min-width: 24px; }"
-        "QToolButton:hover { background: %2; }").arg(tk::radiusSm()).arg(tk::hoverBg()));
+    bindTokenStyle(m_toggle, []() {
+        return QStringLiteral(
+            "QToolButton { background: transparent; border: 1px solid transparent; border-radius: %1px; padding: 0; min-height: 24px; min-width: 24px; }"
+            "QToolButton:hover { background: %2; }").arg(tk::radiusSm()).arg(tk::hoverBg());
+    });
     head->addWidget(m_toggle);
     root->addWidget(m_head);
 
@@ -322,51 +325,51 @@ void AiToolCard::paintStateIcon()
     m_icon->setPixmap(pm);
 }
 
-void AiToolCard::refreshStyle()
+QString AiToolCard::cardStyleSheet() const
 {
     QString border = tk::borderColor();
-    QString statusText;
     switch (m_state) {
-    case State::Waiting:
-        statusText = utils::tr(QStringLiteral("ai.card.waiting"));
-        break;
-    case State::Approval:
-        border = m_danger ? tk::errorFg() : tk::warningFg();
-        statusText = utils::tr(QStringLiteral("ai.card.needs_approval"));
-        break;
-    case State::Question:
-        border = tk::accent();
-        statusText = utils::tr(QStringLiteral("ai.card.question"));
-        break;
-    case State::Running:
-        statusText = utils::tr(QStringLiteral("ai.card.running"));
-        break;
-    case State::Done:
-        statusText = m_summary.isEmpty() ? utils::tr(QStringLiteral("ai.card.done")) : m_summary;
-        break;
-    case State::Failed:
-        border = QColor(tk::errorFg()).darker(130).name();
-        statusText = utils::tr(QStringLiteral("ai.card.failed"));
-        break;
-    case State::Denied:
-        statusText = utils::tr(QStringLiteral("ai.card.denied"));
-        break;
+    case State::Approval: border = m_danger ? tk::errorFg() : tk::warningFg(); break;
+    case State::Question: border = tk::accent(); break;
+    case State::Failed: border = QColor(tk::errorFg()).darker(130).name(); break;
+    default: break;
     }
-    const bool animate = m_state == State::Waiting || m_state == State::Running;
-    if (animate && isVisible()) m_spinTimer->start();
-    else if (!animate) m_spinTimer->stop();
-    paintStateIcon();
-    m_status->setText(statusText);
     const bool pending = m_state == State::Approval || m_state == State::Question;
-    setStyleSheet(QStringLiteral(
+    return QStringLiteral(
         "QFrame#aiToolCard { background: %1; border: 1px solid %2; border-radius: %3px; }"
         "QFrame#aiToolCard QLabel { background: transparent; }"
         "QFrame#aiToolCard QWidget#aiToolHead, QFrame#aiToolCard QWidget#aiApprovalBar, QFrame#aiToolCard QWidget#aiQuestionBar,"
         " QFrame#aiToolCard QWidget#aiOptionsHost { background: transparent; }"
         "QFrame#aiToolCard QPlainTextEdit#aiToolDetail { background: %4; color: %5; border: 1px solid %6; border-radius: %7px; padding: 6px; }")
         .arg(pending ? tk::surface2() : tk::surface(), border).arg(tk::radiusMd())
-        .arg(tk::codeBg(), tk::codeFg(), tk::borderColor()).arg(tk::radiusSm()));
-    applyAiButtonStyle(m_allow, m_danger ? AiButtonKind::PrimaryDanger : AiButtonKind::Primary);
+        .arg(tk::codeBg(), tk::codeFg(), tk::borderColor()).arg(tk::radiusSm());
+}
+
+void AiToolCard::refreshStyle()
+{
+    QString statusText;
+    switch (m_state) {
+    case State::Waiting: statusText = utils::tr(QStringLiteral("ai.card.waiting")); break;
+    case State::Approval: statusText = utils::tr(QStringLiteral("ai.card.needs_approval")); break;
+    case State::Question: statusText = utils::tr(QStringLiteral("ai.card.question")); break;
+    case State::Running: statusText = utils::tr(QStringLiteral("ai.card.running")); break;
+    case State::Done:
+        statusText = m_summary.isEmpty() ? utils::tr(QStringLiteral("ai.card.done")) : m_summary;
+        break;
+    case State::Failed: statusText = utils::tr(QStringLiteral("ai.card.failed")); break;
+    case State::Denied: statusText = utils::tr(QStringLiteral("ai.card.denied")); break;
+    }
+    const bool animate = m_state == State::Waiting || m_state == State::Running;
+    if (animate && isVisible()) m_spinTimer->start();
+    else if (!animate) m_spinTimer->stop();
+    paintStateIcon();
+    m_status->setText(statusText);
+    // Ligado aos tokens: o card reage a troca de tema/cantos sem ser recriado.
+    bindTokenStyle(this, [this]() {
+        paintStateIcon();
+        applyAiButtonStyle(m_allow, m_danger ? AiButtonKind::PrimaryDanger : AiButtonKind::Primary);
+        return cardStyleSheet();
+    });
 }
 
 void AiToolCard::showEvent(QShowEvent *event)

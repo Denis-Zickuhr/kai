@@ -36,7 +36,7 @@ bool MainWindow::isCommandRunning(const QString &commandId) const
         && m_processManager->statusOf(commandId) == engine::ProcessStatus::Running) {
         return true;
     }
-    if (m_pipelineRunningIds.contains(commandId)) {
+    if (m_pipelineRunningIds.contains(commandId) || isRunbookRunning(commandId)) {
         return true;
     }
     return runnerFor(commandId) != nullptr;
@@ -269,7 +269,7 @@ void MainWindow::reloadCommandTree()
             const auto found = panel ? m_commandsById.constFind(panel->commandId()) : m_commandsById.constEnd();
             if (found != m_commandsById.constEnd()) {
                 panel->setName(found->name);
-                panel->setFormattedOutput(found->formattedOutput && !(found->kip && found->type == core::CommandType::Command));
+                panel->setFormattedOutput(found->formattedOutput && !(core::showsKipView(*found)));
                 renamed = true;
                 ++it;
             } else {

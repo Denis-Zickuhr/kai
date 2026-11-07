@@ -113,7 +113,7 @@ StorageManagerWidget::StorageManagerWidget(core::CommandsData &commandsData,
     auto *kindRow = new FlowLayout(0, 6, 6);
     m_kindGroup = new QButtonGroup(this);
     m_kindGroup->setExclusive(true);
-    QList<DataKind> kinds = {DataKind::All, DataKind::Command, DataKind::Http, DataKind::Folder,
+    QList<DataKind> kinds = {DataKind::All, DataKind::Command, DataKind::Http, DataKind::Pipeline, DataKind::Folder,
                              DataKind::Collection};
     if (m_notes) {
         kinds << DataKind::Note;
@@ -259,6 +259,7 @@ QString StorageManagerWidget::kindLabel(DataKind kind) const
     case DataKind::All: return utils::tr(QStringLiteral("storage.kind.all"));
     case DataKind::Command: return utils::tr(QStringLiteral("storage.kind.commands"));
     case DataKind::Http: return utils::tr(QStringLiteral("storage.kind.http"));
+    case DataKind::Pipeline: return utils::tr(QStringLiteral("storage.kind.pipelines"));
     case DataKind::Folder: return utils::tr(QStringLiteral("storage.kind.folders"));
     case DataKind::Collection: return utils::tr(QStringLiteral("storage.kind.collections"));
     case DataKind::Note: return utils::tr(QStringLiteral("storage.kind.notes"));
@@ -268,13 +269,18 @@ QString StorageManagerWidget::kindLabel(DataKind kind) const
 
 int StorageManagerWidget::countOfKind(DataKind kind) const
 {
-    const auto countCommands = [this](bool http) {
+    const auto countType = [this](core::CommandType type, bool matches) {
         return int(std::count_if(m_commandsData.commands.constBegin(), m_commandsData.commands.constEnd(),
-            [http](const core::Command &c) { return (c.type == core::CommandType::Http) == http; }));
+            [type, matches](const core::Command &c) { return (c.type == type) == matches; }));
+    };
+    const auto countShell = [this]() {
+        return int(std::count_if(m_commandsData.commands.constBegin(), m_commandsData.commands.constEnd(),
+            [](const core::Command &c) { return c.type != core::CommandType::Http && c.type != core::CommandType::Pipeline; }));
     };
     switch (kind) {
-    case DataKind::Command: return countCommands(false);
-    case DataKind::Http: return countCommands(true);
+    case DataKind::Command: return countShell();
+    case DataKind::Http: return countType(core::CommandType::Http, true);
+    case DataKind::Pipeline: return countType(core::CommandType::Pipeline, true);
     case DataKind::Folder: return m_commandsData.folders.size();
     case DataKind::Collection: return m_collections.size();
     case DataKind::Note: return m_notes ? m_notes->size() : 0;
@@ -358,7 +364,8 @@ QVector<StorageManagerWidget::RowInfo> StorageManagerWidget::collectRows() const
 
     for (const core::Command &c : m_commandsData.commands) {
         const bool isHttp = c.type == core::CommandType::Http;
-        const DataKind kind = isHttp ? DataKind::Http : DataKind::Command;
+        const bool isPipeline = c.type == core::CommandType::Pipeline;
+        const DataKind kind = isHttp ? DataKind::Http : (isPipeline ? DataKind::Pipeline : DataKind::Command);
         if (!wants(kind) || !matches(c.name)) {
             continue;
         }
@@ -366,7 +373,10 @@ QVector<StorageManagerWidget::RowInfo> StorageManagerWidget::collectRows() const
         row.id = c.id;
         row.kind = kind;
         row.name = c.name;
-        if (!isHttp) {
+        if (isPipeline) {
+            row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.pipeline"));
+            row.typeBadgeColor = utils::tokens::infoFg();
+        } else if (!isHttp) {
             row.typeBadgeText = utils::tr(QStringLiteral("storage.badge.shell"));
             row.typeBadgeColor = utils::tokens::accent();
         } else {
@@ -453,6 +463,7 @@ QString StorageManagerWidget::iconNameFor(DataKind kind)
 {
     switch (kind) {
     case DataKind::Http: return QStringLiteral("globe");
+    case DataKind::Pipeline: return QStringLiteral("list-checks");
     case DataKind::Folder: return QStringLiteral("folder");
     case DataKind::Collection: return QStringLiteral("table");
     case DataKind::Note: return QStringLiteral("notebook");
@@ -656,7 +667,8 @@ void StorageManagerWidget::applyDuplicate(DataKind kind, const QString &id)
 {
     switch (kind) {
     case DataKind::Command:
-    case DataKind::Http: duplicateCommand(id); break;
+    case DataKind::Http:
+    case DataKind::Pipeline: duplicateCommand(id); break;
     case DataKind::Folder: duplicateFolder(id); break;
     case DataKind::Collection: duplicateCollection(id); break;
     case DataKind::Note: duplicateNote(id); break;
@@ -673,6 +685,7 @@ void StorageManagerWidget::persistFor(const QList<DataKind> &kinds)
         switch (kind) {
         case DataKind::Command:
         case DataKind::Http:
+        case DataKind::Pipeline:
         case DataKind::Folder: commands = true; break;
         case DataKind::Collection: collections = true; break;
         case DataKind::Note: notes = true; break;
@@ -762,7 +775,7 @@ QString StorageManagerWidget::confirmDeleteText(const QList<DataKind> &kinds, in
 {
     QSet<int> distinct;
     for (const DataKind kind : kinds) {
-        distinct.insert(kind == DataKind::Http ? int(DataKind::Command) : int(kind));
+        distinct.insert(kind == DataKind::Http || kind == DataKind::Pipeline ? int(DataKind::Command) : int(kind));
     }
     if (distinct.size() == 1) {
         switch (static_cast<DataKind>(*distinct.begin())) {
@@ -785,6 +798,7 @@ void StorageManagerWidget::deleteSingle(DataKind kind, const QString &id)
     switch (kind) {
     case DataKind::Command:
     case DataKind::Http:
+    case DataKind::Pipeline:
         m_commandsData.commands.removeIf([&id](const core::Command &c) { return c.id == id; });
         break;
     case DataKind::Folder:
@@ -819,7 +833,8 @@ void StorageManagerWidget::handleDeleteSelected()
         kinds << item.kind;
         switch (item.kind) {
         case DataKind::Command:
-        case DataKind::Http: commandIds.insert(item.id); break;
+        case DataKind::Http:
+        case DataKind::Pipeline: commandIds.insert(item.id); break;
         case DataKind::Folder: folderIds << item.id; break;
         case DataKind::Collection: collectionIds.insert(item.id); break;
         case DataKind::Note: noteIds.insert(item.id); break;

@@ -35,7 +35,7 @@ public:
                           QWidget *parent = nullptr);
 
 private:
-    enum class DataKind { All, Command, Http, Folder, Collection, Note };
+    enum class DataKind { All, Command, Http, Pipeline, Folder, Collection, Note };
 
     struct RowInfo {
         QString id;

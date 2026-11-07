@@ -94,8 +94,8 @@ QTableWidget *tableOf(StorageManagerWidget &widget)
     return widget.findChild<QTableWidget *>();
 }
 
-// Chips de tipo, na ordem: Todos, Comandos, HTTP, Pastas, Coleções (e Notas, se houver notas).
-enum Kind { All = 0, Commands, Http, Folders, Collections, Notes };
+// Chips de tipo, na ordem: Todos, Comandos, HTTP, Pipelines, Pastas, Coleções (e Notas, se houver notas).
+enum Kind { All = 0, Commands, Http, Pipelines, Folders, Collections, Notes };
 
 void selectKind(StorageManagerWidget &widget, Kind kind)
 {

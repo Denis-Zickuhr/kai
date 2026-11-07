@@ -1,0 +1,273 @@
+project_name: "Pipeline + KIP Sample"
+icon: "git-branch"
+commands:
+  # 1. Release with a wizard: KIP steps (wizard, approval, publish) between plain ones.
+  - name: "Release"
+    type: "pipeline"
+    description: "Wizard (KIP) → package → approval (KIP, stable only) → publish (KIP) → announce."
+    icon: "rocket"
+    steps:
+      - id: preflight
+        label: "Preflight"
+        run: "steps/preflight"
+      - id: wizard
+        label: "Release wizard"
+        run: "steps/release-wizard"
+      - id: package
+        label: "Package"
+        run: "steps/package"
+        params:
+          VERSION: "{{RELEASE_VERSION}}"
+          CHANNEL: "{{RELEASE_CHANNEL}}"
+      - id: approval
+        label: "Approval"
+        run: "steps/approve"
+        params:
+          VERSION: "{{RELEASE_VERSION}}"
+        when:
+          - left: "{{RELEASE_CHANNEL}}"
+            op: "eq"
+            right: "stable"
+      - id: publish
+        label: "Publish"
+        run: "steps/publish"
+        params:
+          VERSION: "{{RELEASE_VERSION}}"
+          CHANNEL: "{{RELEASE_CHANNEL}}"
+      - id: announce
+        label: "Announce"
+        run: "steps/announce"
+        params:
+          VERSION: "{{RELEASE_VERSION}}"
+        on_fail: continue
+        when:
+          - left: "{{NOTIFY}}"
+            op: "eq"
+            right: "true"
+
+  # 2. Restore guard: a KIP picker feeds plain steps, then a KIP destructive confirm.
+  - name: "Restore database"
+    type: "pipeline"
+    description: "Pick a backup (KIP) → verify → snapshot → restore (KIP, danger confirm) → smoke test."
+    icon: "database"
+    steps:
+      - id: pick
+        label: "Pick a backup"
+        run: "steps/pick-backup"
+      - id: verify
+        label: "Verify backup"
+        run: "steps/verify-backup"
+        params:
+          BACKUP: "{{BACKUP_FILE}}"
+      - id: snapshot
+        label: "Snapshot current data"
+        check: "steps/has-snapshot"
+        run: "steps/snapshot"
+      - id: restore
+        label: "Restore"
+        run: "steps/restore"
+        params:
+          BACKUP: "{{BACKUP_FILE}}"
+      - id: smoke
+        label: "Smoke test"
+        run: "steps/smoke"
+        retry:
+          times: 1
+          delay: 1
+
+  # 3. Health sweep: failures do not stop it; a final KIP step reports what happened.
+  - name: "Health sweep"
+    type: "pipeline"
+    description: "Three checks that never abort, then a KIP report built from their results."
+    icon: "activity"
+    steps:
+      - id: disk
+        label: "Disk"
+        run: "steps/check-disk"
+        on_fail: continue
+      - id: network
+        label: "Network"
+        run: "steps/check-network"
+        on_fail: continue
+      - id: tools
+        label: "Toolchain"
+        run: "steps/check-tools"
+        on_fail: continue
+      - id: report
+        label: "Report"
+        run: "steps/report"
+        params:
+          DISK: "{{steps.disk.ok}}"
+          NETWORK: "{{steps.network.ok}}"
+          TOOLS: "{{steps.tools.ok}}"
+
+  - name: "Reset sample state"
+    type: "command"
+    command: "./scripts/reset.sh"
+
+  # --- plain steps ---
+  - name: "preflight"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/preflight.sh"
+  - name: "package"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/package.sh"
+  - name: "announce"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/announce.sh"
+  - name: "verify-backup"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/verify-backup.sh"
+  - name: "snapshot"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/snapshot.sh"
+  - name: "has-snapshot"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/has-snapshot.sh"
+  - name: "smoke"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/smoke.sh"
+  - name: "check-disk"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/check-disk.sh"
+  - name: "check-network"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/check-network.sh"
+  - name: "check-tools"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/check-tools.sh"
+
+  # --- KIP steps (the injected `kip` function; POSIX shells only) ---
+  - name: "release-wizard"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    declared_env_vars:
+      - name: "RELEASE_VERSION"
+      - name: "RELEASE_CHANNEL"
+      - name: "NOTIFY"
+    command: |
+      kip hello --title "Release wizard" --version "1.0"
+      kip prompt --id release --title "What are we releasing?" --submit-label "Continue" \
+          --field text version "Version" --required --default 1.0.0 \
+          --field select channel "Channel" --required --default beta \
+              --option beta:Beta:"Unsigned, for testers" --option stable:Stable:"Signed, for everyone" \
+          --field flags opts "Options" --flag notify:"Announce when done":true
+      kip recv
+      version=$(kip get "$KIP_MSG" values.version)
+      channel=$(kip get "$KIP_MSG" values.channel)
+      notify=$(kip get "$KIP_MSG" values.opts.notify)
+      kip set-env RELEASE_VERSION "$version"
+      kip set-env RELEASE_CHANNEL "$channel"
+      kip set-env NOTIFY "$notify"
+      kip done --title "Release planned" --text "$version on the $channel channel"
+  - name: "approve"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    command: |
+      kip hello --title "Approval"
+      kip confirm --id approve --title "Publish a STABLE release?" --danger \
+          --text "Version $VERSION is signed and goes to everyone." \
+          --confirm-label "Publish" --cancel-label "Not yet"
+      kip recv
+      if [ "$(kip get "$KIP_MSG" values.confirmed)" = true ]; then
+          kip done --title "Approved" --text "Version $VERSION"
+      else
+          kip done --level error --title "Not approved" --text "The release was stopped."
+          exit 1
+      fi
+  - name: "publish"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    command: |
+      kip hello --title "Publish"
+      kip steps --id p --title "Publishing $VERSION" --item upload Upload --item index "Update index" --item tag "Tag"
+      kip step p upload running
+      for pct in 20 50 80 100; do kip progress "$pct" "Uploading kai-$VERSION-$CHANNEL.zip"; sleep 0.4; done
+      kip step p upload success
+      kip step p index running; sleep 0.5; kip step p index success
+      kip step p tag running; sleep 0.5; kip step p tag success "v$VERSION"
+      kip done --title "Published $VERSION" --text "Channel: $CHANNEL"
+  - name: "pick-backup"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    declared_env_vars:
+      - name: "BACKUP_FILE"
+    command: |
+      kip hello --title "Backups"
+      kip prompt --id pick --title "Which backup?" --submit-label "Use this one" \
+          --field select file "Backup" --required --default backup-2026-02.sql \
+              --option backup-2026-01.sql:"January":"2.1 GB" \
+              --option backup-2026-02.sql:"February":"2.3 GB" \
+              --option backup-corrupt.sql:"Corrupt (try it)":"fails the verification"
+      kip recv
+      file=$(kip get "$KIP_MSG" values.file)
+      kip set-env BACKUP_FILE "$file"
+      kip done --title "Selected" --text "$file"
+  - name: "restore"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    command: |
+      kip hello --title "Restore"
+      kip confirm --id sure --title "Overwrite the database?" --danger \
+          --text "The current data is replaced by $BACKUP. A snapshot was taken first." \
+          --confirm-label "Restore" --cancel-label "Cancel"
+      kip recv
+      if [ "$(kip get "$KIP_MSG" values.confirmed)" != true ]; then
+          kip done --level error --title "Restore cancelled" --text "Nothing was changed."
+          exit 1
+      fi
+      kip steps --id r --title "Restoring" --item drop "Drop tables" --item load "Load dump" --item idx "Rebuild indexes"
+      kip step r drop running; sleep 0.6; kip step r drop success
+      kip step r load running; sleep 1; kip step r load success "$BACKUP"
+      kip step r idx running; sleep 0.6; kip step r idx success
+      kip done --title "Database restored" --text "$BACKUP"
+  - name: "report"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    kip: true
+    command: |
+      kip hello --title "Report"
+      kip steps --id s --title "Results" --item disk Disk --item net Network --item tools Toolchain
+      failed=0
+      if [ "$DISK" = true ]; then kip step s disk success; else kip step s disk error "failed"; failed=$((failed + 1)); fi
+      if [ "$NETWORK" = true ]; then kip step s net success; else kip step s net error "failed"; failed=$((failed + 1)); fi
+      if [ "$TOOLS" = true ]; then kip step s tools success; else kip step s tools error "failed"; failed=$((failed + 1)); fi
+      if [ "$failed" -eq 0 ]; then
+          kip done --title "All healthy" --text "3 of 3 checks passed"
+      else
+          kip done --level warning --title "Needs attention" --text "$failed of 3 checks failed"
+      fi
+folders:
+  - path: "steps"
+    icon: "list-ordered"

@@ -210,7 +210,7 @@ QVector<core::Command> withoutKipCommands(const QVector<core::Command> &commands
 {
     QVector<core::Command> out;
     for (const core::Command &c : commands) {
-        if (!(c.kip && c.type == core::CommandType::Command)) {
+        if (!(core::showsKipView(c))) {
             out.append(c);
         }
     }

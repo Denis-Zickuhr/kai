@@ -79,7 +79,7 @@ void DynamicVarsInspectorWidget::setupUi()
 
     m_filterField = new SearchLineEdit(this);
     m_filterField->setFixedHeight(kControlH);
-    bindFieldStyle(m_filterField, [](int radius) { return QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }").arg(radius); });
+    bindFieldStyle(m_filterField, [](int radius) { return QStringLiteral("QLineEdit, QLineEdit:focus { min-height: 0px; padding: 0px; border-radius: %1px; }").arg(radius); });
     m_filterField->setPlaceholderText(utils::tr(QStringLiteral("dynamic_vars.filter.placeholder")));
     connect(m_filterField, &QLineEdit::textChanged, this, [this](const QString &) { rebuildTable(); });
     filterRow->addWidget(m_filterField, 1);

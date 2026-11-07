@@ -109,6 +109,8 @@ tests, skipped steps and untested paths are stated, not smoothed over.
 - **Not a heavy API platform (firm).** No accounts, no cloud workspace, no
   team server, no telemetry, no mandatory sign-in. A complete client yes; an
   online collaboration product no.
+- **Not a CI system either (firm).** A [pipeline](pipelines.md) is a guided, attended sequence on this machine: one step at
+  a time, branching only forward, no parallel steps, matrices, triggers or artifacts, and it never starts by itself.
 - **Not an automation service or daemon (firm).** It is a desktop app that
   runs while the user's session runs. It schedules and auto-runs things, but it
   is not a server, a CI system or a job queue.
@@ -154,7 +156,7 @@ Status marks: **done** (in the app, with tests), **partly** (the useful core is 
 
 9. **Response assertions** — **done**: the same format as execution conditions, with `RESPONSE_*` variables; they decide
    success and stay available to the next steps.
-10. **Chained flows** — **partly**: extractors + hooks + assertions already chain requests; a visual flow is open (A3).
+10. **Chained flows** — **done**: extractors + assertions chain requests, and a [pipeline](pipelines.md) sequences any commands (HTTP included) with captured values passed between steps.
 11. **Request history with responses** — **open**: the run history keeps runs, not their responses (a response can hold
     secrets; this needs the masking work in B2 first).
 12. **Other API styles** — **partly**: GraphQL is a body type and Server-Sent Events stream into the output (Stop ends

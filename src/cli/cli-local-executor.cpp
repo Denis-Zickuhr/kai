@@ -250,7 +250,7 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     }
 
     // KIP precisa do app (view, stdin/stdout do protocolo): o modo LOCAL, com terminal herdado, recusa.
-    if (command->kip && command->type == core::CommandType::Command && !runProfile.delegateToApp) {
+    if (core::showsKipView(*command) && !runProfile.delegateToApp) {
         err() << utils::tr(QStringLiteral("kip.error.needs_app")) << "\n";
         err().flush();
         outcome.exitCode = 1;
@@ -343,6 +343,14 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
         err().flush();
         outcome.exitCode = 2;
         return outcome;
+    }
+
+    // Passos de pipeline vão ao app por chaves reservadas dentro de `params` (MainWindow::startExternalRun as retira).
+    if (!runProfile.flags.fromStep.isEmpty()) {
+        paramVars.insert(QStringLiteral("__pipeline_from"), runProfile.flags.fromStep);
+    }
+    if (!runProfile.flags.onlyStep.isEmpty()) {
+        paramVars.insert(QStringLiteral("__pipeline_only"), runProfile.flags.onlyStep);
     }
 
     if (runProfile.flags.detached) {
@@ -624,6 +632,13 @@ QStringList stripLeadingCliFlags(const QStringList &args, CliFlags &flags)
             flags.dryRun = true;
         } else if (token == QStringLiteral("--json")) {
             flags.json = true;
+        } else if (token == QStringLiteral("--from") || token == QStringLiteral("--only")) {
+            if (i + 1 >= args.size()) {
+                break; // sem valor: cai como token comum e o resolvedor de caminho reclama
+            }
+            (token == QStringLiteral("--from") ? flags.fromStep : flags.onlyStep) = args.at(++i);
+        } else if (token.startsWith(QStringLiteral("--from=")) || token.startsWith(QStringLiteral("--only="))) {
+            (token.startsWith(QStringLiteral("--from=")) ? flags.fromStep : flags.onlyStep) = token.mid(7);
         } else if (shortCluster.match(token).hasMatch()) {
             flags.global = flags.global || token.contains(QLatin1Char('g'));
             flags.detached = flags.detached || token.contains(QLatin1Char('d'));

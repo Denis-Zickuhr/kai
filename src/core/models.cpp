@@ -435,15 +435,27 @@ Hooks Hooks::fromJson(const QJsonObject &obj)
     return h;
 }
 
+bool showsKipView(const Command &command)
+{
+    return (command.kip && command.type == CommandType::Command) || command.type == CommandType::Pipeline;
+}
+
 QString commandTypeToString(CommandType type)
 {
-    return type == CommandType::Http ? QStringLiteral("http") : QStringLiteral("command");
+    switch (type) {
+        case CommandType::Http:     return QStringLiteral("http");
+        case CommandType::Pipeline: return QStringLiteral("pipeline");
+        case CommandType::Command:  break;
+    }
+    return QStringLiteral("command");
 }
 
 CommandType commandTypeFromString(const QString &value)
 {
     // "shell" (nome anterior) e valor desconhecido caem em Command.
-    return value == QStringLiteral("http") ? CommandType::Http : CommandType::Command;
+    if (value == QStringLiteral("http")) return CommandType::Http;
+    if (value == QStringLiteral("pipeline")) return CommandType::Pipeline;
+    return CommandType::Command;
 }
 
 QString commandLanguageToString(CommandLanguage language)
@@ -533,6 +545,7 @@ QJsonObject Command::toJson() const
     if (!hooks.pre.isEmpty() || !hooks.post.isEmpty() || !hooks.cleanup.isEmpty()) {
         obj["hooks"] = hooks.toJson();
     }
+    if (!pipelineSteps.isEmpty()) obj["steps"] = pipelineSteps;
 
     if (!executionConditions.isEmpty()) {
         QJsonArray conditionsArr;
@@ -619,6 +632,7 @@ Command Command::fromJson(const QJsonObject &obj)
     }
 
     c.hooks = Hooks::fromJson(obj.value("hooks").toObject());
+    if (c.type == CommandType::Pipeline) c.pipelineSteps = obj.value("steps").toArray();
 
     for (const QJsonValue &v : obj.value("execution_conditions").toArray()) {
         c.executionConditions << ExecutionCondition::fromJson(v.toObject());

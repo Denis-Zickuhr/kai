@@ -34,6 +34,7 @@
 #include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <variant>
 
 namespace kai::ui {
 
@@ -138,6 +139,13 @@ KipView::KipView(QWidget *parent)
     connect(m_detach, &QToolButton::clicked, this, &KipView::detachRequested);
     header->addWidget(m_detach);
     root->addLayout(header);
+
+    m_pipelineStrip = new QLabel(this);
+    m_pipelineStrip->setObjectName(QStringLiteral("kipPipelineStrip"));
+    m_pipelineStrip->setTextFormat(Qt::RichText);
+    m_pipelineStrip->setWordWrap(true);
+    m_pipelineStrip->setVisible(false);
+    root->addWidget(m_pipelineStrip);
 
     m_scroll = new QScrollArea(this);
     m_scroll->setWidgetResizable(true);
@@ -274,7 +282,54 @@ void KipView::setSession(engine::KipSession *session)
         connect(m_session, &engine::KipSession::protocolTrace, m_details, &KipDetailsDrawer::appendTrace);
     }
     m_details->reload(m_session);
+    if (m_stripParent) {
+        m_stripParent->disconnect(this);
+    }
+    m_stripParent = m_session ? m_session->parentSession() : nullptr;
+    if (m_stripParent) {
+        connect(m_stripParent, &engine::KipSession::screenChanged, this, &KipView::refreshPipelineStrip);
+        connect(m_stripParent, &engine::KipSession::stateChanged, this, &KipView::refreshPipelineStrip);
+    }
+    refreshPipelineStrip();
     flushRefresh();
+}
+
+void KipView::refreshPipelineStrip()
+{
+    if (!m_pipelineStrip) {
+        return;
+    }
+    const core::KipSteps *steps = nullptr;
+    if (m_stripParent) {
+        for (const core::KipBlock &block : m_stripParent->screen().blocks()) {
+            if (const auto *s = std::get_if<core::KipSteps>(&block)) {
+                steps = s;
+                break;
+            }
+        }
+    }
+    if (!steps || steps->items.isEmpty()) {
+        m_pipelineStrip->setVisible(false);
+        return;
+    }
+    QStringList parts;
+    for (const core::KipStepItem &item : steps->items) {
+        QString mark;
+        QString color = tk::mutedFg();
+        switch (item.state) {
+        case core::KipStepState::Success: mark = QStringLiteral("✓"); color = tk::successFg(); break;
+        case core::KipStepState::Error: mark = QStringLiteral("✗"); color = tk::errorFg(); break;
+        case core::KipStepState::Running: mark = QStringLiteral("●"); color = tk::accent(); break;
+        case core::KipStepState::Skipped: mark = QStringLiteral("–"); break;
+        case core::KipStepState::Pending: mark = QStringLiteral("○"); break;
+        }
+        const QString label = item.label.toHtmlEscaped();
+        parts << QStringLiteral("<span style=\"color:%1;%2\">%3 %4</span>")
+                     .arg(color, item.state == core::KipStepState::Running ? QStringLiteral("font-weight:600;") : QString(),
+                          mark, label);
+    }
+    m_pipelineStrip->setText(parts.join(QStringLiteral("&nbsp;&nbsp;›&nbsp;&nbsp;")));
+    m_pipelineStrip->setVisible(true);
 }
 
 void KipView::setScreenState(const core::KipScreenState *state)
@@ -397,6 +452,8 @@ void KipView::refreshBlocks(const core::KipScreenState &s, bool show)
             table->syncRowActions(open, m_session != nullptr);
         } else if (auto *diff = qobject_cast<KipDiffBlockWidget *>(w)) {
             diff->setPreferredView(s.diffViewPreference());
+        } else if (auto *steps = qobject_cast<KipStepsBlockWidget *>(w)) {
+            steps->setActionsEnabled(m_session && m_session->stepActionsEnabled());
         }
     }
     if (next == m_blocks) {
@@ -432,6 +489,11 @@ void KipView::wireBlock(KipBlockWidget *block)
         connect(diff, &KipDiffBlockWidget::viewChosen, this, [this](const QString &view) {
             if (m_session) m_session->setDiffViewPreference(view);
         });
+    } else if (auto *steps = qobject_cast<KipStepsBlockWidget *>(block)) {
+        connect(steps, &KipStepsBlockWidget::stepActionRequested, this,
+                [this](const QString &itemId, const QString &action) {
+                    if (m_session) m_session->requestStepAction(itemId, action);
+                });
     }
 }
 

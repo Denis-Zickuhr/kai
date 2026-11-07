@@ -43,6 +43,24 @@ private slots:
         QVERIFY(hasRed);
     }
 
+    // "Cursor n linhas acima" vira um segmento de controle (sem texto) para quem exibe apagar o quadro anterior.
+    void cursorUpIsReportedAsAControlSegment()
+    {
+        AnsiTextParser parser;
+        const QVector<AnsiSegment> segments = parser.parse(QStringLiteral("a\n\x1b[3Ab\x1b[Ac"));
+
+        QString visibleText;
+        QVector<int> moves;
+        for (const AnsiSegment &seg : segments) {
+            visibleText += seg.text;
+            if (seg.moveUpLines > 0) {
+                moves << seg.moveUpLines;
+            }
+        }
+        QCOMPARE(visibleText, QStringLiteral("a\nbc"));
+        QCOMPARE(moves, (QVector<int>{3, 1}));
+    }
+
     // Em caminhos do Windows o ESC chega como o glifo "←": o parser trata as duas grafias igual.
     void arrowGlyphLeadInIsTreatedLikeRealEscapeByte()
     {

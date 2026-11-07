@@ -144,10 +144,10 @@ void MainWindow::scheduleAutoRunCommands()
         if (!command.autoRun) {
             continue;
         }
-        if (command.kip) {
-            // Sessão KIP precisa de alguém olhando a tela.
+        if (command.kip || command.type == core::CommandType::Pipeline) {
+            // Sessão KIP (e pipeline) precisa de alguém olhando a tela.
             utils::Logger::info(kLogTag,
-                QStringLiteral("Auto-run ignorado: '%1' é um comando KIP.").arg(command.id));
+                QStringLiteral("Auto-run ignorado: '%1' é um comando KIP ou pipeline.").arg(command.id));
             continue;
         }
         const int delayMs = qMax(0, command.autoRunDelaySec) * 1000;
@@ -260,7 +260,7 @@ void MainWindow::prepareDrawerForRun(const core::Command &command)
     m_terminalDrawer->clear();
     // O corpo só vira a view do app quando a sessão nascer (kipSessionStarted, pode demorar com pre-hooks). KIP tem
     // prioridade sobre os modos de saída que competem com ele.
-    const bool isKipCommand = command.kip && command.type == core::CommandType::Command;
+    const bool isKipCommand = core::showsKipView(command);
     m_terminalDrawer->clearKip();
     // Terminal interativo só faz sentido para shell (HTTP não tem PTY/processo).
     m_terminalDrawer->setInteractiveMode(
@@ -298,6 +298,12 @@ void MainWindow::runCommandWithParams(const core::Command &command, const QMap<Q
     // Ação de pasta: pipeline e ambiente próprios, em paralelo.
     if (core::isFolderActionCommandId(command.id)) {
         startFolderAction(command, paramValues);
+        return;
+    }
+
+    // Pipeline: roda no RunbookRunner e se mostra como uma sessão KIP (main-window-pipelines.cpp).
+    if (command.type == core::CommandType::Pipeline) {
+        startPipelineRun(command, paramValues);
         return;
     }
 
@@ -377,7 +383,7 @@ void MainWindow::handlePipelineLog(const QString &commandId, const QString &text
     // O log de um app KIP já está na gaveta "Detalhes" da view: não vai também para a saída de texto.
     {
         const auto kipIt = m_commandsById.constFind(commandId);
-        if (kipIt != m_commandsById.constEnd() && kipIt->kip && kipIt->type == core::CommandType::Command) {
+        if (kipIt != m_commandsById.constEnd() && core::showsKipView(*kipIt)) {
             return;
         }
     }
@@ -648,6 +654,9 @@ engine::ProcessRunner *MainWindow::runnerFor(const QString &commandId) const
 
 engine::KipSession *MainWindow::kipSessionFor(const QString &commandId) const
 {
+    if (engine::KipSession *runbook = runbookSessionFor(commandId)) {
+        return runbook;
+    }
     const auto running = m_actionRuns.find(commandId);
     if (running != m_actionRuns.end()) {
         return running->second->pipeline->kipSessionFor(commandId);

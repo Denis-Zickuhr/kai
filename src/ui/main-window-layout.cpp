@@ -591,7 +591,7 @@ void MainWindow::registerRunViews()
     const auto spec = [this](const QString &id, const QString &prefix, bool kip) -> std::optional<ViewSpec> {
         const QString commandId = id.mid(prefix.size());
         const auto it = m_commandsById.constFind(commandId);
-        if (it == m_commandsById.constEnd() || (kip && !(it->kip && it->type == core::CommandType::Command))) {
+        if (it == m_commandsById.constEnd() || (kip && !(core::showsKipView(*it)))) {
             return std::nullopt;
         }
         ViewSpec view;
@@ -623,7 +623,7 @@ QWidget *MainWindow::createMirrorPanel(const QString &commandId, bool kip)
     const QString name = it != m_commandsById.constEnd() ? it->name : commandId;
     const auto kind = kip ? RunMirrorPanel::Kind::Kip : RunMirrorPanel::Kind::Run;
     auto *panel = new RunMirrorPanel(commandId, name, kind);
-    const bool kipCommand = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command;
+    const bool kipCommand = it != m_commandsById.constEnd() && core::showsKipView(*it);
     const bool ownsOutput = it != m_commandsById.constEnd() && panelOwnsOutput(*it);
     panel->setFormattedOutput(it != m_commandsById.constEnd() && it->formattedOutput && !kipCommand);
     panel->setAcceptsInput(ownsOutput && !kipCommand);
@@ -720,7 +720,7 @@ void MainWindow::refreshCommandActionStrips()
 
 bool MainWindow::panelOwnsOutput(const core::Command &command)
 {
-    return (command.kip && command.type == core::CommandType::Command) || !command.interactiveTerminal;
+    return (core::showsKipView(command)) || !command.interactiveTerminal;
 }
 
 QWidget *MainWindow::dialogParent()
@@ -830,7 +830,7 @@ void MainWindow::pinKipPanel(const QString &commandId)
 QString MainWindow::panelIdForCommand(const QString &commandId) const
 {
     const auto it = m_commandsById.constFind(commandId);
-    const bool kip = it != m_commandsById.constEnd() && it->kip && it->type == core::CommandType::Command
+    const bool kip = it != m_commandsById.constEnd() && core::showsKipView(*it)
         && !core::isFolderActionCommandId(commandId);
     return (kip ? layout::view_id::kKipPrefix : layout::view_id::kRunPrefix) + commandId;
 }

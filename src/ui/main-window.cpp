@@ -318,6 +318,7 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::collectionDeleteRequested, this, &MainWindow::handleCollectionDeleteRequested);
     connect(m_commandTree, &CommandTreeWidget::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_commandTree, &CommandTreeWidget::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
+    connect(m_commandTree, &CommandTreeWidget::newPipelineRequested, this, &MainWindow::handleNewPipelineRequested);
     connect(m_commandTree, &CommandTreeWidget::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
     connect(m_commandTree, &CommandTreeWidget::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_commandTree, &CommandTreeWidget::noteActivated, this, &MainWindow::handleNoteActivated);
@@ -338,6 +339,7 @@ void MainWindow::setupUi()
     connect(m_itemActionsBar, &ItemActionsBar::editCurrentFolderRequested, this, &MainWindow::triggerEditCurrentFolder);
     connect(m_itemActionsBar, &ItemActionsBar::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
     connect(m_itemActionsBar, &ItemActionsBar::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
+    connect(m_itemActionsBar, &ItemActionsBar::newPipelineRequested, this, &MainWindow::handleNewPipelineRequested);
     connect(m_itemActionsBar, &ItemActionsBar::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
     connect(m_itemActionsBar, &ItemActionsBar::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
     connect(m_itemActionsBar, &ItemActionsBar::editSelectedRequested, this, &MainWindow::triggerEditSelected);

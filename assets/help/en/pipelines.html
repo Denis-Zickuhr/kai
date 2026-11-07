@@ -1,0 +1,35 @@
+<h2>Pipelines</h2>
+<p>A <b>pipeline</b> is a command whose body is a list of <b>steps</b>. Each step runs <i>another</i> command of yours, with optional checks, questions, retries and decisions. The run is one guided screen: a checklist with a live log per step.</p>
+<p>Pick <b>Pipeline</b> as the type in the command editor and add steps in the <b>Steps</b> tab. A pipeline never starts by itself: no schedule, no auto-run.</p>
+<h3>What a step does</h3>
+<ul>
+<li><b>Run</b> — the command, by name or <code>Folder/Name</code>. It can be a <a href='help://kip'>KIP</a> command: its screen takes over while it runs.</li>
+<li><b>Check</b> — a command whose exit 0 means "already done": the step is skipped as <i>Already ok</i>, and verified again after the run.</li>
+<li><b>Confirm</b> and <b>Ask</b> — a question before the step; answers are <code>{{ask.name}}</code>. Secret answers are masked.</li>
+<li><b>When</b> — conditions; false skips the step.</li>
+<li><b>Wait until</b> — polls a command until it exits 0, or times out.</li>
+<li><b>Capture</b> — reads values from the output: <code>NAME: stdout:regex</code>, <code>json:path</code>, <code>exit</code>, <code>status</code>.</li>
+</ul>
+<h3>When a step fails</h3>
+<p><b>Retries</b> run it again (optionally asking again). Then <b>On failure</b> decides: <code>abort</code>, <code>continue</code>, <code>ask</code> (Try again / Skip / Abort) or <code>goto:&lt;step id&gt;</code> to jump <i>forward</i>, e.g. to a rollback.</p>
+<pre>- name: "Ship"
+  type: "pipeline"
+  steps:
+    - id: build
+      run: "steps/build"
+      check: "steps/is-built"
+    - id: health
+      run: "steps/noop"
+      wait_until: { check: "steps/health", timeout: 60 }
+      on_fail: "goto:rollback"
+    - id: rollback
+      run: "steps/rollback"
+      when:
+        - { left: "{{steps.health.ok}}", op: "eq", right: "false" }</pre>
+<div class='tip'>Put the step commands in a subfolder and mark them <b>Hidden</b>. Every step leaves <code>{{steps.&lt;id&gt;.ok}}</code> and <code>{{steps.&lt;id&gt;.exit}}</code>.</div>
+<h3>Running</h3>
+<ul>
+<li><b>Stop</b> ends the current step for real and the run is <i>cancelled</i>.</li>
+<li>When a run ends, right-click a step and choose <b>Run from here</b> to resume it, keeping the captured values.</li>
+<li>From the terminal: <code>kai -g &lt;path&gt;</code>, with <code>--from &lt;step&gt;</code> or <code>--only &lt;step&gt;</code>.</li>
+</ul>

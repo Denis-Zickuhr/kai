@@ -61,6 +61,7 @@ signals:
 private:
     void setState(State state);
     void refreshStyle();
+    QString cardStyleSheet() const;
     void setDetail(const QString &text, bool diff);
     void paintStateIcon();
     void updateToggleIcon();

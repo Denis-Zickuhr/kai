@@ -13,6 +13,13 @@
 #include <QSpinBox>
 #include <QTableWidget>
 
+#include "core/pipeline-model.h"
+#include "ui/features/command-editor/pipeline-step-dialog.h"
+#include "ui/shared/collapsible-section-card.h"
+#include "ui/features/command-editor/pipeline-steps-editor-widget.h"
+#include "ui/features/command-editor/step-rows-editor.h"
+#include <QCompleter>
+#include "ui/shared/draggable-table-widget.h"
 #include "ui/features/command-editor/command-editor-dialog.h"
 #include "ui/features/collections/folder-editor-dialog.h"
 #include "ui/shared/inline-code-field.h"
@@ -625,6 +632,166 @@ private slots:
         const int httpRow = navRow(httpDialog, kipTitle);
         QVERIFY(httpRow >= 0);
         QVERIFY2(httpNav->isRowHidden(httpRow), "a aba KIP não existe para comandos HTTP");
+    }
+
+    // Pipeline (spec 13): terceiro modo do editor. Os passos sobrevivem a abrir e salvar, a aba Passos aparece e as abas
+    // de shell/HTTP somem.
+    void pipelineCommandKeepsItsStepsAndShowsTheStepsTab()
+    {
+        auto navRow = [](CommandEditorDialog &dialog, const QString &title) {
+            auto *nav = dialog.findChild<QListWidget *>();
+            for (int i = 0; nav && i < nav->count(); ++i) {
+                if (nav->item(i)->text().startsWith(title)) return i;
+            }
+            return -1;
+        };
+        PipelineStep a;
+        a.id = QStringLiteral("build");
+        a.run = QStringLiteral("steps/build");
+        a.check = QStringLiteral("steps/is-built");
+        a.onFail = QStringLiteral("goto:deploy");
+        PipelineStep b;
+        b.id = QStringLiteral("deploy");
+        b.run = QStringLiteral("steps/deploy");
+        b.retry.times = 2;
+        Command pipeline;
+        pipeline.id = QStringLiteral("p1");
+        pipeline.name = QStringLiteral("Ship");
+        pipeline.type = CommandType::Pipeline;
+        pipeline.pipelineSteps = pipelineStepsToJson({a, b});
+
+        CommandEditorDialog dialog(QStringLiteral("f1"), {}, {}, nullptr, &pipeline);
+        auto *nav = dialog.findChild<QListWidget *>();
+        QVERIFY(nav);
+        const int steps = navRow(dialog, kai::utils::tr(QStringLiteral("command.tab.steps")));
+        QVERIFY2(steps >= 0, "falta a aba Passos");
+        QVERIFY(!nav->isRowHidden(steps));
+        QVERIFY(nav->isRowHidden(navRow(dialog, kai::utils::tr(QStringLiteral("command.tab.kip")))));
+        QVERIFY(nav->isRowHidden(navRow(dialog, kai::utils::tr(QStringLiteral("command.tab.configuration")))));
+
+        const Command built = dialog.buildCommand();
+        QCOMPARE(built.type, CommandType::Pipeline);
+        QCOMPARE(built.pipelineSteps, pipeline.pipelineSteps);
+        QVERIFY(!built.kip);
+        QVERIFY(built.cronExpression.isEmpty());
+
+        CommandEditorDialog fresh(QStringLiteral("f1"), {}, {}, nullptr);
+        QVERIFY(fresh.findChild<QListWidget *>()->isRowHidden(navRow(fresh, kai::utils::tr(QStringLiteral("command.tab.steps")))));
+    }
+
+    // O formulário de passo é o irmão do de parâmetros: valida inline e só liga o OK sem pendências.
+    void pipelineStepDialogStartsCollapsedExceptTheBasics()
+    {
+        PipelineStep step;
+        step.id = QStringLiteral("a");
+        step.run = QStringLiteral("x");
+        PipelineStepDialog dialog(step, {}, {});
+        const auto cards = dialog.findChildren<CollapsibleSectionCard *>();
+        QCOMPARE(cards.size(), 7);
+        int open = 0;
+        for (const auto *card : cards) {
+            open += card->isExpanded() ? 1 : 0;
+        }
+        QCOMPARE(open, 2);
+
+        step.when = {ExecutionCondition{}};
+        step.onFail = QStringLiteral("continue");
+        PipelineStepDialog filled(step, {}, {});
+        int openFilled = 0;
+        for (const auto *card : filled.findChildren<CollapsibleSectionCard *>()) {
+            openFilled += card->isExpanded() ? 1 : 0;
+        }
+        QCOMPARE(openFilled, 4);
+    }
+
+    void pipelineStepDialogValidatesAndRoundTrips()
+    {
+        PipelineStep step;
+        step.id = QStringLiteral("deploy");
+        step.run = QStringLiteral("steps/deploy");
+        step.check = QStringLiteral("steps/is-deployed");
+        step.ask = QJsonArray{QJsonObject{{"name", "token"}, {"type", "secret"}}};
+        step.params.insert(QStringLiteral("TOKEN"), QStringLiteral("{{ask.token}}"));
+        step.onFail = QStringLiteral("goto:rollback");
+        step.retry = {2, 1, true};
+        step.waitUntil = {QStringLiteral("steps/health"), 60, 5};
+        PipelineCapture cap;
+        cap.name = QStringLiteral("ID");
+        cap.from = QStringLiteral("json");
+        cap.path = QStringLiteral("data.id");
+        step.capture << cap;
+
+        PipelineStepDialog dialog(step, {QStringLiteral("build")}, {QStringLiteral("rollback")});
+        QVERIFY(dialog.isValid());
+        if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            dialog.show();
+            QTest::qWait(80);
+            dialog.grab().save(QString::fromLocal8Bit(shots) + QStringLiteral("/pipeline-step-dialog.png"));
+        }
+        const PipelineStep back = dialog.result();
+        QCOMPARE(back.id, step.id);
+        QCOMPARE(back.run, step.run);
+        QCOMPARE(back.check, step.check);
+        QCOMPARE(back.ask, step.ask);
+        QCOMPARE(back.params, step.params);
+        QCOMPARE(back.onFail, step.onFail);
+        QCOMPARE(back.retry.times, 2);
+        QVERIFY(back.retry.reask);
+        QCOMPARE(back.waitUntil.timeoutSec, 60);
+        QCOMPARE(back.capture.first().path, QStringLiteral("data.id"));
+
+        auto *ok = dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+        dialog.findChild<QLineEdit *>(QStringLiteral("stepRunField"))->setText(QString());
+        QVERIFY(!dialog.isValid());
+        QVERIFY(!ok->isEnabled());
+        dialog.findChild<QLineEdit *>(QStringLiteral("stepRunField"))->setText(QStringLiteral("x"));
+        dialog.findChild<QLineEdit *>(QStringLiteral("stepIdField"))->setText(QStringLiteral("build")); // duplicado
+        QVERIFY(!dialog.isValid());
+        dialog.findChild<QLineEdit *>(QStringLiteral("stepIdField"))->setText(QStringLiteral("Bad Id"));
+        QVERIFY(!dialog.isValid());
+        dialog.findChild<QLineEdit *>(QStringLiteral("stepIdField"))->setText(QStringLiteral("deploy2"));
+        QVERIFY(dialog.isValid());
+        QVERIFY(ok->isEnabled());
+    }
+
+    void stepRowsEditorKeepsUnknownKeysAndListsAnswerNames()
+    {
+        StepRowsEditor ask(StepRowsEditor::Kind::Ask);
+        ask.setAskFields(QJsonArray{QJsonObject{{"name", "token"}, {"type", "secret"}, {"group", "auth"}}});
+        QCOMPARE(ask.names(), QStringList{QStringLiteral("token")});
+        QCOMPARE(ask.askFields().first().toObject().value(QStringLiteral("group")).toString(), QStringLiteral("auth"));
+        StepRowsEditor params(StepRowsEditor::Kind::Params);
+        params.setParams({{QStringLiteral("TOKEN"), QStringLiteral("{{ask.token}}")}});
+        QCOMPARE(params.params().value(QStringLiteral("TOKEN")), QStringLiteral("{{ask.token}}"));
+    }
+
+    void stepRunPickerSearchesByAnyPartOfTheName()
+    {
+        PipelineStep step;
+        step.id = QStringLiteral("a");
+        PipelineStepDialog dialog(step, {}, {}, {QStringLiteral("Demos/Pipeline/steps/Say hi")});
+        auto *run = dialog.findChild<QLineEdit *>(QStringLiteral("stepRunField"));
+        QVERIFY(run);
+        auto *combo = qobject_cast<QComboBox *>(run->parentWidget());
+        QVERIFY(combo && combo->completer());
+        QCOMPARE(combo->completer()->filterMode(), Qt::MatchContains);
+    }
+
+    void pipelineStepsCanBeReorderedByDragging()
+    {
+        PipelineStepsEditorWidget editor;
+        PipelineStep a, b, c;
+        a.id = QStringLiteral("a"); a.run = QStringLiteral("A");
+        b.id = QStringLiteral("b"); b.run = QStringLiteral("B");
+        c.id = QStringLiteral("c"); c.run = QStringLiteral("C");
+        editor.setSteps({a, b, c});
+        auto *table = editor.findChild<DraggableTableWidget *>();
+        QVERIFY(table);
+        emit table->rowMoved(0, 3); // a vai para o fim
+        QCOMPARE(editor.steps().at(0).id, QStringLiteral("b"));
+        QCOMPARE(editor.steps().at(2).id, QStringLiteral("a"));
+        emit table->rowMoved(2, 0); // a volta ao topo
+        QCOMPARE(editor.steps().at(0).id, QStringLiteral("a"));
     }
 
     void kipTabListsRememberedAnswersAndCanForgetThem()

@@ -511,16 +511,11 @@ message. The value is available immediately to other commands as
   render them.
 - `kai kip …` is the helper from §6; `kai kip --help` lists everything.
 
-## 10. A real example: `packaging/release.sh --kip`
+## 10. A real example: pipelines with KIP steps
 
-Kai's own release script (version bump, build, commit, tag, push, GitHub Release) speaks KIP when you pass
-`--kip`; the *Publish a release (KIP)* command in Kai's `kai.yml` does exactly that. One form replaces the
-terminal questions (the `--bump/--build/--tag…` flags become its initial values), the plan is a confirmation
-that turns **red** when it pushes or publishes, and the run is a live checklist whose failures show the tail of
-the log. Without `--kip` the script behaves exactly as before. It is also a good reference for turning an
-existing interactive script into a KIP program: the protocol is written by hand in the script, all
-non-protocol output goes to stderr (Details → Log), the `docker compose run` gets `-T` (no TTY), and the
-validations of the terminal flow are reused to produce `invalid`.
+`sample/pipeline-kip` mixes plain steps with KIP steps (a release wizard, a danger confirmation, a restore
+checklist, a report). Each KIP step is an ordinary command with `kip: true` written with the injected `kip`
+function (§25); the pipeline passes the answers on with `set-env` and step params. See `docs/pipelines.md`.
 
 ## 11. Settings and the creation manifesto
 

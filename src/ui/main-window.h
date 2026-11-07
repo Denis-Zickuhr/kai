@@ -21,6 +21,7 @@
 #include "core/note-files.h"
 #include "engine/execution-pipeline.h"
 #include "engine/process-manager.h"
+#include "engine/runbook-runner.h"
 #include "engine/cron-scheduler.h"
 #include "engine/project-sync-manager.h"
 #include "ui/features/command-editor/command-tree-widget.h"
@@ -197,6 +198,8 @@ private slots:
     void handleThemeReloaded(const utils::ResolvedTheme &theme);
     void handleNewFolderRequested();
     void handleNewCommandRequested();
+    void handleNewPipelineRequested();
+    void createCommandFlow(bool asPipeline);
     void handleNewCollectionRequested();
     void handleEditRequested(const QString &commandId, bool isFolder);
     void handleDeleteRequested(const QString &commandId, bool isFolder);
@@ -571,6 +574,16 @@ private:
     // depois do fim do processo, então o pipeline fica vivo até a próxima execução da ação.
     std::map<QString, QPointer<engine::ExecutionPipeline>> m_keptKipPipelines;
     engine::KipSession *kipSessionFor(const QString &commandId) const;
+    // Pipelines (spec 13): um RunbookRunner por comando, vivo até a próxima execução (a view mostra o estado final).
+    std::map<QString, std::unique_ptr<engine::RunbookRunner>> m_runbooks;
+    void startPipelineRun(const core::Command &command, const QMap<QString, QString> &paramValues);
+    // Troca a view KIP de uma pipeline entre a sessão dela e a de um passo KIP (filho).
+    void bindPipelineView(const QString &commandId, engine::KipSession *session, bool takeFocus);
+    // `kai -g <pipeline> --from/--only <passo>`: opções que a próxima execução da pipeline consome.
+    QMap<QString, engine::RunbookRunner::Options> m_pendingRunbookOptions;
+    void handleRunbookFinished(const QString &commandId, const engine::RunbookResult &result);
+    bool isRunbookRunning(const QString &commandId) const;
+    engine::KipSession *runbookSessionFor(const QString &commandId) const;
     engine::ProjectSyncManager *m_projectSync = nullptr;
     QSet<QString> m_projectSyncBusy;
     // Destaque de pasta dessincronizada: sem watcher, só confere (em segundo plano) ao abrir,

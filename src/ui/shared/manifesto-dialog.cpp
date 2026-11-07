@@ -58,6 +58,7 @@ const QVector<ManifestoDialog::Source> &ManifestoDialog::sources()
     static const QVector<Source> list = {
         {QStringLiteral("kai"), {QStringLiteral("kai-manifesto.md"), QStringLiteral("kai-icons.md")}},
         {QStringLiteral("kip"), {QStringLiteral("kip-manifesto.md")}},
+        {QStringLiteral("pipeline"), {QStringLiteral("pipeline-manifesto.md")}},
     };
     return list;
 }
@@ -81,14 +82,13 @@ ManifestoDialog::ManifestoDialog(QWidget *parent)
     root->addWidget(m_tabs, 1);
 
     for (const Source &source : sources()) {
-        const bool kip = source.id == QLatin1String("kip");
+        const QString id = source.id;
         auto *page = new QWidget(m_tabs);
         auto *pageLayout = new QVBoxLayout(page);
         pageLayout->setContentsMargins(tk::space(3), tk::space(3), tk::space(3), tk::space(3));
         pageLayout->setSpacing(tk::space(2));
 
-        auto *description = new QLabel(utils::tr(kip ? QStringLiteral("manifesto.kip.desc")
-                                                     : QStringLiteral("manifesto.kai.desc")), page);
+        auto *description = new QLabel(utils::tr(QStringLiteral("manifesto.%1.desc").arg(id)), page);
         description->setWordWrap(true);
         description->setStyleSheet(mutedStyle());
         pageLayout->addWidget(description);
@@ -114,7 +114,7 @@ ManifestoDialog::ManifestoDialog(QWidget *parent)
         preview->setPlaceholderText(utils::tr(QStringLiteral("manifesto.loading")));
         pageLayout->addWidget(preview, 1);
 
-        m_tabs->addTab(page, utils::tr(kip ? QStringLiteral("manifesto.tab.kip") : QStringLiteral("manifesto.tab.kai")));
+        m_tabs->addTab(page, utils::tr(QStringLiteral("manifesto.tab.%1").arg(id)));
 
         m_buttons.insert(source.id, button);
         m_status.insert(source.id, status);

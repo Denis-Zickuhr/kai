@@ -161,9 +161,17 @@ public:
     // Testes: o log do item está à vista?
     bool logVisible(const QString &itemId) const;
     QToolButton *logToggle(const QString &itemId) const;
+    // Menu de contexto por item ("Rodar daqui"): só com quem dirige a sessão oferecendo (pipeline, run terminada).
+    void setActionsEnabled(bool enabled) { m_actionsEnabled = enabled; }
+    bool actionsEnabled() const { return m_actionsEnabled; }
+    const QString &stepsId() const { return m_id; }
+
+signals:
+    void stepActionRequested(const QString &itemId, const QString &action);
 
 private:
     void rebuildRows(const core::KipSteps &steps);
+    bool m_actionsEnabled = false;
 
     QString m_id;
     QLabel *m_title = nullptr;

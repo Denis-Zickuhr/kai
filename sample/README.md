@@ -10,6 +10,8 @@ exercised by the test suite, so they stay working.
 | [`shell`](shell/kai.yml) | Parameters (text, select, bool, file, `options_script`), dynamic variables, a masked secret, a custom `working_dir`, a background process, a Collection | `bash` |
 | [`languages`](languages/kai.yml) | Python and Node written directly in the command, the injected `kai` module, a per-command interpreter; `showcase.py` is a long interactive program using `kip` and `kai` | `python3`, `node` |
 | [`kip`](kip/README.md) | Programs that speak KIP: wizards, confirmations, tables, diffs, trees, login with `set-env`, in bash, Python, Node and PHP | `bash` (+ `python3`, `node`, `php`) |
+| [`pipeline`](pipeline/README.md) | A pipeline: checks, tests, build, deploy with questions, health check, rollback | `bash` |
+| [`pipeline-kip`](pipeline-kip/README.md) | Three pipelines with KIP steps in the middle: release wizard, restore guard, health sweep with a KIP report | `bash` |
 | [`logs`](logs/kai.yml) | Formatted output for JSON and logfmt logs: levels, grouped stack traces, rebuilt multi-line JSON, live stream, filters, a 5,000-line volume test | `bash` |
 | [`docs`](docs/README.md) | The documentation viewer: JSON/YAML/XML folding, and project notes of each type | — |
 | [`ai`](ai/README.md) | A fake OpenAI-compatible provider to try the AI chat without a key | `python3` |

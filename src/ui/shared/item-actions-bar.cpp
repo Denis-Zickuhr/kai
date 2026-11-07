@@ -27,6 +27,7 @@ void ItemActionsBar::setupUi()
     m_btnEditFolder = createIconButton(QStringLiteral("folder-pen"), utils::tr(QStringLiteral("sidebar.edit_folder")));
     m_btnNewFolder = createIconButton(QStringLiteral("folder-plus"), utils::tr(QStringLiteral("sidebar.new_folder")));
     m_btnNewCommand = createIconButton(QStringLiteral("square-terminal"), utils::tr(QStringLiteral("sidebar.new_command")));
+    m_btnNewPipeline = createIconButton(QStringLiteral("list-checks"), utils::tr(QStringLiteral("sidebar.new_pipeline")));
     m_btnNewCollection = createIconButton(QStringLiteral("database"), utils::tr(QStringLiteral("sidebar.new_collection")));
     m_btnNewNote = createIconButton(QStringLiteral("notebook"), utils::tr(QStringLiteral("sidebar.new_note")));
     m_btnEditSelected = createIconButton(QStringLiteral("pencil"), utils::tr(QStringLiteral("tree.edit_command")));
@@ -35,12 +36,13 @@ void ItemActionsBar::setupUi()
     connect(m_btnEditFolder, &QPushButton::clicked, this, &ItemActionsBar::editCurrentFolderRequested);
     connect(m_btnNewFolder, &QPushButton::clicked, this, &ItemActionsBar::newFolderRequested);
     connect(m_btnNewCommand, &QPushButton::clicked, this, &ItemActionsBar::newCommandRequested);
+    connect(m_btnNewPipeline, &QPushButton::clicked, this, &ItemActionsBar::newPipelineRequested);
     connect(m_btnNewCollection, &QPushButton::clicked, this, &ItemActionsBar::newCollectionRequested);
     connect(m_btnNewNote, &QPushButton::clicked, this, &ItemActionsBar::newNoteRequested);
     connect(m_btnEditSelected, &QPushButton::clicked, this, &ItemActionsBar::editSelectedRequested);
     connect(m_btnDeleteSelected, &QPushButton::clicked, this, &ItemActionsBar::deleteSelectedRequested);
 
-    for (auto *btn : {m_btnEditFolder, m_btnNewFolder, m_btnNewCommand, m_btnNewCollection, m_btnNewNote,
+    for (auto *btn : {m_btnEditFolder, m_btnNewFolder, m_btnNewCommand, m_btnNewPipeline, m_btnNewCollection, m_btnNewNote,
                        m_btnEditSelected, m_btnDeleteSelected}) {
         m_layout->addWidget(btn);
     }

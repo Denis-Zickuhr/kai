@@ -264,7 +264,8 @@ private slots:
     void everyManifestoFileExistsAndTheirRelativeLinksResolve()
     {
         for (const QString &name : {QStringLiteral("kai-manifesto.md"), QStringLiteral("kip-manifesto.md"),
-                                    QStringLiteral("kai-icons.md"), QStringLiteral("kai.schema.json")}) {
+                                    QStringLiteral("kai-icons.md"), QStringLiteral("kai.schema.json"),
+                                    QStringLiteral("pipeline-manifesto.md")}) {
             QVERIFY2(QFile::exists(QStringLiteral("assets/manifesto/") + name), qPrintable(name));
         }
         // Links relativos `](./x)` ou `](x.md)` dentro da pasta têm de existir.
@@ -874,10 +875,10 @@ private slots:
         QSignalSpy loaded(&dialog, &ui::ManifestoDialog::loaded);
         QSignalSpy copied(&dialog, &ui::ManifestoDialog::copyFinished);
         dialog.show();
-        QCOMPARE(dialog.tabs()->count(), 2);
+        QCOMPARE(dialog.tabs()->count(), 3);
         // O texto só chega quando a leitura em segundo plano termina: antes disso o botão está desabilitado.
         QVERIFY(!dialog.copyButton(QStringLiteral("kai"))->isEnabled());
-        QTRY_COMPARE_WITH_TIMEOUT(loaded.count(), 2, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(loaded.count(), 3, 5000);
         for (const QVariantList &args : std::as_const(loaded)) QVERIFY(args.at(1).toBool());
 
         QApplication::clipboard()->setText(QStringLiteral("untouched"));

@@ -7,7 +7,7 @@ class QCheckBox;
 
 namespace kai::ui {
 
-// Tela única de importação: só decide a FONTE (pasta de projeto ou arquivo). Pasta é sempre Projeto; para arquivo, o tipo
+// Tela única de importação: só decide a FONTE (pasta de projeto, arquivo ou coleção de requisições). Pasta é sempre Projeto; para arquivo, o tipo
 // (OpenAPI/Swagger vs Configuração do Kai) é detectado pelo conteúdo. As telas de opções (ProjectImportOptionsDialog,
 // ImportSelectionDialog) rodam como passo seguinte.
 class ImportDialog : public QDialog {
@@ -31,7 +31,7 @@ public:
 
 private:
     void pickProjectFolder();
-    void pickFile();
+    void pickFile(bool collectionOnly);
 
     Kind m_kind = Kind::Project;
     QString m_path;

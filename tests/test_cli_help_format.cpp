@@ -95,6 +95,23 @@ private slots:
         QCOMPARE(rest, (QStringList{QStringLiteral("kai"), QStringLiteral("x")}));
     }
 
+    // --from/--only <passo>: pipeline; consomem o valor seguinte (ou vêm como --from=passo).
+    void pipelineStepFlagsParse()
+    {
+        const QString exe = QStringLiteral("kai");
+        cli::CliFlags a;
+        QCOMPARE(cli::stripLeadingCliFlags({exe, QStringLiteral("-g"), QStringLiteral("--from"), QStringLiteral("deploy"),
+                                            QStringLiteral("ship")}, a),
+                 (QStringList{exe, QStringLiteral("ship")}));
+        QVERIFY(a.global);
+        QCOMPARE(a.fromStep, QStringLiteral("deploy"));
+        QVERIFY(a.onlyStep.isEmpty());
+        QVERIFY(a.any());
+        cli::CliFlags b;
+        cli::stripLeadingCliFlags({exe, QStringLiteral("--only=health"), QStringLiteral("ship")}, b);
+        QCOMPARE(b.onlyStep, QStringLiteral("health"));
+    }
+
     // -w/--window: abre a saída numa janela do app; combina com as demais.
     void windowFlagParses()
     {

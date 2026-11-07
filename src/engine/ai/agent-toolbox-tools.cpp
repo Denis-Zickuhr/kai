@@ -563,7 +563,9 @@ void AgentToolbox::buildTools()
 
     add(QStringLiteral("create_command"),
         QStringLiteral("Create a command in a folder. 'command' is an object with the kai.yml command keys (name, type, command, "
-                       "language, params, hooks by name, http_config...). Read the reference with read_manifesto (kai, 3.1) first when unsure."),
+                       "language, params, hooks by name, http_config...). For a pipeline use type 'pipeline' and 'steps' (a list of "
+                       "{id, run: 'Folder/Command name', check, confirm, on_fail, ...}) instead of 'command'. "
+                       "Read the reference with read_manifesto (kai, 3.1) first when unsure."),
         objectSchema({{QStringLiteral("folder_id"), prop(QStringLiteral("string"), QStringLiteral("Destination folder id."))},
                       {QStringLiteral("command"), QJsonObject{{QStringLiteral("type"), QStringLiteral("object")},
                                                               {QStringLiteral("description"), QStringLiteral("The command definition.")}}}},

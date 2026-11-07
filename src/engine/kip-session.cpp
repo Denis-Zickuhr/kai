@@ -279,6 +279,7 @@ void KipSession::sendLine(const QByteArray &line, const QByteArray &traceLine)
     if (m_runner && m_runner->isRunning()) {
         m_runner->writeRawBytes(line);
     }
+    emit lineSent(line);
 }
 
 bool KipSession::submit()
@@ -447,6 +448,22 @@ void KipSession::cancel()
     sendLine(line, line);
     m_cancelTimer.start(m_cancelGraceMs);
     emit screenChanged();
+}
+
+void KipSession::setStepActionsEnabled(bool enabled)
+{
+    if (m_stepActionsEnabled == enabled) {
+        return;
+    }
+    m_stepActionsEnabled = enabled;
+    emit screenChanged();
+}
+
+void KipSession::requestStepAction(const QString &stepId, const QString &action)
+{
+    if (m_stepActionsEnabled) {
+        emit stepActionRequested(stepId, action);
+    }
 }
 
 void KipSession::handleCancelGraceExpired()

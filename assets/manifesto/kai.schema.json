@@ -107,7 +107,8 @@
       "required": ["name", "type"],
       "properties": {
         "name": { "type": "string", "description": "Required in practice — an empty name still imports, but is meaningless in the tree and unusable as a hook target." },
-        "type": { "type": "string", "enum": ["command", "shell", "http"], "default": "command", "description": "\"shell\" is the legacy name of \"command\" and is still accepted." },
+        "type": { "type": "string", "enum": ["command", "shell", "http", "pipeline"], "default": "command", "description": "\"shell\" is the legacy name of \"command\" and is still accepted. \"pipeline\" runs the \"steps\" list (other commands, by name)." },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/pipelineStep" }, "description": "Pipeline type only: the steps, in order. Each step runs an existing command referenced by name or Folder/Name path." },
         "description": { "type": "string" },
         "icon": { "type": "string", "description": "See kai-icons.md." },
         "command": { "type": "string", "description": "Command type only. A shell line/script (language native) or code (python/node). {{VAR}} interpolation applies to native only. Required (in practice) when type is \"command\"." },
@@ -336,6 +337,56 @@
         "left": { "type": "string" },
         "op": { "type": "string", "enum": ["exists", "not_exists", "eq", "ne", "gt", "ge", "lt", "le", "contains", "not_contains"] },
         "right": { "type": "string", "description": "Ignored for exists/not_exists." }
+      },
+      "additionalProperties": false
+    },
+
+    "pipelineStep": {
+      "type": "object",
+      "required": ["id", "run"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "Unique inside the pipeline." },
+        "label": { "type": "string", "description": "Shown in the checklist; default: the name of the command in run." },
+        "run": { "type": "string", "description": "Command to run, by name or Folder/Name path (never an id). Not a pipeline, background or interactive-terminal command." },
+        "check": { "type": "string", "description": "Command whose exit 0 means the step is already done (skips run); run once more afterwards to verify." },
+        "confirm": { "type": "string", "description": "Asks before running; answering No skips the step." },
+        "ask": { "type": "array", "items": { "type": "object" }, "description": "KIP prompt fields (docs/kip.md §5); answers are available as {{ask.<name>}}." },
+        "params": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] }, "description": "Values for the step command's parameters; {{variables}} accepted." },
+        "when": { "type": "array", "items": { "$ref": "#/$defs/executionCondition" }, "description": "Run the step only if the conditions pass (else it is skipped)." },
+        "when_combinator": { "type": "string", "enum": ["and", "or"], "default": "and" },
+        "on_fail": { "type": "string", "default": "abort", "description": "abort | continue | ask | goto:<later step id>." },
+        "retry": {
+          "type": "object",
+          "properties": {
+            "times": { "type": "integer", "minimum": 0 },
+            "delay": { "type": "integer", "minimum": 0, "description": "Seconds between attempts." },
+            "reask": { "type": "boolean", "description": "Show ask again before each attempt." }
+          },
+          "additionalProperties": false
+        },
+        "wait_until": {
+          "type": "object",
+          "properties": {
+            "check": { "type": "string" },
+            "timeout": { "type": "integer", "minimum": 1, "default": 120 },
+            "interval": { "type": "integer", "minimum": 0, "default": 3 }
+          },
+          "additionalProperties": false
+        },
+        "capture": {
+          "type": "object",
+          "description": "Variable name -> where to read it from. Available as {{NAME}} and {{steps.<id>.NAME}}.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "from": { "type": "string", "enum": ["stdout", "json", "exit", "status"], "default": "stdout" },
+              "regex": { "type": "string" },
+              "path": { "type": "string", "description": "Dotted path for from: json." },
+              "secret": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },

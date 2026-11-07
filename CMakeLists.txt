@@ -4,7 +4,7 @@ project(kai VERSION 1.0.0 LANGUAGES CXX C)
 # Fonte única da versão: project(VERSION X.Y.Z) + KAI_VERSION_PRERELEASE (ex.: "beta.1"; vazio no estável, que é o
 # default). O CI passa o sufixo a partir da tag (-DKAI_VERSION_PRERELEASE=beta.1). KAI_VERSION_STRING é a versão
 # exibida (Sobre, Ajuda, MCP, nome dos artefatos); o VERSIONINFO numérico do Windows usa só X.Y.Z.0.
-set(KAI_VERSION_PRERELEASE "beta.1" CACHE STRING "Sufixo de pré-release (ex.: beta.1). Vazio = versão estável.")
+set(KAI_VERSION_PRERELEASE "beta.2" CACHE STRING "Sufixo de pré-release (ex.: beta.1). Vazio = versão estável.")
 if(KAI_VERSION_PRERELEASE)
     set(KAI_VERSION_STRING "${PROJECT_VERSION}-${KAI_VERSION_PRERELEASE}")
 else()
@@ -132,6 +132,8 @@ add_library(kai-core ${KAI_LIB_TYPE}
     src/utils/action-shortcuts.cpp
     src/core/models.h
     src/core/models.cpp
+    src/core/pipeline-model.h
+    src/core/pipeline-model.cpp
     src/core/note-files.h
     src/core/note-files.cpp
     src/core/config-manager.h
@@ -277,6 +279,11 @@ add_library(kai-engine ${KAI_LIB_TYPE}
     src/engine/project-sync-manager.cpp
     src/engine/kip-session.h
     src/engine/kip-session.cpp
+    src/engine/step-executor.h
+    src/engine/runbook-runner.h
+    src/engine/runbook-runner.cpp
+    src/engine/pipeline-step-executor.h
+    src/engine/pipeline-step-executor.cpp
     src/engine/command-language.h
     src/engine/command-language.cpp
     src/engine/script-spill.h
@@ -508,6 +515,12 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/command-editor/parameter-row-dialog.cpp
     src/ui/features/command-editor/output-responders-editor-widget.h
     src/ui/features/command-editor/output-responders-editor-widget.cpp
+    src/ui/features/command-editor/pipeline-steps-editor-widget.h
+    src/ui/features/command-editor/pipeline-steps-editor-widget.cpp
+    src/ui/features/command-editor/pipeline-step-dialog.h
+    src/ui/features/command-editor/pipeline-step-dialog.cpp
+    src/ui/features/command-editor/step-rows-editor.h
+    src/ui/features/command-editor/step-rows-editor.cpp
     src/ui/features/command-editor/folder-actions-view.h
     src/ui/features/command-editor/folder-actions-view.cpp
     src/ui/features/command-editor/inline-row-actions.h
@@ -542,6 +555,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/command-editor/tabs/declared-env-vars-tab.cpp
     src/ui/features/command-editor/tabs/params-tab.cpp
     src/ui/features/command-editor/tabs/responders-tab.cpp
+    src/ui/features/command-editor/tabs/steps-tab.cpp
     src/ui/features/command-editor/tabs/conditions-tab.cpp
     src/ui/features/command-editor/tabs/hooks-tab.cpp
     src/ui/features/command-editor/command-json-editor-dialog.h
@@ -690,6 +704,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/main-window-output.cpp
     src/ui/main-window-palette.cpp
     src/ui/main-window-processes.cpp
+    src/ui/main-window-pipelines.cpp
     src/ui/main-window-project-import.cpp
     src/ui/main-window-run.cpp
     src/ui/main-window-selection.cpp

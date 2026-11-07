@@ -32,7 +32,7 @@ VariablesEditorWidget::VariablesEditorWidget(QWidget *parent)
     m_search = new SearchLineEdit(this);
     m_search->setPlaceholderText(utils::tr(QStringLiteral("variables.search.placeholder")));
     m_search->setFixedHeight(kControlH);
-    bindFieldStyle(m_search, [](int radius) { return QStringLiteral("QLineEdit { min-height: 0px; padding: 0px; border-radius: %1px; }").arg(radius); });
+    bindFieldStyle(m_search, [](int radius) { return QStringLiteral("QLineEdit, QLineEdit:focus { min-height: 0px; padding: 0px; border-radius: %1px; }").arg(radius); });
     connect(m_search, &QLineEdit::textChanged, this, [this]() { rebuild(); });
     m_toolbar->addWidget(m_search, 1);
 

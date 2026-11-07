@@ -110,7 +110,8 @@ void CommandEditorDialog::buildGeneralTab()
         .arg(utils::tokens::mutedFg()).arg(utils::tokens::accent()).arg(utils::tokens::bg());
     m_commandModeButton = new QPushButton(utils::tr(QStringLiteral("command.tab.command")), segmentedControl);
     m_httpModeButton = new QPushButton(utils::tr(QStringLiteral("command.tab.http")), segmentedControl);
-    for (QPushButton *btn : {m_commandModeButton, m_httpModeButton}) {
+    m_pipelineModeButton = new QPushButton(utils::tr(QStringLiteral("command.tab.pipeline")), segmentedControl);
+    for (QPushButton *btn : {m_commandModeButton, m_httpModeButton, m_pipelineModeButton}) {
         btn->setCheckable(true);
         btn->setCursor(Qt::PointingHandCursor);
         btn->setStyleSheet(segmentCss);
@@ -120,8 +121,10 @@ void CommandEditorDialog::buildGeneralTab()
     m_commandModeButton->setChecked(true);
     connect(m_commandModeButton, &QPushButton::clicked, this, [this]() { setExecutionMode(false); });
     connect(m_httpModeButton, &QPushButton::clicked, this, [this]() { setExecutionMode(true); });
+    connect(m_pipelineModeButton, &QPushButton::clicked, this, [this]() { setExecutionMode(false, true); });
     segmentedLayout->addWidget(m_commandModeButton);
     segmentedLayout->addWidget(m_httpModeButton);
+    segmentedLayout->addWidget(m_pipelineModeButton);
     // Rótulo pequeno em cima (wrapWithLabel), no mesmo padrão do "PERFIL" ao lado.
     execHeaderLayout->addWidget(wrapWithLabel(execCard,
         utils::tr(QStringLiteral("command.field.type")), segmentedControl), 1, Qt::AlignBottom);
@@ -155,6 +158,11 @@ void CommandEditorDialog::buildGeneralTab()
         "QStackedWidget#execModeStack { background: transparent; }"));
     m_tabWidget->addWidget(buildCommandTab());
     m_tabWidget->addWidget(buildHttpTab());
+    // Pipeline: o corpo são os passos (aba própria); esta página fica vazia.
+    auto *pipelinePage = new QWidget(this);
+    pipelinePage->setObjectName(QStringLiteral("pipelineTabPage"));
+    pipelinePage->setStyleSheet(QStringLiteral("QWidget#pipelineTabPage { background: transparent; }"));
+    m_tabWidget->addWidget(pipelinePage);
     // Sem stretch: com stretch 1 o stack abria um vão entre o último campo e "Parâmetros Dinâmicos";
     // o QScrollArea externo cuida do excesso. O sizeHint do QStackedWidget é o da MAIOR página (a HTTP):
     // marcar as inativas como Ignored faz valer o da página visível.
@@ -165,6 +173,7 @@ void CommandEditorDialog::buildGeneralTab()
     generalLayout->addWidget(execCard);
 
     auto *configCard = makeSurfaceCard(this);
+    m_configCard = configCard;
     auto *configCardLayout = new QVBoxLayout(configCard);
     configCardLayout->setContentsMargins(utils::tokens::space(3), utils::tokens::space(2),
                                          utils::tokens::space(3), utils::tokens::space(2));

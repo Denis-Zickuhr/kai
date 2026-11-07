@@ -1,4 +1,7 @@
 #include "engine/ai/command-json.h"
+#include "core/pipeline-model.h"
+
+#include <algorithm>
 
 #include <QJsonArray>
 #include <QRegularExpression>
@@ -32,7 +35,7 @@ bool commandFromAiJson(const QJsonObject &input, const QString &folderId, const 
         "kip_auto_close", "kip_auto_close_delay_sec", "terminal_target", "auto_run", "auto_run_delay_sec",
         "cron_expression", "cron_notify_on_run", "order", "http_config", "params", "hooks", "execution_conditions",
         "condition_combinator", "condition_skip_behavior", "responders", "last_param_values", "kip_last_values",
-        "param_usage_history", "cli_path", "cli_working_dir"};
+        "param_usage_history", "cli_path", "cli_working_dir", "steps"};
     QStringList unknown;
     for (const QString &k : obj.keys()) {
         if (!known.contains(k)) unknown << k;
@@ -45,8 +48,9 @@ bool commandFromAiJson(const QJsonObject &input, const QString &folderId, const 
     }
     if (obj.contains(QStringLiteral("type"))) {
         const QString t = obj.value(QStringLiteral("type")).toString();
-        if (t != QLatin1String("command") && t != QLatin1String("http") && t != QLatin1String("shell")) {
-            error = QStringLiteral("Invalid type '%1' (use 'command' or 'http').").arg(t);
+        if (t != QLatin1String("command") && t != QLatin1String("http") && t != QLatin1String("shell")
+            && t != QLatin1String("pipeline")) {
+            error = QStringLiteral("Invalid type '%1' (use 'command', 'http' or 'pipeline').").arg(t);
             return false;
         }
     }
@@ -123,6 +127,29 @@ bool commandFromAiJson(const QJsonObject &input, const QString &folderId, const 
         if (!c.httpConfig || c.httpConfig->url.trimmed().isEmpty()) {
             error = QStringLiteral("An http command needs http_config.url.");
             return false;
+        }
+    } else if (c.type == core::CommandType::Pipeline) {
+        // O corpo de uma pipeline são os passos: cada um chama outro comando por nome ("Pasta/Nome").
+        const QVector<core::PipelineStep> steps = core::pipelineStepsFromJson(c.pipelineSteps);
+        if (steps.isEmpty()) {
+            error = QStringLiteral("A pipeline needs a non-empty 'steps' array (each step: id, run = name of an existing command).");
+            return false;
+        }
+        const QVector<core::PipelineIssue> issues = core::validatePipelineSteps(steps);
+        if (!issues.isEmpty()) {
+            const core::PipelineIssue &issue = issues.first();
+            error = QStringLiteral("Step %1: %2%3").arg(issue.stepIndex + 1).arg(issue.code,
+                issue.arg.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(issue.arg));
+            return false;
+        }
+        if (warnings) {
+            for (const core::PipelineStep &step : steps) {
+                const QString name = step.run.mid(step.run.lastIndexOf(QLatin1Char('/')) + 1).trimmed();
+                const bool exists = std::any_of(allCommands.cbegin(), allCommands.cend(), [&name](const Command &o) {
+                    return o.name == name;
+                });
+                if (!exists) *warnings << QStringLiteral("Step '%1' runs '%2', which is not an existing command yet.").arg(step.id, step.run);
+            }
         }
     } else if (c.command.trimmed().isEmpty()) {
         error = QStringLiteral("The command needs a non-empty 'command'.");

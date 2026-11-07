@@ -161,7 +161,7 @@ the comment above it. Many combinations are exclusive (a KIP command cannot also
 - name: "Deploy staging"
   # Hint shown at the top of the parameter form. Default: none.
   description: "Builds the app and ships it to staging."
-  # REQUIRED in the file: "command" or "http". ("shell" is accepted as an old alias of "command".)
+  # REQUIRED in the file: "command", "http" or "pipeline" (§9.5). ("shell" is accepted as an old alias of "command".)
   type: "command"
   # Icon name from the icon list. Default: generic icon.
   icon: "rocket"
@@ -249,6 +249,10 @@ the comment above it. Many combinations are exclusive (a KIP command cannot also
   cli_path: "deploy"
   # CLI runs: "default" = the command's own working_dir; "invocation" = where you typed `kai`.
   cli_working_dir: "invocation"
+  # type "pipeline" only: the steps, in order (§9.5). Each one runs another command, referenced by name.
+  steps:
+    - id: "build"
+      run: "Build"
 ```
 
 Keys Kai writes for its own bookkeeping — **never write them**: `id`, `folder_id`,
@@ -782,6 +786,108 @@ Auto-answers for interactive scripts that ask `[y/N]`-style questions.
 ```
 
 With `capture_env: true` and no `declared_env_vars`, nothing is captured.
+
+### 9.5 Pipelines (`type: pipeline`)
+
+A pipeline is a command whose body is a list of `steps`; each step runs ANOTHER command of the file, referenced by
+name (or `Folder/Name`, never an id). Kai shows it as a checklist with a live log per step. Use it for long, guided
+routines: setup, deploy, release. The step commands are ordinary commands (put them in a subfolder, `hidden: true`).
+
+```yaml model pipeline_step
+# One entry of `steps`. Only `id` and `run` are required.
+# Unique inside the pipeline: a-z, 0-9 and _.
+- id: "deploy"
+  # Shown in the checklist. Default: the name of the command in `run`.
+  label: "Deploy"
+  # The command to run. Not a pipeline, not background, not interactive_terminal. A KIP command is allowed:
+  # its screen takes over the pipeline view while it runs.
+  run: "steps/deploy"
+  # exit 0 = the step is already done (run is skipped). After `run`, it is executed once more to verify.
+  check: "steps/is-deployed"
+  # Asks before running; answering No skips the step.
+  confirm: "Deploy to production?"
+  # KIP prompt fields asked before `run`; answers are {{ask.<name>}} (a `secret` field is masked in logs).
+  ask:
+    - name: "token"
+      type: "secret"
+      label: "Token"
+  # Values for the step command's parameters; {{variables}} accepted.
+  params:
+    TOKEN: "{{ask.token}}"
+  # Run only if these conditions pass (same format as §9.2); otherwise the step is skipped.
+  when:
+    - left: "{{TARGET}}"
+      op: "eq"
+      right: "prod"
+  # "and" (default) or "or".
+  when_combinator: "and"
+  # What a failure does: "abort" (default) | "continue" | "ask" (Retry / Skip / Abort) | "goto:<later step id>".
+  on_fail: "goto:rollback"
+  # More attempts before on_fail applies; `reask` shows `ask` again each time (a wrong key can be retyped).
+  retry:
+    times: 2
+    delay: 1
+    reask: true
+  # After `run`, poll this command until exit 0 (or fail after `timeout` seconds).
+  wait_until:
+    check: "steps/health"
+    timeout: 60
+    interval: 3
+  # Variables read from the step: from = stdout (last `regex` match, group 1; default the last line) | json (dotted
+  # `path` over stdout / HTTP body) | exit | status. Available as {{NAME}} and {{steps.<id>.NAME}}.
+  capture:
+    RELEASE_ID:
+      from: "json"
+      path: "data.id"
+      secret: false
+```
+
+Every step also leaves `{{steps.<id>.ok}}` (`true`/`false`) and `{{steps.<id>.exit}}`, so a later step can be
+guarded by an earlier one (`when: {{steps.health.ok}} eq false` makes a rollback step). `goto` only moves FORWARD,
+and a pipeline never repeats steps except through `retry`. A pipeline that asks questions cannot be scheduled
+(`cron_expression`, `auto_run`).
+
+```yaml file
+commands:
+  - name: Ship
+    type: pipeline
+    steps:
+      - id: build
+        run: Build
+        check: Is built
+      - id: health
+        run: Deploy
+        wait_until:
+          check: Health
+          timeout: 60
+        on_fail: goto:rollback
+      - id: rollback
+        run: Rollback
+        when:
+          - left: "{{steps.health.ok}}"
+            op: eq
+            right: "false"
+  - name: Build
+    type: command
+    command: make build
+    hidden: true
+  - name: Is built
+    type: command
+    command: test -f build/app
+    hidden: true
+  - name: Deploy
+    type: command
+    command: ./deploy.sh
+    hidden: true
+  - name: Health
+    type: command
+    command: curl -fsS http://localhost:8080/health
+    hidden: true
+  - name: Rollback
+    type: command
+    command: ./rollback.sh
+    hidden: true
+```
 
 ---
 

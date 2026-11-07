@@ -26,6 +26,7 @@
 
 #include "ui/features/output/output-tabs-bar.h"
 
+#include "ui/shared/token-style.h"
 #include "ui/shared/welcome-screen.h"
 
 #include "utils/design-tokens.h"
@@ -50,6 +51,9 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     // A camada moderna (raio, elevação, tipografia, scrollbars, seleção) vai depois do tema do core para sobrescrevê-lo.
     setStyleSheet(themeStyleSheet(theme.qss));
     applyWindowBackdrop(this);
+    // Widgets com estilo local ligado aos tokens (bindTokenStyle) só pegam o tema novo assim; sem isto uma troca de tema
+    // pelo live reload ou pela IA deixava caixas, listas e cards com a cor do tema anterior.
+    refreshTokenStyles();
     if (m_dock) {
         m_dock->refreshFloatingStyle();
     }
@@ -156,7 +160,7 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
 
     // Terminal interativo: o corpo do painel vira o terminal real e a tela é reconstruída a partir do log bruto (um
     // único vterm é reaproveitado entre comandos, ver OutputPanel::setInteractiveMode).
-    const bool isKip = (it != m_commandsById.constEnd()) && it->kip && it->type == core::CommandType::Command;
+    const bool isKip = (it != m_commandsById.constEnd()) && core::showsKipView(*it);
     const bool isInteractive = (it != m_commandsById.constEnd())
         && it->type == core::CommandType::Command && it->interactiveTerminal && !isKip;
     m_terminalDrawer->setInteractiveMode(isInteractive);

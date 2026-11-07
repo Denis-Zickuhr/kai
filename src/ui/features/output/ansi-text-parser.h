@@ -11,6 +11,9 @@ struct AnsiSegment {
     QString text;
     QTextCharFormat format;
     bool isLink = false;
+    // > 0: segmento sem texto que representa "cursor n linhas acima" (ESC[nA). Quem exibe apaga as n últimas linhas, pois
+    // a animação (docker compose up) redesenha o mesmo bloco várias vezes por segundo.
+    int moveUpLines = 0;
 };
 
 // Parser puro (sem widgets) de ANSI SGR: cores básicas (30-37, 90-97), fundo (40-47, 100-107), bold, reset e SGR

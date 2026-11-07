@@ -14,6 +14,7 @@
 #include <QImage>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
@@ -443,6 +444,17 @@ void KipStepsBlockWidget::rebuildRows(const core::KipSteps &steps)
     for (const core::KipStepItem &step : steps.items) {
         auto *row = new QWidget(m_rows);
         row->setObjectName(QStringLiteral("kipStepRow"));
+        row->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(row, &QWidget::customContextMenuRequested, this, [this, row, stepId = step.id](const QPoint &pos) {
+            if (!m_actionsEnabled) {
+                return;
+            }
+            QMenu menu(row);
+            QAction *runFrom = menu.addAction(utils::tr(QStringLiteral("kip.steps.run_from")));
+            if (menu.exec(row->mapToGlobal(pos)) == runFrom) {
+                emit stepActionRequested(stepId, QStringLiteral("run_from"));
+            }
+        });
         row->setStyleSheet(QStringLiteral("QWidget#kipStepRow { background: transparent; }"));
         auto *grid = new QHBoxLayout(row);
         grid->setContentsMargins(0, 0, 0, 0);

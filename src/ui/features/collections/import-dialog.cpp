@@ -40,8 +40,9 @@ public:
     {
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_StyledBackground, true);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setMinimumHeight(150);
+        // Preferred (não Fixed): a descrição quebra linha e o cartão precisa crescer com ela, senão o texto era cortado.
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        setMinimumHeight(190);
         // Por NOME de objeto: o seletor pelo nome da classe ("SourceCard") não casava (a classe vive num namespace
         // anônimo) e a regra nunca valia — o cartão ficava sem borda e com cantos retos, ignorando a preferência.
         setObjectName(QStringLiteral("importSourceCard"));
@@ -116,8 +117,14 @@ ImportDialog::ImportDialog(QWidget *parent)
     auto *fileCard = new SourceCard(QStringLiteral("file-code"),
         utils::tr(QStringLiteral("import.source.file.title")),
         utils::tr(QStringLiteral("import.source.file.description")), this);
-    connect(fileCard, &SourceCard::clicked, this, &ImportDialog::pickFile);
+    connect(fileCard, &SourceCard::clicked, this, [this]() { pickFile(false); });
     cardsRow->addWidget(fileCard);
+
+    auto *collectionCard = new SourceCard(QStringLiteral("book"),
+        utils::tr(QStringLiteral("import.source.collection.title")),
+        utils::tr(QStringLiteral("import.source.collection.description")), this);
+    connect(collectionCard, &SourceCard::clicked, this, [this]() { pickFile(true); });
+    cardsRow->addWidget(collectionCard);
 
     layout->addLayout(cardsRow);
 
@@ -131,8 +138,8 @@ ImportDialog::ImportDialog(QWidget *parent)
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttonBox);
 
-    setMinimumWidth(520);
-    resize(qMax(520, width()), height());
+    setMinimumWidth(760);
+    resize(qMax(760, width()), height());
     centerOnParent(this);
 }
 
@@ -149,10 +156,11 @@ void ImportDialog::pickProjectFolder()
     accept();
 }
 
-void ImportDialog::pickFile()
+void ImportDialog::pickFile(bool collectionOnly)
 {
     const QString path = pickOpenFile(
-        this, utils::tr(QStringLiteral("import.source.file.title")),
+        this, utils::tr(collectionOnly ? QStringLiteral("import.source.collection.title")
+                                       : QStringLiteral("import.source.file.title")),
         utils::tr(QStringLiteral("import.source.file.filter")));
     if (path.isEmpty()) {
         return;
@@ -170,6 +178,12 @@ void ImportDialog::pickFile()
     if (!detectKindFromText(rawText, &detected)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("import.title")),
             utils::tr(QStringLiteral("import.error.unrecognized")));
+        return;
+    }
+    // O cartão de coleções só aceita formatos de coleção de requisições.
+    if (collectionOnly && (detected == Kind::Config || detected == Kind::Project)) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("import.title")),
+            utils::tr(QStringLiteral("import.error.not_collection")));
         return;
     }
     m_kind = detected;

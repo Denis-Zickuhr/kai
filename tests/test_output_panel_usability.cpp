@@ -998,6 +998,22 @@ private slots:
         QVERIFY(plain.plainOutput().contains(QStringLiteral("\n\n\n")));
     }
 
+    // Animação do docker compose up: cada quadro sobe o cursor N linhas e redesenha. A saída guarda só o último quadro,
+    // em vez de acumular um bloco novo a cada atualização.
+    void cursorUpRedrawReplacesThePreviousFrame()
+    {
+        OutputPanel panel;
+        panel.appendOutput(QStringLiteral("antes\n"));
+        panel.appendOutput(QStringLiteral("db Creating\nweb Waiting\n"));
+        for (int i = 0; i < 50; ++i) {
+            panel.appendOutput(QStringLiteral("\x1b[2A\x1b[2Kdb Creating %1\n\x1b[2Kweb Waiting\n").arg(i));
+        }
+        panel.appendOutput(QStringLiteral("\x1b[2Adb Started\nweb Started\n"));
+
+        const QString out = panel.plainOutput();
+        QCOMPARE(out, QStringLiteral("antes\ndb Started\nweb Started\n"));
+    }
+
     // O flag compact_output é preferência POR COMANDO e precisa sobreviver ao
     // salvar/carregar (e é aceito no kai.json).
     void compactOutputFlagRoundTripsInCommand()

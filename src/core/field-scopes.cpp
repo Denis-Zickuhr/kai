@@ -33,6 +33,7 @@ const Table &commandTable()
         F("cli_path", S::Portable), F("cli_working_dir", S::Portable),
         F("terminal_target", S::Reference),      // perfil de terminal, por nome
         F("hooks", S::Reference),                // outros comandos, por nome
+        F("steps", S::Portable),                 // passos de pipeline; os comandos já são citados por nome/caminho
         F("last_param_values", S::Local), F("kip_last_values", S::Local), F("param_usage_history", S::Local),
     };
     return table;

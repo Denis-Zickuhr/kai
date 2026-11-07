@@ -229,6 +229,7 @@ signals:
     // Criação (menu de contexto ou Insert); o MainWindow resolve a pasta destino pela seleção/aba atual.
     void newFolderRequested();
     void newCommandRequested();
+    void newPipelineRequested();
     void newCollectionRequested();
 
     // Force-stop pelo menu de contexto; mesmo caminho de kill do MainWindow (terminate->timeout->kill).

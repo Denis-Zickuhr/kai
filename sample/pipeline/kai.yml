@@ -1,0 +1,137 @@
+project_name: "Pipeline Sample"
+icon: "list-checks"
+commands:
+  - name: "Ship to staging"
+    type: "pipeline"
+    description: "Checks, tests, build, deploy, health check and rollback. Fake scripts only."
+    icon: "rocket"
+    params:
+      - name: "TARGET"
+        type: "select"
+        options: ["staging", "prod"]
+        default: "staging"
+    steps:
+      - id: git_clean
+        label: "Working tree clean"
+        run: "steps/git-clean"
+        on_fail: ask
+      - id: tests
+        label: "Tests"
+        run: "steps/tests"
+        retry:
+          times: 1
+      - id: build
+        label: "Build"
+        check: "steps/is-built"
+        run: "steps/build"
+      - id: confirm_deploy
+        label: "Production gate"
+        run: "steps/noop"
+        confirm: "Deploy to production?"
+        when:
+          - left: "{{TARGET}}"
+            op: "eq"
+            right: "prod"
+      - id: deploy
+        label: "Deploy"
+        run: "steps/deploy"
+        ask:
+          - name: "token"
+            type: "secret"
+            label: "Deploy token (letmein)"
+        params:
+          TOKEN: "{{ask.token}}"
+        retry:
+          times: 2
+          reask: true
+        capture:
+          RELEASE_ID:
+            from: "stdout"
+            regex: "release=(\\w+)"
+      - id: health
+        label: "Health check"
+        run: "steps/noop"
+        wait_until:
+          check: "steps/health"
+          timeout: 20
+          interval: 1
+        on_fail: "goto:rollback"
+      - id: smoke
+        label: "Smoke test"
+        run: "steps/smoke"
+        capture:
+          LIVE_VERSION:
+            from: "json"
+            path: "data.version"
+      - id: announce
+        label: "Announce"
+        run: "steps/announce"
+        on_fail: continue
+        when:
+          - left: "{{steps.health.ok}}"
+            op: "eq"
+            right: "true"
+      - id: rollback
+        label: "Rollback"
+        run: "steps/rollback"
+        when:
+          - left: "{{steps.health.ok}}"
+            op: "eq"
+            right: "false"
+
+  - name: "git-clean"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/git-clean.sh"
+  - name: "tests"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/tests.sh"
+  - name: "build"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/build.sh"
+  - name: "is-built"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/is-built.sh"
+  - name: "noop"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "true"
+  - name: "deploy"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/deploy.sh"
+  - name: "health"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/health.sh"
+  - name: "smoke"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/smoke.sh"
+  - name: "announce"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/announce.sh"
+  - name: "rollback"
+    folder: "steps"
+    hidden: true
+    type: "command"
+    command: "./scripts/rollback.sh"
+  - name: "Reset sample state"
+    type: "command"
+    command: "./scripts/reset.sh"
+folders:
+  - path: "steps"
+    icon: "list-ordered"

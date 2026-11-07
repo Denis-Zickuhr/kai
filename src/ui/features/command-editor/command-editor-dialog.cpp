@@ -1,5 +1,6 @@
 #include "ui/features/command-editor/command-editor-dialog.h"
 
+#include "core/pipeline-model.h"
 #include <QScreen>
 #include <QGuiApplication>
 #include <QShowEvent>
@@ -18,6 +19,7 @@
 #include "ui/shared/table-utils.h"
 #include "ui/features/command-editor/parameter-editor-widget.h"
 #include "ui/features/command-editor/output-responders-editor-widget.h"
+#include "ui/features/command-editor/pipeline-steps-editor-widget.h"
 #include "ui/features/command-editor/hooks-editor-widget.h"
 #include "ui/features/command-editor/execution-conditions-editor-widget.h"
 #include "ui/features/environments/env-extractors-editor-widget.h"
@@ -119,6 +121,20 @@ CommandEditorDialog::CommandEditorDialog(const QString &folderId,
     setupUi(existingCommand);
     populateFolderCombo(allFolders, folderId);
     refreshInheritedHttp();
+    {
+        // Seletores de comando dos passos da pipeline: "Pasta/Nome" de todo comando, exceto o próprio.
+        QStringList refs;
+        for (const core::Command &cmd : allCommands) {
+            if (existingCommand && cmd.id == existingCommand->id) {
+                continue;
+            }
+            const QString path = core::folderPathOf(cmd.folderId, allFolders);
+            refs << (path.isEmpty() ? cmd.name : path + QLatin1Char('/') + cmd.name);
+        }
+        refs.removeDuplicates();
+        refs.sort(Qt::CaseInsensitive);
+        m_stepsEditor->setCommandRefs(refs);
+    }
     m_hooksEditor->setAvailableCommands(hookCandidates);
     m_hooksEditor->setAllAvailableCommands(allHookCandidates);
     if (existingCommand) {
@@ -226,6 +242,8 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     m_sideNav->setRowHidden(m_navRowExtractors, true);
     buildParamsTab();
     buildRespondersTab();
+    buildStepsTab();
+    m_sideNav->setRowHidden(m_navRowSteps, true); // só no modo Pipeline (setExecutionMode)
     buildConditionsTab();
     buildHooksTab();
     buildCliTab();
@@ -272,7 +290,10 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
         m_cliPathField->setText(existingCommand->cliPath);
         m_cliInvocationDirCheck->setChecked(existingCommand->cliWorkingDir == core::CliWorkingDir::Invocation);
 
-        if (existingCommand->type == core::CommandType::Http && existingCommand->httpConfig.has_value()) {
+        if (existingCommand->type == core::CommandType::Pipeline) {
+            setExecutionMode(false, true);
+            m_stepsEditor->setSteps(core::pipelineStepsFromJson(existingCommand->pipelineSteps));
+        } else if (existingCommand->type == core::CommandType::Http && existingCommand->httpConfig.has_value()) {
             setExecutionMode(true);
             applyHttpConfig(existingCommand->httpConfig.value());
         } else {
@@ -388,8 +409,36 @@ void CommandEditorDialog::handleAcceptRequested()
     }
 
     const bool isHttp = (m_tabWidget->currentIndex() == 1);
+    const bool isPipeline = (m_tabWidget->currentIndex() == 2);
 
-    if (isHttp) {
+    if (isPipeline) {
+        const QVector<core::PipelineStep> steps = m_stepsEditor->steps();
+        if (steps.isEmpty()) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("command.error.steps_required.title")),
+                utils::tr(QStringLiteral("command.error.steps_required.body")));
+            m_sideNav->setCurrentRow(m_navRowSteps);
+            return;
+        }
+        const QVector<core::PipelineIssue> issues = core::validatePipelineSteps(steps);
+        if (!issues.isEmpty()) {
+            const core::PipelineIssue &issue = issues.first();
+            // Chaves literais (o teste de chaves órfãs só enxerga literais).
+            static const QMap<QString, QString> keyByCode = {
+                {QStringLiteral("invalid_id"), QStringLiteral("validate.error.pipeline_invalid_id")},
+                {QStringLiteral("duplicate_id"), QStringLiteral("validate.error.pipeline_duplicate_id")},
+                {QStringLiteral("missing_run"), QStringLiteral("validate.error.pipeline_missing_run")},
+                {QStringLiteral("bad_on_fail"), QStringLiteral("validate.error.pipeline_bad_on_fail")},
+                {QStringLiteral("goto_unknown"), QStringLiteral("validate.error.pipeline_goto_unknown")},
+                {QStringLiteral("goto_backward"), QStringLiteral("validate.error.pipeline_goto_backward")},
+                {QStringLiteral("bad_capture"), QStringLiteral("validate.error.pipeline_bad_capture")},
+                {QStringLiteral("bad_ask"), QStringLiteral("validate.error.pipeline_bad_ask")},
+            };
+            QMessageBox::warning(this, utils::tr(QStringLiteral("command.error.steps_invalid.title")),
+                utils::tr(keyByCode.value(issue.code)).arg(issue.arg));
+            m_sideNav->setCurrentRow(m_navRowSteps);
+            return;
+        }
+    } else if (isHttp) {
         if (m_urlField->text().trimmed().isEmpty()) {
             QMessageBox::warning(this, utils::tr(QStringLiteral("command.error.url_required.title")),
                 utils::tr(QStringLiteral("command.error.url_required.body")));
@@ -408,28 +457,38 @@ void CommandEditorDialog::handleAcceptRequested()
     accept();
 }
 
-void CommandEditorDialog::setExecutionMode(bool isHttp)
+void CommandEditorDialog::setExecutionMode(bool isHttp, bool isPipeline)
 {
-    m_commandModeButton->setChecked(!isHttp);
+    m_commandModeButton->setChecked(!isHttp && !isPipeline);
     m_httpModeButton->setChecked(isHttp);
-    m_tabWidget->setCurrentIndex(isHttp ? 1 : 0);
+    m_pipelineModeButton->setChecked(isPipeline);
+    m_tabWidget->setCurrentIndex(isPipeline ? 2 : (isHttp ? 1 : 0));
     // Headers/Extractors só valem para HTTP: some o item de nav, não o card.
     m_sideNav->setRowHidden(m_navRowHeaders, !isHttp);
     m_sideNav->setRowHidden(m_navRowConnection, !isHttp);
     m_sideNav->setRowHidden(m_navRowExtractors, !isHttp);
+    // Passos só na pipeline.
+    m_sideNav->setRowHidden(m_navRowSteps, !isPipeline);
     // Variáveis exportáveis só para Shell (resultado de um processo).
-    m_sideNav->setRowHidden(m_navRowDeclaredEnvVars, isHttp);
+    m_sideNav->setRowHidden(m_navRowDeclaredEnvVars, isHttp || isPipeline);
     // Configuração só tem opções de Shell (o CLI foi para aba própria).
-    m_sideNav->setRowHidden(m_navRowConfiguration, isHttp);
-    // KIP é coisa de comando shell (o programa fala o protocolo): em HTTP a aba some.
-    m_sideNav->setRowHidden(m_navRowKip, isHttp);
+    m_sideNav->setRowHidden(m_navRowConfiguration, isHttp || isPipeline);
+    // KIP é coisa de comando shell (o programa fala o protocolo): em HTTP e pipeline a aba some.
+    m_sideNav->setRowHidden(m_navRowKip, isHttp || isPipeline);
+    // Auto-respostas leem a saída de um processo: não valem para pipeline.
+    if (m_navRowResponders >= 0) {
+        m_sideNav->setRowHidden(m_navRowResponders, isPipeline);
+    }
     // Se a aba atual acabou escondida, volta para "Geral".
     if (m_sideNav->isRowHidden(m_sideNav->currentRow())) {
         m_sideNav->setCurrentRow(0);
     }
-    m_terminalProfileFieldWrapper->setVisible(true);
+    m_terminalProfileFieldWrapper->setVisible(!isPipeline);
+    if (m_configCard) {
+        m_configCard->setVisible(!isPipeline);
+    }
     // Working dir e flags de execução são Shell-only.
-    m_commandConfigContainer->setVisible(!isHttp);
+    m_commandConfigContainer->setVisible(!isHttp && !isPipeline);
     if (m_sideNav->isRowHidden(m_sideNav->currentRow())) {
         m_sideNav->setCurrentRow(0);
     }
@@ -507,11 +566,16 @@ core::Command CommandEditorDialog::buildCommand() const
     command.conditionSkipBehavior = m_conditionsEditor->skipBehavior();
 
     const bool isHttp = (m_tabWidget->currentIndex() == 1);
-    command.type = isHttp ? core::CommandType::Http : core::CommandType::Command;
+    const bool isPipeline = (m_tabWidget->currentIndex() == 2);
+    command.type = isPipeline ? core::CommandType::Pipeline
+        : (isHttp ? core::CommandType::Http : core::CommandType::Command);
 
     command.id = m_existingId.isEmpty() ? generateCommandId(command.folderId, command.name) : m_existingId;
 
-    if (isHttp) {
+    if (isPipeline) {
+        command.pipelineSteps = core::pipelineStepsToJson(m_stepsEditor->steps());
+        command.terminalTarget.clear();
+    } else if (isHttp) {
         command.httpConfig = readHttpConfig();
     } else {
         command.command = m_commandField->toPlainText();
@@ -553,7 +617,7 @@ core::Command CommandEditorDialog::buildCommand() const
     command.autoRunDelaySec = m_autoRunDelayField->value();
     command.cronExpression = m_cronExpressionField->text();
     command.cronNotifyOnRun = m_cronNotifyOnRunField->isChecked();
-    if (command.kip) {
+    if (command.kip || isPipeline) {
         command.responders.clear();
         command.autoRun = false;
         command.autoRunDelaySec = 0;

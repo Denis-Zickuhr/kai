@@ -1,6 +1,7 @@
 #include "core/kai-file-validator.h"
 
 #include "core/models.h"
+#include "core/pipeline-model.h"
 #include "core/cli-reserved-verbs.h"
 #include "core/yaml-bridge.h"
 #include "utils/cron-expression.h"
@@ -280,8 +281,65 @@ const QSet<QString> &commandKeys()
         QStringLiteral("cli_working_dir"),
         QStringLiteral("language"), QStringLiteral("interpreter"),
         QStringLiteral("cron_expression"), QStringLiteral("cron_notify_on_run"),
+        QStringLiteral("steps"),
     };
     return keys;
+}
+
+const QSet<QString> &pipelineStepKeys()
+{
+    static const QSet<QString> keys = {
+        QStringLiteral("id"), QStringLiteral("label"), QStringLiteral("run"), QStringLiteral("check"),
+        QStringLiteral("confirm"), QStringLiteral("ask"), QStringLiteral("params"), QStringLiteral("when"),
+        QStringLiteral("when_combinator"), QStringLiteral("on_fail"), QStringLiteral("retry"),
+        QStringLiteral("wait_until"), QStringLiteral("capture"),
+    };
+    return keys;
+}
+
+// Passos de uma pipeline (spec 13): estrutura do arquivo + as regras de core::validatePipelineSteps.
+void validatePipelineCommand(ValidationResult &result, const QJsonObject &obj, const QString &path)
+{
+    const QJsonValue stepsValue = obj.value(QStringLiteral("steps"));
+    if (!stepsValue.isArray()) {
+        addError(result, path, utils::tr(QStringLiteral("validate.error.missing_field")).arg(QStringLiteral("steps")));
+        return;
+    }
+    const QJsonArray stepsArr = stepsValue.toArray();
+    for (int i = 0; i < stepsArr.size(); ++i) {
+        const QString stepPath = path + QStringLiteral(".steps[%1]").arg(i);
+        if (!stepsArr.at(i).isObject()) {
+            addError(result, stepPath, utils::tr(QStringLiteral("validate.error.wrong_type"))
+                .arg(QStringLiteral("(item)"), QStringLiteral("object")));
+            continue;
+        }
+        warnUnknownKeys(result, stepsArr.at(i).toObject(), stepPath, pipelineStepKeys());
+    }
+    const QVector<core::PipelineStep> steps = core::pipelineStepsFromJson(stepsArr);
+    // Chaves literais (e não "validate.error.pipeline_" + code): o teste de chaves órfãs só enxerga literais.
+    static const QMap<QString, QString> messageKeyByCode = {
+        {QStringLiteral("invalid_id"), QStringLiteral("validate.error.pipeline_invalid_id")},
+        {QStringLiteral("duplicate_id"), QStringLiteral("validate.error.pipeline_duplicate_id")},
+        {QStringLiteral("missing_run"), QStringLiteral("validate.error.pipeline_missing_run")},
+        {QStringLiteral("bad_on_fail"), QStringLiteral("validate.error.pipeline_bad_on_fail")},
+        {QStringLiteral("goto_unknown"), QStringLiteral("validate.error.pipeline_goto_unknown")},
+        {QStringLiteral("goto_backward"), QStringLiteral("validate.error.pipeline_goto_backward")},
+        {QStringLiteral("bad_capture"), QStringLiteral("validate.error.pipeline_bad_capture")},
+        {QStringLiteral("bad_ask"), QStringLiteral("validate.error.pipeline_bad_ask")},
+    };
+    for (const core::PipelineIssue &issue : core::validatePipelineSteps(steps)) {
+        addError(result, path + QStringLiteral(".steps[%1]").arg(issue.stepIndex),
+            utils::tr(messageKeyByCode.value(issue.code)).arg(issue.arg));
+    }
+    // Pipeline interativa (pergunta ou passo de confirmação) não roda sozinha.
+    bool interactive = false;
+    for (const core::PipelineStep &s : steps) {
+        interactive = interactive || !s.ask.isEmpty() || !s.confirm.isEmpty() || s.onFail == QLatin1String("ask");
+    }
+    if (interactive && (!obj.value(QStringLiteral("cron_expression")).toString().trimmed().isEmpty()
+                        || obj.value(QStringLiteral("auto_run")).toBool(false))) {
+        addWarning(result, path, utils::tr(QStringLiteral("validate.warning.pipeline_interactive_schedule")));
+    }
 }
 
 // "shell" é o nome anterior de "command" e continua válido.
@@ -543,7 +601,7 @@ void validateCommand(ValidationResult &result, const QJsonValue &value, const QS
     QString type;
     requireString(result, obj, path, QStringLiteral("type"), true, &type);
     requireEnum(result, obj, path, QStringLiteral("type"),
-        {QStringLiteral("command"), QStringLiteral("shell"), QStringLiteral("http")});
+        {QStringLiteral("command"), QStringLiteral("shell"), QStringLiteral("http"), QStringLiteral("pipeline")});
     requireWorkingDir(result, obj, path);
     // Flags e números do comando: entre aspas ("true", "5") o Kai ignora o valor e fica no padrão.
     for (const QString &flag : {QStringLiteral("is_background"), QStringLiteral("hidden"), QStringLiteral("hide_on_run"),
@@ -565,6 +623,8 @@ void validateCommand(ValidationResult &result, const QJsonValue &value, const QS
     if (isCommandType(type)) {
         requireString(result, obj, path, QStringLiteral("command"), true);
         validateLanguage(result, obj, path);
+    } else if (type == QStringLiteral("pipeline")) {
+        validatePipelineCommand(result, obj, path);
     } else if (type == QStringLiteral("http")) {
         const QJsonValue httpConfig = obj.value(QStringLiteral("http_config"));
         if (!httpConfig.isObject()) {

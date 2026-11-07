@@ -4,8 +4,8 @@ Ideas for evolving Kai, split into **new features** and **improvements to
 existing routines**. Each item carries a *value* × *effort* note and a
 short implementation sketch. Suggested prioritization at the end.
 
-> **Status:** feature-frozen as of the current beta — nothing here lands
-> without at least a minor version bump.
+> **Status:** the 1.0.0 line is feature-frozen; new features ship in the next beta
+> (`1.0.0-beta.N`). Pipelines (A3, [spec 13](../specs/13-pipelines.md)) target `beta.2`.
 
 ---
 
@@ -25,7 +25,7 @@ specs are YAML).
 - *Impl.*: bundle a light YAML parser (e.g. `rapidyaml`/`yaml-cpp`) and
   convert to `QJsonDocument` before reusing `parseOpenApi`.
 
-### A3. Chained "send & extract" request flows
+### A3. Chained "send & extract" request flows — **done as pipelines** ([spec 13](../specs/13-pipelines.md), [docs](pipelines.md))
 Build visual **flows** (request → extract → request) without manual
 hooks, Postman-runner style.
 - *Impl.*: a new "flow" type that sequences HTTP commands with an
@@ -75,7 +75,7 @@ assertions, export as cURL/code, Postman/Insomnia/HAR/`.env` imports — see
 - **WebSocket** (`Qt6::WebSockets`, an extra module to package on Windows). Server-Sent Events already stream.
 - **Responses in history** + a diff of two responses (after B2: secrets masking).
 - A cookie jar **viewer**; HTML response rendering; per-folder default `Content-Type`.
-- A visual **chained flow** (A3) on top of extractors + assertions.
+- A visual editor for chained flows: the [pipeline](pipelines.md) Steps tab is a form, not a graph.
 
 ### A10. AI assistant & agent ⭐ (high value / high effort) — **implemented** (see [AI assistant](ai.md))
 A built-in assistant that can write commands for you (**editor assist**) and an

@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QSet>
 #include <QVector>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <optional>
 
@@ -276,7 +277,9 @@ struct Hooks {
 // shell, Python ou Node. No JSON o tipo é "command"; "shell" segue aceito na leitura.
 enum class CommandType {
     Command,
-    Http
+    Http,
+    // Lista de passos que orquestra outros comandos (spec 13, core/pipeline-model.h). O `command` fica vazio.
+    Pipeline
 };
 
 QString commandTypeToString(CommandType type);
@@ -306,6 +309,11 @@ enum class CliWorkingDir {
 
 QString cliWorkingDirToString(CliWorkingDir mode);
 CliWorkingDir cliWorkingDirFromString(const QString &value);
+
+struct Command;
+// O comando se mostra como app KIP (view KIP em vez de texto de saída): um comando KIP de verdade ou uma Pipeline,
+// cuja execução também é uma tela KIP (engine::RunbookRunner).
+bool showsKipView(const Command &command);
 
 struct Command {
     QString id;
@@ -409,6 +417,10 @@ struct Command {
 
     QVector<Parameter> params;
     Hooks hooks;
+
+    // Só Pipeline: os passos, em ordem (core/pipeline-model.h). Guardados como JSON cru aqui para o models.h
+    // não depender do tipo dos passos; use pipelineStepsFromJson()/pipelineStepsToJson().
+    QJsonArray pipelineSteps;
 
     // Guarda avaliada por ExecutionPipeline na invocação (ver ExecutionCondition); vale igual como
     // principal ou como hook, pois a regra vive no comando.

@@ -1,4 +1,5 @@
 project_name: "Kai Stop Test"
+icon: "octagon-x"
 commands:
   - command: "./run.sh"
     name: "1. Go bridge + remote script (cleanup 4s)"

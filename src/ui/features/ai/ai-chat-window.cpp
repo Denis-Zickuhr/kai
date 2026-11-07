@@ -1,4 +1,5 @@
 #include "ui/features/ai/ai-chat-window.h"
+#include "ui/shared/token-style.h"
 
 #include "core/config-manager.h"
 #include "ui/features/ai/ai-chat-widgets.h"
@@ -155,10 +156,12 @@ void AiChatWindow::buildUi()
     m_sidebar = new QWidget(this);
     m_sidebar->setObjectName(QStringLiteral("aiSidebar"));
     m_sidebar->setFixedWidth(kSidebarWidth);
-    m_sidebar->setStyleSheet(QStringLiteral(
-        "QWidget#aiSidebar { background: %1; border-right: 1px solid %2;"
-        " border-top-left-radius: %3px; border-bottom-left-radius: %3px; }")
-        .arg(tk::surface(), tk::borderColor()).arg(tk::radiusMd()));
+    bindTokenStyle(m_sidebar, []() {
+        return QStringLiteral(
+            "QWidget#aiSidebar { background: %1; border-right: 1px solid %2;"
+            " border-top-left-radius: %3px; border-bottom-left-radius: %3px; }")
+            .arg(tk::surface(), tk::borderColor()).arg(tk::radiusMd());
+    });
     auto *sideLayout = new QVBoxLayout(m_sidebar);
     sideLayout->setContentsMargins(tk::space(2) + 2, tk::space(3), tk::space(2) + 2, tk::space(3));
     sideLayout->setSpacing(tk::space(2));
@@ -205,7 +208,9 @@ void AiChatWindow::buildUi()
 
     auto *top = new QWidget(main);
     top->setObjectName(QStringLiteral("aiTopBar"));
-    top->setStyleSheet(QStringLiteral("QWidget#aiTopBar { border-bottom: 1px solid %1; }").arg(tk::borderColor()));
+    bindTokenStyle(top, []() {
+        return QStringLiteral("QWidget#aiTopBar { border-bottom: 1px solid %1; }").arg(tk::borderColor());
+    });
     auto *topLayout = new QHBoxLayout(top);
     topLayout->setContentsMargins(tk::space(3), tk::space(2), tk::space(3), tk::space(2));
     topLayout->setSpacing(tk::space(2));
@@ -216,9 +221,11 @@ void AiChatWindow::buildUi()
     m_sidebarToggle->setFixedSize(32, 32);
     m_sidebarToggle->setIcon(LucideIcons::icon(QStringLiteral("panel-left"), QColor(tk::mutedFg()), 18));
     m_sidebarToggle->setToolTip(utils::tr(QStringLiteral("ai.chat.sidebar.toggle")));
-    m_sidebarToggle->setStyleSheet(QStringLiteral(
-        "QToolButton { background: transparent; border: 1px solid transparent; border-radius: %1px; padding: 0; }"
-        "QToolButton:hover { background: %2; }").arg(tk::radiusMdForHeight(32)).arg(tk::hoverBg()));
+    bindTokenStyle(m_sidebarToggle, []() {
+        return QStringLiteral(
+            "QToolButton { background: transparent; border: 1px solid transparent; border-radius: %1px; padding: 0; }"
+            "QToolButton:hover { background: %2; }").arg(tk::radiusMdForHeight(32)).arg(tk::hoverBg());
+    });
     topLayout->addWidget(m_sidebarToggle);
     m_title = new ElidedLabel(top);
     m_title->setObjectName(QStringLiteral("aiChatTitle"));
@@ -300,9 +307,11 @@ void AiChatWindow::buildUi()
     m_jump->setFixedSize(34, 34);
     m_jump->setIcon(LucideIcons::icon(QStringLiteral("arrow-down"), QColor(tk::fg()), 16));
     m_jump->setToolTip(utils::tr(QStringLiteral("ai.chat.jump_bottom")));
-    m_jump->setStyleSheet(QStringLiteral(
-        "QToolButton { background: %1; border: 1px solid %2; border-radius: %4px; padding: 0; min-height: 34px; min-width: 34px; }"
-        "QToolButton:hover { background: %3; }").arg(tk::surface2(), aiStrongBorder(), tk::hoverBg()).arg(tk::radiusMd() <= 0 ? 0 : 17));
+    bindTokenStyle(m_jump, []() {
+        return QStringLiteral(
+            "QToolButton { background: %1; border: 1px solid %2; border-radius: %4px; padding: 0; min-height: 34px; min-width: 34px; }"
+            "QToolButton:hover { background: %3; }").arg(tk::surface2(), aiStrongBorder(), tk::hoverBg()).arg(tk::radiusMd() <= 0 ? 0 : 17);
+    });
     m_jump->setVisible(false);
     connect(m_jump, &QToolButton::clicked, this, [this]() { forceBottom(); });
 
@@ -386,10 +395,12 @@ void AiChatWindow::buildUi()
 
     m_composer = new QFrame(composerColumn);
     m_composer->setObjectName(QStringLiteral("aiComposer"));
-    m_composer->setStyleSheet(QStringLiteral(
-        "QFrame#aiComposer { background: %1; border: 1px solid %2; border-radius: %3px; }"
-        "QFrame#aiComposer[focused=\"true\"] { border: 1px solid %4; }")
-        .arg(tk::surface(), aiStrongBorder()).arg(softer(tk::radiusLg(), 22)).arg(tk::accent()));
+    bindTokenStyle(m_composer, []() {
+        return QStringLiteral(
+            "QFrame#aiComposer { background: %1; border: 1px solid %2; border-radius: %3px; }"
+            "QFrame#aiComposer[focused=\"true\"] { border: 1px solid %4; }")
+            .arg(tk::surface(), aiStrongBorder()).arg(softer(tk::radiusLg(), 22)).arg(tk::accent());
+    });
     auto *composerLayout = new QHBoxLayout(m_composer);
     composerLayout->setContentsMargins(tk::space(4), tk::space(2), tk::space(2), tk::space(2));
     composerLayout->setSpacing(tk::space(2));
@@ -405,13 +416,15 @@ void AiChatWindow::buildUi()
     m_send->setObjectName(QStringLiteral("aiSendButton"));
     m_send->setCursor(Qt::PointingHandCursor);
     m_send->setFixedSize(36, 36);
-    m_send->setStyleSheet(QStringLiteral(
-        "QPushButton { background: %1; border: 1px solid %2; border-radius: %5px; padding: 0px; min-height: 36px; min-width: 36px; }"
-        "QPushButton:hover { background: %3; }"
-        "QPushButton:disabled { background: %4; border: 1px solid %4; border-radius: %5px; }")
-        .arg(tk::buttonColor(), QColor(tk::buttonColor()).lighter(135).name(), QColor(tk::buttonColor()).lighter(112).name(),
-             tk::borderColor())
-        .arg(tk::radiusMd() <= 0 ? 0 : 18));
+    bindTokenStyle(m_send, []() {
+        return QStringLiteral(
+            "QPushButton { background: %1; border: 1px solid %2; border-radius: %5px; padding: 0px; min-height: 36px; min-width: 36px; }"
+            "QPushButton:hover { background: %3; }"
+            "QPushButton:disabled { background: %4; border: 1px solid %4; border-radius: %5px; }")
+            .arg(tk::buttonColor(), QColor(tk::buttonColor()).lighter(135).name(), QColor(tk::buttonColor()).lighter(112).name(),
+                 tk::borderColor())
+            .arg(tk::radiusMd() <= 0 ? 0 : 18);
+    });
     composerLayout->addWidget(m_send, 0, Qt::AlignBottom);
     columnLayout->addWidget(m_composer);
     mainLayout->addWidget(composerHost);

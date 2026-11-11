@@ -81,6 +81,9 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("global_hotkey")) {
         data.globalHotkey = root.value("global_hotkey").toString();
     }
+    if (root.contains("palette_hotkey")) {
+        data.paletteHotkey = root.value("palette_hotkey").toString();
+    }
     if (root.contains("start_visible")) {
         data.startVisible = root.value("start_visible").toBool(data.startVisible);
     }
@@ -375,6 +378,16 @@ SettingsData ConfigManager::loadSettings()
             data.kipPanelAutoStart << v.toString();
         }
     }
+    if (root.value("identification").isObject()) {
+        const QJsonObject id = root.value("identification").toObject();
+        IdentificationSettings ident;
+        ident.httpVerb = id.value("http_verb").toBool(ident.httpVerb);
+        ident.scriptLanguage = id.value("script_language").toBool(ident.scriptLanguage);
+        ident.note = id.value("note").toBool(ident.note);
+        ident.folderProject = id.value("folder_project").toBool(ident.folderProject);
+        ident.folderHttpCollection = id.value("folder_http_collection").toBool(ident.folderHttpCollection);
+        data.identification = ident;
+    }
     if (root.value("interpreters").isObject()) {
         const QJsonObject i = root.value("interpreters").toObject();
         data.interpreters.python = i.value("python").toString(data.interpreters.python);
@@ -411,6 +424,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["detached_window_width"] = data.detachedWindowWidth;
     root["detached_window_height"] = data.detachedWindowHeight;
     root["global_hotkey"] = data.globalHotkey;
+    root["palette_hotkey"] = data.paletteHotkey;
     root["start_visible"] = data.startVisible;
     root["next_tab_shortcut"] = data.nextTabShortcut;
     root["previous_tab_shortcut"] = data.previousTabShortcut;
@@ -538,6 +552,15 @@ bool ConfigManager::saveSettings(const SettingsData &data)
         root["kip"] = k;
     }
     root["kip_panel_autostart"] = QJsonArray::fromStringList(data.kipPanelAutoStart);
+    {
+        QJsonObject id;
+        id["http_verb"] = data.identification.httpVerb;
+        id["script_language"] = data.identification.scriptLanguage;
+        id["note"] = data.identification.note;
+        id["folder_project"] = data.identification.folderProject;
+        id["folder_http_collection"] = data.identification.folderHttpCollection;
+        root["identification"] = id;
+    }
     {
         QJsonObject i;
         i["python"] = data.interpreters.python;

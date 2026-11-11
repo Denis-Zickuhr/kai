@@ -131,6 +131,12 @@ bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, Q
     m_inlineActions = newSettings.inlineActions;
     m_commandTree->setInlineActionsEnabled(m_inlineActions);
     core::setKipSettings(newSettings.kip);
+    if (!(newSettings.identification == old.identification)) {
+        core::setIdentificationSettings(newSettings.identification);
+        m_restoredSelectionId = m_commandTree->currentSelectionId();
+        m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+        m_restoredSelectionId.clear();
+    }
     if (newSettings.activeTheme != old.activeTheme && !m_themeManager->loadTheme(newSettings.activeTheme)) {
         utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado (pedido da IA).").arg(newSettings.activeTheme));
     }
@@ -161,6 +167,9 @@ bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, Q
     }
     if (newSettings.shortcuts != old.shortcuts) {
         setupActionShortcuts();
+    }
+    if (newSettings.globalHotkey != old.globalHotkey || newSettings.paletteHotkey != old.paletteHotkey) {
+        setupGlobalHotkey();
     }
     if (newSettings.executionActionsPlacement != old.executionActionsPlacement
         || newSettings.displayActionsPlacement != old.displayActionsPlacement
@@ -216,9 +225,16 @@ void MainWindow::handleSettingsRequested()
         refreshAiAvailability();
     }
     core::setKipSettings(newSettings.kip);
+    const bool identificationChanged = !(newSettings.identification == currentSettings.identification);
+    core::setIdentificationSettings(newSettings.identification);
     m_globalActions = newSettings.globalActions;
     rebuildActionCommands();
     m_commandTree->setGlobalActions(m_globalActions);
+    if (identificationChanged) {
+        m_restoredSelectionId = m_commandTree->currentSelectionId();
+        m_commandTree->setData(m_commandsData.folders, m_commandsData.commands, m_collections, m_notes);
+        m_restoredSelectionId.clear();
+    }
 
     if (newSettings.activeTheme != currentSettings.activeTheme) {
         if (!m_themeManager->loadTheme(newSettings.activeTheme)) {
@@ -246,6 +262,11 @@ void MainWindow::handleSettingsRequested()
             m_commandTree->setBackground(newSettings.commandsBackgroundImage,
                                          newSettings.commandsBackgroundOpacity);
         }
+    }
+
+    if (newSettings.globalHotkey != currentSettings.globalHotkey
+        || newSettings.paletteHotkey != currentSettings.paletteHotkey) {
+        setupGlobalHotkey();
     }
 
     if (newSettings.windowMode != currentSettings.windowMode

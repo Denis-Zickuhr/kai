@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFrame>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -18,7 +19,7 @@ class QuickRunPopup : public QFrame {
     Q_OBJECT
 
 public:
-    enum class Kind { Command, Folder, Note, Environment, Action };
+    enum class Kind { Command, Http, Folder, Collection, Note, Environment, Action };
 
     struct Entry {
         QString id;
@@ -57,12 +58,21 @@ private:
     void applyFilter();
     void chooseCurrent();
     void present(const QPoint &topLeft);
+    // (Re)monta a barra de chips de filtro por tipo, conforme os tipos presentes nas entradas.
+    void rebuildFilterChips();
+    // Chave de memória do filtro (objectName, ou "quickRun"): lembra os tipos escolhidos entre aberturas.
+    QString filterMemoryKey() const;
 
     QLineEdit *m_search = nullptr;
     QListWidget *m_list = nullptr;
     QLabel *m_empty = nullptr;
+    QWidget *m_filterBar = nullptr;
     QVector<Entry> m_entries;
     bool m_mixed = false; // há mais que comandos: cada linha ganha o ícone do seu tipo
+    // Tipos presentes nas entradas atuais (define quais chips de filtro aparecem).
+    QVector<Kind> m_availableKinds;
+    // Tipos ATIVOS no filtro; vazio = todos. Lembrado entre aberturas por filterMemoryKey().
+    QSet<int> m_activeKinds;
 };
 
 } // namespace kai::ui

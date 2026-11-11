@@ -23,6 +23,10 @@ inline constexpr int kIsHttpRole = Qt::UserRole + 4;
 // Marca um item como NOTA. Notas também levam kIsCollectionRole (são "nem pasta nem comando", como a coleção: não
 // executam, não aceitam filhos...), e este papel as distingue onde o comportamento muda (menu, abrir, arrastar).
 inline constexpr int kIsNoteRole = Qt::UserRole + 5;
+// Texto do chip de identificação (Configurações → Identificação), ex: "GET", "python", "projeto". Vazio = sem chip.
+inline constexpr int kChipTextRole = Qt::UserRole + 6;
+// Cor (QColor, nome de token resolvido) do chip de identificação.
+inline constexpr int kChipColorRole = Qt::UserRole + 7;
 inline constexpr int kStatusColumn = 1;
 // Fundo do item sempre transparente, aplicado como stylesheet LOCAL (prioridade garantida sobre o
 // tema): o DraggableTreeWidget pinta normal/zebra/hover/seleção em linha inteira (ver paintEvent/setRowColors).

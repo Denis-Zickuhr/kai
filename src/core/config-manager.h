@@ -9,6 +9,7 @@
 
 #include "core/ai-profile.h"
 #include "core/interpreter-settings.h"
+#include "core/identification-settings.h"
 #include "core/kip-settings.h"
 #include "core/models.h"
 
@@ -108,6 +109,8 @@ struct SettingsData {
     int detachedWindowWidth = 0;
     int detachedWindowHeight = 0;
     QString globalHotkey = QStringLiteral("Ctrl+Shift+B");
+    // Atalho global OPCIONAL que abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela. Vazio = desligado.
+    QString paletteHotkey;
 
     // Iniciar visível: override da decisão de boot, independente do atalho global (cujo registro pode
     // falhar em WSL/WSLg ou por colisão, abrindo visível sem o usuário pedir). Default true; desligar
@@ -231,6 +234,8 @@ struct SettingsData {
 
     // Configurações → KIP (spec 11 §23), objeto "kip".
     KipSettings kip;
+    // Configurações → Identificação: quais chips visuais aparecem na árvore, objeto "identification".
+    IdentificationSettings identification;
     // Apps KIP com painel próprio que abrem com o Kai (ids de comando); entra ao pôr o app num painel,
     // sai pelo menu do painel ("Abrir com o Kai").
     QStringList kipPanelAutoStart;

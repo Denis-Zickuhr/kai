@@ -13,6 +13,9 @@
 #endif
 
 #include <QApplication>
+#include <QScreen>
+#include <QCursor>
+#include <QTimer>
 
 #include "ui/features/output/output-tabs-bar.h"
 
@@ -137,7 +140,7 @@ void MainWindow::revealInTree(const QString &itemId, const std::function<void()>
     }
 }
 
-void MainWindow::showCommandPalette()
+void MainWindow::showCommandPalette(bool standalone)
 {
     if (!m_palette) {
         m_palette = new QuickRunPopup(this);
@@ -146,7 +149,11 @@ void MainWindow::showCommandPalette()
         connect(m_palette, &QuickRunPopup::entryChosen, this, [this](QuickRunPopup::Kind kind, const QString &id) {
             switch (kind) {
             case QuickRunPopup::Kind::Command:
+            case QuickRunPopup::Kind::Http:
                 handleCommandActivated(id);
+                break;
+            case QuickRunPopup::Kind::Collection:
+                revealInTree(id, [this, id]() { m_commandTree->selectCommand(id); });
                 break;
             case QuickRunPopup::Kind::Folder:
                 revealInTree(id, [this, id]() {
@@ -173,12 +180,18 @@ void MainWindow::showCommandPalette()
     QVector<QuickRunPopup::Entry> entries;
     for (const core::Command &command : m_commandsData.commands) {
         if (!command.hidden) {
-            entries.append({command.id, command.name, folderPathOf(command.folderId), Kind::Command});
+            const Kind kind = command.type == core::CommandType::Http ? Kind::Http : Kind::Command;
+            entries.append({command.id, command.name, folderPathOf(command.folderId), kind});
         }
     }
     for (const core::Folder &folder : m_commandsData.folders) {
         if (!folder.hidden) {
             entries.append({folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder});
+        }
+    }
+    for (const core::Collection &collection : m_collections) {
+        if (!collection.hidden) {
+            entries.append({collection.id, collection.name, folderPathOf(collection.folderId), Kind::Collection});
         }
     }
     for (const core::Note &note : m_notes) {
@@ -231,7 +244,21 @@ void MainWindow::showCommandPalette()
     }
     m_palette->refreshStyle();
     m_palette->setEntries(entries);
-    m_palette->openCentered(this);
+    if (standalone && (!isVisible() || isMinimized())) {
+        // Chamado pelo atalho global com o Kai oculto: abre só a paleta, na tela sob o cursor, sem trazer a janela.
+        const QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+        if (!screen) {
+            screen = QGuiApplication::primaryScreen();
+        }
+        m_palette->openOnScreen(screen->availableGeometry());
+    } else {
+        m_palette->openCentered(this);
+    }
+}
+
+void MainWindow::showCommandPaletteFromHotkey()
+{
+    showCommandPalette(true);
 }
 
 // Buscar item (Ctrl+F): a mesma busca da paleta, mas inerte. Escolher leva até o item na árvore e abre o menu de ações
@@ -251,12 +278,18 @@ void MainWindow::showFindPalette()
     QVector<QuickRunPopup::Entry> entries;
     for (const core::Command &command : m_commandsData.commands) {
         if (!command.hidden) {
-            entries.append({command.id, command.name, folderPathOf(command.folderId), Kind::Command});
+            const Kind kind = command.type == core::CommandType::Http ? Kind::Http : Kind::Command;
+            entries.append({command.id, command.name, folderPathOf(command.folderId), kind});
         }
     }
     for (const core::Folder &folder : m_commandsData.folders) {
         if (!folder.hidden) {
             entries.append({folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder});
+        }
+    }
+    for (const core::Collection &collection : m_collections) {
+        if (!collection.hidden) {
+            entries.append({collection.id, collection.name, folderPathOf(collection.folderId), Kind::Collection});
         }
     }
     for (const core::Note &note : m_notes) {

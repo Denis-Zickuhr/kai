@@ -6,11 +6,14 @@
 #include "utils/translation-manager.h"
 
 #include <QApplication>
+#include <QHash>
+#include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
+#include <QPushButton>
 #include <QScreen>
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
@@ -36,12 +39,35 @@ QString iconFor(QuickRunPopup::Kind kind)
 {
     switch (kind) {
     case QuickRunPopup::Kind::Command: return QStringLiteral("square-terminal");
+    case QuickRunPopup::Kind::Http: return QStringLiteral("globe");
     case QuickRunPopup::Kind::Folder: return QStringLiteral("folder");
+    case QuickRunPopup::Kind::Collection: return QStringLiteral("database");
     case QuickRunPopup::Kind::Note: return QStringLiteral("notebook");
     case QuickRunPopup::Kind::Environment: return QStringLiteral("layers");
     case QuickRunPopup::Kind::Action: return QStringLiteral("zap");
     }
     return {};
+}
+
+QString labelFor(QuickRunPopup::Kind kind)
+{
+    switch (kind) {
+    case QuickRunPopup::Kind::Command: return utils::tr(QStringLiteral("palette.filter.command"));
+    case QuickRunPopup::Kind::Http: return utils::tr(QStringLiteral("palette.filter.http"));
+    case QuickRunPopup::Kind::Folder: return utils::tr(QStringLiteral("palette.filter.folder"));
+    case QuickRunPopup::Kind::Collection: return utils::tr(QStringLiteral("palette.filter.collection"));
+    case QuickRunPopup::Kind::Note: return utils::tr(QStringLiteral("palette.filter.note"));
+    case QuickRunPopup::Kind::Environment: return utils::tr(QStringLiteral("palette.filter.environment"));
+    case QuickRunPopup::Kind::Action: return utils::tr(QStringLiteral("palette.filter.action"));
+    }
+    return {};
+}
+
+// Memória do filtro por chave de paleta (process-local): sobrevive entre aberturas da mesma paleta.
+QHash<QString, QSet<int>> &filterMemory()
+{
+    static QHash<QString, QSet<int>> memory;
+    return memory;
 }
 
 // Nome à esquerda, pastas em cinza à direita; o realce da linha usa o raio do tema.
@@ -107,6 +133,15 @@ QuickRunPopup::QuickRunPopup(QWidget *parent)
     m_search->installEventFilter(this);
     layout->addWidget(m_search);
 
+    // Barra de chips de filtro por tipo (preenchida em setEntries conforme os tipos presentes).
+    m_filterBar = new QWidget(this);
+    m_filterBar->setObjectName(QStringLiteral("quickRunFilterBar"));
+    auto *filterLayout = new QHBoxLayout(m_filterBar);
+    filterLayout->setContentsMargins(0, 0, 0, 0);
+    filterLayout->setSpacing(4);
+    m_filterBar->setVisible(false);
+    layout->addWidget(m_filterBar);
+
     m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("quickRunList"));
     m_list->setFrameShape(QFrame::NoFrame);
@@ -133,8 +168,11 @@ void QuickRunPopup::refreshStyle()
     setStyleSheet(QStringLiteral(
         "#quickRunSearch { background-color: %1; color: %3; border: 1px solid %2; border-radius: %4px; padding: 6px 10px; }"
         "#quickRunList { background: transparent; border: none; outline: none; }"
+        "#quickRunFilterChip { background-color: %1; color: %5; border: 1px solid %2; border-radius: %4px; padding: 3px 9px; }"
+        "#quickRunFilterChip:checked { background-color: %6; color: %7; border: 1px solid %6; }"
         "QLabel { color: %5; background: transparent; }")
-        .arg(tk::bg(), tk::borderColor(), tk::fg()).arg(tk::radiusSm()).arg(tk::mutedFg()));
+        .arg(tk::bg(), tk::borderColor(), tk::fg()).arg(tk::radiusSm())
+        .arg(tk::mutedFg(), tk::accent(), tk::buttonFg()));
     update();
 }
 
@@ -158,27 +196,114 @@ void QuickRunPopup::setEntries(const QVector<Entry> &entries)
         const int byName = a.name.compare(b.name, Qt::CaseInsensitive);
         return byName != 0 ? byName < 0 : a.path.compare(b.path, Qt::CaseInsensitive) < 0;
     });
+
+    // Tipos presentes (na ordem do enum), para montar os chips de filtro.
+    m_availableKinds.clear();
+    for (const Entry &entry : std::as_const(m_entries)) {
+        if (!m_availableKinds.contains(entry.kind)) {
+            m_availableKinds.append(entry.kind);
+        }
+    }
+    std::sort(m_availableKinds.begin(), m_availableKinds.end());
+
+    // Restaura o filtro lembrado desta paleta, descartando tipos que sumiram.
+    const QSet<int> remembered = filterMemory().value(filterMemoryKey());
+    QSet<int> stillValid;
+    for (Kind kind : std::as_const(m_availableKinds)) {
+        if (remembered.contains(static_cast<int>(kind))) {
+            stillValid.insert(static_cast<int>(kind));
+        }
+    }
+    m_activeKinds = stillValid;
+
+    rebuildFilterChips();
     applyFilter();
+}
+
+QString QuickRunPopup::filterMemoryKey() const
+{
+    const QString name = objectName();
+    return name.isEmpty() ? QStringLiteral("quickRun") : name;
+}
+
+void QuickRunPopup::rebuildFilterChips()
+{
+    auto *filterLayout = qobject_cast<QHBoxLayout *>(m_filterBar->layout());
+    if (!filterLayout) {
+        return;
+    }
+    // Limpa os chips antigos.
+    QLayoutItem *item = nullptr;
+    while ((item = filterLayout->takeAt(0)) != nullptr) {
+        if (QWidget *w = item->widget()) {
+            w->deleteLater();
+        }
+        delete item;
+    }
+
+    // Só vale a pena filtrar com mais de um tipo presente.
+    if (m_availableKinds.size() < 2) {
+        m_filterBar->setVisible(false);
+        return;
+    }
+
+    for (Kind kind : std::as_const(m_availableKinds)) {
+        auto *chip = new QPushButton(labelFor(kind), m_filterBar);
+        chip->setObjectName(QStringLiteral("quickRunFilterChip"));
+        chip->setCheckable(true);
+        chip->setCursor(Qt::PointingHandCursor);
+        chip->setFocusPolicy(Qt::NoFocus);
+        chip->setIcon(LucideIcons::icon(iconFor(kind), QColor(tk::mutedFg()), 13));
+        chip->setChecked(m_activeKinds.contains(static_cast<int>(kind)));
+        const int kindInt = static_cast<int>(kind);
+        connect(chip, &QPushButton::toggled, this, [this, kindInt](bool on) {
+            if (on) {
+                m_activeKinds.insert(kindInt);
+            } else {
+                m_activeKinds.remove(kindInt);
+            }
+            filterMemory()[filterMemoryKey()] = m_activeKinds;
+            applyFilter();
+        });
+        filterLayout->addWidget(chip);
+    }
+    filterLayout->addStretch(1);
+    m_filterBar->setVisible(true);
+    refreshStyle();
 }
 
 void QuickRunPopup::applyFilter()
 {
     const QString query = m_search->text().trimmed();
     m_list->clear();
+
+    // Entradas que passam no filtro de tipo (vazio = todos).
+    QVector<int> allowed;
+    for (int i = 0; i < m_entries.size(); ++i) {
+        if (m_activeKinds.isEmpty() || m_activeKinds.contains(static_cast<int>(m_entries.at(i).kind))) {
+            allowed.append(i);
+        }
+    }
+
     QVector<int> order;
     if (query.isEmpty()) {
-        for (int i = 0; i < m_entries.size() && i < kMaxResults; ++i) {
-            order.append(i);
+        for (int idx : std::as_const(allowed)) {
+            if (order.size() >= kMaxResults) {
+                break;
+            }
+            order.append(idx);
         }
     } else {
         // O nome vem primeiro no texto buscado: casar o começo dele rende mais que casar só nas pastas.
         QStringList candidates;
-        for (const Entry &entry : std::as_const(m_entries)) {
+        candidates.reserve(allowed.size());
+        for (int idx : std::as_const(allowed)) {
+            const Entry &entry = m_entries.at(idx);
             candidates << entry.name + QLatin1Char(' ') + entry.path;
         }
         const QVector<FuzzyMatchResult> found = FuzzyMatcher::search(query, candidates);
         for (int i = 0; i < found.size() && i < kMaxResults; ++i) {
-            order.append(found.at(i).originalIndex);
+            order.append(allowed.at(found.at(i).originalIndex));
         }
     }
     for (int index : std::as_const(order)) {
@@ -210,7 +335,7 @@ void QuickRunPopup::chooseCurrent()
     const QString id = item->data(kIdRole).toString();
     const auto kind = static_cast<Kind>(item->data(kKindRole).toInt());
     hide();
-    if (kind == Kind::Command) {
+    if (kind == Kind::Command || kind == Kind::Http) {
         emit commandChosen(id);
     }
     emit entryChosen(kind, id);

@@ -71,6 +71,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     const core::SettingsData initialSettings = m_configManager.loadSettings();
     core::setKipSettings(initialSettings.kip);
+    core::setIdentificationSettings(initialSettings.identification);
     // O idioma tem de estar carregado antes de construir a UI.
     utils::TranslationManager::instance().loadLanguage(initialSettings.language);
     m_outputMaxLogSizeChars = qMax(1, initialSettings.outputMaxLogSizeKb) * 1024;

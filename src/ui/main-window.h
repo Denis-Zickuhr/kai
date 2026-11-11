@@ -459,7 +459,9 @@ private:
     QuickRunPopup *preparedQuickRun();
     QuickRunPopup *m_quickRun = nullptr;
     // Ctrl+K: a mesma janelinha do "+", mas com comandos, pastas, notas, ambientes e ações.
-    void showCommandPalette();
+    void showCommandPalette(bool standalone = false);
+    // Atalho global da paleta (settings.paletteHotkey): abre a paleta mesmo com o Kai oculto, só ela, sem trazer a janela.
+    void showCommandPaletteFromHotkey();
     void runPaletteAction(const QString &actionId);
     void revealInTree(const QString &itemId, const std::function<void()> &fallback);
     void showCommandInTree(const QString &commandId);
@@ -709,6 +711,8 @@ private:
 
     QSystemTrayIcon *m_trayIcon = nullptr;
     std::unique_ptr<QHotkey> m_globalHotkey;
+    // Segundo atalho global, opcional (settings.paletteHotkey): abre a paleta Ctrl+K de fora do Kai.
+    std::unique_ptr<QHotkey> m_paletteHotkey;
     ProcessListDialog *m_processListDialog = nullptr;
 
     // Borda da janela frameless sob o cursor (0 = interior); `kResizeMargin` é a largura da faixa sensível.

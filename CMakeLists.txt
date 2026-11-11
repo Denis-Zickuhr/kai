@@ -200,6 +200,8 @@ add_library(kai-core ${KAI_LIB_TYPE}
     src/core/unified-diff.cpp
     src/core/kip-settings.h
     src/core/kip-settings.cpp
+    src/core/identification-settings.h
+    src/core/identification-settings.cpp
     src/core/ipc-endpoint.h
     src/core/ipc-endpoint.cpp
     src/core/project-tree-scan.h
@@ -592,6 +594,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/settings/tabs/actions-tab.cpp
     src/ui/features/settings/tabs/kip-tab.h
     src/ui/features/settings/tabs/kip-tab.cpp
+    src/ui/features/settings/tabs/identification-tab.h
+    src/ui/features/settings/tabs/identification-tab.cpp
     src/ui/features/settings/tabs/notifications-tab.cpp
     src/ui/shared/manifesto-dialog.h
     src/ui/shared/manifesto-dialog.cpp

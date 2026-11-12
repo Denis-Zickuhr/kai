@@ -24,6 +24,31 @@ Commands from **ancestor folders** show up as available hooks in
 subfolders (marked `⤴ folder`). A utility defined at the root can serve
 every command below it, without duplication.
 
+## Hooks on folders
+
+A **folder** can have hooks too (folder editor → **Hooks** tab): they wrap **every command in that folder and in its
+subfolders**. A command's own hooks are added to them.
+
+| Phase | Order |
+|---|---|
+| **pre** | from the outermost folder to the command: root folder → … → folder → the command's own |
+| **post** and **cleanup** | the order unwinds: the command's own, then the folders from the nearest to the outermost |
+
+Nothing is inherited if you don't want it — you have to say so:
+
+- a **subfolder** turns off *Inherit hooks from parent folders*: it ignores the hooks of the folders above it (its own
+  hooks, and those of its children, still apply);
+- a **command** turns off *Inherit folder hooks* (its **Hooks** tab): it ignores every folder hook and only its own run.
+
+The command's Hooks tab and the subfolder's tab list what arrives from above (read-only), with the folder it comes from.
+A command is never a hook of itself: if the folder hook `Login` lives in that same folder, running `Login` does not call
+`Login` before itself. A repeated hook runs once per phase. Folder hooks are saved in `kai.yml` by command **name** (top of
+the file for the project, on a `folders:` entry for a subfolder; `inherit_hooks: false` / `inherit_folder_hooks: false` to
+opt out) — see the [manifesto](../assets/manifesto/kai-manifesto.md#91-hooks).
+
+A command nested inside another command does not inherit the hooks of the folders above (the folder chain is read from
+the command's `folder`, like the HTTP defaults).
+
 ## Execution conditions
 
 A hook can also carry its own **execution conditions** — a guard that

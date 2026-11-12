@@ -200,8 +200,16 @@ void LayoutController::populateViewMenu(QMenu *menu)
         // O estilo do menu não desenha a marca de seleção ao lado de um ícone: o painel que está na janela leva o ícone na
         // cor de destaque, o fechado na cor apagada.
         const bool placed = model.isPlaced(id);
-        QAction *action = menu->addAction(
-            LucideIcons::icon(registry->icon(id), QColor(placed ? tk::accent() : tk::mutedFg()), 16), registry->title(id));
+        const QIcon rowIcon = LucideIcons::icon(registry->icon(id), QColor(placed ? tk::accent() : tk::mutedFg()), 16);
+        // Painel com setinha (ex: Commands, com as árvores extras): a linha é um submenu, e o primeiro item dele abre ou
+        // fecha o painel como as outras linhas.
+        const auto rowSpec = registry->spec(id);
+        QMenu *rowMenu = nullptr;
+        if (rowSpec && rowSpec->chevronInViewMenu && rowSpec->chevronMenu) {
+            rowMenu = menu->addMenu(rowIcon, registry->title(id));
+        }
+        QAction *action = rowMenu ? rowMenu->addAction(rowIcon, registry->title(id))
+                                  : menu->addAction(rowIcon, registry->title(id));
         action->setCheckable(true);
         action->setChecked(placed);
         action->setEnabled(registry->closable(id) || !model.isPlaced(id));
@@ -212,6 +220,10 @@ void LayoutController::populateViewMenu(QMenu *menu)
                 m_dock->closeView(id);
             }
         });
+        if (rowMenu) {
+            rowMenu->addSeparator();
+            rowSpec->chevronMenu(rowMenu);
+        }
     }
     menu->addSeparator();
 

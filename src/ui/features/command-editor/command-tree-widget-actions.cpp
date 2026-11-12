@@ -12,12 +12,14 @@ using namespace cmdtree;
 
 void CommandTreeWidget::setGlobalActions(const QVector<core::GlobalAction> &actions)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setGlobalActions(actions); });
     m_globalActions = actions;
     refreshActionViews();
 }
 
 void CommandTreeWidget::setFocusedAction(const QString &virtualId)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setFocusedAction(virtualId); });
     if (m_focusedActionId == virtualId) {
         return;
     }
@@ -27,12 +29,14 @@ void CommandTreeWidget::setFocusedAction(const QString &virtualId)
 
 void CommandTreeWidget::setActionsWithOutput(const QSet<QString> &virtualIds)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setActionsWithOutput(virtualIds); });
     m_actionsWithOutput = virtualIds;
     refreshActionViews();
 }
 
 void CommandTreeWidget::setOutputMarksEnabled(bool enabled)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setOutputMarksEnabled(enabled); });
     if (m_outputMarks == enabled) {
         return;
     }
@@ -42,6 +46,7 @@ void CommandTreeWidget::setOutputMarksEnabled(bool enabled)
 
 void CommandTreeWidget::setShownCommand(const QString &commandId)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setShownCommand(commandId); });
     if (m_shownCommandId == commandId) {
         return;
     }
@@ -51,6 +56,7 @@ void CommandTreeWidget::setShownCommand(const QString &commandId)
 
 void CommandTreeWidget::setInlineActionsEnabled(bool enabled)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setInlineActionsEnabled(enabled); });
     m_inlineActions = enabled;
     for (QTreeWidget *tree : std::as_const(m_treesByRootId)) {
         for (auto *delegate : tree->findChildren<InlineRowActions *>(QString(), Qt::FindDirectChildrenOnly)) {

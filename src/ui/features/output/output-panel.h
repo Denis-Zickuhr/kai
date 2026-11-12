@@ -31,6 +31,7 @@ class QPlainTextEdit;
 class QShortcut;
 class QTabBar;
 class QTabWidget;
+class QTextDocument;
 class QTextBrowser;
 class QPushButton;
 class QToolButton;
@@ -41,6 +42,7 @@ class QScrollArea;
 namespace kai::ui {
 
 class JsonViewerWidget;
+class LogLineModel;
 class JsonSyntaxHighlighter;
 class HttpWaitView;
 class KipView;
@@ -67,9 +69,34 @@ public:
     };
 
     explicit OutputPanel(QWidget *parent = nullptr);
+    ~OutputPanel() override;
 
     void appendOutput(const QString &rawText, bool isError = false);
     void clearAll();
+    // SESSÕES DE TEXTO. O texto da Saída de cada comando recente (o documento do texto cru, o modelo da saída formatada e o estado
+    // do parser de cores) fica MONTADO: voltar a um comando só troca o que a tela mostra, sem reimprimir (parse ANSI, cards,
+    // layout) e com a rolagem em que ele ficou. Guarda até 6; a mais antiga sai. O resto do painel (abas HTTP, JSON, cabeçalho)
+    // não é da sessão: ao trocar, o que era do comando que saiu é zerado e o dono reaplica o do novo.
+    // `key` = id do comando. true = a sessão já existia (o conteúdo foi preservado).
+    bool activateSession(const QString &key);
+    bool hasSession(const QString &key) const;
+    QString activeSessionKey() const;
+    // Quanto do log do comando (em caracteres, na contagem do dono) já está nesta sessão, e de qual "geração" do log (muda
+    // quando a execução refaz o log): o dono compara para saber se a sessão está em dia, se falta só o final ou se refaz.
+    qint64 sessionShownTotal() const;
+    int sessionGeneration() const;
+    void setSessionShown(qint64 total, int generation);
+    void addSessionShown(qint64 chars);
+    // Esquece a sessão (a execução refez o log, o usuário descartou a saída).
+    void dropSession(const QString &key);
+
+    // Rola as duas vistas (texto e formatada) até o fim.
+    void scrollToEnd();
+    // As vistas já receberam todo o texto (nada em fila).
+    bool outputLoaded() const;
+    // A lixeira (e "Limpar" do menu): limpa a tela E avisa o dono, que descarta o que guardou desta saída (senão ela voltava
+    // ao selecionar o comando de novo).
+    void requestClear();
     void setCommandName(const QString &name);
     void setCommandId(const QString &id);
     QString commandId() const { return m_commandId; }
@@ -195,6 +222,8 @@ signals:
     void kipFocusWindowRequested();
     // O botão "salvar a saída como nota" (quem sabe de que comando é a saída é o app).
     void saveAsNoteRequested();
+    // O usuário descartou a saída (lixeira). A tela já foi limpa; o dono esquece o log guardado.
+    void discardRequested();
     // O cabeçalho (abas, ações e o botão de recolher) apareceu/sumiu: a barra de guias leva o botão de recolher quando ele some.
     void headerVisibilityChanged(bool visible);
 
@@ -254,6 +283,27 @@ private:
     void recompactExistingOutput();
     static QString userName();
     void refreshLineNumberArea();
+
+    struct TextSession {
+        QString key;
+        QTextDocument *document = nullptr;
+        LogLineModel *model = nullptr;
+        bool ownsViews = true; // a sessão inicial usa o documento e o modelo que as vistas criaram (não os apaga)
+        AnsiTextParser parser;
+        bool atLineStart = true;
+        bool lastLineWasBlank = false;
+        qint64 shownTotal = 0;
+        int generation = 0;
+        int outputScroll = 0;
+        bool outputAtBottom = true;
+        int formattedScroll = 0;
+        bool formattedAtBottom = true;
+    };
+    QVector<TextSession *> m_sessions; // a mais recente primeiro
+    TextSession *m_session = nullptr;
+    void initTextSessions();
+    void saveActiveSession();
+    void clearSharedState();   // o que não é da sessão: HTTP, JSON, aviso de pulado... (ver clearAll)
 
     QString m_commandId;
     OutputStatus m_status = OutputStatus::Idle;

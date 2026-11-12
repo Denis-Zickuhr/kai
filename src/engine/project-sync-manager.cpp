@@ -49,6 +49,8 @@ const QStringList kRootFolderKeys = {
     QStringLiteral("env_vars"),
     QStringLiteral("secret_env_keys"),
     QStringLiteral("http_defaults"),
+    QStringLiteral("hooks"),
+    QStringLiteral("inherit_hooks"),
     QStringLiteral("actions"),
     QStringLiteral("expansion_actions"),
     QStringLiteral("action_groups"),
@@ -486,6 +488,12 @@ SyncPlan ProjectSyncManager::computePlan(const PlanInputs &in)
     if (fileRoot.value(QStringLiteral("http_defaults")).isObject()) {
         plan.rootHttpDefaults = core::HttpDefaults::fromJson(fileRoot.value(QStringLiteral("http_defaults")).toObject());
     }
+    if (fileRoot.value(QStringLiteral("hooks")).isObject()) {
+        plan.rootHooksByName = fileRoot.value(QStringLiteral("hooks")).toObject();
+    }
+    if (fileRoot.contains(QStringLiteral("inherit_hooks"))) {
+        plan.rootInheritHooks = fileRoot.value(QStringLiteral("inherit_hooks")).toBool(true);
+    }
     if (core::isKaiExportFormat(fileRoot)) {
         plan.imported = core::ConfigManager::importFromJson(QString::fromUtf8(QJsonDocument(fileRoot).toJson()));
         if (!plan.imported.ok) {
@@ -786,6 +794,9 @@ void reconcileIds(core::ConfigManager::ImportResult &imported, const core::Comma
         if (f.parentId.has_value()) f.parentId = mapped(*f.parentId);
         f.actions = mappedList(f.actions);
         f.expansionActions = mappedList(f.expansionActions);
+        f.hooks.pre = mappedList(f.hooks.pre);
+        f.hooks.post = mappedList(f.hooks.post);
+        f.hooks.cleanup = mappedList(f.hooks.cleanup);
         QMap<QString, QString> groups;
         for (auto it = f.actionGroups.constBegin(); it != f.actionGroups.constEnd(); ++it) {
             groups.insert(mapped(it.key()), it.value());
@@ -958,6 +969,43 @@ bool ProjectSyncManager::applyFileToKai(const SyncPlan &plan, core::CommandsData
         pendingRefs.pendingFolderActions[folderId] = plan.rootActions->actions;
         pendingRefs.pendingFolderExpansion[folderId] = plan.rootActions->expansion;
         pendingRefs.pendingFolderGroups[folderId] = plan.rootActions->groups;
+    }
+    // HOOKS do projeto (pasta raiz): por nome no arquivo, ids dos comandos do projeto aqui. Um nome sem comando é ignorado.
+    if (plan.rootHooksByName.has_value() || plan.rootInheritHooks.has_value()) {
+        QSet<QString> projectFolderIds{folderId};
+        collectDescendantFolderIds(folderId, data.folders, projectFolderIds);
+        auto idForName = [&](const QString &name) {
+            for (const core::Command &c : std::as_const(data.commands)) {
+                if (c.name == name && projectFolderIds.contains(c.folderId)) {
+                    return c.id;
+                }
+            }
+            return QString();
+        };
+        for (core::Folder &f : data.folders) {
+            if (f.id != folderId) {
+                continue;
+            }
+            if (plan.rootHooksByName.has_value()) {
+                auto resolve = [&](const char *key) {
+                    QStringList ids;
+                    for (const QJsonValue &nv : plan.rootHooksByName->value(QLatin1String(key)).toArray()) {
+                        const QString id = idForName(nv.toString());
+                        if (!id.isEmpty()) {
+                            ids << id;
+                        }
+                    }
+                    return ids;
+                };
+                f.hooks.pre = resolve("pre");
+                f.hooks.post = resolve("post");
+                f.hooks.cleanup = resolve("cleanup");
+            }
+            if (plan.rootInheritHooks.has_value()) {
+                f.inheritHooks = *plan.rootInheritHooks;
+            }
+            break;
+        }
     }
     QVector<core::GlobalAction> noGlobalActions; // as globais são das Configurações: o sync nunca as toca
     const int unresolved = core::ConfigManager::applyImportedActions(pendingRefs, data.folders, data.commands, noGlobalActions);

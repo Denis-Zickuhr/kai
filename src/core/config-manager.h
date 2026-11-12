@@ -10,6 +10,8 @@
 #include "core/ai-profile.h"
 #include "core/interpreter-settings.h"
 #include "core/identification-settings.h"
+#include "core/palette-usage.h"
+#include "core/tree-view.h"
 #include "core/kip-settings.h"
 #include "core/models.h"
 
@@ -259,6 +261,8 @@ public:
     QString notesFilePath() const;
     // Memória do leitor de documentos (posições, rascunhos, recentes) — ui::DocSessionStore.
     QString docUsageFilePath() const;
+    QString paletteUsageFilePath() const;
+    QString treeViewsFilePath() const;
     QString docStateFilePath() const;
     // Layout flexível da janela (zonas, painéis, flutuantes, perspectivas) — ui::layout::LayoutStore.
     // Estado pessoal: fora do settings.json e nunca no YAML do projeto.
@@ -311,6 +315,14 @@ public:
     // (fora de exportação e sync); ordena o menu de documentos por uso.
     QMap<QString, int> loadDocUsage();
     bool saveDocUsage(const QMap<QString, int> &usage);
+
+    // palette-usage.json: o que mais se usa na paleta (Ctrl+K), para subir na lista. Estado LOCAL, como o doc-usage.
+    PaletteUsage loadPaletteUsage();
+    bool savePaletteUsage(const PaletteUsage &usage);
+
+    // tree-views.json: as árvores extras do menu Exibir (core::TreeViewDef). Estado LOCAL e pessoal, como o layout.json.
+    QVector<TreeViewDef> loadTreeViews();
+    bool saveTreeViews(const QVector<TreeViewDef> &views);
 
     // --- Import/Export de configuração ---
     // O JSON exportado tem o cabeçalho {"kai_export": {"scope": ..., "version": 1}} para validação na importação.

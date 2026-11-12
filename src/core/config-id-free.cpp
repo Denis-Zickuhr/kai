@@ -109,6 +109,28 @@ QJsonObject stripIdsFromExport(QJsonObject root, const QString &exportRootFolder
             f.remove(QStringLiteral("expansion_actions"));
             f.remove(QStringLiteral("action_groups"));
         }
+        // Hooks da pasta: ids -> NOMES de comando (como nos comandos; o que não tem nome conhecido some).
+        if (f.value(QStringLiteral("hooks")).isObject()) {
+            QJsonObject hooksObj = f.value(QStringLiteral("hooks")).toObject();
+            QJsonObject namedHooks;
+            for (const char *key : {"pre", "post", "cleanup"}) {
+                QJsonArray namesArr;
+                for (const QJsonValue &idv : hooksObj.value(QLatin1String(key)).toArray()) {
+                    const QString name = commandNameById.value(idv.toString(), allCommandNames.value(idv.toString()));
+                    if (!name.isEmpty()) {
+                        namesArr.append(name);
+                    }
+                }
+                if (!namesArr.isEmpty()) {
+                    namedHooks.insert(QLatin1String(key), namesArr);
+                }
+            }
+            if (namedHooks.isEmpty()) {
+                f.remove(QStringLiteral("hooks"));
+            } else {
+                f.insert(QStringLiteral("hooks"), namedHooks);
+            }
+        }
         if (!exportRootFolderId.isEmpty() && id == exportRootFolderId) {
             // A pasta exportada não entra na lista de filhas, mas nome/ícone
             // vão em "root_folder"; sem isso um comando direto na raiz perdia
@@ -384,6 +406,28 @@ QJsonObject resolveIdFreeImport(QJsonObject root)
             c.insert(QStringLiteral("folder_id"), folderId);
         }
         newCollections.append(c);
+    }
+
+    // Hooks das pastas: nomes -> ids dos comandos do PRÓPRIO pacote; um nome sem comando no pacote é ignorado (a mesma regra
+    // dos hooks de comando).
+    for (int i = 0; i < newFolders.size(); ++i) {
+        QJsonObject f = newFolders.at(i).toObject();
+        if (!f.value(QStringLiteral("hooks")).isObject()) {
+            continue;
+        }
+        QJsonObject hooksObj = f.value(QStringLiteral("hooks")).toObject();
+        for (const char *key : {"pre", "post", "cleanup"}) {
+            QJsonArray idsArr;
+            for (const QJsonValue &nv : hooksObj.value(QLatin1String(key)).toArray()) {
+                const QString resolved = commandIdByName.value(nv.toString());
+                if (!resolved.isEmpty()) {
+                    idsArr.append(resolved);
+                }
+            }
+            hooksObj.insert(QLatin1String(key), idsArr);
+        }
+        f.insert(QStringLiteral("hooks"), hooksObj);
+        newFolders.replace(i, f);
     }
 
     // Ações (pasta e globais): nomes -> ids dos comandos do PRÓPRIO pacote. O

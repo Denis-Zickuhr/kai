@@ -40,6 +40,10 @@ struct ViewSpec {
     std::function<bool()> available;
     // Itens a mais no menu do painel (clique direito na aba), depois dos de posição. Ausente = nenhum.
     std::function<void(QMenu *menu)> menuExtras;
+    // Menu da setinha ao lado do título da aba (ex: as árvores extras de Commands). Ausente = sem setinha. Preenche `menu`.
+    std::function<void(QMenu *menu)> chevronMenu;
+    // No menu Exibir a linha do painel vira um submenu: o item que abre/fecha o painel e depois o `chevronMenu`.
+    bool chevronInViewMenu = false;
 };
 
 // Registro dos painéis conhecidos. Os fixos (commands, output, document, ...) são registrados pelo MainWindow; os

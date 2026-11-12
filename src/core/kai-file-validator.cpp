@@ -277,7 +277,7 @@ const QSet<QString> &commandKeys()
         QStringLiteral("auto_run_delay_sec"), QStringLiteral("order"), QStringLiteral("params"),
         QStringLiteral("responders"), QStringLiteral("execution_conditions"),
         QStringLiteral("condition_combinator"), QStringLiteral("condition_skip_behavior"),
-        QStringLiteral("hooks"), QStringLiteral("id"), QStringLiteral("cli_path"),
+        QStringLiteral("hooks"), QStringLiteral("inherit_folder_hooks"), QStringLiteral("id"), QStringLiteral("cli_path"),
         QStringLiteral("cli_working_dir"),
         QStringLiteral("language"), QStringLiteral("interpreter"),
         QStringLiteral("cron_expression"), QStringLiteral("cron_notify_on_run"),
@@ -673,6 +673,7 @@ const QSet<QString> &folderKeys()
         QStringLiteral("terminal_target"), QStringLiteral("env_vars"), QStringLiteral("id"),
         QStringLiteral("parent_id"), QStringLiteral("cli_path"), QStringLiteral("cli_description"),
         QStringLiteral("working_dir"), QStringLiteral("actions"), QStringLiteral("http_defaults"),
+        QStringLiteral("hooks"), QStringLiteral("inherit_hooks"),
     };
     return keys;
 }
@@ -816,7 +817,7 @@ const QSet<QString> &topLevelKeys()
         QStringLiteral("collections"), QStringLiteral("notes"), QStringLiteral("terminal_profiles"),
         QStringLiteral("shortcuts"), QStringLiteral("dynamic_vars"), QStringLiteral("id"),
         QStringLiteral("name"), QStringLiteral("cli_path"), QStringLiteral("cli_description"),
-        QStringLiteral("http_defaults"),
+        QStringLiteral("http_defaults"), QStringLiteral("hooks"), QStringLiteral("inherit_hooks"),
     };
     return keys;
 }

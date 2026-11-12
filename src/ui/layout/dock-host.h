@@ -170,6 +170,8 @@ private:
     Zone nominalZoneAt(const QPoint &hostPos) const;
 
     void showPanelMenu(const QString &id, const QPoint &globalPos);
+    // A setinha da aba: o menu extra do painel (ViewSpec::chevronMenu).
+    void showChevronMenu(const QString &id, const QPoint &globalPos);
 
     ViewRegistry *m_registry;
     QWidget *m_floatParent;

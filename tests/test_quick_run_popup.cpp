@@ -180,6 +180,110 @@ private slots:
         QVERIFY(popup.searchField()->text().isEmpty());
         QCOMPARE(popup.visibleIds().size(), 4);
     }
+
+    void mostUsedEntriesComeFirstWhenTheQueryIsEmpty()
+    {
+        auto list = entries();
+        list[0].score = 0.5; // c1
+        list[2].score = 3.0; // c3
+        QuickRunPopup popup;
+        popup.setEntries(list);
+        QCOMPARE(popup.visibleIds(), (QStringList{"c3", "c1", "c4", "c2"})); // usados por pontuação, o resto por nome
+    }
+
+    void usageBreaksTiesButNotClearlyBetterMatches()
+    {
+        QVector<QuickRunPopup::Entry> list = {
+            {QStringLiteral("a"), QStringLiteral("deploy api"), QString()},
+            {QStringLiteral("b"), QStringLiteral("deploy app"), QString()},
+            {QStringLiteral("c"), QStringLiteral("xx d e p l o y"), QString()}};
+        list[1].score = 5.0;
+        QuickRunPopup popup;
+        popup.setEntries(list);
+        popup.openBelow(QPoint(50, 50));
+        QTest::keyClicks(popup.searchField(), QStringLiteral("deploy"));
+        QCOMPARE(popup.visibleIds().first(), QStringLiteral("b")); // empate de casamento: o mais usado
+        QCOMPARE(popup.visibleIds().last(), QStringLiteral("c"));  // espalhado continua atrás
+    }
+
+    void inlineActionsAreOffByDefault()
+    {
+        QuickRunPopup popup;
+        popup.setEntries(mixedEntries());
+        popup.openCentered(nullptr);
+        QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
+        QTest::keyClick(popup.searchField(), Qt::Key_E, Qt::ControlModifier);
+        QCOMPARE(action.size(), 0);
+        QVERIFY(!popup.triggerCurrentAction(QStringLiteral("edit")));
+        QCOMPARE(action.size(), 0);
+    }
+
+    void ctrlEEditsTheHighlightedItem()
+    {
+        using Kind = QuickRunPopup::Kind;
+        QuickRunPopup popup;
+        popup.setInlineActionsEnabled(true);
+        popup.setEntries(mixedEntries());
+        popup.openCentered(nullptr);
+        QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
+        QSignalSpy chosen(&popup, &QuickRunPopup::entryChosen);
+        QTest::keyClicks(popup.searchField(), QStringLiteral("runbook"));
+        QTest::keyClick(popup.searchField(), Qt::Key_E, Qt::ControlModifier);
+        QCOMPARE(action.size(), 1);
+        QCOMPARE(action.first().at(0).value<Kind>(), Kind::Note);
+        QCOMPARE(action.first().at(1).toString(), QStringLiteral("n1"));
+        QCOMPARE(action.first().at(2).toString(), QStringLiteral("edit"));
+        QCOMPARE(chosen.size(), 0); // a ação inline não é a ação padrão
+        QVERIFY(!popup.isVisible());
+    }
+
+    void tabWalksTheRowActionsAndEnterRunsTheMarkedOne()
+    {
+        QuickRunPopup popup;
+        popup.setInlineActionsEnabled(true);
+        popup.setEntries(mixedEntries());
+        popup.openCentered(nullptr);
+        QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
+        QTest::keyClicks(popup.searchField(), QStringLiteral("subir"));
+        QTest::keyClick(popup.searchField(), Qt::Key_Tab);
+        QTest::keyClick(popup.searchField(), Qt::Key_Tab); // 2ª ação: duplicar
+        QTest::keyClick(popup.searchField(), Qt::Key_Return);
+        QCOMPARE(action.size(), 1);
+        QCOMPARE(action.first().at(2).toString(), QStringLiteral("duplicate"));
+    }
+
+    void tabCyclesBackToTheDefaultActionAndEnterStillChooses()
+    {
+        QuickRunPopup popup;
+        popup.setInlineActionsEnabled(true);
+        popup.setEntries(mixedEntries());
+        popup.openCentered(nullptr);
+        QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
+        QSignalSpy chosen(&popup, &QuickRunPopup::entryChosen);
+        QTest::keyClicks(popup.searchField(), QStringLiteral("subir"));
+        QTest::keyClick(popup.searchField(), Qt::Key_Tab);
+        QTest::keyClick(popup.searchField(), Qt::Key_Backtab); // volta a nenhuma
+        QTest::keyClick(popup.searchField(), Qt::Key_Return);
+        QCOMPARE(action.size(), 0);
+        QCOMPARE(chosen.size(), 1);
+    }
+
+    void environmentsOnlyOfferEditAndActionsOfferNothing()
+    {
+        QuickRunPopup popup;
+        popup.setInlineActionsEnabled(true);
+        popup.setEntries(mixedEntries());
+        popup.openCentered(nullptr);
+        QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
+        QTest::keyClicks(popup.searchField(), QStringLiteral("staging"));
+        QVERIFY(!popup.triggerCurrentAction(QStringLiteral("duplicate")));
+        QVERIFY(popup.triggerCurrentAction(QStringLiteral("edit")));
+        QCOMPARE(action.size(), 1);
+
+        popup.openCentered(nullptr);
+        popup.searchField()->setText(QStringLiteral("settings"));
+        QVERIFY(!popup.triggerCurrentAction(QStringLiteral("edit")));
+    }
 };
 
 QTEST_MAIN(TestQuickRunPopup)

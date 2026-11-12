@@ -223,6 +223,7 @@ void MainWindow::updateFocusActions()
     }
     const QString id = m_commandTree->currentSelectionId();
     m_actionSidebar->setFocusActions(!m_smartFocus, canShowOutput(id), !documentTargetFor(id).isEmpty());
+    syncExtraBars();
 }
 
 bool MainWindow::isNoteId(const QString &id) const

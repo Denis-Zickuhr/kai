@@ -317,11 +317,21 @@ void MainWindow::setupUi()
     connect(m_commandTree, &CommandTreeWidget::collectionEditRequested, this, &MainWindow::handleCollectionEditRequested);
     connect(m_commandTree, &CommandTreeWidget::collectionDuplicateRequested, this, &MainWindow::handleCollectionDuplicateRequested);
     connect(m_commandTree, &CommandTreeWidget::collectionDeleteRequested, this, &MainWindow::handleCollectionDeleteRequested);
-    connect(m_commandTree, &CommandTreeWidget::newFolderRequested, this, &MainWindow::handleNewFolderRequested);
-    connect(m_commandTree, &CommandTreeWidget::newCommandRequested, this, &MainWindow::handleNewCommandRequested);
-    connect(m_commandTree, &CommandTreeWidget::newPipelineRequested, this, &MainWindow::handleNewPipelineRequested);
-    connect(m_commandTree, &CommandTreeWidget::newCollectionRequested, this, &MainWindow::handleNewCollectionRequested);
-    connect(m_commandTree, &CommandTreeWidget::newNoteRequested, this, &MainWindow::handleNewNoteRequested);
+    connect(m_commandTree, &CommandTreeWidget::newFolderRequested, this, [this](const QString &folderId) {
+        withCreationTarget(folderId, [this]() { handleNewFolderRequested(); });
+    });
+    connect(m_commandTree, &CommandTreeWidget::newCommandRequested, this, [this](const QString &folderId) {
+        withCreationTarget(folderId, [this]() { handleNewCommandRequested(); });
+    });
+    connect(m_commandTree, &CommandTreeWidget::newPipelineRequested, this, [this](const QString &folderId) {
+        withCreationTarget(folderId, [this]() { handleNewPipelineRequested(); });
+    });
+    connect(m_commandTree, &CommandTreeWidget::newCollectionRequested, this, [this](const QString &folderId) {
+        withCreationTarget(folderId, [this]() { handleNewCollectionRequested(); });
+    });
+    connect(m_commandTree, &CommandTreeWidget::newNoteRequested, this, [this](const QString &folderId) {
+        withCreationTarget(folderId, [this]() { handleNewNoteRequested(); });
+    });
     connect(m_commandTree, &CommandTreeWidget::noteActivated, this, &MainWindow::handleNoteActivated);
     connect(m_commandTree, &CommandTreeWidget::noteEditRequested, this, &MainWindow::handleNoteEditRequested);
     connect(m_commandTree, &CommandTreeWidget::noteDuplicateRequested, this, &MainWindow::handleNoteDuplicateRequested);
@@ -436,7 +446,10 @@ void MainWindow::setupUi()
     m_terminalDrawer = new TerminalDrawer(central);
     connect(m_terminalDrawer, &TerminalDrawer::detachedPanelCreated, this, [this](OutputPanel *panel, const QString &commandId) {
         panel->addHeaderWidget(makeCommandActionStrip(commandId));
+        connect(panel, &OutputPanel::discardRequested, this, [this, commandId]() { discardStoredOutput(commandId); });
     });
+    connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::discardRequested, this,
+            [this]() { discardStoredOutput(m_connectedTerminalCommandId); });
     connect(m_terminalDrawer, &TerminalDrawer::commandEntered, this, &MainWindow::handleTerminalInputEntered);
     connect(m_terminalDrawer->embeddedPanel(), &OutputPanel::saveAsNoteRequested, this,
             [this]() { saveOutputAsNote(m_connectedTerminalCommandId); });

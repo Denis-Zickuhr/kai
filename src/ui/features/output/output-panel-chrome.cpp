@@ -64,11 +64,11 @@ void OutputPanel::updateTabVisibility()
     updateBodyStackPage();
 }
 
-void OutputPanel::clearAll()
+// Tudo o que NÃO é do texto da sessão: respostas HTTP, JSON, cabeçalhos, aviso de pulado, terminal interativo. Zerado ao trocar
+// de comando (o dono reaplica o do novo) e em clearAll().
+void OutputPanel::clearSharedState()
 {
     m_lastHttpResult.reset();
-    m_outputView->clear();
-    m_formattedView->clearLog();
     m_headersView->setRowCount(0);
     m_requestHeadersView->setRowCount(0);
     m_requestBodyView->clear();
@@ -79,7 +79,6 @@ void OutputPanel::clearAll()
     if (m_requestBodyHeader) {
         m_requestBodyHeader->setVisible(false);
     }
-    m_parser.resetFormat();
     if (m_requestMetricsHeader) {
         m_requestMetricsHeader->clear();
     }
@@ -91,8 +90,6 @@ void OutputPanel::clearAll()
         m_requestInfoLabel->clear();
         m_requestInfoLabel->setVisible(false);
     }
-    m_atLineStart = true;
-    m_lastLineWasBlank = false;
     if (m_skipped) {
         m_skipped = false;
         updateBodyStackPage();
@@ -105,6 +102,26 @@ void OutputPanel::clearAll()
     if (m_interactiveMode && m_ptyTerminal) {
         m_ptyTerminal->resetScreen();
     }
+}
+
+void OutputPanel::clearAll()
+{
+    // O texto da sessão ativa (a tela do comando conectado) e, junto, o que não é dele.
+    m_outputView->clear();
+    m_formattedView->clearLog();
+    m_parser.resetFormat();
+    m_atLineStart = true;
+    m_lastLineWasBlank = false;
+    if (m_session) {
+        m_session->shownTotal = 0;
+    }
+    clearSharedState();
+}
+
+void OutputPanel::requestClear()
+{
+    clearAll();
+    emit discardRequested();
 }
 
 int OutputPanel::headerHeight() const

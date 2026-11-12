@@ -187,8 +187,19 @@ bool MainWindow::hasDuplicateCollectionName(const QString &folderId, const QStri
     return collectionNameCollides(m_collections, folderId, name, excludeId);
 }
 
+void MainWindow::withCreationTarget(const QString &folderId, const std::function<void()> &create)
+{
+    m_explicitCreateFolderId = folderId;
+    create();
+    m_explicitCreateFolderId.clear();
+}
+
 QString MainWindow::resolveTargetFolderId() const
 {
+    // Pedido explícito (menu de contexto numa pasta): vale mais que a seleção.
+    if (!m_explicitCreateFolderId.isEmpty()) {
+        return m_explicitCreateFolderId;
+    }
     // Prioriza a seleção na árvore (pasta, ou a pasta do comando/nota); sem
     // seleção, a raiz da aba ativa; sem nenhuma aba, vazio.
     const QString selectedId = m_commandTree->currentSelectionId();

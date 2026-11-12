@@ -35,7 +35,7 @@ QColor colorFor(InlineRowActions::Kind kind)
 } // namespace
 
 InlineRowActions::InlineRowActions(QTreeWidget *tree, Provider provider)
-    : QStyledItemDelegate(tree)
+    : ChipItemDelegate(tree)
     , m_tree(tree)
     , m_provider(std::move(provider))
 {
@@ -136,7 +136,7 @@ void InlineRowActions::paint(QPainter *painter, const QStyleOptionViewItem &opti
 {
     const QTreeWidgetItem *item = m_tree->itemFromIndex(index);
     if (!rowShowsButtons(item) || !m_provider) {
-        QStyledItemDelegate::paint(painter, option, index);
+        ChipItemDelegate::paint(painter, option, index);
         return;
     }
     const QVector<Kind> kinds = m_provider(item);
@@ -145,7 +145,11 @@ void InlineRowActions::paint(QPainter *painter, const QStyleOptionViewItem &opti
     // O nome termina antes dos botões em vez de passar por baixo deles.
     QStyleOptionViewItem opt(option);
     initStyleOption(&opt, index);
-    if (!rects.isEmpty()) {
+    if (!rects.isEmpty() && hasChip(index)) {
+        QStyleOptionViewItem narrowed(option);
+        narrowed.rect.setRight(rects.last().left() - kLeadGap);
+        ChipItemDelegate::paint(painter, narrowed, index);
+    } else if (!rects.isEmpty()) {
         const QWidget *widget = opt.widget;
         QStyle *style = widget ? widget->style() : QApplication::style();
         const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
@@ -153,7 +157,7 @@ void InlineRowActions::paint(QPainter *painter, const QStyleOptionViewItem &opti
         opt.text = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight, std::max(0, available));
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
     } else {
-        QStyledItemDelegate::paint(painter, option, index);
+        ChipItemDelegate::paint(painter, option, index);
     }
 
     painter->save();

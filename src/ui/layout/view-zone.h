@@ -25,6 +25,8 @@ public:
         QString title;
         QString icon;
         bool closable = true;
+        // Setinha logo depois do título (ViewSpec::chevronMenu): abre o menu extra do painel.
+        bool chevron = false;
     };
 
     explicit ZoneTabStrip(QWidget *parent = nullptr);
@@ -46,6 +48,7 @@ public:
     int insertionIndexAt(int x) const;
     QRect tabRect(int index) const;
     QRect closeRect(int index) const;
+    QRect chevronRect(int index) const;
     QRect menuRect() const;
     QRect maximizeRect() const;
     // O painel maximizado no quadro (vazio = nenhum): a aba da frente que for ele mostra "restaurar" no lugar de "maximizar".
@@ -58,6 +61,7 @@ signals:
     void tabActivated(const QString &id);
     void tabCloseRequested(const QString &id);
     void tabMenuRequested(const QString &id, const QPoint &globalPos);
+    void tabChevronRequested(const QString &id, const QPoint &globalPos);
     void tabDoubleClicked(const QString &id);
     void tabMaximizeRequested(const QString &id);
     void dragStarted(const QString &id);
@@ -100,6 +104,7 @@ private:
     bool m_zoneFocused = false;
     int m_hover = -1;
     bool m_hoverClose = false;
+    bool m_hoverChevron = false;
     bool m_hoverMenu = false;
     bool m_hoverMaximize = false;
     bool m_pressOnMaximize = false;
@@ -107,6 +112,7 @@ private:
     int m_pressIndex = -1;
     QPoint m_pressPos;
     bool m_pressOnClose = false;
+    bool m_pressOnChevron = false;
 };
 
 // A pilha de um grupo de abas; avisa quando o filho pediu outro tamanho (o colapso da Saída limita a altura/largura dela).
@@ -171,6 +177,8 @@ signals:
     void viewActivated(const QString &id);
     void viewCloseRequested(const QString &id);
     void viewMenuRequested(const QString &id, const QPoint &globalPos);
+    // A setinha da aba (ViewSpec::chevronMenu).
+    void viewChevronRequested(const QString &id, const QPoint &globalPos);
     void viewMaximizeRequested(const QString &id);
     void dragStarted(const QString &id);
     void dragFinished(const QString &id, Qt::DropAction action, const QPoint &globalPos);
@@ -181,6 +189,8 @@ protected:
 
 private:
     void rebuildStrip(const QString &active);
+    // O painel tem menu da setinha (ViewSpec::chevronMenu)?
+    bool hasChevron(const QString &id) const;
     void applySplit();
     void updateSplitOrientation();
     void clearSplit();

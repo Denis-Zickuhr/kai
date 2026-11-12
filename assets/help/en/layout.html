@@ -12,6 +12,10 @@
 </table>
 <h3>The View menu</h3>
 <p><b>View</b> is the way back to everything: the panel list (a highlighted icon means it is on the window; clicking closes it or brings it back to the last place it was), <i>Panel position</i> (move, float, maximize, collapse, close), <i>Maximize panel</i>, <i>Rearrange panels</i>, <i>Perspectives</i> and <i>Restore layout</i>. Close every panel and the window offers a <b>Restore layout</b> button. <b>Settings → Layout</b> has it too.</p>
+<h3>Extra trees</h3>
+<p>The <b>chevron</b> next to the <i>Commands</i> tab (and the <i>Commands</i> row of the <b>View</b> menu, which opens as a submenu) lists your <b>extra trees</b>: other command trees, each with <b>fixed filters</b>, shown as panels you can move, float and close like any other. The main tree stays as it is.</p>
+<p><b>New tree…</b> asks for a name, an icon and what to show, in any combination: the ticked <b>folders</b> (a ticked folder becomes the root of the tree), the <b>types</b> (commands, HTTP, pipelines, collections, notes), <b>only running</b>, <b>show hidden</b> and a fixed <b>filter</b> text (the same fuzzy match as the search). Folders and parent commands that hold a matching item stay as context.</p>
+<p>An extra tree is a view of the same data: running state, marks, the context menu and the inline actions work as in the main tree, and selecting an item there selects it in the main tree (so the Output and the Document follow). <b>Dragging reorders for real</b>: the order is the same as in the main tree; what is filtered out keeps its place and the visible items trade the positions they already had. <i>Edit tree</i> changes the filters of an open tree on the spot, and the dialog has <b>Delete tree</b>. The definitions live in <code>tree-views.json</code> (personal, never exported) and where each panel sits is saved in <code>layout.json</code>.</p>
 <h3>Moving panels</h3>
 <ul>
 <li><b>View → Rearrange panels</b> is on by default: every cell shows its tab strip (turn it off to hide it on cells with a single panel).</li>

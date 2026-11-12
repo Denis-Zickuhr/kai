@@ -9,8 +9,19 @@
 #include "ui/shared/fuzzy-search.h"
 #include "ui/shared/loading-overlay.h"
 #include "ui/shared/folder-picker-widget.h"
+#include "ui/shared/icon-picker-widget.h"
+#include "ui/shared/foldable-json-view.h"
+#include "ui/shared/json-syntax-highlighter.h"
+#include "ui/app-stylesheet.h"
 
 #include <QSpinBox>
+#include <QClipboard>
+#include <QGridLayout>
+#include <QGuiApplication>
+#include <QListWidget>
+#include <QRegularExpression>
+#include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -24,6 +35,7 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFile>
+#include <QFrame>
 #include <QTextStream>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -35,6 +47,7 @@
 #include <QUuid>
 
 #include <functional>
+#include <limits>
 #include "ui/shared/file-dialogs.h"
 
 namespace kai::ui {
@@ -47,6 +60,16 @@ constexpr int kFirstSchemaColumn = 1;
 QString newEntryId()
 {
     return QStringLiteral("ce_") + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+}
+
+// Rótulo de campo sem os ":" finais das chaves antigas (aqui o rótulo vai em caixa alta acima do campo).
+QString fieldLabelText(const QString &key)
+{
+    QString text = utils::tr(key);
+    while (text.endsWith(QLatin1Char(':')) || text.endsWith(QLatin1Char(' '))) {
+        text.chop(1);
+    }
+    return text;
 }
 
 // True se a entrada tem ao menos um campo com valor não-vazio (a importação omite as vazias).
@@ -73,7 +96,7 @@ CollectionEditorDialog::CollectionEditorDialog(const core::Collection &collectio
     }
     setWindowTitle(utils::tr(QStringLiteral("collection.editor.title")).arg(m_collection.name));
     setSizeGripEnabled(true);
-    resize(820, 560);
+    resize(1040, 680);
     setupUi();
     rebuildTable();
     centerOnParent(this);
@@ -81,38 +104,165 @@ CollectionEditorDialog::CollectionEditorDialog(const core::Collection &collectio
 
 void CollectionEditorDialog::setupUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(utils::tokens::space(5), utils::tokens::space(5),
-                                    utils::tokens::space(5), utils::tokens::space(4));
-    mainLayout->setSpacing(utils::tokens::space(3));
+    // Stylesheet LOCAL, como no editor de comandos: um QDialog top-level não herda de forma confiável a regra genérica.
+    const QString gradientDecl = utils::tokens::hasGradient(QStringLiteral("primary"))
+        ? QStringLiteral("QDialog { %1 }")
+            .arg(utils::tokens::gradientQss(QStringLiteral("background-color"), QStringLiteral("primary")))
+        : QString();
+    setStyleSheet(gradientDecl + buildModernStylesheet());
 
-    auto *identityRow = new QHBoxLayout();
-    identityRow->setSpacing(utils::tokens::space(2));
-    identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.name")), this));
-    m_nameField = new QLineEdit(m_collection.name, this);
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto *header = new QWidget(this);
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(16, 12, 16, 12);
+    auto *headerTitle = new QLabel(windowTitle(), header);
+    QFont headerTitleFont = headerTitle->font();
+    headerTitleFont.setPointSize(headerTitleFont.pointSize() + 2);
+    headerTitleFont.setWeight(QFont::Bold);
+    headerTitle->setFont(headerTitleFont);
+    headerLayout->addWidget(headerTitle, 0, Qt::AlignVCenter);
+    headerLayout->addStretch();
+    outerLayout->addWidget(header);
+
+    auto makeDivider = [this]() {
+        auto *divider = new QFrame(this);
+        divider->setFrameShape(QFrame::HLine);
+        divider->setStyleSheet(QStringLiteral("background-color: %1; max-height: 1px; border: none;")
+            .arg(utils::tokens::borderColor()));
+        return divider;
+    };
+    outerLayout->addWidget(makeDivider());
+
+    auto *body = new QWidget(this);
+    SidebarTabsHost tabsHost = buildSidebarTabsHost(body);
+    m_sideNav = tabsHost.nav;
+    m_sidePages = tabsHost.pages;
+    buildGeneralTab();
+    buildDataTab();
+    buildAdvancedTab();
+    connect(m_sideNav, &QListWidget::currentRowChanged, this, &CollectionEditorDialog::handleNavChanged);
+    m_sideNav->setCurrentRow(0);
+    outerLayout->addWidget(body, 1);
+
+    outerLayout->addWidget(makeDivider());
+    auto *buttonContainer = new QWidget(this);
+    auto *buttonLayout = new QVBoxLayout(buttonContainer);
+    buttonLayout->setContentsMargins(16, 12, 16, 12);
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, buttonContainer);
+    stripDialogButtonIcons(buttonBox);
+    buttonBox->button(QDialogButtonBox::Ok)->setText(utils::tr(QStringLiteral("dialog.save")));
+    buttonBox->button(QDialogButtonBox::Cancel)->setText(utils::tr(QStringLiteral("dialog.cancel")));
+    connect(buttonBox, &QDialogButtonBox::accepted, this, &CollectionEditorDialog::handleAccepted);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    buttonLayout->addWidget(buttonBox);
+    outerLayout->addWidget(buttonContainer);
+
+    m_loadingOverlay = new LoadingOverlay(this);
+}
+
+QVBoxLayout *CollectionEditorDialog::addNavPage(const QString &title, const QString &iconName, bool scrolling)
+{
+    SidebarTabsHost host{m_sideNav, m_sidePages};
+    if (scrolling) {
+        return addSidebarTabPage(host, title, iconName);
+    }
+    // Dados e Avançado usam a área toda (a tabela e o editor já rolam sozinhos).
+    auto *page = new QWidget(m_sidePages);
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(16, 16, 16, 12);
+    layout->setSpacing(12);
+    m_sidePages->addWidget(page);
+    auto *item = new QListWidgetItem(
+        LucideIcons::icon(iconName, QColor(utils::tokens::mutedFg()), 16), title, m_sideNav);
+    item->setToolTip(title);
+    item->setSizeHint(QSize(0, 36));
+    return layout;
+}
+
+// Aba "Geral": identificação (nome, ícone, pasta, ordem) e um resumo dos campos, que se editam no editor de schema.
+void CollectionEditorDialog::buildGeneralTab()
+{
+    using layout_helpers::makeSurfaceCard;
+    using layout_helpers::wrapWithLabel;
+    auto *layout = addNavPage(utils::tr(QStringLiteral("collection.tab.general")), QStringLiteral("settings"), true);
+
+    auto *identityCard = makeSurfaceCard(this);
+    auto *grid = new QGridLayout(identityCard);
+    grid->setContentsMargins(utils::tokens::space(3), utils::tokens::space(3),
+                             utils::tokens::space(3), utils::tokens::space(3));
+    grid->setHorizontalSpacing(utils::tokens::space(4));
+    grid->setVerticalSpacing(utils::tokens::space(3));
+    grid->setColumnStretch(0, 2);
+    grid->setColumnStretch(1, 1);
+
+    m_nameField = new QLineEdit(m_collection.name, identityCard);
     m_nameField->setPlaceholderText(utils::tr(QStringLiteral("collection.field.name.placeholder")));
-    identityRow->addWidget(m_nameField, 1);
+    grid->addWidget(wrapWithLabel(identityCard, fieldLabelText(QStringLiteral("collection.field.name")), m_nameField), 0, 0);
 
-    identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.folder")), this));
-    m_folderCombo = new FolderPickerWidget(this);
+    m_initialIcon = m_collection.icon.isEmpty() ? QStringLiteral("database") : m_collection.icon;
+    m_iconPicker = new IconPickerWidget(identityCard);
+    m_iconPicker->setSelectedIconName(m_initialIcon);
+    grid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("collection.field.icon")), m_iconPicker), 0, 1);
+
+    m_folderCombo = new FolderPickerWidget(identityCard);
     capComboBoxWidth(m_folderCombo);
-    auto foldersInOrder = foldersInTreeOrder(m_folders);
-    m_folderCombo->setFolders(foldersInOrder);
+    m_folderCombo->setFolders(foldersInTreeOrder(m_folders));
     m_folderCombo->enableNoneOption(utils::tr(QStringLiteral("collection.folder.root")));
     m_folderCombo->setSelectedFolderId(m_collection.folderId);
     makeSearchableCombo(m_folderCombo); // busca no seletor de pastas
-    identityRow->addWidget(m_folderCombo);
+    grid->addWidget(wrapWithLabel(identityCard, fieldLabelText(QStringLiteral("collection.field.folder")), m_folderCombo), 1, 0);
 
     // "Ordem": posição entre os irmãos (menor = mais acima); -1 = automático.
-    identityRow->addWidget(new QLabel(utils::tr(QStringLiteral("collection.field.order")), this));
-    m_orderField = new QSpinBox(this);
+    m_orderField = new QSpinBox(identityCard);
     m_orderField->setRange(-1, 9999);
     m_orderField->setSpecialValueText(QStringLiteral("auto"));
     m_orderField->setToolTip(utils::tr(QStringLiteral("collection.field.order.tip")));
     m_orderField->setValue(m_collection.order);
-    identityRow->addWidget(m_orderField);
+    grid->addWidget(wrapWithLabel(identityCard, fieldLabelText(QStringLiteral("collection.field.order")), m_orderField), 1, 1);
+    layout->addWidget(identityCard);
 
-    mainLayout->addLayout(identityRow);
+    auto *fieldsCard = makeSurfaceCard(this);
+    auto *fieldsLayout = new QVBoxLayout(fieldsCard);
+    fieldsLayout->setContentsMargins(utils::tokens::space(3), utils::tokens::space(3),
+                                     utils::tokens::space(3), utils::tokens::space(3));
+    fieldsLayout->setSpacing(utils::tokens::space(2));
+    auto *fieldsHeader = new QHBoxLayout();
+    auto *fieldsTitle = new QLabel(utils::tr(QStringLiteral("collection.fields.title")), fieldsCard);
+    fieldsTitle->setStyleSheet(QStringLiteral("font-weight: 600; background: transparent;"));
+    fieldsHeader->addWidget(fieldsTitle);
+    fieldsHeader->addStretch();
+    auto *schemaButton = new QToolButton(fieldsCard);
+    schemaButton->setText(utils::tr(QStringLiteral("collection.schema.button")));
+    schemaButton->setToolTip(utils::tr(QStringLiteral("collection.schema.tip")));
+    schemaButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    schemaButton->setIcon(LucideIcons::icon(QStringLiteral("pencil"), QColor(utils::tokens::accent()), 16));
+    schemaButton->setCursor(Qt::PointingHandCursor);
+    schemaButton->setStyleSheet(QStringLiteral(
+        "QToolButton { border: none; background: transparent; color: %1; font-weight: 600; }"
+        "QToolButton:hover { text-decoration: underline; }")
+        .arg(utils::tokens::accent()));
+    connect(schemaButton, &QToolButton::clicked, this, &CollectionEditorDialog::handleEditSchema);
+    fieldsHeader->addWidget(schemaButton);
+    fieldsLayout->addLayout(fieldsHeader);
+
+    m_fieldsSummary = new QLabel(fieldsCard);
+    m_fieldsSummary->setWordWrap(true);
+    m_fieldsSummary->setProperty("kaiRole", QStringLiteral("caption"));
+    m_fieldsSummary->setStyleSheet(QStringLiteral("background: transparent;"));
+    fieldsLayout->addWidget(m_fieldsSummary);
+    layout->addWidget(fieldsCard);
+    layout->addStretch(1);
+    updateFieldsSummary();
+}
+
+// Aba "Dados": busca/filtros, tabela de entradas, ações de linha e paginação.
+void CollectionEditorDialog::buildDataTab()
+{
+    auto *layout = addNavPage(utils::tr(QStringLiteral("collection.tab.data")), QStringLiteral("table"), false);
+    m_navRowData = m_sideNav->count() - 1;
 
     auto *topBar = new QHBoxLayout();
     topBar->setSpacing(utils::tokens::space(2));
@@ -138,21 +288,23 @@ void CollectionEditorDialog::setupUi()
     connect(m_favoritesOnlyButton, &QToolButton::toggled, this, &CollectionEditorDialog::handleFavoritesOnlyToggled);
     topBar->addWidget(m_favoritesOnlyButton);
 
-    auto *schemaButton = new QToolButton(this);
-    schemaButton->setText(utils::tr(QStringLiteral("collection.schema.button")));
-    schemaButton->setToolTip(utils::tr(QStringLiteral("collection.schema.tip")));
-    schemaButton->setIcon(LucideIcons::icon(QStringLiteral("table"), QColor(utils::tokens::mutedFg()), 16));
-    connect(schemaButton, &QToolButton::clicked, this, &CollectionEditorDialog::handleEditSchema);
-    topBar->addWidget(schemaButton);
-
     auto *importButton = new QToolButton(this);
     importButton->setText(utils::tr(QStringLiteral("collection.import.button")));
     importButton->setToolTip(utils::tr(QStringLiteral("collection.import.tip")));
+    importButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     importButton->setIcon(LucideIcons::icon(QStringLiteral("upload"), QColor(utils::tokens::mutedFg()), 16));
     connect(importButton, &QToolButton::clicked, this, &CollectionEditorDialog::handleImportFile);
     topBar->addWidget(importButton);
 
-    mainLayout->addLayout(topBar);
+    auto *pasteButton = new QToolButton(this);
+    pasteButton->setText(utils::tr(QStringLiteral("collection.paste.button")));
+    pasteButton->setToolTip(utils::tr(QStringLiteral("collection.paste.tip")));
+    pasteButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    pasteButton->setIcon(LucideIcons::icon(QStringLiteral("clipboard-paste"), QColor(utils::tokens::mutedFg()), 16));
+    connect(pasteButton, &QToolButton::clicked, this, &CollectionEditorDialog::handlePasteFromClipboard);
+    topBar->addWidget(pasteButton);
+
+    layout->addLayout(topBar);
 
     m_table = new QTableWidget(this);
     m_table->setSortingEnabled(true);
@@ -200,7 +352,7 @@ void CollectionEditorDialog::setupUi()
             if (e.id == entryId) { e.favorite = now; break; }
         }
     });
-    mainLayout->addWidget(m_table, 1);
+    layout->addWidget(m_table, 1);
 
     auto *rowActions = new QHBoxLayout();
     rowActions->setSpacing(utils::tokens::space(2));
@@ -221,7 +373,7 @@ void CollectionEditorDialog::setupUi()
     rowActions->addStretch();
     m_countLabel = new QLabel(this);
     rowActions->addWidget(m_countLabel);
-    mainLayout->addLayout(rowActions);
+    layout->addLayout(rowActions);
 
     // Paginação: coleções com milhares de entradas travavam ao renderizar tudo; a tabela mostra só a fatia da página (rebuildTable).
     auto *pageBar = new QHBoxLayout();
@@ -258,60 +410,189 @@ void CollectionEditorDialog::setupUi()
         rebuildTable();
     });
     pageBar->addWidget(m_nextButton);
-    mainLayout->addLayout(pageBar);
+    layout->addLayout(pageBar);
+}
 
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    stripDialogButtonIcons(buttonBox);
-    // "Modo avançado (JSON)": abre o JsonEditorDialog com a coleção atual; se aceito, substitui m_collection e fecha.
-    auto *advancedButton = new QPushButton(utils::tr(QStringLiteral("command.switch_to_advanced")), this);
-    advancedButton->setToolTip(utils::tr(QStringLiteral("collection.advanced.hint")));
-    connect(advancedButton, &QPushButton::clicked, this, [this]() {
-        collectTableIntoEntries();
-        if (m_nameField && !m_nameField->text().trimmed().isEmpty()) {
-            m_collection.name = m_nameField->text().trimmed();
-        }
-        if (m_folderCombo) {
-            m_collection.folderId = m_folderCombo->selectedFolderId();
-        }
-        if (m_orderField) {
-            m_collection.order = m_orderField->value();
-        }
-        JsonEditorDialog dialog(utils::tr(QStringLiteral("collection.advanced.title")),
-                                m_collection.toJson(), this);
-        if (dialog.exec() != QDialog::Accepted) {
+// Aba "Avançado": o JSON da coleção, editável. Ao sair da aba (ou salvar) o texto editado volta para o modelo.
+void CollectionEditorDialog::buildAdvancedTab()
+{
+    auto *layout = addNavPage(utils::tr(QStringLiteral("collection.tab.advanced")), QStringLiteral("code-xml"), false);
+    m_navRowAdvanced = m_sideNav->count() - 1;
+
+    auto *toolBar = new QHBoxLayout();
+    toolBar->setSpacing(utils::tokens::space(2));
+    m_advancedStatus = new QLabel(this);
+    toolBar->addWidget(m_advancedStatus, 1);
+    auto *formatButton = makeHeaderIconButton(this, QStringLiteral("braces"),
+        utils::tr(QStringLiteral("json.dialog.format_title")));
+    toolBar->addWidget(formatButton);
+    layout->addLayout(toolBar);
+
+    m_advancedEdit = new FoldableJsonView(this);
+    m_advancedEdit->setFont(utils::tokens::monoFont());
+    m_advancedEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_advancedEdit->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit { background-color: %1; color: %2; border: 1px solid %3;"
+        " border-radius: %4px; }")
+        .arg(utils::tokens::codeBg(), utils::tokens::codeFg(), utils::tokens::codeBorder())
+        .arg(utils::tokens::radiusMd()));
+    m_advancedEdit->setGutterColors(QColor(utils::tokens::codeBg()), QColor(utils::tokens::mutedFg()));
+    new JsonSyntaxHighlighter(m_advancedEdit->document());
+    layout->addWidget(m_advancedEdit, 1);
+
+    // O status (JSON válido ou o erro) acompanha a digitação, com debounce: o JSON de uma coleção grande é pesado.
+    m_advancedTimer = new QTimer(this);
+    m_advancedTimer->setSingleShot(true);
+    m_advancedTimer->setInterval(350);
+    connect(m_advancedTimer, &QTimer::timeout, this, &CollectionEditorDialog::updateAdvancedStatus);
+    connect(m_advancedEdit, &QPlainTextEdit::textChanged, this, [this]() {
+        m_advancedDirty = true;
+        m_advancedTimer->start();
+    });
+    connect(formatButton, &QToolButton::clicked, this, [this]() {
+        QJsonParseError error;
+        const QJsonDocument doc = QJsonDocument::fromJson(m_advancedEdit->toPlainText().toUtf8(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("json.dialog.format_title")),
+                utils::tr(QStringLiteral("json.error.invalid_format")).arg(error.errorString()));
             return;
         }
-        core::Collection parsed = core::Collection::fromJson(dialog.result());
-        if (parsed.name.trimmed().isEmpty()) {
-            QMessageBox::warning(this, utils::tr(QStringLiteral("collection.advanced.title")),
-                utils::tr(QStringLiteral("json_editor.error.name_required.body")));
+        m_advancedEdit->setFoldableJsonText(QString::fromUtf8(doc.toJson(QJsonDocument::Indented)));
+        m_advancedDirty = true;
+    });
+}
+
+void CollectionEditorDialog::updateFieldsSummary()
+{
+    QStringList parts;
+    for (const core::CollectionField &f : m_collection.schema) {
+        QString part = f.label.isEmpty() ? f.name : f.label;
+        if (!f.visible) {
+            part += QStringLiteral(" (%1)").arg(utils::tr(QStringLiteral("collection.schema.hidden_tag")));
+        }
+        if (f.secret) {
+            part += QStringLiteral(" (%1)").arg(utils::tr(QStringLiteral("collection.schema.secret_tag")));
+        }
+        parts << part;
+    }
+    m_fieldsSummary->setText(parts.join(QStringLiteral("  ·  ")));
+}
+
+void CollectionEditorDialog::updateDataNavTitle(int total)
+{
+    if (QListWidgetItem *item = m_sideNav ? m_sideNav->item(m_navRowData) : nullptr) {
+        const QString base = utils::tr(QStringLiteral("collection.tab.data"));
+        item->setText(total > 0 ? QStringLiteral("%1 (%2)").arg(base).arg(total) : base);
+    }
+}
+
+void CollectionEditorDialog::syncModelFromUi()
+{
+    collectTableIntoEntries();
+    const QString name = m_nameField->text().trimmed();
+    if (!name.isEmpty()) {
+        m_collection.name = name;
+    }
+    m_collection.folderId = m_folderCombo->selectedFolderId();
+    m_collection.order = m_orderField->value();
+    const QString icon = m_iconPicker->selectedIconName();
+    if (icon != m_initialIcon) {
+        m_collection.icon = icon;
+    }
+}
+
+void CollectionEditorDialog::applyModelToUi()
+{
+    if (m_collection.schema.isEmpty()) {
+        m_collection.schema = core::Collection::defaultSchema();
+    }
+    m_nameField->setText(m_collection.name);
+    m_folderCombo->setSelectedFolderId(m_collection.folderId);
+    m_orderField->setValue(m_collection.order);
+    m_initialIcon = m_collection.icon.isEmpty() ? QStringLiteral("database") : m_collection.icon;
+    m_iconPicker->setSelectedIconName(m_initialIcon);
+    updateFieldsSummary();
+    rebuildSearchFieldSelector();
+    rebuildTable();
+}
+
+void CollectionEditorDialog::handleNavChanged(int row)
+{
+    if (m_navGuard) {
+        return;
+    }
+    const int previous = m_lastNavRow;
+    if (previous == m_navRowAdvanced && row != m_navRowAdvanced && m_advancedDirty && !applyAdvancedJson()) {
+        // JSON inválido: fica na aba para corrigir (o aviso já foi mostrado).
+        m_navGuard = true;
+        m_sideNav->setCurrentRow(m_navRowAdvanced);
+        m_navGuard = false;
+        return;
+    }
+    if (row == m_navRowAdvanced && previous != row) {
+        syncModelFromUi();
+        refreshAdvancedJson();
+    }
+    m_lastNavRow = row;
+}
+
+void CollectionEditorDialog::refreshAdvancedJson()
+{
+    m_advancedEdit->setFoldableJsonText(
+        QString::fromUtf8(QJsonDocument(m_collection.toJson()).toJson(QJsonDocument::Indented)));
+    m_advancedDirty = false;
+    updateAdvancedStatus();
+}
+
+bool CollectionEditorDialog::applyAdvancedJson()
+{
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(m_advancedEdit->toPlainText().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("collection.advanced.title")),
+            utils::tr(QStringLiteral("json_editor.parse_error")).arg(error.errorString()));
+        return false;
+    }
+    core::Collection parsed = core::Collection::fromJson(doc.object());
+    if (parsed.name.trimmed().isEmpty()) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("collection.advanced.title")),
+            utils::tr(QStringLiteral("json_editor.error.name_required.body")));
+        return false;
+    }
+    if (parsed.id.trimmed().isEmpty()) {
+        parsed.id = m_collection.id; // preserva o id existente
+    }
+    m_collection = parsed;
+    m_advancedDirty = false;
+    applyModelToUi();
+    return true;
+}
+
+void CollectionEditorDialog::updateAdvancedStatus()
+{
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(m_advancedEdit->toPlainText().toUtf8(), &error);
+    const bool valid = error.error == QJsonParseError::NoError && doc.isObject();
+    m_advancedStatus->setStyleSheet(QStringLiteral("color: %1; background: transparent;")
+        .arg(valid ? utils::tokens::successFg() : utils::tokens::errorFg()));
+    m_advancedStatus->setText(valid ? utils::tr(QStringLiteral("collection.advanced.valid"))
+                                    : utils::tr(QStringLiteral("collection.advanced.error")).arg(error.errorString()));
+}
+
+void CollectionEditorDialog::handleAccepted()
+{
+    if (m_advancedDirty) {
+        if (!applyAdvancedJson()) {
+            m_navGuard = true;
+            m_sideNav->setCurrentRow(m_navRowAdvanced);
+            m_navGuard = false;
+            m_lastNavRow = m_navRowAdvanced;
             return;
         }
-        if (parsed.id.trimmed().isEmpty()) {
-            parsed.id = m_collection.id; // preserva o id existente
-        }
-        m_collection = parsed;
-        accept();
-    });
-    buttonBox->addButton(advancedButton, QDialogButtonBox::ActionRole);
-    installEditModeToggleShortcut(this, advancedButton);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
-        collectTableIntoEntries();
-        if (m_nameField && !m_nameField->text().trimmed().isEmpty()) {
-            m_collection.name = m_nameField->text().trimmed();
-        }
-        if (m_folderCombo) {
-            m_collection.folderId = m_folderCombo->selectedFolderId();
-        }
-        if (m_orderField) {
-            m_collection.order = m_orderField->value();
-        }
-        accept();
-    });
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    mainLayout->addWidget(buttonBox);
-
-    m_loadingOverlay = new LoadingOverlay(this);
+    } else {
+        syncModelFromUi();
+    }
+    accept();
 }
 
 void CollectionEditorDialog::rebuildTable()
@@ -425,6 +706,7 @@ void CollectionEditorDialog::rebuildTable()
         m_countLabel->setText(utils::tr(QStringLiteral("collection.count"))
             .arg(total).arg(m_collection.entries.size()));
     }
+    updateDataNavTitle(m_collection.entries.size());
     if (m_pageLabel) {
         m_pageLabel->setText(utils::tr(QStringLiteral("collection.selector.page"))
             .arg(m_currentPage + 1).arg(qMax(1, pageCount)).arg(total));
@@ -868,73 +1150,144 @@ void CollectionEditorDialog::handleImportFile()
             utils::tr(QStringLiteral("collection.import.none")));
         return;
     }
-    m_collection.entries += imported;
+    appendEntries(imported);
     if (m_collection.sourcePath.isEmpty()) {
         m_collection.sourcePath = path;
     }
+}
+
+// Registros da área de transferência (JSON, ou linhas de planilha/CSV): confirma a quantidade antes de somar.
+void CollectionEditorDialog::handlePasteFromClipboard()
+{
+    const QString text = QGuiApplication::clipboard()->text();
+    const QVector<core::CollectionEntry> parsed = parseImportText(text, m_collection.schema);
+    if (parsed.isEmpty()) {
+        QMessageBox::information(this, utils::tr(QStringLiteral("collection.paste.title")),
+            utils::tr(QStringLiteral("collection.paste.none")));
+        return;
+    }
+    const auto answer = QMessageBox::question(this, utils::tr(QStringLiteral("collection.paste.title")),
+        utils::tr(QStringLiteral("collection.paste.confirm")).arg(parsed.size()),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    collectTableIntoEntries();
+    appendEntries(parsed);
+}
+
+void CollectionEditorDialog::appendEntries(const QVector<core::CollectionEntry> &entries)
+{
+    m_collection.entries += entries;
+    // Vai para a última página, onde as novas entradas aparecem.
+    m_currentPage = std::numeric_limits<int>::max() / 2;
     rebuildTable();
 }
 
 QVector<core::CollectionEntry> CollectionEditorDialog::parseImportFile(
     const QString &path, const QVector<core::CollectionField> &schema)
 {
-    QVector<core::CollectionEntry> result;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    const QString text = QString::fromUtf8(file.readAll());
+    file.close();
+    return parseImportText(text, schema, path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive));
+}
+
+QVector<core::CollectionEntry> CollectionEditorDialog::parseImportText(
+    const QString &text, const QVector<core::CollectionField> &schema, bool forceJson)
+{
+    QVector<core::CollectionEntry> result;
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
         return result;
     }
-    const QByteArray data = file.readAll();
-    file.close();
 
-    // JSON: array de objetos {campo: valor, ...} (+ favorite opcional).
-    if (path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)) {
-        const QJsonDocument doc = QJsonDocument::fromJson(data);
-        if (doc.isArray()) {
-            for (const QJsonValue &v : doc.array()) {
-                const QJsonObject obj = v.toObject();
-                core::CollectionEntry e;
-                e.id = newEntryId();
-                for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
-                    if (it.key() == QStringLiteral("favorite")) {
-                        e.favorite = it.value().toBool(false);
-                    } else {
-                        e.values[it.key()] = it.value().toVariant().toString();
+    // JSON: array de objetos {campo: valor, ...} (+ favorite opcional) ou um objeto só.
+    auto entryFromObject = [](const QJsonObject &obj) {
+        core::CollectionEntry e;
+        e.id = newEntryId();
+        for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+            if (it.key() == QStringLiteral("favorite")) {
+                e.favorite = it.value().toBool(false);
+            } else {
+                e.values[it.key()] = it.value().toVariant().toString();
+            }
+        }
+        return e;
+    };
+    if (forceJson || trimmed.startsWith(QLatin1Char('[')) || trimmed.startsWith(QLatin1Char('{'))) {
+        QJsonParseError error;
+        const QJsonDocument doc = QJsonDocument::fromJson(trimmed.toUtf8(), &error);
+        if (error.error == QJsonParseError::NoError) {
+            QVector<QJsonObject> objects;
+            if (doc.isArray()) {
+                for (const QJsonValue &v : doc.array()) {
+                    if (v.isObject()) {
+                        objects << v.toObject();
                     }
                 }
+            } else if (doc.isObject()) {
+                objects << doc.object();
+            }
+            for (const QJsonObject &obj : std::as_const(objects)) {
+                const core::CollectionEntry e = entryFromObject(obj);
                 if (entryHasAnyValue(e)) {
                     result << e;
                 }
             }
+            return result;
         }
-        return result;
+        if (forceJson) {
+            return result;
+        }
+        // Só parecia JSON: tenta como linhas delimitadas.
     }
 
-    // CSV: primeira linha = cabeçalho (nomes de campo); demais = valores.
-    // Se o cabeçalho não casar com o schema, mapeia posicionalmente aos
-    // campos do schema (ex: 2 colunas -> key, value).
-    QString csvText = QString::fromUtf8(data);
-    QTextStream in(&csvText, QIODevice::ReadOnly);
+    // Linhas delimitadas por tab (colar de planilha) ou vírgula. A primeira linha é cabeçalho se alguma célula casa com o
+    // nome ou o rótulo de um campo do schema; senão mapeia as colunas aos campos do schema, na ordem.
+    const QStringList lines = text.split(QRegularExpression(QStringLiteral("\r?\n")));
+    QChar delimiter = QLatin1Char(',');
+    for (const QString &line : lines) {
+        if (!line.trimmed().isEmpty()) {
+            if (line.contains(QLatin1Char('\t'))) {
+                delimiter = QLatin1Char('\t');
+            }
+            break;
+        }
+    }
+    auto fieldNameFor = [&schema](const QString &cell) {
+        for (const core::CollectionField &f : schema) {
+            if (cell.compare(f.name, Qt::CaseInsensitive) == 0
+                || (!f.label.isEmpty() && cell.compare(f.label, Qt::CaseInsensitive) == 0)) {
+                return f.name;
+            }
+        }
+        return QString();
+    };
     QStringList headerCols;
     bool firstLine = true;
-    while (!in.atEnd()) {
-        const QString line = in.readLine();
+    for (const QString &line : lines) {
         if (line.trimmed().isEmpty()) {
             continue;
         }
-        const QStringList cols = line.split(QLatin1Char(','));
+        const QStringList cols = line.split(delimiter);
         if (firstLine) {
             firstLine = false;
-            // Heurística: se a 1ª célula casa com um nome de campo do
-            // schema, tratamos como cabeçalho; senão, é dado (sem header).
             bool looksLikeHeader = false;
-            for (const core::CollectionField &f : schema) {
-                if (!cols.isEmpty() && cols.first().trimmed() == f.name) {
+            for (const QString &c : cols) {
+                if (!fieldNameFor(c.trimmed()).isEmpty()) {
                     looksLikeHeader = true;
                     break;
                 }
             }
             if (looksLikeHeader) {
-                for (const QString &c : cols) headerCols << c.trimmed();
+                for (const QString &c : cols) {
+                    const QString mapped = fieldNameFor(c.trimmed());
+                    headerCols << (mapped.isEmpty() ? c.trimmed() : mapped);
+                }
                 continue;
             }
         }
@@ -947,8 +1300,8 @@ QVector<core::CollectionEntry> CollectionEditorDialog::parseImportFile(
             } else if (i < schema.size()) {
                 fieldName = schema.at(i).name; // mapeamento posicional
             } else {
-                // NÃO traduzir: chave de dados para colunas de CSV sem schema
-                // correspondente (mapeamento posicional). Ver nota em "campo%1".
+                // NÃO traduzir: chave de dados para colunas sem schema correspondente (mapeamento posicional). Ver nota
+                // em "campo%1".
                 fieldName = QStringLiteral("col%1").arg(i + 1);
             }
             e.values[fieldName] = cols.at(i).trimmed();

@@ -75,6 +75,20 @@ void CommandTreeWidget::openContextMenuForCurrent()
 
 void CommandTreeWidget::showContextMenu(QTreeWidgetItem *item, const QPoint &globalPos)
 {
+    // Onde criar pelo menu: a própria pasta; para comando, nota ou coleção, o pai deles (a pasta ou o comando em que estão).
+    // Clique fora de um item: vazio, e quem recebe decide pela seleção/aba.
+    m_creationTargetId.clear();
+    if (item) {
+        const QString itemId = item->data(0, kCommandIdRole).toString();
+        const bool isContainer = !item->data(0, kIsCommandRole).toBool() && !item->data(0, kIsCollectionRole).toBool();
+        if (isContainer) {
+            m_creationTargetId = itemId;
+        } else if (item->parent()) {
+            m_creationTargetId = item->parent()->data(0, kCommandIdRole).toString();
+        } else {
+            m_creationTargetId = currentRootFolderId();
+        }
+    }
     const QColor accent(utils::tokens::accent());
     const QColor playColor(80, 250, 123);
     const QColor stopColor(241, 250, 140);
@@ -384,11 +398,13 @@ void CommandTreeWidget::handleCreationChoice(QAction *chosen)
         return;
     }
     const QString kind = chosen->data().toString();
-    if (kind == QStringLiteral("new-folder")) emit newFolderRequested();
-    else if (kind == QStringLiteral("new-command")) emit newCommandRequested();
-    else if (kind == QStringLiteral("new-pipeline")) emit newPipelineRequested();
-    else if (kind == QStringLiteral("new-collection")) emit newCollectionRequested();
-    else if (kind == QStringLiteral("new-note")) emit newNoteRequested();
+    // O destino é onde o clique caiu, não a seleção: botão direito numa pasta cria dentro DELA.
+    const QString target = m_creationTargetId;
+    if (kind == QStringLiteral("new-folder")) emit newFolderRequested(target);
+    else if (kind == QStringLiteral("new-command")) emit newCommandRequested(target);
+    else if (kind == QStringLiteral("new-pipeline")) emit newPipelineRequested(target);
+    else if (kind == QStringLiteral("new-collection")) emit newCollectionRequested(target);
+    else if (kind == QStringLiteral("new-note")) emit newNoteRequested(target);
 }
 
 } // namespace kai::ui

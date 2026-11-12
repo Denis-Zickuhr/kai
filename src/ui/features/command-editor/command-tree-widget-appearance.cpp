@@ -48,6 +48,7 @@ void CommandTreeWidget::setBackground(const QString &imagePath, int opacity)
 
 void CommandTreeWidget::setTreeConnectorStyle(int style, const QColor &lineColor)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setTreeConnectorStyle(style, lineColor); });
     m_treeConnectorStyle = style;
     if (lineColor.isValid()) {
         m_treeConnectorLineColor = lineColor;

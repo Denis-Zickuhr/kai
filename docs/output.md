@@ -31,7 +31,7 @@ The field at the bottom sends text to the command's input — for `read` prompts
 ## Search and display options
 
 - **Search in output** (magnifier) finds text in the log.
-- The **display options** menu has: Auto-scroll, Line numbers, Timestamps, Wrap long lines (visual only), **Compact output** (collapses repeated blank lines and trims trailing spaces), Increase/Decrease font, Copy all, **Export to file…** and Clear output.
+- The **display options** menu has: Auto-scroll, Line numbers, Timestamps, Wrap long lines (visual only), **Compact output** (collapses repeated blank lines and trims trailing spaces), Increase/Decrease font, Copy all, **Export to file…** and Clear output. The text of the **6 most recent commands** stays mounted: switching back to one shows it at once, with its scroll position, without printing the log again (a command that ran in the background while you were elsewhere only gets its new tail). **Clear output** (and the trash button in the header) **discards** the output: the stored log of that command is dropped too, so selecting the command again does not bring it back; a run still in progress keeps writing new output.
 - Large outputs are capped per command: **Settings → General → Max log size per command**.
 
 ## Other ways to see the output
@@ -39,7 +39,7 @@ The field at the bottom sends text to the command's input — for `read` prompts
 |   |   |
 |---|---|
 | **Interactive terminal** | a real terminal grid for `vim`, `htop`, `less`, a nested Claude Code. Turn it on in the command's advanced settings. |
-| **Formatted output** | each line that is a JSON or [logfmt](https://brandur.org/logfmt) (`level=info msg="server up" port=8080`) log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. The search can filter by *level*, and Kai can [notify](notifications.md) on the first ERROR line. |
+| **Formatted output** | each line that is a JSON or [logfmt](https://brandur.org/logfmt) (`level=info msg="server up" port=8080`) log record (level, message, timestamp) becomes a collapsible card with a level badge; other lines stay as text. Big outputs load **lazily** (in slices, so the window never freezes), a JSON object that a terminal wrapped over several lines is put back together, and text that only looks like the start of one (a `{` in code, the `[` of colour codes) never holds the output back; if the rest of a record does not arrive, what is there shows as plain lines after a moment. The search can filter by *level*, and Kai can [notify](notifications.md) on the first ERROR line. |
 
 ## Reading the README while a command runs
 

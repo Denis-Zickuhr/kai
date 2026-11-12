@@ -4,6 +4,8 @@
 #include <QString>
 
 class QCheckBox;
+class QDragEnterEvent;
+class QDropEvent;
 
 namespace kai::ui {
 
@@ -29,7 +31,14 @@ public:
     // false se não reconhecer. Estático e público para testar sem arquivo nem QDialog.
     static bool detectKindFromText(const QString &rawText, Kind *outKind);
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
+    // Onde o arquivo/pasta foi solto (ou escolhido): em um cartão específico ou fora deles (detecta sozinho).
+    enum class DropTarget { Any, Project, File, Collection };
+    void importPath(const QString &path, DropTarget target);
     void pickProjectFolder();
     void pickFile(bool collectionOnly);
 

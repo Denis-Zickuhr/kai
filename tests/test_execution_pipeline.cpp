@@ -159,6 +159,76 @@ private slots:
         QVERIFY(!mainCommandRan);
     }
 
+    // Hook de PASTA: um comando dentro da pasta o herda (aqui, um pre-hook que falha aborta antes do principal).
+    void folderPreHookIsInheritedByItsCommands()
+    {
+        Command guard;
+        guard.id = "folder_guard";
+        guard.type = CommandType::Command;
+        guard.command = "exit 1";
+
+        Folder folder;
+        folder.id = "F";
+        folder.name = "F";
+        folder.hooks.pre << guard.id;
+
+        Command main;
+        main.id = "inside";
+        main.folderId = "F";
+        main.type = CommandType::Command;
+        main.command = "echo NAO_DEVERIA_RODAR";
+
+        QMap<QString, Command> allCommands;
+        allCommands[guard.id] = guard;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setFolders({folder});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, allCommands, env);
+
+        QVERIFY(finishedSpy.wait(5000));
+        const PipelineResult result = qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0));
+        QVERIFY(!result.success);
+        QCOMPARE(result.failedStage, PipelineStage::PreHooks);
+        QCOMPARE(result.failedCommandId, QStringLiteral("folder_guard"));
+    }
+
+    // O comando que não quer os hooks da pasta diz que não herda: roda sem eles.
+    void aCommandThatDoesNotInheritFolderHooksRunsWithoutThem()
+    {
+        Command guard;
+        guard.id = "folder_guard";
+        guard.type = CommandType::Command;
+        guard.command = "exit 1";
+
+        Folder folder;
+        folder.id = "F";
+        folder.name = "F";
+        folder.hooks.pre << guard.id;
+
+        Command main;
+        main.id = "inside";
+        main.folderId = "F";
+        main.type = CommandType::Command;
+        main.command = "true";
+        main.inheritFolderHooks = false;
+
+        QMap<QString, Command> allCommands;
+        allCommands[guard.id] = guard;
+        allCommands[main.id] = main;
+
+        EnvironmentManager env;
+        ExecutionPipeline pipeline;
+        pipeline.setFolders({folder});
+        QSignalSpy finishedSpy(&pipeline, &ExecutionPipeline::pipelineFinished);
+        pipeline.run(main, allCommands, env);
+
+        QVERIFY(finishedSpy.wait(5000));
+        QVERIFY(qvariant_cast<PipelineResult>(finishedSpy.at(0).at(0)).success);
+    }
+
     // Parada pedida (Parar/kill/reset) não é falha: stoppedByRequest evita a notificação de erro.
     // Uma falha real (exit != 0) continua sem a marca.
     void stopRequestedIsFlaggedButRealFailureIsNot()

@@ -12,6 +12,8 @@ public:
     explicit CodeOutputView(QWidget *parent = nullptr);
 
     void setLineNumbersVisible(bool visible);
+    // Depois de setDocument() (as sessões de saída por comando trocam o documento): refaz a margem lateral dos números de linha.
+    void documentSwapped();
     bool lineNumbersVisible() const { return m_showLineNumbers; }
 
     void setGutterColors(const QColor &background, const QColor &foreground);

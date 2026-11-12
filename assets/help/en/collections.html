@@ -1,7 +1,12 @@
 <h2>Collections</h2>
 <p>A <b>Collection</b> is your own table of data (customers, servers, environments — whatever you need) that a <a href='help://parameters'>select parameter</a> can use as its list of options. Create one from <b>Item → New Collection</b>; it belongs to a folder/tab.</p>
 <h3>Schema and entries</h3>
-<p>You define the fields (columns) — one is the <b>key</b>, one the <b>value</b>, plus any others — and then the entries. You can mark favourites, filter, and <b>import entries from CSV or JSON</b> (completely empty entries are ignored).</p>
+<p>The editor has three tabs on the left, like the command editor:</p>
+<ul>
+<li><b>General</b> — name, icon, folder, order and a summary of the fields; <b>Schema…</b> edits them (one is the <b>key</b>, one the <b>value</b>, plus any others).</li>
+<li><b>Data</b> — the entries in a table. Mark favourites, filter, <b>import a CSV or JSON file</b>, or <b>Paste</b> records from the clipboard: JSON (an array of objects, or one object) or rows copied from a spreadsheet (tab-separated) or CSV lines. A first row that names the fields (by name or label) is used as the header; otherwise the columns go to the fields in order. Kai shows how many records it found and asks before adding them. Completely empty entries are ignored.</li>
+<li><b>Advanced</b> — the collection as JSON, editable. The text goes back into the collection when you leave the tab or save; invalid JSON keeps you on the tab until it is fixed.</li>
+</ul>
 <h3>Example</h3>
 <p>A command <code>echo {{cliente.value}}</code> with a <code>cliente</code> parameter of type select bound to the <b>Clientes</b> collection (displayed field: <code>value</code>). At run time you pick the client and Kai injects <code>{{cliente.value}}</code> (the displayed field) <i>and</i> <code>{{cliente.key}}</code> plus every other field of the entry.</p>
 <h3>Versioning with a project</h3>

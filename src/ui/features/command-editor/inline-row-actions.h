@@ -7,6 +7,8 @@
 #include <QVector>
 #include <functional>
 
+#include "ui/features/command-editor/command-tree-chip-delegate.h"
+
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -16,7 +18,7 @@ namespace kai::ui {
 // mesma posição: executar/parar é o do canto e os outros se somam à esquerda dele. Os botões acompanham o estado do item
 // (executar ou parar, reiniciar, body, saída, documento) e só aparecem na linha sob o mouse ou na selecionada. É o delegate da coluna do nome e um filtro de eventos do viewport: o clique num botão é consumido aqui,
 // então nem seleciona a linha nem inicia um arrasto.
-class InlineRowActions : public QStyledItemDelegate {
+class InlineRowActions : public ChipItemDelegate {
     Q_OBJECT
 public:
     enum class Kind { Play, Stop, Reset, EditBody, Output, Document };

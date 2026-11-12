@@ -15,6 +15,9 @@
 #include <QApplication>
 #include <QScreen>
 #include <QCursor>
+#include <QDateTime>
+#include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include "ui/features/output/output-tabs-bar.h"
@@ -146,7 +149,15 @@ void MainWindow::showCommandPalette(bool standalone)
         m_palette = new QuickRunPopup(this);
         m_palette->setObjectName(QStringLiteral("commandPalette"));
         m_palette->setPlaceholder(utils::tr(QStringLiteral("palette.placeholder")));
+        m_palette->setInlineActionsEnabled(true);
+        connect(m_palette, &QuickRunPopup::entryActionRequested, this,
+                [this](QuickRunPopup::Kind kind, const QString &id, const QString &actionId) {
+            recordPaletteUse(kind, id);
+            // Depois que a paleta fechou: os diálogos não podem nascer dentro do clique dela.
+            QTimer::singleShot(0, this, [this, kind, id, actionId]() { runPaletteEntryAction(kind, id, actionId); });
+        });
         connect(m_palette, &QuickRunPopup::entryChosen, this, [this](QuickRunPopup::Kind kind, const QString &id) {
+            recordPaletteUse(kind, id);
             switch (kind) {
             case QuickRunPopup::Kind::Command:
             case QuickRunPopup::Kind::Http:
@@ -242,6 +253,10 @@ void MainWindow::showCommandPalette(bool standalone)
                                      .toString(QKeySequence::NativeText);
         entries.append({QStringLiteral("view_ai_chat"), utils::tr(QStringLiteral("layout.view.ai_chat")), shortcut, Kind::Action});
     }
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    for (QuickRunPopup::Entry &entry : entries) {
+        entry.score = m_paletteUsage.score(paletteUsageKey(entry.kind, entry.id), nowMs);
+    }
     m_palette->refreshStyle();
     m_palette->setEntries(entries);
     if (standalone && (!isVisible() || isMinimized())) {
@@ -316,6 +331,85 @@ void MainWindow::revealItemActions(const QString &itemId)
         return;
     }
     m_commandTree->openContextMenuForCurrent();
+}
+
+QString MainWindow::paletteUsageKey(QuickRunPopup::Kind kind, const QString &id) const
+{
+    return QStringLiteral("%1:%2").arg(int(kind)).arg(id);
+}
+
+void MainWindow::recordPaletteUse(QuickRunPopup::Kind kind, const QString &id)
+{
+    m_paletteUsage.record(paletteUsageKey(kind, id), QDateTime::currentMSecsSinceEpoch());
+    if (!m_paletteUsageSaveTimer) {
+        m_paletteUsageSaveTimer = new QTimer(this);
+        m_paletteUsageSaveTimer->setSingleShot(true);
+        m_paletteUsageSaveTimer->setInterval(1500);
+        connect(m_paletteUsageSaveTimer, &QTimer::timeout, this, [this]() {
+            if (m_paletteUsageSaving) {
+                m_paletteUsageSaveTimer->start();
+                return;
+            }
+            m_paletteUsageSaving = true;
+            const core::PaletteUsage snapshot = m_paletteUsage;
+            QPointer<MainWindow> guard(this);
+            QThread *thread = QThread::create([guard, snapshot]() {
+                core::ConfigManager config;
+                config.savePaletteUsage(snapshot);
+                QMetaObject::invokeMethod(guard.data(), [guard]() {
+                    if (guard) {
+                        guard->m_paletteUsageSaving = false;
+                    }
+                }, Qt::QueuedConnection);
+            });
+            connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+            thread->start();
+        });
+    }
+    m_paletteUsageSaveTimer->start();
+}
+
+void MainWindow::runPaletteEntryAction(QuickRunPopup::Kind kind, const QString &id, const QString &actionId)
+{
+    using Kind = QuickRunPopup::Kind;
+    // O usuário pediu a ação explicitamente: com a janela oculta (paleta aberta pelo atalho global) ela volta para o diálogo.
+    showAndRaise("palette action");
+    if (actionId == QLatin1String("edit")) {
+        switch (kind) {
+        case Kind::Command:
+        case Kind::Http: handleEditRequested(id, false); break;
+        case Kind::Folder: handleEditRequested(id, true); break;
+        case Kind::Collection: handleCollectionEditRequested(id); break;
+        case Kind::Note: handleNoteEditRequested(id); break;
+        case Kind::Environment: handleManageEnvironmentsRequested(); break;
+        case Kind::Action: break;
+        }
+    } else if (actionId == QLatin1String("duplicate")) {
+        switch (kind) {
+        case Kind::Command:
+        case Kind::Http: handleDuplicateRequested(id, false); break;
+        case Kind::Folder: handleDuplicateRequested(id, true); break;
+        case Kind::Collection: handleCollectionDuplicateRequested(id); break;
+        case Kind::Note: handleNoteDuplicateRequested(id); break;
+        case Kind::Environment:
+        case Kind::Action: break;
+        }
+    } else if (actionId == QLatin1String("reveal")) {
+        switch (kind) {
+        case Kind::Command:
+        case Kind::Http: showCommandInTree(id); break;
+        case Kind::Collection: revealInTree(id, [this, id]() { m_commandTree->selectCommand(id); }); break;
+        case Kind::Folder:
+            revealInTree(id, [this, id]() {
+                m_commandTree->showRootTab(id);
+                showFolderDocumentation(id);
+            });
+            break;
+        case Kind::Note: revealInTree(id, [this, id]() { showNoteView(id, false); }); break;
+        case Kind::Environment:
+        case Kind::Action: break;
+        }
+    }
 }
 
 void MainWindow::runPaletteAction(const QString &actionId)

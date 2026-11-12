@@ -6,6 +6,7 @@
 #include "core/models.h"
 #include "core/config-manager.h"
 
+class QLabel;
 class QLineEdit;
 class QComboBox;
 class QSpinBox;
@@ -18,6 +19,7 @@ class HttpDefaultsEditorWidget;
 class IconPickerWidget;
 class WorkingDirField;
 class ActionsEditorWidget;
+class HooksEditorWidget;
 class CollapsibleSectionCard;
 class FolderPickerWidget;
 
@@ -74,6 +76,12 @@ private:
     KeyValueEditorWidget *m_envVarsEditor = nullptr;
     CollapsibleSectionCard *m_envVarsCard = nullptr;
     HttpDefaultsEditorWidget *m_httpDefaultsEditor = nullptr;
+    // Hooks da pasta (valem para tudo abaixo dela), o interruptor de herança das pastas acima e o que chega de cima.
+    HooksEditorWidget *m_hooksEditor = nullptr;
+    QCheckBox *m_inheritHooksField = nullptr;
+    QLabel *m_inheritedHooksLabel = nullptr;
+    QVector<core::Folder> m_allFolders;
+    void refreshInheritedHooks();
     IconPickerWidget *m_iconPicker = nullptr;
 
     QString m_existingId;

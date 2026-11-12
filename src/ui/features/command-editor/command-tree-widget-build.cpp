@@ -45,16 +45,27 @@ QColor httpVerbChipColor(const QString &verb)
     return QColor(utils::tokens::mutedFg());
 }
 
-// Cor do chip de linguagem do script.
+// Cor (do logo) e ícone do chip de linguagem do script: cores de marca, não tokens, para o logo ser reconhecível.
 QColor scriptLangChipColor(core::CommandLanguage language)
 {
     switch (language) {
-    case core::CommandLanguage::Python: return QColor(utils::tokens::infoFg());
-    case core::CommandLanguage::Node:   return QColor(utils::tokens::successFg());
-    case core::CommandLanguage::Php:    return QColor(utils::tokens::accent());
+    case core::CommandLanguage::Python: return QColor(0x4B, 0x8B, 0xBE);
+    case core::CommandLanguage::Node:   return QColor(0x5F, 0xA0, 0x4E);
+    case core::CommandLanguage::Php:    return QColor(0x89, 0x93, 0xBE);
     case core::CommandLanguage::Native: break;
     }
-    return QColor(utils::tokens::mutedFg());
+    return QColor(0x4E, 0xAA, 0x25);
+}
+
+QString scriptLangChipIcon(core::CommandLanguage language)
+{
+    switch (language) {
+    case core::CommandLanguage::Python: return QStringLiteral("brand-python");
+    case core::CommandLanguage::Node:   return QStringLiteral("brand-node");
+    case core::CommandLanguage::Php:    return QStringLiteral("brand-php");
+    case core::CommandLanguage::Native: break;
+    }
+    return QStringLiteral("brand-bash");
 }
 
 } // namespace
@@ -379,6 +390,7 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
                 : core::commandLanguageToString(command.language);
             commandItem->setData(0, kChipTextRole, lang);
             commandItem->setData(0, kChipColorRole, scriptLangChipColor(command.language));
+            commandItem->setData(0, kChipIconRole, scriptLangChipIcon(command.language));
         }
         if (command.hidden) {
             commandItem->setForeground(0, QColor(utils::tokens::mutedFg()));

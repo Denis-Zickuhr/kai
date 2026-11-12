@@ -59,6 +59,8 @@ inline const QString kVariables = QStringLiteral("variables");
 inline const QString kLogs = QStringLiteral("logs");
 // Um comando KIP fixado como painel: "kip:<commandId>".
 inline const QString kKipPrefix = QStringLiteral("kip:");
+// Uma árvore extra de comandos: "tree:<id>" (definida em tree-views.json).
+inline const QString kTreePrefix = QStringLiteral("tree:");
 // Uma execução arrastada para fora da Saída: "run:<commandId>".
 inline const QString kRunPrefix = QStringLiteral("run:");
 } // namespace view_id

@@ -70,6 +70,8 @@ On a command: **Edit**, **Duplicate**, **Export…**, **Delete**. On a folder: t
 
 **Ctrl+K** opens a search box over the window, from anywhere in it, even with the command list collapsed. It finds **commands** (Enter runs it), **folders** and **notes** (Enter selects them in the tree and shows their documentation or text), **environments** (Enter makes it the active one) and **actions** (new command or folder, search, history, notifications, environments, settings, and the tree toggles). Typing is fuzzy and matches the folder path too; ↑ and ↓ move, Esc closes. The **+** in the Output tab bar is the same box limited to commands. The key is changeable in *Settings → Shortcuts*.
 
+The highlighted row shows small **inline actions** on its right: **Edit**, **Duplicate** and **Show in list** (an environment only has Edit; app actions have none). Click one, or press **Tab** to step through them and **Enter** to run the marked one; **Ctrl+E** edits right away. Plain Enter is still the default action. Kai also remembers what you pick: with an empty box the most used items come first (older uses fade over a couple of weeks), and while typing, usage only breaks ties between similar matches. That memory is local to this machine (`palette-usage.json`), never exported or synced, and has no telemetry.
+
 ## Order, hiding and filtering
 
 - **Order:** the command editor has an **Order** field. Lower numbers come first; *automatic* sorts by name.

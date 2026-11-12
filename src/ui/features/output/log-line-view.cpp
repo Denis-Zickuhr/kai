@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QElapsedTimer>
 #include <QContextMenuEvent>
 #include <QFontMetrics>
 #include <QJsonArray>
@@ -167,6 +168,33 @@ std::optional<QJsonObject> parseLogfmt(const QString &line)
 LogLineModel::LogLineModel(QObject *parent)
     : QAbstractListModel(parent)
 {
+    m_drainTimer.setSingleShot(true);
+    connect(&m_drainTimer, &QTimer::timeout, this, &LogLineModel::drainQueue);
+    // Acumulando um JSON que o wrap do terminal quebrou, o resto costuma chegar junto; se parar de chegar texto, o que
+    // há vira linhas cruas em vez de ficar preso (a saída parecia travada até limpar).
+    m_accumTimer.setSingleShot(true);
+    m_accumTimer.setInterval(400);
+    connect(&m_accumTimer, &QTimer::timeout, this, [this]() {
+        if (m_queueHead < m_queue.size()) {
+            m_accumTimer.start(); // ainda há texto na fila: o fim da linha pode estar nela
+        } else if (m_accumulatingJson) {
+            giveUpAccumulation();
+        }
+    });
+    m_pendingTimer.setSingleShot(true);
+    m_pendingTimer.setInterval(400);
+    connect(&m_pendingTimer, &QTimer::timeout, this, [this]() {
+        if (m_pending.isEmpty()) {
+            return;
+        }
+        if (m_queueHead < m_queue.size()) {
+            m_pendingTimer.start();
+            return;
+        }
+        const QString line = m_pending; // a última linha ficou sem '\n' (um prompt, o fim da execução): mostra assim mesmo
+        m_pending.clear();
+        appendLine(line);
+    });
 }
 
 int LogLineModel::rowCount(const QModelIndex &parent) const
@@ -271,8 +299,30 @@ constexpr int kMaxJsonAccumLines = 80;
 // Balanço de chaves/colchetes de UMA linha, ciente de string/escape (como scanJsonChar, mas sem estado). Gate de
 // appendLine: como parseLine tolera prefixo antes do "{", uma linha com "{" solto em texto comum só entra em
 // acumulação se o balanço ficar aberto no fim da linha (depth > 0), sinal de objeto cortado pelo wrap.
-int quickBraceBalance(const QString &s)
+// Sequências ANSI (cor, cursor...) trazem "[" que não é colchete de JSON: "\x1b[32m{...}" parecia um objeto aberto e
+// engolia as linhas seguintes. Tiradas antes de contar.
+QString withoutAnsi(const QString &s)
 {
+    if (!s.contains(QLatin1Char('\x1b'))) {
+        return s;
+    }
+    static const QRegularExpression ansi(QStringLiteral("\x1b(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^\x07\x1b]*(?:\x07|\x1b\\\\)|[@-Z\\\\-_])"));
+    QString out = s;
+    out.remove(ansi);
+    return out;
+}
+
+// Um objeto JSON de verdade começa com "{" seguido de aspas, "}" ou do fim da linha (o resto vem nas próximas linhas).
+// Qualquer outro "{" (código, "{x}" em texto) não é motivo para acumular linhas.
+bool looksLikeJsonObjectStart(const QString &s)
+{
+    static const QRegularExpression start(QStringLiteral("\\{\\s*(?:\"|\\}|$)"));
+    return s.contains(start);
+}
+
+int quickBraceBalance(const QString &raw)
+{
+    const QString s = withoutAnsi(raw);
     int depth = 0;
     bool inString = false;
     bool escaped = false;
@@ -323,6 +373,7 @@ void LogLineModel::flushAccumulatedJson()
         insertRawLine(m_jsonAccumBuffer);
     }
     m_accumulatingJson = false;
+    m_accumTimer.stop();
     m_jsonAccumBuffer.clear();
     m_jsonAccumRawLines.clear();
     m_jsonAccumDepth = 0;
@@ -340,6 +391,7 @@ void LogLineModel::giveUpAccumulation()
         insertRawLine(physicalLine);
     }
     m_accumulatingJson = false;
+    m_accumTimer.stop();
     m_jsonAccumBuffer.clear();
     m_jsonAccumRawLines.clear();
     m_jsonAccumDepth = 0;
@@ -361,7 +413,8 @@ void LogLineModel::appendLine(const QString &line)
                 insertEntry(attempt); // caso comum: JSON completo numa linha física só
                 return;
             }
-            if (quickBraceBalance(trimmed) <= 0) {
+            const QString visible = withoutAnsi(trimmed);
+            if (quickBraceBalance(trimmed) <= 0 || !looksLikeJsonObjectStart(visible)) {
                 // "{" solto já fechado e sem formar objeto válido: texto comum (ex: código colado), não wrap em
                 // andamento. Cai como linha crua, sem acumular.
                 insertRawLine(line);
@@ -390,13 +443,15 @@ void LogLineModel::appendLine(const QString &line)
     // balanço fora de string.
     m_jsonAccumRawLines.append(line);
     m_jsonAccumBuffer += line;
-    for (const QChar c : line) {
+    for (const QChar c : withoutAnsi(line)) {
         scanJsonChar(c);
     }
     if (m_jsonAccumDepth <= 0 && !m_jsonAccumBuffer.trimmed().isEmpty()) {
         flushAccumulatedJson();
     } else if (m_jsonAccumRawLines.size() > kMaxJsonAccumLines) {
         giveUpAccumulation();
+    } else {
+        m_accumTimer.start(); // se o resto não vier, desiste (ver o construtor)
     }
 }
 
@@ -494,13 +549,45 @@ void LogLineModel::appendText(const QString &text)
     QStringList parts = combined.split(QLatin1Char('\n'));
     // O último pedaço só é linha fechada se o texto terminava em \n; senão fica parcial para a próxima chamada.
     m_pending = parts.takeLast();
-    for (const QString &line : parts) {
-        appendLine(line);
+    if (m_pending.isEmpty()) {
+        m_pendingTimer.stop();
+    } else {
+        m_pendingTimer.start();
+    }
+    m_queue += parts;
+    drainQueue();
+}
+
+void LogLineModel::drainQueue()
+{
+    // As primeiras linhas entram na hora (textos pequenos ficam síncronos, como sempre); passando disso, só enquanto
+    // couber no orçamento de tempo, e o resto na próxima volta do laço de eventos.
+    constexpr int kImmediateLines = 400;
+    constexpr int kBudgetMs = 10;
+    QElapsedTimer budget;
+    budget.start();
+    int done = 0;
+    while (m_queueHead < m_queue.size()) {
+        appendLine(m_queue.at(m_queueHead++));
+        if (++done >= kImmediateLines && budget.elapsed() >= kBudgetMs) {
+            break;
+        }
+    }
+    if (m_queueHead >= m_queue.size()) {
+        m_queue.clear();
+        m_queueHead = 0;
+    } else {
+        m_drainTimer.start(0);
     }
 }
 
 void LogLineModel::clearLog()
 {
+    m_queue.clear();
+    m_queueHead = 0;
+    m_drainTimer.stop();
+    m_accumTimer.stop();
+    m_pendingTimer.stop();
     beginResetModel();
     m_all.clear();
     m_visibleRows.clear();
@@ -1202,6 +1289,23 @@ void LogLineView::flushPending() const
     if (wasAtBottom) {
         self->scrollToBottom();
     }
+}
+
+void LogLineView::setActiveModel(LogLineModel *model)
+{
+    if (!model || model == m_model) {
+        return;
+    }
+    flushPending(); // o que estava em espera é do modelo que sai
+    m_flushTimer->stop();
+    disconnect(m_model, &LogLineModel::currentMatchRowChanged, this, &LogLineView::jumpToRow);
+    disconnect(m_model, &LogLineModel::errorLineDetected, this, &LogLineView::errorLineDetected);
+    m_model = model;
+    m_delegate->setModel(m_model);
+    setModel(m_model);
+    connect(m_model, &LogLineModel::currentMatchRowChanged, this, &LogLineView::jumpToRow);
+    connect(m_model, &LogLineModel::errorLineDetected, this, &LogLineView::errorLineDetected);
+    m_pendingAtBottom = true;
 }
 
 void LogLineView::clearLog()

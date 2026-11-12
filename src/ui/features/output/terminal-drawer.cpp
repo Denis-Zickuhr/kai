@@ -330,6 +330,43 @@ void TerminalDrawer::applyExpandedConstraints()
     }
 }
 
+namespace {
+// Tamanho (em caracteres) de cada fatia de saída aplicada de uma vez à tela.
+constexpr int kOutputSliceChars = 48 * 1024;
+}
+
+void TerminalDrawer::setCurrentCommandId(const QString &commandId)
+{
+    if (commandId == m_currentCommandId) {
+        return;
+    }
+    m_currentCommandId = commandId;
+    m_pendingChunks.clear(); // era do comando que saiu
+    m_panel->activateSession(commandId);
+}
+
+void TerminalDrawer::scheduleFlush()
+{
+    if (!m_flushTimer) {
+        m_flushTimer = new QTimer(this);
+        m_flushTimer->setSingleShot(true);
+        m_flushTimer->setInterval(16);
+        connect(m_flushTimer, &QTimer::timeout, this, &TerminalDrawer::flushPendingOutput);
+    }
+    if (!m_flushTimer->isActive() && !m_sliceScheduled) {
+        m_flushTimer->start();
+    }
+}
+
+void TerminalDrawer::appendNotice(const QString &text)
+{
+    if (text.isEmpty()) {
+        return;
+    }
+    m_pendingChunks.append({text, false, false});
+    scheduleFlush();
+}
+
 void TerminalDrawer::appendRawText(const QString &rawText, bool isError)
 {
     // Coalesce: acumula e aplica em lote (~16ms); cada chunk disparando parse ANSI + insertText + scroll travava a GUI
@@ -337,16 +374,23 @@ void TerminalDrawer::appendRawText(const QString &rawText, bool isError)
     if (rawText.isEmpty()) {
         return;
     }
-    m_pendingChunks.append(qMakePair(rawText, isError));
-    if (!m_flushTimer) {
-        m_flushTimer = new QTimer(this);
-        m_flushTimer->setSingleShot(true);
-        m_flushTimer->setInterval(16);
-        connect(m_flushTimer, &QTimer::timeout, this, &TerminalDrawer::flushPendingOutput);
+    // Um texto grande (reabrir um comando reinjeta o log guardado inteiro) entra na fila em FATIAS cortadas numa quebra de
+    // linha: aplicar tudo de uma vez congelava a janela.
+    if (rawText.size() > kOutputSliceChars) {
+        qsizetype start = 0;
+        while (start < rawText.size()) {
+            qsizetype end = qMin<qsizetype>(start + kOutputSliceChars, rawText.size());
+            if (end < rawText.size()) {
+                const qsizetype newline = rawText.indexOf(QLatin1Char('\n'), end);
+                end = newline >= 0 && newline - end < kOutputSliceChars ? newline + 1 : end;
+            }
+            m_pendingChunks.append({rawText.mid(start, end - start), isError, true});
+            start = end;
+        }
+    } else {
+        m_pendingChunks.append({rawText, isError, true});
     }
-    if (!m_flushTimer->isActive()) {
-        m_flushTimer->start();
-    }
+    scheduleFlush();
 }
 
 void TerminalDrawer::flushPendingOutput()
@@ -354,23 +398,64 @@ void TerminalDrawer::flushPendingOutput()
     if (m_pendingChunks.isEmpty()) {
         return;
     }
-    // Junta chunks consecutivos do MESMO canal numa única inserção.
-    QVector<QPair<QString, bool>> batched;
-    for (const auto &chunk : m_pendingChunks) {
-        if (!batched.isEmpty() && batched.last().second == chunk.second) {
-            batched.last().first += chunk.first;
+    // Aplica uma FATIA por vez (cerca de kOutputSliceChars): junta chunks consecutivos iguais (mesmo canal e mesma contagem)
+    // numa inserção e, se sobrou fila, agenda a próxima para a volta seguinte do laço de eventos. A janela segue respondendo
+    // enquanto um log grande é reexibido, e a saída nova entra depois dele, na ordem. O que é do log soma na sessão ao ser
+    // APLICADO (o que a fila perdeu numa troca de comando volta pelo log guardado).
+    QVector<Chunk> batched;
+    int taken = 0;
+    int used = 0;
+    while (taken < m_pendingChunks.size() && (taken == 0 || used < kOutputSliceChars)) {
+        const Chunk &chunk = m_pendingChunks.at(taken);
+        if (!batched.isEmpty() && batched.last().isError == chunk.isError && batched.last().counted == chunk.counted) {
+            batched.last().text += chunk.text;
         } else {
             batched.append(chunk);
         }
+        used += chunk.text.size();
+        ++taken;
     }
-    m_pendingChunks.clear();
-    for (const auto &chunk : batched) {
-        m_panel->appendOutput(chunk.first, chunk.second);
+    m_pendingChunks.remove(0, taken);
+    for (const Chunk &chunk : std::as_const(batched)) {
+        m_panel->appendOutput(chunk.text, chunk.isError);
+        if (chunk.counted) {
+            m_panel->addSessionShown(chunk.text.size());
+        }
     }
+    if (!m_pendingChunks.isEmpty() && !m_sliceScheduled) {
+        m_sliceScheduled = true;
+        QTimer::singleShot(0, this, [this]() {
+            m_sliceScheduled = false;
+            flushPendingOutput();
+        });
+    }
+}
+
+void TerminalDrawer::scrollToEndWhenLoaded()
+{
+    m_scrollEndTries = 0;
+    if (!m_scrollEndTimer) {
+        m_scrollEndTimer = new QTimer(this);
+        m_scrollEndTimer->setInterval(40);
+        connect(m_scrollEndTimer, &QTimer::timeout, this, [this]() {
+            // O log volta em fatias (e a vista formatada em lotes): o fim só existe depois de tudo entrar. Desiste depois de
+            // alguns segundos e rola até onde houver.
+            const bool loaded = m_pendingChunks.isEmpty() && m_panel->outputLoaded();
+            if (!loaded && ++m_scrollEndTries < 150) {
+                return;
+            }
+            m_scrollEndTimer->stop();
+            m_panel->scrollToEnd();
+        });
+    }
+    m_scrollEndTimer->start();
 }
 
 void TerminalDrawer::clear()
 {
+    if (m_scrollEndTimer) {
+        m_scrollEndTimer->stop(); // o "rolar até o fim" pendente era do conteúdo que está saindo
+    }
     m_pendingChunks.clear();
     m_panel->clearAll();
     // Não limpa a janela destacada: é um monitor fixo do comando de origem e preserva o histórico.

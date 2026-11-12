@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPointer>
 #include <QWidget>
 #include <QTabWidget>
 #include <QTreeWidget>
@@ -11,6 +12,7 @@
 #include <QColor>
 #include <QPixmap>
 #include <functional>
+#include <optional>
 
 class QPaintEvent;
 class QEvent;
@@ -20,6 +22,7 @@ class QMovie;
 #include "core/models.h"
 #include "core/note-files.h"
 #include "core/sync-drift.h"
+#include "core/tree-view.h"
 #include "ui/shared/fuzzy-search.h"
 #include "ui/features/command-editor/folder-actions-view.h"
 
@@ -59,6 +62,14 @@ public:
     void setData(const QVector<core::Folder> &folders, const QVector<core::Command> &commands,
                  const QVector<core::Collection> &collections, const QVector<core::Note> &notes);
 
+    // ÁRVORES EXTRAS (Exibir → Commands ▸). A principal repassa a cada seguidora os dados e o estado que recebe (comandos
+    // rodando, falhas, marcas, ações...); cada seguidora aplica o PRÓPRIO filtro (setView) sobre o mesmo conjunto, então a
+    // ordem é a mesma e arrastar numa filtrada reordena de verdade. A seguidora recebe de imediato o estado atual.
+    void addFollower(CommandTreeWidget *follower);
+    // Faz desta instância uma árvore filtrada: só o que a definição deixa passar. Chamar antes de addFollower.
+    void setView(const core::TreeViewDef &view);
+    bool isFiltered() const { return m_view.has_value(); }
+
     // Id da pasta padrão sintética ("Geral") que hospeda órfãos (folderId vazio ou inexistente);
     // não persistida. Exposta para o MainWindow tratar a exclusão dessa aba.
     static QString defaultFolderId();
@@ -91,14 +102,27 @@ public:
     void setFocusPredicates(std::function<bool(const QString &commandId)> hasOutput,
                             std::function<bool(const QString &itemId)> hasDocument)
     {
-        m_commandHasOutput = std::move(hasOutput);
-        m_itemHasDocument = std::move(hasDocument);
+        m_commandHasOutput = hasOutput;
+        m_itemHasDocument = hasDocument;
+        for (const QPointer<CommandTreeWidget> &follower : std::as_const(m_followers)) {
+            if (follower) {
+                follower->setFocusPredicates(hasOutput, hasDocument);
+            }
+        }
     }
     // O comando que está na Saída (marca em destaque na linha dele; os outros com saída ganham a marca discreta).
     void setShownCommand(const QString &commandId);
     QString shownCommand() const { return m_shownCommandId; }
     // Redesenha as marcas (o que elas dizem mudou fora da árvore, como o foco inteligente).
-    void refreshRowMarks() { refreshActionViews(); }
+    void refreshRowMarks()
+    {
+        refreshActionViews();
+        for (const QPointer<CommandTreeWidget> &follower : std::as_const(m_followers)) {
+            if (follower) {
+                follower->refreshRowMarks();
+            }
+        }
+    }
     // Com as marcas ligadas (sem o foco inteligente) a coluna de status ganha o espaço delas, ao lado do tempo.
     void setOutputMarksEnabled(bool enabled);
     // Ações inline: botões do item logo depois do nome, na linha sob o mouse e na selecionada.
@@ -208,7 +232,8 @@ signals:
     void noteDeleteRequested(const QString &noteId);
     // Salvar como / abrir cópia / copiar o conteúdo da nota; e importar um arquivo de texto como nota nova.
     void noteFileActionRequested(const QString &noteId, core::NoteFileAction action);
-    void newNoteRequested();
+    // Criação pelo menu de contexto: `targetFolderId` é a pasta onde o clique caiu (vazio = clique fora de um item).
+    void newNoteRequested(const QString &targetFolderId = QString());
     void quickEditBodyRequested(const QString &commandId);
     void quickEditFolderRequested(const QString &folderId);
     void selectionChanged(const QString &itemId, bool isFolder);
@@ -227,10 +252,10 @@ signals:
     void resetRequested(const QString &commandId);
 
     // Criação (menu de contexto ou Insert); o MainWindow resolve a pasta destino pela seleção/aba atual.
-    void newFolderRequested();
-    void newCommandRequested();
-    void newPipelineRequested();
-    void newCollectionRequested();
+    void newFolderRequested(const QString &targetFolderId = QString());
+    void newCommandRequested(const QString &targetFolderId = QString());
+    void newPipelineRequested(const QString &targetFolderId = QString());
+    void newCollectionRequested(const QString &targetFolderId = QString());
 
     // Force-stop pelo menu de contexto; mesmo caminho de kill do MainWindow (terminate->timeout->kill).
     void forceStopRequested(const QString &commandId);
@@ -252,6 +277,18 @@ private slots:
 
 private:
     void setupUi();
+    // Guarda os dados (já filtrados, se esta é uma árvore extra) e os repassa às seguidoras.
+    void storeData(const QVector<core::Folder> &folders, const QVector<core::Command> &commands,
+                   const QVector<core::Collection> &collections, const QVector<core::Note> &notes);
+    template <typename Fn>
+    void forFollowers(Fn &&fn)
+    {
+        for (const QPointer<CommandTreeWidget> &follower : std::as_const(m_followers)) {
+            if (follower) {
+                fn(follower.data());
+            }
+        }
+    }
     void rebuildTabs();
     // Menu de contexto de `item` (nullptr = área vazia: só criação).
     void showContextMenu(QTreeWidgetItem *item, const QPoint &globalPos);
@@ -281,6 +318,11 @@ private:
 
     QTabWidget *m_tabWidget = nullptr;
     QMap<QString, QTreeWidget *> m_treesByRootId;
+    QVector<QPointer<CommandTreeWidget>> m_followers;
+    QString m_creationTargetId; // pasta onde o menu de contexto foi aberto; vai com os sinais de criação
+    std::optional<core::TreeViewDef> m_view; // árvore extra: o que ela mostra
+    core::TreeData m_raw;                    // árvore extra: o conjunto completo (m_folders... guardam o filtrado)
+    int m_tabBarHeight = 0;
     // Guardados para aplicar também às árvores criadas depois (createTreeForRoot).
     int m_treeConnectorStyle = 0;
     QColor m_treeConnectorLineColor;

@@ -1,6 +1,8 @@
 #include <QTest>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QListWidget>
+#include <QPlainTextEdit>
 
 #include "ui/features/collections/collection-editor-dialog.h"
 #include "core/models.h"
@@ -84,6 +86,94 @@ private slots:
         QCOMPARE(combo->currentData().toString(), QStringLiteral("f1"));
         const Collection built = dialog.buildCollection();
         QCOMPARE(built.folderId, QStringLiteral("f1"));
+    }
+
+    static QVector<CollectionField> keyValueSchema()
+    {
+        return {{QStringLiteral("key"), QStringLiteral("Chave"), CollectionFieldType::Key},
+                {QStringLiteral("value"), QStringLiteral("Nome"), CollectionFieldType::Value}};
+    }
+
+    // Colar da área de transferência: planilha (tab) com cabeçalho pelo RÓTULO do campo.
+    void clipboardTabSeparatedRowsWithHeaderByLabel()
+    {
+        const auto entries = CollectionEditorDialog::parseImportText(
+            QStringLiteral("Nome\tChave\nAlice\tu1\nBob\tu2\n"), keyValueSchema());
+        QCOMPARE(entries.size(), 2);
+        QCOMPARE(entries.at(0).values.value(QStringLiteral("value")), QStringLiteral("Alice"));
+        QCOMPARE(entries.at(0).values.value(QStringLiteral("key")), QStringLiteral("u1"));
+        QCOMPARE(entries.at(1).values.value(QStringLiteral("key")), QStringLiteral("u2"));
+        QVERIFY(entries.at(0).id != entries.at(1).id);
+    }
+
+    void clipboardRowsWithoutHeaderMapByPosition()
+    {
+        const auto tabs = CollectionEditorDialog::parseImportText(
+            QStringLiteral("u1\tAlice\r\nu2\tBob"), keyValueSchema());
+        QCOMPARE(tabs.size(), 2);
+        QCOMPARE(tabs.at(1).values.value(QStringLiteral("key")), QStringLiteral("u2"));
+        QCOMPARE(tabs.at(1).values.value(QStringLiteral("value")), QStringLiteral("Bob"));
+
+        const auto commas = CollectionEditorDialog::parseImportText(QStringLiteral("u1,Alice"), keyValueSchema());
+        QCOMPARE(commas.size(), 1);
+        QCOMPARE(commas.at(0).values.value(QStringLiteral("value")), QStringLiteral("Alice"));
+    }
+
+    void clipboardJsonArrayAndSingleObject()
+    {
+        const auto array = CollectionEditorDialog::parseImportText(
+            QStringLiteral(R"([{"key":"a","value":"A","favorite":true},{"key":"b","value":"B"},{}])"), keyValueSchema());
+        QCOMPARE(array.size(), 2); // o objeto vazio é omitido
+        QVERIFY(array.at(0).favorite);
+        QVERIFY(!array.at(1).favorite);
+
+        const auto single = CollectionEditorDialog::parseImportText(
+            QStringLiteral(R"({"key":"z","value":"Z"})"), keyValueSchema());
+        QCOMPARE(single.size(), 1);
+        QCOMPARE(single.at(0).values.value(QStringLiteral("value")), QStringLiteral("Z"));
+    }
+
+    void clipboardWithoutRecordsGivesNothing()
+    {
+        QVERIFY(CollectionEditorDialog::parseImportText(QString(), keyValueSchema()).isEmpty());
+        QVERIFY(CollectionEditorDialog::parseImportText(QStringLiteral("  \n\t\n "), keyValueSchema()).isEmpty());
+        QVERIFY(CollectionEditorDialog::parseImportText(QStringLiteral("not json"), keyValueSchema(), true).isEmpty());
+    }
+
+    void dialogHasGeneralDataAndAdvancedTabs()
+    {
+        Collection col;
+        col.id = QStringLiteral("c");
+        col.name = QStringLiteral("Servidores");
+        CollectionEntry e;
+        e.id = QStringLiteral("e1");
+        e.values = {{QStringLiteral("key"), QStringLiteral("k")}, {QStringLiteral("value"), QStringLiteral("v")}};
+        col.entries = {e};
+        CollectionEditorDialog dialog(col);
+        auto *nav = dialog.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+        QVERIFY(nav != nullptr);
+        QCOMPARE(nav->count(), 3);
+        QVERIFY(nav->item(1)->text().contains(QStringLiteral("(1)"))); // Dados mostra quantas entradas há
+    }
+
+    // A aba Avançado edita o JSON da coleção: sair dela devolve o texto ao modelo.
+    void advancedTabJsonRoundTripsIntoTheCollection()
+    {
+        Collection col;
+        col.id = QStringLiteral("c");
+        col.name = QStringLiteral("Antes");
+        CollectionEditorDialog dialog(col);
+        auto *nav = dialog.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+        auto *editor = dialog.findChild<QPlainTextEdit *>();
+        QVERIFY(nav && editor);
+        nav->setCurrentRow(2); // Avançado
+        QVERIFY(editor->toPlainText().contains(QStringLiteral("Antes")));
+        QString text = editor->toPlainText();
+        text.replace(QStringLiteral("Antes"), QStringLiteral("Depois"));
+        editor->setPlainText(text);
+        nav->setCurrentRow(1); // sair aplica o JSON
+        QCOMPARE(dialog.buildCollection().name, QStringLiteral("Depois"));
+        QCOMPARE(nav->currentRow(), 1);
     }
 
     // Campo "secret": a grade mostra mascarado, mas buildCollection() preserva o valor VERDADEIRO (não grava o

@@ -180,7 +180,7 @@ void OutputPanel::setupUi()
     m_clearButton->setCursor(Qt::PointingHandCursor);
     m_clearButton->setIcon(LucideIcons::icon(QStringLiteral("trash-2"), QColor(tk::mutedFg()), 15));
     m_clearButton->setToolTip(utils::tr(QStringLiteral("output.menu.clear")));
-    connect(m_clearButton, &QToolButton::clicked, this, &OutputPanel::clearAll);
+    connect(m_clearButton, &QToolButton::clicked, this, &OutputPanel::requestClear);
     extrasLayout->addWidget(m_clearButton, 0, Qt::AlignVCenter);
     addHeaderSeparator();
 
@@ -467,6 +467,7 @@ void OutputPanel::setupUi()
     m_outputView->viewport()->installEventFilter(this);
     m_requestBodyView->viewport()->installEventFilter(this);
 
+    initTextSessions(); // o texto de cada comando recente fica montado (ver activateSession)
     applyOptionsToOutput();
     updateTabVisibility();
     setStatus(OutputStatus::Idle);
@@ -553,7 +554,7 @@ void OutputPanel::fillContextMenu(QMenu *menu)
     menu->setToolTipsVisible(true);
     connect(menu->addAction(LucideIcons::icon(QStringLiteral("trash-2"), QColor(tk::mutedFg()), 15),
                             utils::tr(QStringLiteral("output.menu.clear"))),
-            &QAction::triggered, this, &OutputPanel::clearAll);
+            &QAction::triggered, this, &OutputPanel::requestClear);
     connect(menu->addAction(LucideIcons::icon(QStringLiteral("clipboard-copy"), QColor(tk::mutedFg()), 15),
                             utils::tr(QStringLiteral("output.menu.copy_all"))),
             &QAction::triggered, this, &OutputPanel::copyAllOutput);

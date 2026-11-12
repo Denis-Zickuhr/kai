@@ -268,10 +268,11 @@ ExternalRunSession *MainWindow::startExternalRun(const QString &commandId,
 
     // Os hooks logam com o próprio id.
     QSet<QString> chainIds{command.id};
-    for (const QString &hookId : command.hooks.pre) {
+    const core::Hooks effectiveHooks = m_pipeline->withEffectiveHooks(command).hooks; // com os das pastas
+    for (const QString &hookId : effectiveHooks.pre) {
         chainIds.insert(hookId);
     }
-    for (const QString &hookId : command.hooks.post) {
+    for (const QString &hookId : effectiveHooks.post) {
         chainIds.insert(hookId);
     }
     connect(m_pipeline, &engine::ExecutionPipeline::logMessage, session,

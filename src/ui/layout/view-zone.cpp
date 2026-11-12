@@ -35,6 +35,7 @@ constexpr int kTabPadding = 10;
 constexpr int kIconSize = 14;
 constexpr int kGap = 6;
 constexpr int kCloseSize = 14;
+constexpr int kChevronSize = 12;
 constexpr int kMinTabWidth = 72;
 constexpr int kMenuWidth = 38;
 constexpr int kMaximizeWidth = 28;
@@ -97,7 +98,7 @@ void ZoneTabStrip::relayout()
     for (const Tab &tab : std::as_const(m_tabs)) {
         // +4: horizontalAdvance arredonda para baixo e o elidedText compara com a largura fracionária ("Notificatio…").
         const int w = kTabPadding * 2 + kIconSize + kGap + metrics.horizontalAdvance(tab.title) + 4
-                      + (tab.closable ? kGap + kCloseSize : 0);
+                      + (tab.closable ? kGap + kCloseSize : 0) + (tab.chevron ? kGap + kChevronSize : 0);
         widths.append(w);
         total += w;
     }
@@ -129,6 +130,16 @@ QRect ZoneTabStrip::closeRect(int index) const
     const QRect tab = m_rects.at(index);
     return QRect(tab.right() - kTabPadding - kCloseSize + 1, tab.top() + (tab.height() - kCloseSize) / 2, kCloseSize,
                  kCloseSize);
+}
+
+QRect ZoneTabStrip::chevronRect(int index) const
+{
+    if (index < 0 || index >= m_tabs.size() || !m_tabs.at(index).chevron) {
+        return QRect();
+    }
+    const QRect tab = m_rects.at(index);
+    const int right = tab.right() - kTabPadding - (m_tabs.at(index).closable ? kGap + kCloseSize : 0);
+    return QRect(right - kChevronSize + 1, tab.top() + (tab.height() - kChevronSize) / 2, kChevronSize, kChevronSize);
 }
 
 QRect ZoneTabStrip::menuRect() const
@@ -202,10 +213,24 @@ void ZoneTabStrip::paintEvent(QPaintEvent *)
             icon.paint(&p, QRect(r.left() + kTabPadding, r.top() + (r.height() - kIconSize) / 2, kIconSize, kIconSize));
         }
         const int textLeft = r.left() + kTabPadding + kIconSize + kGap;
-        const int textRight = r.left() + r.width() - kTabPadding - (tab.closable ? kGap + kCloseSize : 0);
+        const int textRight = r.left() + r.width() - kTabPadding - (tab.closable ? kGap + kCloseSize : 0)
+                              - (tab.chevron ? kGap + kChevronSize : 0);
         p.setPen(fg);
         p.drawText(QRect(textLeft, r.top(), qMax(0, textRight - textLeft), r.height()),
                    Qt::AlignVCenter | Qt::AlignLeft, metrics.elidedText(tab.title, Qt::ElideRight, textRight - textLeft));
+        if (tab.chevron) {
+            const QRect c = chevronRect(i);
+            if (i == m_hover && m_hoverChevron) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(tk::selBg()));
+                p.drawRoundedRect(c.adjusted(-3, -3, 3, 3), tk::radiusSm(), tk::radiusSm());
+            }
+            const QIcon chevron = LucideIcons::icon(QStringLiteral("chevron-down"),
+                                                    QColor(i == m_hover && m_hoverChevron ? tk::fg() : tk::mutedFg()), kChevronSize);
+            if (!chevron.isNull()) {
+                chevron.paint(&p, c);
+            }
+        }
         if (tab.closable && (active || hover)) {
             const QRect c = closeRect(i);
             if (i == m_hover && m_hoverClose) {
@@ -269,6 +294,7 @@ void ZoneTabStrip::mousePressEvent(QMouseEvent *event)
     m_pressIndex = indexAt(event->pos());
     m_pressPos = event->pos();
     m_pressOnClose = m_pressIndex >= 0 && closeRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos());
+    m_pressOnChevron = m_pressIndex >= 0 && chevronRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos());
     m_pressOnMaximize = m_pressIndex < 0 && maximizeRect().contains(event->pos());
     if (m_pressIndex >= 0 && !m_pressOnClose) {
         // A faixa mostra já a aba clicada (quem troca o painel é o ViewZone, em resposta ao sinal).
@@ -282,16 +308,19 @@ void ZoneTabStrip::mouseMoveEvent(QMouseEvent *event)
 {
     const int index = indexAt(event->pos());
     const bool onClose = index >= 0 && closeRect(index).adjusted(-3, -3, 3, 3).contains(event->pos());
+    const bool onChevron = index >= 0 && chevronRect(index).adjusted(-3, -3, 3, 3).contains(event->pos());
     const bool onMenu = menuRect().contains(event->pos());
     const bool onMaximize = !m_tabs.isEmpty() && maximizeRect().contains(event->pos());
-    if (index != m_hover || onClose != m_hoverClose || onMenu != m_hoverMenu || onMaximize != m_hoverMaximize) {
+    if (index != m_hover || onClose != m_hoverClose || onChevron != m_hoverChevron || onMenu != m_hoverMenu
+        || onMaximize != m_hoverMaximize) {
         m_hover = index;
         m_hoverClose = onClose;
+        m_hoverChevron = onChevron;
         m_hoverMenu = onMenu;
         m_hoverMaximize = onMaximize;
         update();
     }
-    if (m_dragEnabled && (event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose
+    if (m_dragEnabled && (event->buttons() & Qt::LeftButton) && m_pressIndex >= 0 && !m_pressOnClose && !m_pressOnChevron
         && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
         const int index = m_pressIndex;
         m_pressIndex = -1;
@@ -306,19 +335,24 @@ void ZoneTabStrip::mouseReleaseEvent(QMouseEvent *event)
             emit tabMaximizeRequested(m_active);
         } else if (menuRect().contains(event->pos()) && m_pressIndex < 0 && !m_active.isEmpty()) {
             emit tabMenuRequested(m_active, mapToGlobal(QPoint(menuRect().left(), menuRect().bottom())));
+        } else if (m_pressIndex >= 0 && m_pressOnChevron && chevronRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos())) {
+            const QRect c = chevronRect(m_pressIndex);
+            emit tabChevronRequested(m_tabs.at(m_pressIndex).id, mapToGlobal(QPoint(c.left() - 3, m_barHeight)));
         } else if (m_pressIndex >= 0 && m_pressOnClose && closeRect(m_pressIndex).adjusted(-3, -3, 3, 3).contains(event->pos())) {
             emit tabCloseRequested(m_tabs.at(m_pressIndex).id);
         }
     }
     m_pressIndex = -1;
     m_pressOnClose = false;
+    m_pressOnChevron = false;
     m_pressOnMaximize = false;
 }
 
 void ZoneTabStrip::mouseDoubleClickEvent(QMouseEvent *event)
 {
     const int index = indexAt(event->pos());
-    if (event->button() == Qt::LeftButton && index >= 0 && !closeRect(index).contains(event->pos())) {
+    if (event->button() == Qt::LeftButton && index >= 0 && !closeRect(index).contains(event->pos())
+        && !chevronRect(index).adjusted(-3, -3, 3, 3).contains(event->pos())) {
         emit tabDoubleClicked(m_tabs.at(index).id);
         return;
     }
@@ -330,6 +364,7 @@ void ZoneTabStrip::leaveEvent(QEvent *event)
     if (m_hover != -1 || m_hoverMenu || m_hoverMaximize) {
         m_hover = -1;
         m_hoverClose = false;
+        m_hoverChevron = false;
         m_hoverMenu = false;
         m_hoverMaximize = false;
         update();
@@ -418,6 +453,7 @@ ViewZone::ViewZone(Zone zone, ViewRegistry *registry, QWidget *parent)
     });
     connect(m_strip, &ZoneTabStrip::tabCloseRequested, this, &ViewZone::viewCloseRequested);
     connect(m_strip, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
+    connect(m_strip, &ZoneTabStrip::tabChevronRequested, this, &ViewZone::viewChevronRequested);
     connect(m_strip, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);
     connect(m_strip, &ZoneTabStrip::tabMaximizeRequested, this, &ViewZone::viewMaximizeRequested);
     connect(m_strip, &ZoneTabStrip::dragStarted, this, &ViewZone::dragStarted);
@@ -499,8 +535,9 @@ void ViewZone::applySplit()
         header->setBarHeight(m_barHeight);
         header->setZoneFocused(m_zoneFocused);
         header->setDragEnabled(m_dragEnabled);
-        header->setTabs({{id, m_registry->title(id), m_registry->icon(id), false}}, id);
+        header->setTabs({{id, m_registry->title(id), m_registry->icon(id), false, hasChevron(id)}}, id);
         connect(header, &ZoneTabStrip::tabMenuRequested, this, &ViewZone::viewMenuRequested);
+        connect(header, &ZoneTabStrip::tabChevronRequested, this, &ViewZone::viewChevronRequested);
         connect(header, &ZoneTabStrip::tabDoubleClicked, this, &ViewZone::viewMaximizeRequested);
         connect(header, &ZoneTabStrip::tabMaximizeRequested, this, &ViewZone::viewMaximizeRequested);
         header->setMaximizedView(m_maximizedView);
@@ -605,12 +642,18 @@ int ViewZone::dropIndexAt(const QPoint &pos) const
     return -1;
 }
 
+bool ViewZone::hasChevron(const QString &id) const
+{
+    const auto spec = m_registry->spec(id);
+    return spec && spec->chevronMenu;
+}
+
 void ViewZone::rebuildStrip(const QString &active)
 {
     QList<ZoneTabStrip::Tab> tabs;
     for (const QString &id : std::as_const(m_ids)) {
         // Sem o "x" na aba: fechar é algo pontual e fica no menu de contexto (botão direito).
-        tabs.append({id, m_registry->title(id), m_registry->icon(id), false});
+        tabs.append({id, m_registry->title(id), m_registry->icon(id), false, hasChevron(id)});
     }
     m_strip->setTabs(tabs, active);
 }

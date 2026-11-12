@@ -9,6 +9,7 @@
 #include <QRect>
 #include <QString>
 
+#include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
 #include "ui/features/command-editor/command-tree-widget-internal.h"
 
@@ -21,10 +22,16 @@ class ChipItemDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
+    static bool hasChip(const QModelIndex &index)
+    {
+        return !index.data(cmdtree::kChipTextRole).toString().isEmpty()
+            || !index.data(cmdtree::kChipIconRole).toString().isEmpty();
+    }
+
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
         const QString chip = index.data(cmdtree::kChipTextRole).toString();
-        if (chip.isEmpty()) {
+        if (!hasChip(index)) {
             QStyledItemDelegate::paint(painter, option, index);
             return;
         }
@@ -51,13 +58,20 @@ public:
         if (!chipColor.isValid()) {
             chipColor = QColor(utils::tokens::mutedFg());
         }
+        // Chip de ícone (linguagem do script): só o logo da ferramenta; sem o ícone no resource cai no texto.
+        const QString iconName = index.data(cmdtree::kChipIconRole).toString();
+        QIcon chipIcon;
+        if (!iconName.isEmpty()) {
+            chipIcon = LucideIcons::icon(iconName, chipColor, 14);
+        }
         QFont chipFont = opt.font;
         chipFont.setPointSizeF(std::max(6.0, opt.font.pointSizeF() - 1.0));
         chipFont.setBold(true);
         const QFontMetrics chipMetrics(chipFont);
         const QString chipText = chip.toUpper();
         const int padH = 6;
-        const int chipTextW = chipMetrics.horizontalAdvance(chipText);
+        const bool iconChip = !chipIcon.isNull();
+        const int chipTextW = iconChip ? 14 : chipMetrics.horizontalAdvance(chipText);
         const int chipH = chipMetrics.height() + 2;
         const int chipW = chipTextW + padH * 2;
         const QRect chipRect(x, cell.top() + (cell.height() - chipH) / 2, chipW, chipH);
@@ -68,9 +82,15 @@ public:
         painter->setBrush(fill);
         const int radius = utils::tokens::radiusSm();
         painter->drawRoundedRect(chipRect, radius, radius);
-        painter->setFont(chipFont);
-        painter->setPen(chipColor);
-        painter->drawText(chipRect, Qt::AlignCenter, chipText);
+        if (iconChip) {
+            const QRect iconRect(chipRect.left() + (chipRect.width() - 14) / 2,
+                                 chipRect.top() + (chipRect.height() - 14) / 2, 14, 14);
+            chipIcon.paint(painter, iconRect);
+        } else {
+            painter->setFont(chipFont);
+            painter->setPen(chipColor);
+            painter->drawText(chipRect, Qt::AlignCenter, chipText);
+        }
 
         x = chipRect.right() + 6;
 

@@ -18,6 +18,9 @@
       - "Parar túnel"</pre>
 <h3>Herança por pasta</h3>
 <p>Comandos de <b>pastas ancestrais</b> aparecem como hooks disponíveis nas subpastas (marcados com <code>⤴ pasta</code>). Assim um utilitário na raiz serve a todos os comandos abaixo.</p>
+<h3>Hooks em pastas</h3>
+<p>Uma <b>pasta</b> também pode ter hooks (editor de pasta → aba <b>Hooks</b>): eles envolvem <b>todo comando daquela pasta e das subpastas</b>, somados aos do próprio comando. O <b>pre</b> roda da pasta mais externa até o comando; <b>post</b> e <b>cleanup</b> desfazem na ordem inversa: os do comando, depois as pastas da mais próxima à mais externa.</p>
+<p>Nada é herdado se você não quiser — é preciso dizer: uma <b>subpasta</b> desliga <i>Herdar hooks das pastas acima</i> (ela ignora os hooks das pastas de cima; os dela e os das filhas continuam valendo), e um <b>comando</b> desliga <i>Herdar hooks das pastas</i> na aba Hooks dele (ignora todo hook de pasta). As duas abas listam o que chega de cima, só leitura, com a pasta de origem. Um comando nunca é hook de si mesmo, e um hook repetido roda uma vez por fase. No <code>kai.yml</code> eles se escrevem pelo <b>nome</b> do comando: <code>hooks:</code> no topo do arquivo (o projeto) ou numa entrada de <code>folders:</code>, com <code>inherit_hooks: false</code> / <code>inherit_folder_hooks: false</code> para não herdar.</p>
 <h3>Condição de Execução</h3>
 <p>Um comando ou hook também pode ter uma <b>condição de execução</b> — uma guarda que decide se ele roda de verdade, baseada em comparar valores interpolados. Roda só se o token estiver ausente ou expirado:</p>
 <pre>- name: "Login"

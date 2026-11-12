@@ -96,6 +96,9 @@ public:
     // Hierarquia de pastas (id -> Folder) para resolver o perfil de terminal herdado ("@parent"); o MainWindow
     // republica ao carregar/salvar. Sem ela a herança cai no default global.
     void setFolders(const QVector<core::Folder> &folders);
+    // O comando com os hooks EFETIVOS: os das pastas acima (se herda) somados aos próprios (core::effectiveHooks). run() já
+    // usa isto; quem lê `command.hooks` por fora do pipeline (cleanup de segundo plano, saídas dos hooks) usa também.
+    core::Command withEffectiveHooks(const core::Command &command) const;
     // Interrompe a requisição HTTP em curso deste comando (botão Parar). false se não há nenhuma.
     bool abortHttp(const QString &commandId);
 

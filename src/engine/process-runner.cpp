@@ -1149,16 +1149,18 @@ void ProcessRunner::stop()
     // processo da sessão, não só o líder.
     utils::Logger::info(kLogTag,
         QStringLiteral("Solicitando encerramento gracioso (Ctrl+C -> SIGTERM -> SIGKILL) à sessão de processos."));
+    // Fotografia da árvore ANTES de qualquer sinal (os descendentes que mudarem de sessão ou forem reparentados ainda
+    // são achados) e escalada independente deste objeto: se o runner for destruído antes do fim, ela continua. Tem de vir
+    // antes do Ctrl+C: ele mata o shell na hora, e um descendente que fez setsid() e ignora o sinal passa a filho do init,
+    // fora da sessão — sem estar na fotografia, escapava da escalada e ficava órfão.
+    const pid_t sid = static_cast<pid_t>(pid);
+    const QVector<ProcTag> snapshot = processTree(sid);
     if (m_ptyMasterFd >= 0) {
         writeRaw(QStringLiteral("\x03"));
     } else {
         killProcessGroup(pid, SIGINT);
     }
-
-    // Fotografia da árvore ANTES de qualquer sinal (os descendentes que mudarem de sessão ou forem reparentados ainda
-    // são achados) e escalada independente deste objeto: se o runner for destruído antes do fim, ela continua.
-    const pid_t sid = static_cast<pid_t>(pid);
-    scheduleReap(sid, processTree(sid), m_killTimeoutMs / 2, m_killTimeoutMs);
+    scheduleReap(sid, snapshot, m_killTimeoutMs / 2, m_killTimeoutMs);
 #endif
 }
 

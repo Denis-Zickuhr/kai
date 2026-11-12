@@ -545,6 +545,7 @@ QJsonObject Command::toJson() const
     if (!hooks.pre.isEmpty() || !hooks.post.isEmpty() || !hooks.cleanup.isEmpty()) {
         obj["hooks"] = hooks.toJson();
     }
+    if (!inheritFolderHooks) obj["inherit_folder_hooks"] = false;
     if (!pipelineSteps.isEmpty()) obj["steps"] = pipelineSteps;
 
     if (!executionConditions.isEmpty()) {
@@ -632,6 +633,7 @@ Command Command::fromJson(const QJsonObject &obj)
     }
 
     c.hooks = Hooks::fromJson(obj.value("hooks").toObject());
+    c.inheritFolderHooks = obj.value("inherit_folder_hooks").toBool(true);
     if (c.type == CommandType::Pipeline) c.pipelineSteps = obj.value("steps").toArray();
 
     for (const QJsonValue &v : obj.value("execution_conditions").toArray()) {
@@ -675,6 +677,8 @@ QJsonObject Folder::toJson() const
     if (hidden) obj["hidden"] = true;
     if (!terminalTarget.isEmpty()) obj["terminal_target"] = terminalTarget;
     if (!httpDefaults.isEmpty()) obj["http_defaults"] = httpDefaults.toJson();
+    if (!hooks.isEmpty()) obj["hooks"] = hooks.toJson();
+    if (!inheritHooks) obj["inherit_hooks"] = false;
     if (!cliPath.isEmpty()) obj["cli_path"] = cliPath;
     if (!cliDescription.isEmpty()) obj["cli_description"] = cliDescription;
     if (!actions.isEmpty()) obj["actions"] = QJsonArray::fromStringList(actions);
@@ -763,6 +767,8 @@ Folder Folder::fromJson(const QJsonObject &obj)
         f.envVars[it.key()] = it.value().toString();
     }
     f.httpDefaults = HttpDefaults::fromJson(obj.value("http_defaults").toObject());
+    f.hooks = Hooks::fromJson(obj.value("hooks").toObject());
+    f.inheritHooks = obj.value("inherit_hooks").toBool(true);
     // Um nome secreto sempre existe como variável (num arquivo ele vem sem valor: cada instalação preenche).
     for (const QJsonValue &v : obj.value("secret_env_keys").toArray()) {
         const QString name = v.toString().trimmed();

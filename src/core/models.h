@@ -269,6 +269,8 @@ struct Hooks {
     // cleanup que falha não impede os outros nem reinicia o pipeline.
     QStringList cleanup;
 
+    bool isEmpty() const { return pre.isEmpty() && post.isEmpty() && cleanup.isEmpty(); }
+
     QJsonObject toJson() const;
     static Hooks fromJson(const QJsonObject &obj);
 };
@@ -417,6 +419,9 @@ struct Command {
 
     QVector<Parameter> params;
     Hooks hooks;
+    // Os hooks das PASTAS acima valem para este comando (Folder::hooks, ver core/hook-resolve.h). false = só os próprios
+    // `hooks` valem; é como um comando diz que não quer o que a pasta define.
+    bool inheritFolderHooks = true;
 
     // Só Pipeline: os passos, em ordem (core/pipeline-model.h). Guardados como JSON cru aqui para o models.h
     // não depender do tipo dos passos; use pipelineStepsFromJson()/pipelineStepsToJson().
@@ -470,6 +475,11 @@ struct Folder {
     QMap<QString, QString> envVars;
     // Headers, autenticação e opções que TODO comando HTTP desta pasta e subpastas herda (core/http-resolve.h).
     HttpDefaults httpDefaults;
+    // HOOKS que TODO comando desta pasta e das subpastas herda (ver core/hook-resolve.h): pre de fora para dentro; post e
+    // cleanup de dentro para fora. `inheritHooks` false = esta pasta não herda os hooks das pastas acima (os dela, e os das
+    // suas filhas, valem); um comando ou subpasta que não os quer precisa dizer.
+    Hooks hooks;
+    bool inheritHooks = true;
     // Nomes de `envVars` SECRETOS: o valor vale na execução mas NUNCA vai para arquivo (sync, exportação);
     // o arquivo guarda só o nome e cada instalação preenche o seu valor.
     QSet<QString> secretEnvKeys;

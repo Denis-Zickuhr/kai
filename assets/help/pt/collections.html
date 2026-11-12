@@ -1,7 +1,12 @@
 <h2>Coleções</h2>
 <p>Uma <b>Coleção</b> é a sua própria tabela de dados (clientes, servidores, ambientes — o que precisar) que um <a href='help://parameters'>parâmetro select</a> pode usar como lista de opções. Crie em <b>Item → Nova Coleção</b>; ela pertence a uma pasta/aba.</p>
 <h3>Schema e entradas</h3>
-<p>Você define os campos (colunas) — um é a <b>chave</b>, um o <b>valor</b>, mais quaisquer outros — e depois as entradas. Dá para marcar favoritos, filtrar e <b>importar entradas de CSV ou JSON</b> (entradas totalmente vazias são ignoradas).</p>
+<p>O editor tem três abas à esquerda, como o editor de comandos:</p>
+<ul>
+<li><b>Geral</b> — nome, ícone, pasta, ordem e um resumo dos campos; <b>Schema…</b> os edita (um é a <b>chave</b>, um o <b>valor</b>, mais quaisquer outros).</li>
+<li><b>Dados</b> — as entradas numa tabela. Dá para marcar favoritos, filtrar, <b>importar um arquivo CSV ou JSON</b> ou <b>Colar</b> registros da área de transferência: JSON (um array de objetos ou um objeto) ou linhas copiadas de uma planilha (separadas por tab) ou de CSV. Uma primeira linha que nomeia os campos (pelo nome ou rótulo) vira o cabeçalho; senão as colunas vão para os campos na ordem. O Kai mostra quantos registros achou e pergunta antes de adicionar. Entradas totalmente vazias são ignoradas.</li>
+<li><b>Avançado</b> — a coleção em JSON, editável. O texto volta para a coleção ao sair da aba ou salvar; JSON inválido mantém você na aba até corrigir.</li>
+</ul>
 <h3>Exemplo</h3>
 <p>Um comando <code>echo {{cliente.value}}</code> com um parâmetro <code>cliente</code> do tipo select ligado à coleção <b>Clientes</b> (campo exibido: <code>value</code>). Ao rodar, você escolhe o cliente e o Kai injeta <code>{{cliente.value}}</code> (o campo exibido) <i>e</i> <code>{{cliente.key}}</code> mais todos os outros campos da entrada.</p>
 <h3>Versionando junto do projeto</h3>

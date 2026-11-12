@@ -13,9 +13,62 @@
 
 #include "ui/features/command-editor/command-tree-widget-internal.h"
 
+#include "ui/features/command-editor/command-tree-chip-delegate.h"
+#include "core/identification-settings.h"
+#include "utils/translation-manager.h"
+#include "utils/design-tokens.h"
+#include <QColor>
+
 namespace kai::ui {
 
 using namespace cmdtree;
+
+namespace {
+
+// Cor do chip de verbo HTTP: verde (leitura), azul (criação), âmbar (atualização), vermelho (remoção).
+QColor httpVerbChipColor(const QString &verb)
+{
+    const QString v = verb.toUpper();
+    if (v == QLatin1String("GET") || v == QLatin1String("HEAD") || v == QLatin1String("OPTIONS")
+        || v == QLatin1String("QUERY")) {
+        return QColor(utils::tokens::successFg());
+    }
+    if (v == QLatin1String("POST")) {
+        return QColor(utils::tokens::infoFg());
+    }
+    if (v == QLatin1String("PUT") || v == QLatin1String("PATCH")) {
+        return QColor(utils::tokens::warningFg());
+    }
+    if (v == QLatin1String("DELETE")) {
+        return QColor(utils::tokens::errorFg());
+    }
+    return QColor(utils::tokens::mutedFg());
+}
+
+// Cor (do logo) e ícone do chip de linguagem do script: cores de marca, não tokens, para o logo ser reconhecível.
+QColor scriptLangChipColor(core::CommandLanguage language)
+{
+    switch (language) {
+    case core::CommandLanguage::Python: return QColor(0x4B, 0x8B, 0xBE);
+    case core::CommandLanguage::Node:   return QColor(0x5F, 0xA0, 0x4E);
+    case core::CommandLanguage::Php:    return QColor(0x89, 0x93, 0xBE);
+    case core::CommandLanguage::Native: break;
+    }
+    return QColor(0x4E, 0xAA, 0x25);
+}
+
+QString scriptLangChipIcon(core::CommandLanguage language)
+{
+    switch (language) {
+    case core::CommandLanguage::Python: return QStringLiteral("brand-python");
+    case core::CommandLanguage::Node:   return QStringLiteral("brand-node");
+    case core::CommandLanguage::Php:    return QStringLiteral("brand-php");
+    case core::CommandLanguage::Native: break;
+    }
+    return QStringLiteral("brand-bash");
+}
+
+} // namespace
 
 QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder)
 {
@@ -45,6 +98,44 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
     // (DraggableTreeWidget::setRowColors); o QSS deixa o item transparente em todo estado.
     tree->setRowColors(QColor(utils::tokens::bg()), QColor(utils::tokens::treeStripeBg()),
                         QColor(utils::tokens::hoverBg()), QColor(utils::tokens::selBg()));
+
+    // Chips de identificação (Configurações → Identificação): um delegate na coluna 0 desenha
+    // ícone + chip + nome quando o item tem kChipTextRole. Sem chips ligados, o delegate delega ao
+    // padrão (nenhum item recebe texto de chip), então o comportamento comum fica intacto.
+    const core::IdentificationSettings &ident = core::identificationSettings();
+    tree->setItemDelegateForColumn(0, new ChipItemDelegate(tree));
+
+    // Pastas que contêm comandos HTTP (direta ou via subpasta/comando aninhado): sobe o folderId de cada
+    // comando HTTP pela cadeia de pastas e marca todas como "coleção HTTP".
+    QSet<QString> httpCollectionFolderIds;
+    if (ident.folderHttpCollection) {
+        for (const core::Command &command : m_commands) {
+            if (command.type != core::CommandType::Http) {
+                continue;
+            }
+            QString cur = command.folderId;
+            QSet<QString> visited;
+            for (int guard = 0; guard < 128; ++guard) {
+                if (cur.isEmpty() || visited.contains(cur)) {
+                    break;
+                }
+                visited.insert(cur);
+                const auto fit = std::find_if(m_folders.constBegin(), m_folders.constEnd(),
+                    [&cur](const core::Folder &f) { return f.id == cur; });
+                if (fit != m_folders.constEnd()) {
+                    httpCollectionFolderIds.insert(fit->id);
+                    cur = fit->parentId.value_or(QString());
+                    continue;
+                }
+                const auto cit = std::find_if(m_commands.constBegin(), m_commands.constEnd(),
+                    [&cur](const core::Command &c) { return c.id == cur; });
+                if (cit == m_commands.constEnd()) {
+                    break;
+                }
+                cur = cit->folderId;
+            }
+        }
+    }
 
     // Ícones das AÇÕES na linha de cada subpasta (ver FolderActionsView).
     {
@@ -217,6 +308,13 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         folderItem->setData(0, kIsCommandRole, false);
         folderItem->setIcon(0, folderIconFor(folder));
         folderItem->setToolTip(0, syncTooltipFor(folder.id));
+        if (ident.folderProject && folder.isProject) {
+            folderItem->setData(0, kChipTextRole, utils::tr(QStringLiteral("tree.chip.project")));
+            folderItem->setData(0, kChipColorRole, QColor(utils::tokens::accent()));
+        } else if (ident.folderHttpCollection && httpCollectionFolderIds.contains(folder.id)) {
+            folderItem->setData(0, kChipTextRole, utils::tr(QStringLiteral("tree.chip.http_collection")));
+            folderItem->setData(0, kChipColorRole, QColor(utils::tokens::warningFg()));
+        }
         if (folder.hidden) {
             folderItem->setForeground(0, QColor(utils::tokens::mutedFg()));
         }
@@ -282,6 +380,18 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         commandItem->setData(0, kIsCommandRole, true);
         commandItem->setData(0, kIsHttpRole, command.type == core::CommandType::Http);
         commandItem->setIcon(0, IconPickerWidget::iconForName(command.icon));
+        if (ident.httpVerb && command.type == core::CommandType::Http) {
+            const QString verb = command.httpConfig ? command.httpConfig->methodName() : QStringLiteral("GET");
+            commandItem->setData(0, kChipTextRole, verb);
+            commandItem->setData(0, kChipColorRole, httpVerbChipColor(verb));
+        } else if (ident.scriptLanguage && command.type == core::CommandType::Command) {
+            const QString lang = command.language == core::CommandLanguage::Native
+                ? QStringLiteral("shell")
+                : core::commandLanguageToString(command.language);
+            commandItem->setData(0, kChipTextRole, lang);
+            commandItem->setData(0, kChipColorRole, scriptLangChipColor(command.language));
+            commandItem->setData(0, kChipIconRole, scriptLangChipIcon(command.language));
+        }
         if (command.hidden) {
             commandItem->setForeground(0, QColor(utils::tokens::mutedFg()));
         }
@@ -346,6 +456,10 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         noteItem->setData(0, kIsNoteRole, true);
         noteItem->setIcon(0, noteIconFor(note));
         noteItem->setToolTip(0, noteTooltipFor(note));
+        if (ident.note) {
+            noteItem->setData(0, kChipTextRole, utils::tr(QStringLiteral("tree.chip.note")));
+            noteItem->setData(0, kChipColorRole, QColor(utils::tokens::successFg()));
+        }
         if (note.hidden) {
             noteItem->setForeground(0, QColor(utils::tokens::mutedFg()));
         }

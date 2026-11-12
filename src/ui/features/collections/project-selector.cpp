@@ -148,6 +148,11 @@ ProjectImportResult ProjectSelector::importFromDirectory(const QString &director
     // Conversão compartilhada com a sincronização manual (core/project-format).
     core::ProjectFormatContent content =
         core::convertProjectFormat(root, folder.id, projectName, kaiJsonPath);
+    // Hooks e herança do projeto (topo do kai.yml): vão para a pasta raiz.
+    if (content.rootHooks.has_value()) {
+        folder.hooks = *content.rootHooks;
+    }
+    folder.inheritHooks = content.rootInheritHooks;
     result.subFolders = content.subFolders;
     result.commands = content.commands;
     result.collections = content.collections;

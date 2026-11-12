@@ -1,6 +1,6 @@
 commands:
   - cli_path: "up"
-    command: "docker compose -f docker/docker-compose.yml up"
+    command: "docker compose -f docker/docker-compose.yml up --menu=false"
     description: "Starts the kai-dev container (docker compose up). Its main process is docker/watch.sh, which rebuilds and relaunches the app on every change."
     icon: "play"
     interactive_terminal: true
@@ -24,8 +24,8 @@ commands:
     order: 11
     type: "command"
   - cli_path: "all"
-    command: "docker exec {{KAI_DEV_CONTAINER}} bash -c \"cd /workspace && ctest --test-dir {{KAI_BUILD_DIR}} --output-on-failure\""
-    description: "Runs every Qt Test through ctest in the container, printing the output of failed tests."
+    command: "docker exec {{KAI_DEV_CONTAINER}} bash -c \"cd /workspace && cmake --build {{KAI_BUILD_DIR}} && ctest --test-dir {{KAI_BUILD_DIR}} --output-on-failure\""
+    description: "Builds the tests (not built by the watch loop), then runs every Qt Test through ctest, printing the output of failed tests."
     folder: "Tools/Tests"
     icon: "list-checks"
     name: "Run the full test suite"

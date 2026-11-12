@@ -258,6 +258,10 @@ void MainWindow::setupToolbar()
 
 void MainWindow::setupGlobalHotkey()
 {
+    // Re-executável: solta registros anteriores antes de reprocessar (mudança de atalho nas Configurações).
+    m_globalHotkey.reset();
+    m_paletteHotkey.reset();
+
     // QHotkey (v1.5.0) só tem backend nativo para X11, Win32 e macOS: sob Wayland (inclusive WSLg) a construção pode
     // segfaultar. Também pula "offscreen"/"minimal" (headless/CI).
     const QString platformName = QGuiApplication::platformName();
@@ -276,34 +280,54 @@ void MainWindow::setupGlobalHotkey()
 
     const core::SettingsData settings = m_configManager.loadSettings();
 
+    // Atalho global de VISIBILIDADE (mostra/esconde o Kai).
     if (settings.globalHotkey.trimmed().isEmpty()) {
         utils::Logger::info(kLogTag, QStringLiteral("Atalho global desabilitado (settings.json vazio)."));
-        return;
-    }
-
-    const QKeySequence sequence(settings.globalHotkey);
-    if (sequence.isEmpty()) {
-        utils::Logger::warning(kLogTag,
-            QStringLiteral("Atalho global '%1' inválido; nenhum atalho será registrado.")
-                .arg(settings.globalHotkey));
-        return;
-    }
-
-    // autoRegister=false: uma falha do backend nativo acontece numa chamada explícita, que dá para isolar e logar.
-    m_globalHotkey = std::make_unique<QHotkey>(sequence, false);
-    connect(m_globalHotkey.get(), &QHotkey::activated, this, &MainWindow::toggleVisibility);
-
-    const bool registered = m_globalHotkey->setRegistered(true);
-
-    if (!registered) {
-        utils::Logger::warning(kLogTag,
-            QStringLiteral("Não foi possível registrar o atalho global '%1' neste ambiente "
-                            "(backend nativo indisponível ou combinação já em uso). "
-                            "Kai continuará funcionando normalmente sem o atalho global.")
-                .arg(settings.globalHotkey));
-        m_globalHotkey.reset();
     } else {
-        utils::Logger::info(kLogTag, QStringLiteral("Atalho global '%1' registrado.").arg(settings.globalHotkey));
+        const QKeySequence sequence(settings.globalHotkey);
+        if (sequence.isEmpty()) {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Atalho global '%1' inválido; nenhum atalho será registrado.")
+                    .arg(settings.globalHotkey));
+        } else {
+            // autoRegister=false: uma falha do backend nativo acontece numa chamada explícita, que dá para isolar e logar.
+            m_globalHotkey = std::make_unique<QHotkey>(sequence, false);
+            connect(m_globalHotkey.get(), &QHotkey::activated, this, &MainWindow::toggleVisibility);
+
+            if (!m_globalHotkey->setRegistered(true)) {
+                utils::Logger::warning(kLogTag,
+                    QStringLiteral("Não foi possível registrar o atalho global '%1' neste ambiente "
+                                    "(backend nativo indisponível ou combinação já em uso). "
+                                    "Kai continuará funcionando normalmente sem o atalho global.")
+                        .arg(settings.globalHotkey));
+                m_globalHotkey.reset();
+            } else {
+                utils::Logger::info(kLogTag, QStringLiteral("Atalho global '%1' registrado.").arg(settings.globalHotkey));
+            }
+        }
+    }
+
+    // Segundo atalho global, OPCIONAL: abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela.
+    if (!settings.paletteHotkey.trimmed().isEmpty()) {
+        const QKeySequence paletteSeq(settings.paletteHotkey);
+        if (paletteSeq.isEmpty()) {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Atalho global da paleta '%1' inválido; nenhum atalho será registrado.")
+                    .arg(settings.paletteHotkey));
+        } else {
+            m_paletteHotkey = std::make_unique<QHotkey>(paletteSeq, false);
+            connect(m_paletteHotkey.get(), &QHotkey::activated, this, &MainWindow::showCommandPaletteFromHotkey);
+            if (!m_paletteHotkey->setRegistered(true)) {
+                utils::Logger::warning(kLogTag,
+                    QStringLiteral("Não foi possível registrar o atalho global da paleta '%1' "
+                                    "(backend indisponível ou combinação em uso).")
+                        .arg(settings.paletteHotkey));
+                m_paletteHotkey.reset();
+            } else {
+                utils::Logger::info(kLogTag,
+                    QStringLiteral("Atalho global da paleta '%1' registrado.").arg(settings.paletteHotkey));
+            }
+        }
     }
 }
 

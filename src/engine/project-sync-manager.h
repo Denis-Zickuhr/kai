@@ -2,6 +2,7 @@
 
 #include <QMap>
 #include <optional>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -62,6 +63,9 @@ struct SyncPlan {
     std::optional<RootFolderActions> rootActions;
     // Padrões HTTP (headers, autenticação, opções) da pasta raiz, lidos do topo do arquivo.
     std::optional<core::HttpDefaults> rootHttpDefaults;
+    // Hooks do projeto (topo do arquivo), por NOME de comando, e a herança da pasta raiz; resolvidos para ids ao aplicar.
+    std::optional<QJsonObject> rootHooksByName;
+    std::optional<bool> rootInheritHooks;
     // Nomes de coleção que o arquivo referencia e este Kai não tem (ou tem repetido): os parâmetros
     // que as usam ficam sem fonte.
     QStringList unresolvedCollections;

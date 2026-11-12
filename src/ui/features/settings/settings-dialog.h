@@ -20,6 +20,7 @@ class ShortcutsTab;
 class TerminalsTab;
 class NotificationsTab;
 class KipTab;
+class IdentificationTab;
 class ActionsTab;
 class AiTab;
 
@@ -94,6 +95,7 @@ private:
     StorageManagerWidget *m_storageManager = nullptr;
     NotificationsTab *m_notificationsTab = nullptr;
     KipTab *m_kipTab = nullptr;
+    IdentificationTab *m_identificationTab = nullptr;
     ActionsTab *m_actionsTab = nullptr;
     AiTab *m_aiTab = nullptr;
     core::AiSettings m_originalAi;

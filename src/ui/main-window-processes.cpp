@@ -337,8 +337,12 @@ void MainWindow::handleBackgroundProcessStatusChanged(const QString &commandId, 
     // então é aqui, com o processo já morto, que o cleanup roda.
     if (status != engine::ProcessStatus::Running) {
         const auto it = m_commandsById.constFind(commandId);
-        if (it != m_commandsById.constEnd() && !it.value().hooks.cleanup.isEmpty()) {
-            m_pipeline->runCleanupHooks(it.value(), m_commandsById);
+        if (it != m_commandsById.constEnd()) {
+            // Com os hooks de cleanup das pastas somados (herança).
+            const core::Command effective = m_pipeline->withEffectiveHooks(it.value());
+            if (!effective.hooks.cleanup.isEmpty()) {
+                m_pipeline->runCleanupHooks(effective, m_commandsById);
+            }
         }
     }
 

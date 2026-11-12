@@ -55,6 +55,12 @@ CodeOutputView::CodeOutputView(QWidget *parent)
     updateLineNumberAreaWidth();
 }
 
+void CodeOutputView::documentSwapped()
+{
+    updateLineNumberAreaWidth();
+    viewport()->update();
+}
+
 void CodeOutputView::setLineNumbersVisible(bool visible)
 {
     if (m_showLineNumbers == visible) {

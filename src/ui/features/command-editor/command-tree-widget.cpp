@@ -28,6 +28,8 @@ CommandTreeWidget::CommandTreeWidget(QWidget *parent)
 
 void CommandTreeWidget::setTabBarHeight(int height)
 {
+    m_tabBarHeight = height;
+    forFollowers([height](CommandTreeWidget *f) { f->setTabBarHeight(height); });
     if (m_tabWidget) {
         m_tabWidget->tabBar()->setStyleSheet(flatTabBarQss(height));
     }
@@ -97,33 +99,78 @@ void CommandTreeWidget::setupUi()
 void CommandTreeWidget::setData(const QVector<core::Folder> &folders,
                                 const QVector<core::Command> &commands)
 {
-    m_folders = folders;
-    m_commands = commands;
     // Versão 2-arg legada (testes): zera coleções/notas para não exibir dados órfãos.
-    m_collections.clear();
-    m_notes.clear();
-    applyDataAndRebuild();
+    storeData(folders, commands, {}, {});
 }
 
 void CommandTreeWidget::setData(const QVector<core::Folder> &folders,
                                 const QVector<core::Command> &commands,
                                 const QVector<core::Collection> &collections)
 {
-    m_folders = folders;
-    m_commands = commands;
-    m_collections = collections;
-    m_notes.clear();
-    applyDataAndRebuild();
+    storeData(folders, commands, collections, {});
 }
 
 void CommandTreeWidget::setData(const QVector<core::Folder> &folders, const QVector<core::Command> &commands,
                                 const QVector<core::Collection> &collections, const QVector<core::Note> &notes)
 {
-    m_folders = folders;
-    m_commands = commands;
-    m_collections = collections;
-    m_notes = notes;
+    storeData(folders, commands, collections, notes);
+}
+
+void CommandTreeWidget::storeData(const QVector<core::Folder> &folders, const QVector<core::Command> &commands,
+                                  const QVector<core::Collection> &collections, const QVector<core::Note> &notes)
+{
+    forFollowers([&](CommandTreeWidget *f) { f->setData(folders, commands, collections, notes); });
+    if (m_view) {
+        m_raw = core::TreeData{folders, commands, collections, notes};
+        const core::TreeData filtered = core::filterTreeData(*m_view, m_raw);
+        m_folders = filtered.folders;
+        m_commands = filtered.commands;
+        m_collections = filtered.collections;
+        m_notes = filtered.notes;
+    } else {
+        m_folders = folders;
+        m_commands = commands;
+        m_collections = collections;
+        m_notes = notes;
+    }
     applyDataAndRebuild();
+}
+
+void CommandTreeWidget::setView(const core::TreeViewDef &view)
+{
+    m_view = view;
+    // O arrastar de abas reordenaria só as raízes visíveis; a ordem delas fica com a árvore principal.
+    m_tabWidget->tabBar()->setMovable(false);
+    setShowHidden(view.showHidden);
+    setShowRunningOnly(view.runningOnly);
+    setFilterQuery(view.query);
+    // Refiltra o conjunto completo que já tinha (trocar os filtros de uma árvore aberta); sem dados ainda, só limpa.
+    storeData(m_raw.folders, m_raw.commands, m_raw.collections, m_raw.notes);
+}
+
+// A seguidora nasce com o estado de agora (ela só recebe as mudanças seguintes) e entra na lista de repasse.
+void CommandTreeWidget::addFollower(CommandTreeWidget *follower)
+{
+    if (!follower || follower == this || m_followers.contains(follower)) {
+        return;
+    }
+    m_followers.append(follower);
+    if (m_tabBarHeight > 0) {
+        follower->setTabBarHeight(m_tabBarHeight);
+    }
+    follower->setTreeConnectorStyle(m_treeConnectorStyle, m_treeConnectorLineColor);
+    follower->setGlobalActions(m_globalActions);
+    follower->setInlineActionsEnabled(m_inlineActions);
+    follower->setOutputMarksEnabled(m_outputMarks);
+    follower->setFocusPredicates(m_commandHasOutput, m_itemHasDocument);
+    follower->setActionsWithOutput(m_actionsWithOutput);
+    follower->setFocusedAction(m_focusedActionId);
+    follower->setShownCommand(m_shownCommandId);
+    follower->setFailedCommandIds(m_failedCommandIds);
+    follower->setRunningCommandIds(m_runningCommandIds);
+    follower->setSyncDrift(m_syncDrift);
+    follower->setDraftMarks(m_draftFolderIds, m_draftNoteIds);
+    follower->setData(m_folders, m_commands, m_collections, m_notes);
 }
 
 QString CommandTreeWidget::defaultFolderId()
@@ -174,6 +221,7 @@ void CommandTreeWidget::applyDataAndRebuild()
 
 void CommandTreeWidget::setRunningCommandIds(const QSet<QString> &runningCommandIds)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setRunningCommandIds(runningCommandIds); });
     // Marca o INÍCIO dos que passaram a rodar e descarta os que terminaram
     // (o contador de tempo é por execução).
     const QDateTime now = QDateTime::currentDateTime();
@@ -213,6 +261,7 @@ void CommandTreeWidget::setRunningCommandIds(const QSet<QString> &runningCommand
 
 void CommandTreeWidget::resetRunTimer(const QString &commandId)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->resetRunTimer(commandId); });
     // Sobrescreve INCONDICIONALMENTE (o laço de setRunningCommandIds só grava
     // se ausente); o MainWindow chama no instante síncrono em que a execução
     // começa, sem esperar o próximo poll.
@@ -276,6 +325,7 @@ void CommandTreeWidget::updateElapsedLabels()
 
 void CommandTreeWidget::setFailedCommandIds(const QSet<QString> &failedCommandIds)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setFailedCommandIds(failedCommandIds); });
     m_failedCommandIds = failedCommandIds;
     refreshCommandVisuals();
 }
@@ -485,6 +535,7 @@ QString CommandTreeWidget::noteTooltipFor(const core::Note &note) const
 
 void CommandTreeWidget::setDraftMarks(const QSet<QString> &folderIds, const QSet<QString> &noteIds)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setDraftMarks(folderIds, noteIds); });
     QMap<QString, core::Folder> foldersById;
     for (const core::Folder &f : std::as_const(m_folders)) {
         foldersById.insert(f.id, f);
@@ -508,6 +559,7 @@ void CommandTreeWidget::setDraftMarks(const QSet<QString> &folderIds, const QSet
 
 void CommandTreeWidget::setSyncDrift(const QMap<QString, core::SyncDrift> &driftByFolderId)
 {
+    forFollowers([&](CommandTreeWidget *f) { f->setSyncDrift(driftByFolderId); });
     if (m_syncDrift == driftByFolderId) {
         return;
     }

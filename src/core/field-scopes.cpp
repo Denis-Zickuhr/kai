@@ -33,6 +33,7 @@ const Table &commandTable()
         F("cli_path", S::Portable), F("cli_working_dir", S::Portable),
         F("terminal_target", S::Reference),      // perfil de terminal, por nome
         F("hooks", S::Reference),                // outros comandos, por nome
+        F("inherit_folder_hooks", S::Portable),  // false = não recebe os hooks das pastas
         F("steps", S::Portable),                 // passos de pipeline; os comandos já são citados por nome/caminho
         F("last_param_values", S::Local), F("kip_last_values", S::Local), F("param_usage_history", S::Local),
     };
@@ -69,6 +70,8 @@ const Table &folderTable()
         F("http_defaults", S::Portable),         // headers/auth/opções HTTP herdados (segredos: use {{VAR}})
         F("working_dir", S::Machine),
         F("terminal_target", S::Reference),
+        F("hooks", S::Reference),                // comandos que rodam em volta de todo comando da pasta, por nome
+        F("inherit_hooks", S::Portable),         // false = não herda os hooks das pastas acima
         F("actions", S::Reference), F("expansion_actions", S::Reference), F("action_groups", S::Reference),
     };
     return table;

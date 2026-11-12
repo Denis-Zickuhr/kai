@@ -353,6 +353,9 @@ void MainWindow::setupLayout()
     commands.titleKey = QStringLiteral("layout.view.commands");
     commands.icon = QStringLiteral("folder-tree");
     commands.home = Home::Primary;
+    // A setinha ao lado do título (e a linha do menu Exibir) abre as árvores extras.
+    commands.chevronMenu = [this](QMenu *menu) { populateTreesMenu(menu); };
+    commands.chevronInViewMenu = true;
     m_viewRegistry->registerView(commands, m_mainAreaWrapper);
 
     ViewSpec output;
@@ -368,6 +371,7 @@ void MainWindow::setupLayout()
     registerPanelViews();
 
     registerRunViews();
+    registerTreeViews();
 
     m_layoutStore = new LayoutStore(m_configManager.layoutFilePath(), this);
     m_dock = new DockHost(m_viewRegistry, this, m_content);
@@ -628,6 +632,7 @@ QWidget *MainWindow::createMirrorPanel(const QString &commandId, bool kip)
     panel->setFormattedOutput(it != m_commandsById.constEnd() && it->formattedOutput && !kipCommand);
     panel->setAcceptsInput(ownsOutput && !kipCommand);
     panel->output()->addHeaderWidget(makeCommandActionStrip(commandId));
+    connect(panel->output(), &OutputPanel::discardRequested, this, [this, commandId]() { discardStoredOutput(commandId); });
     OutputPanel *embedded = m_terminalDrawer->embeddedPanel();
     panel->applyBarHeight(embedded->barHeight());
     panel->seed(embedded, m_commandLogs.value(commandId));

@@ -4,7 +4,11 @@ A **Collection** is your own table of data (customers, servers, environments —
 
 ## Schema and entries
 
-You define the fields (columns) — one is the **key**, one the **value**, plus any others — and then the entries. You can mark favourites, filter, and **import entries from CSV or JSON** (completely empty entries are ignored).
+The editor has three tabs on the left, like the command editor:
+
+- **General** — name, icon, folder, order and a summary of the fields; **Schema…** edits them (one is the **key**, one the **value**, plus any others).
+- **Data** — the entries in a table. Mark favourites, filter, **import a CSV or JSON file**, or **Paste** records from the clipboard: JSON (an array of objects, or one object) or rows copied from a spreadsheet (tab-separated) or CSV lines. A first row that names the fields (by name or label) is used as the header; otherwise the columns go to the fields in order. Kai shows how many records it found and asks before adding them. Completely empty entries are ignored.
+- **Advanced** — the collection as JSON, editable. The text goes back into the collection when you leave the tab or save; invalid JSON keeps you on the tab until it is fixed.
 
 ## Example
 

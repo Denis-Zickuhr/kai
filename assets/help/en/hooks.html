@@ -18,6 +18,9 @@
       - "Stop tunnel"</pre>
 <h3>Folder inheritance</h3>
 <p>Commands from <b>ancestor folders</b> appear as available hooks in subfolders (marked with <code>⤴ folder</code>). This way a utility at the root serves all commands below it.</p>
+<h3>Hooks on folders</h3>
+<p>A <b>folder</b> can have hooks too (folder editor → <b>Hooks</b> tab): they wrap <b>every command in that folder and in its subfolders</b>, added to the command's own. <b>pre</b> runs from the outermost folder to the command; <b>post</b> and <b>cleanup</b> unwind: the command's own, then the folders from the nearest to the outermost.</p>
+<p>Nothing is inherited if you don't want it — you have to say so: a <b>subfolder</b> turns off <i>Inherit hooks from parent folders</i> (it ignores the hooks of the folders above it; its own and its children's still apply), and a <b>command</b> turns off <i>Inherit folder hooks</i> in its Hooks tab (it ignores every folder hook). Both tabs list what arrives from above, read-only, with the folder it comes from. A command is never a hook of itself, and a repeated hook runs once per phase. In <code>kai.yml</code> they are written by command <b>name</b>: <code>hooks:</code> at the top of the file (the project) or on a <code>folders:</code> entry, with <code>inherit_hooks: false</code> / <code>inherit_folder_hooks: false</code> to opt out.</p>
 <h3>Execution conditions</h3>
 <p>A command or hook can also carry an <b>execution condition</b> — a guard deciding whether it actually runs, based on comparing interpolated values. Runs only if the token is missing or expired:</p>
 <pre>- name: "Login"

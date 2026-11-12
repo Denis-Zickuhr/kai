@@ -6,6 +6,7 @@
 #include "ui/features/settings/tabs/terminals-tab.h"
 #include "ui/features/settings/tabs/actions-tab.h"
 #include "ui/features/settings/tabs/kip-tab.h"
+#include "ui/features/settings/tabs/identification-tab.h"
 #include "ui/features/settings/tabs/ai-tab.h"
 #include "core/ai-conversation.h"
 #include "ui/features/settings/tabs/notifications-tab.h"
@@ -101,6 +102,7 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_terminalsTab = new TerminalsTab(currentSettings);
     m_notificationsTab = new NotificationsTab(currentSettings);
     m_kipTab = new KipTab(currentSettings.kip);
+    m_identificationTab = new IdentificationTab(currentSettings.identification);
     m_actionsTab = new ActionsTab(currentSettings.globalActions, commandsData.commands, commandsData.folders);
     {
         core::ConfigManager config;
@@ -137,6 +139,8 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
          wrapPage(m_generalTab)},
         {utils::tr(QStringLiteral("settings.group.appearance")), QStringLiteral("palette"),
          wrapPage(m_appearanceTab)},
+        {utils::tr(QStringLiteral("settings.group.identification")), QStringLiteral("tags"),
+         wrapPage(m_identificationTab)},
         {utils::tr(QStringLiteral("settings.group.layout")), QStringLiteral("layout-grid"),
          wrapPage(m_layoutTab)},
         {utils::tr(QStringLiteral("settings.group.shortcuts")), QStringLiteral("keyboard"),
@@ -319,6 +323,7 @@ core::SettingsData SettingsDialog::buildSettings() const
 {
     core::SettingsData settings;
     settings.globalHotkey = m_shortcutsTab->hotkeyField()->keySequenceString();
+    settings.paletteHotkey = m_shortcutsTab->paletteHotkeyField()->keySequenceString();
     settings.activeTheme = m_appearanceTab->themeField()->currentText().trimmed();
     settings.uiDensity = m_layoutTab->densityField()->currentData().toString();
     settings.uiCornerStyle = m_layoutTab->cornerStyleField()->currentData().toInt();
@@ -397,6 +402,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.notifyOnFirstErrorInFormattedOutput = m_notificationsTab->notifyFirstErrorInFormattedOutputField()->isChecked();
     settings.notifyEvenWhenFocused = m_notificationsTab->notifyEvenWhenFocusedField()->isChecked();
     settings.kip = m_kipTab->settings();
+    settings.identification = m_identificationTab->settings();
     settings.interpreters = m_generalTab->interpreters();
     settings.globalActions = m_actionsTab->globalActions();
 

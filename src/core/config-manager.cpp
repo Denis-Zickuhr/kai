@@ -21,6 +21,8 @@ constexpr const char *kSettingsFileName = "settings.json";
 constexpr const char *kCollectionsFileName = "collections.json";
 constexpr const char *kNotesFileName = "notes.json";
 constexpr const char *kDocUsageFileName = "doc-usage.json";
+constexpr const char *kPaletteUsageFileName = "palette-usage.json";
+constexpr const char *kTreeViewsFileName = "tree-views.json";
 constexpr const char *kDocStateFileName = "doc-state.json";
 constexpr const char *kLayoutFileName = "layout.json";
 constexpr const char *kDynamicVarsFileName = "dynamic-vars.json";
@@ -136,6 +138,16 @@ QString ConfigManager::notesFilePath() const
 QString ConfigManager::docUsageFilePath() const
 {
     return QDir(configDirPath()).filePath(QString::fromLatin1(kDocUsageFileName));
+}
+
+QString ConfigManager::paletteUsageFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kPaletteUsageFileName));
+}
+
+QString ConfigManager::treeViewsFilePath() const
+{
+    return QDir(configDirPath()).filePath(QString::fromLatin1(kTreeViewsFileName));
 }
 
 QString ConfigManager::docStateFilePath() const
@@ -412,6 +424,41 @@ bool ConfigManager::saveDocUsage(const QMap<QString, int> &usage)
     QJsonObject root;
     root["usage"] = counts;
     return writeJsonAtomic(docUsageFilePath(), QJsonDocument(root));
+}
+
+QVector<TreeViewDef> ConfigManager::loadTreeViews()
+{
+    QVector<TreeViewDef> views;
+    QSet<QString> seen;
+    for (const QJsonValue &v : readJsonWithRecovery(treeViewsFilePath()).value("views").toArray()) {
+        TreeViewDef view = TreeViewDef::fromJson(v.toObject());
+        if (!view.id.isEmpty() && !view.name.trimmed().isEmpty() && !seen.contains(view.id)) {
+            seen.insert(view.id);
+            views << view;
+        }
+    }
+    return views;
+}
+
+bool ConfigManager::saveTreeViews(const QVector<TreeViewDef> &views)
+{
+    QJsonArray array;
+    for (const TreeViewDef &view : views) {
+        array.append(view.toJson());
+    }
+    QJsonObject root;
+    root["views"] = array;
+    return writeJsonAtomic(treeViewsFilePath(), QJsonDocument(root));
+}
+
+PaletteUsage ConfigManager::loadPaletteUsage()
+{
+    return PaletteUsage::fromJson(readJsonWithRecovery(paletteUsageFilePath()));
+}
+
+bool ConfigManager::savePaletteUsage(const PaletteUsage &usage)
+{
+    return writeJsonAtomic(paletteUsageFilePath(), QJsonDocument(usage.toJson()));
 }
 
 QVector<Collection> ConfigManager::loadCollections()

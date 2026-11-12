@@ -185,6 +185,21 @@ void OutputPanel::recompactExistingOutput()
     }
 }
 
+void OutputPanel::scrollToEnd()
+{
+    if (QScrollBar *bar = m_outputView->verticalScrollBar()) {
+        bar->setValue(bar->maximum());
+    }
+    if (QScrollBar *bar = m_formattedView->verticalScrollBar()) {
+        bar->setValue(bar->maximum());
+    }
+}
+
+bool OutputPanel::outputLoaded() const
+{
+    return m_formattedView->isLoaded();
+}
+
 void OutputPanel::appendOutput(const QString &rawText, bool isError)
 {
     if (rawText.isEmpty()) {

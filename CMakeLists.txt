@@ -198,8 +198,16 @@ add_library(kai-core ${KAI_LIB_TYPE}
     src/core/text-diff.cpp
     src/core/unified-diff.h
     src/core/unified-diff.cpp
+    src/core/palette-usage.h
+    src/core/palette-usage.cpp
+    src/core/tree-view.h
+    src/core/tree-view.cpp
+    src/core/hook-resolve.h
+    src/core/hook-resolve.cpp
     src/core/kip-settings.h
     src/core/kip-settings.cpp
+    src/core/identification-settings.h
+    src/core/identification-settings.cpp
     src/core/ipc-endpoint.h
     src/core/ipc-endpoint.cpp
     src/core/project-tree-scan.h
@@ -363,6 +371,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/output/output-panel-chrome.cpp
     src/ui/features/output/output-panel-search.cpp
     src/ui/features/output/output-panel-session.cpp
+    src/ui/features/output/output-panel-text-sessions.cpp
     src/ui/features/output/output-tabs-bar.h
     src/ui/features/output/output-tabs-bar.cpp
     src/ui/features/output/quick-run-popup.h
@@ -592,6 +601,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/settings/tabs/actions-tab.cpp
     src/ui/features/settings/tabs/kip-tab.h
     src/ui/features/settings/tabs/kip-tab.cpp
+    src/ui/features/settings/tabs/identification-tab.h
+    src/ui/features/settings/tabs/identification-tab.cpp
     src/ui/features/settings/tabs/notifications-tab.cpp
     src/ui/shared/manifesto-dialog.h
     src/ui/shared/manifesto-dialog.cpp
@@ -612,6 +623,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/shared/icon-picker-dialog.cpp
     src/ui/features/collections/collection-editor-dialog.h
     src/ui/features/collections/collection-editor-dialog.cpp
+    src/ui/features/collections/tree-view-editor-dialog.h
+    src/ui/features/collections/tree-view-editor-dialog.cpp
     src/ui/shared/json-viewer-widget.h
     src/ui/shared/json-viewer-widget.cpp
     src/ui/shared/foldable-json-view.h
@@ -703,6 +716,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/main-window-layout.cpp
     src/ui/main-window-output.cpp
     src/ui/main-window-palette.cpp
+    src/ui/main-window-trees.cpp
     src/ui/main-window-processes.cpp
     src/ui/main-window-pipelines.cpp
     src/ui/main-window-project-import.cpp

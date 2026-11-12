@@ -18,10 +18,12 @@ public:
     explicit ShortcutsTab(const core::SettingsData &currentSettings, QWidget *parent = nullptr);
 
     ShortcutCaptureField *hotkeyField() const { return m_hotkeyField; }
+    ShortcutCaptureField *paletteHotkeyField() const { return m_paletteHotkeyField; }
     ShortcutsManagerWidget *shortcutsManager() const { return m_shortcutsManager; }
 
 private:
     ShortcutCaptureField *m_hotkeyField = nullptr;
+    ShortcutCaptureField *m_paletteHotkeyField = nullptr;
     ShortcutsManagerWidget *m_shortcutsManager = nullptr;
 };
 

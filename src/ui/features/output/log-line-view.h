@@ -93,6 +93,8 @@ public:
     void toggleExpanded(int row);
     const LogLineEntry &entryAt(int row) const;
     bool isEmpty() const { return m_all.isEmpty(); }
+    // Ainda há linhas esperando para entrar (ver drainQueue)?
+    bool isIngesting() const { return m_queueHead < m_queue.size(); }
 
     static LogLineEntry parseLine(const QString &rawLine);
 
@@ -105,6 +107,9 @@ signals:
 
 private:
     void appendLine(const QString &line);
+    // Entrada preguiçosa: as linhas de um texto grande entram em fatias (as primeiras na hora, o resto de pouco em pouco a
+    // cada volta do laço de eventos), para uma saída enorme (ou o replay do log guardado) não congelar a janela.
+    void drainQueue();
     // Profundidade de chaves (fora de string) para saber quando um objeto fragmentado por wrap fechou.
     void scanJsonChar(QChar c);
     void flushAccumulatedJson();
@@ -126,6 +131,14 @@ private:
     QVector<int> m_visibleRows;
     QSet<QString> m_levelFilter; // vazio = sem filtro
     QString m_pending; // linha parcial ainda não fechada por '\n'
+
+    // Linhas à espera de entrar (ver drainQueue) e os relógios de "parou de chegar texto": uma acumulação de JSON que não
+    // fecha, ou uma linha parcial sem '\n', não ficam presas para sempre (o fim da execução não manda mais nada).
+    QStringList m_queue;
+    int m_queueHead = 0;
+    QTimer m_drainTimer;
+    QTimer m_accumTimer;
+    QTimer m_pendingTimer;
 
     // Acumulação de objeto JSON fragmentado em várias linhas físicas (wrap do terminal).
     bool m_accumulatingJson = false;
@@ -154,6 +167,8 @@ class LogLineDelegate : public QStyledItemDelegate {
     Q_OBJECT
 public:
     explicit LogLineDelegate(LogLineModel *model, QObject *parent = nullptr);
+    // As sessões de saída por comando trocam o modelo mostrado (ver LogLineView::setActiveModel).
+    void setModel(LogLineModel *model) { m_model = model; }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override;
@@ -229,9 +244,14 @@ public:
     void appendText(const QString &text);
     // Entrega já o texto em espera (ver appendText).
     void flush() const { flushPending(); }
+    // Mostra OUTRO modelo (uma sessão de saída por comando recente, ver OutputPanel::activateSession): o texto em espera é
+    // entregue ao modelo que sai; o modelo não é do view (quem o criou o mantém vivo). Troca o do delegate e as ligações.
+    void setActiveModel(LogLineModel *model);
     void clearLog();
     void setFilterText(const QString &needle);
     bool isEmpty() const { flushPending(); return m_model->isEmpty(); }
+    // Nada mais por entrar: nem texto em espera para o próximo lote, nem linhas na fila do modelo.
+    bool isLoaded() const { return m_pending.isEmpty() && !m_model->isIngesting(); }
 
     // Avança/retrocede a ocorrência atual e rola até ela.
     void goToNextMatch();

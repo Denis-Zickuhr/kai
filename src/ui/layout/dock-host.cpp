@@ -230,6 +230,7 @@ ViewZone *DockHost::createZone(Zone zone)
     });
     connect(widget, &ViewZone::viewCloseRequested, this, &DockHost::closeView);
     connect(widget, &ViewZone::viewMenuRequested, this, &DockHost::showPanelMenu);
+    connect(widget, &ViewZone::viewChevronRequested, this, &DockHost::showChevronMenu);
     connect(widget, &ViewZone::viewMaximizeRequested, this, &DockHost::toggleMaximize);
     connect(widget, &ViewZone::dragStarted, this, [this](const QString &) { beginViewDrag(); });
     connect(widget, &ViewZone::dragFinished, this, &DockHost::endViewDrag);
@@ -1411,6 +1412,18 @@ void DockHost::showPanelMenu(const QString &id, const QPoint &globalPos)
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     populatePanelMenu(menu, id);
+    menu->popup(globalPos);
+}
+
+void DockHost::showChevronMenu(const QString &id, const QPoint &globalPos)
+{
+    const auto spec = m_registry->spec(id);
+    if (!spec || !spec->chevronMenu) {
+        return;
+    }
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    spec->chevronMenu(menu);
     menu->popup(globalPos);
 }
 

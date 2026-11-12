@@ -4,6 +4,7 @@
 #include "ui/shared/dialog-utils.h"
 #include "ui/shared/lucide-icons.h"
 #include "utils/design-tokens.h"
+#include "utils/logger.h"
 #include "utils/translation-manager.h"
 #include "core/http-collection-import.h"
 #include "core/yaml-bridge.h"
@@ -11,22 +12,39 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFileDialog>
 #include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace kai::ui {
 namespace tk = kai::utils::tokens;
 
 namespace {
+
+// Um único arquivo/pasta local arrastado; vazio se o arrasto não for isso.
+QString singleLocalPath(const QMimeData *mime)
+{
+    // Diagnóstico: se esta linha nunca aparece no log, o arrasto não chegou ao app (limitação do WSLg/Explorer).
+    utils::Logger::debug(QStringLiteral("ImportDialog"),
+        QStringLiteral("arrasto recebido: formatos=%1").arg(mime ? mime->formats().join(QLatin1Char(',')) : QString()));
+    if (!mime || !mime->hasUrls() || mime->urls().size() != 1 || !mime->urls().constFirst().isLocalFile()) {
+        return {};
+    }
+    return mime->urls().constFirst().toLocalFile();
+}
 
 // Cartão de fonte (pasta/arquivo): ícone + título + descrição, clicável. Não é QToolButton: o chrome nativo dele reserva
 // área de conteúdo e cortava o topo do ícone customizado. QFrame com mousePressEvent próprio (como IconPickerWidget).
@@ -39,6 +57,7 @@ public:
         : QFrame(parent)
     {
         setCursor(Qt::PointingHandCursor);
+        setAcceptDrops(true);
         setAttribute(Qt::WA_StyledBackground, true);
         // Preferred (não Fixed): a descrição quebra linha e o cartão precisa crescer com ela, senão o texto era cortado.
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -77,8 +96,24 @@ public:
 
 signals:
     void clicked();
+    void dropped(const QString &path);
 
 protected:
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (!singleLocalPath(event->mimeData()).isEmpty()) {
+            event->acceptProposedAction();
+        }
+    }
+    void dropEvent(QDropEvent *event) override
+    {
+        const QString path = singleLocalPath(event->mimeData());
+        if (path.isEmpty()) {
+            return;
+        }
+        event->acceptProposedAction();
+        emit dropped(path);
+    }
     void mousePressEvent(QMouseEvent *event) override
     {
         if (event->button() == Qt::LeftButton) {
@@ -96,6 +131,7 @@ ImportDialog::ImportDialog(QWidget *parent)
 {
     setWindowTitle(utils::tr(QStringLiteral("import.title")));
     setSizeGripEnabled(true);
+    setAcceptDrops(true);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(tk::space(5), tk::space(5), tk::space(5), tk::space(4));
@@ -112,18 +148,22 @@ ImportDialog::ImportDialog(QWidget *parent)
         utils::tr(QStringLiteral("import.source.project.title")),
         utils::tr(QStringLiteral("import.source.project.description")), this);
     connect(projectCard, &SourceCard::clicked, this, &ImportDialog::pickProjectFolder);
+    connect(projectCard, &SourceCard::dropped, this, [this](const QString &path) { importPath(path, DropTarget::Project); });
     cardsRow->addWidget(projectCard);
 
     auto *fileCard = new SourceCard(QStringLiteral("file-code"),
         utils::tr(QStringLiteral("import.source.file.title")),
         utils::tr(QStringLiteral("import.source.file.description")), this);
     connect(fileCard, &SourceCard::clicked, this, [this]() { pickFile(false); });
+    connect(fileCard, &SourceCard::dropped, this, [this](const QString &path) { importPath(path, DropTarget::File); });
     cardsRow->addWidget(fileCard);
 
-    auto *collectionCard = new SourceCard(QStringLiteral("book"),
+    auto *collectionCard = new SourceCard(QStringLiteral("database"),
         utils::tr(QStringLiteral("import.source.collection.title")),
         utils::tr(QStringLiteral("import.source.collection.description")), this);
     connect(collectionCard, &SourceCard::clicked, this, [this]() { pickFile(true); });
+    connect(collectionCard, &SourceCard::dropped, this,
+        [this](const QString &path) { importPath(path, DropTarget::Collection); });
     cardsRow->addWidget(collectionCard);
 
     layout->addLayout(cardsRow);
@@ -150,10 +190,7 @@ void ImportDialog::pickProjectFolder()
     if (directory.isEmpty()) {
         return;
     }
-    m_kind = Kind::Project;
-    m_path = directory;
-    m_recursive = m_recursiveField->isChecked();
-    accept();
+    importPath(directory, DropTarget::Project);
 }
 
 void ImportDialog::pickFile(bool collectionOnly)
@@ -165,6 +202,48 @@ void ImportDialog::pickFile(bool collectionOnly)
     if (path.isEmpty()) {
         return;
     }
+    importPath(path, collectionOnly ? DropTarget::Collection : DropTarget::File);
+}
+
+void ImportDialog::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!singleLocalPath(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
+    }
+}
+
+void ImportDialog::dropEvent(QDropEvent *event)
+{
+    const QString path = singleLocalPath(event->mimeData());
+    if (path.isEmpty()) {
+        return;
+    }
+    event->acceptProposedAction();
+    importPath(path, DropTarget::Any);
+}
+
+// Caminho único de validação para o seletor e para o arrastar-e-soltar.
+void ImportDialog::importPath(const QString &path, DropTarget target)
+{
+    const bool isDir = QFileInfo(path).isDir();
+    if (isDir) {
+        if (target == DropTarget::File || target == DropTarget::Collection) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("import.title")),
+                utils::tr(QStringLiteral("import.error.unrecognized")));
+            return;
+        }
+        m_kind = Kind::Project;
+        m_path = path;
+        m_recursive = m_recursiveField->isChecked();
+        accept();
+        return;
+    }
+    if (target == DropTarget::Project) {
+        QMessageBox::warning(this, utils::tr(QStringLiteral("import.title")),
+            utils::tr(QStringLiteral("import.error.unrecognized")));
+        return;
+    }
+    const bool collectionOnly = target == DropTarget::Collection;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QMessageBox::warning(this, utils::tr(QStringLiteral("import.title")),

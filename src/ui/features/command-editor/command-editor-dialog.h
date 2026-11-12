@@ -178,6 +178,10 @@ private:
     IconPickerWidget *m_iconPicker = nullptr;
     QSpinBox *m_orderField = nullptr;
     HooksEditorWidget *m_hooksEditor = nullptr;
+    // Hooks das pastas: o interruptor para NÃO herdar e a lista (só leitura) do que chega de cima.
+    QCheckBox *m_inheritHooksField = nullptr;
+    QLabel *m_inheritedHooksLabel = nullptr;
+    void refreshInheritedHooks();
     ExecutionConditionsEditorWidget *m_conditionsEditor = nullptr;
 
     InlineCodeField *m_commandField = nullptr;

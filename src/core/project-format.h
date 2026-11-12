@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <QJsonObject>
 #include <QString>
 #include <QVector>
@@ -20,6 +22,10 @@ struct ProjectFormatContent {
     QVector<Collection> collections;
     // Notas versionadas junto ao projeto (chave "notes"): sempre sincronizáveis (`local == false`).
     QVector<Note> notes;
+    // Hooks do PROJETO (chaves "hooks" e "inherit_hooks" no topo do arquivo): valem para tudo no projeto; vão para a pasta raiz.
+    // Por nome no arquivo, já resolvidos para os ids dos comandos importados. Ausente = o arquivo não diz nada.
+    std::optional<Hooks> rootHooks;
+    bool rootInheritHooks = true;
     // Continuação da numeração/ordem das subpastas, para a detecção genérica do import não colidir.
     int nextSubFolderCounter = 0;
     int nextSubFolderOrder = 0;

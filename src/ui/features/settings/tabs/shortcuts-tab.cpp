@@ -50,6 +50,17 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     globalRow->addWidget(m_hotkeyField, 1);
     layout->addLayout(globalRow);
 
+    // Segundo atalho GLOBAL: abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela.
+    auto *paletteRow = new QHBoxLayout();
+    paletteRow->setSpacing(utils::tokens::space(2));
+    auto *paletteLabel = new QLabel(utils::tr(QStringLiteral("settings.shortcut.palette")), this);
+    paletteLabel->setToolTip(utils::tr(QStringLiteral("settings.shortcut.palette.hint")));
+    m_paletteHotkeyField = new ShortcutCaptureField(currentSettings.paletteHotkey, this);
+    m_paletteHotkeyField->setToolTip(utils::tr(QStringLiteral("settings.shortcut.palette.hint")));
+    paletteRow->addWidget(paletteLabel);
+    paletteRow->addWidget(m_paletteHotkeyField, 1);
+    layout->addLayout(paletteRow);
+
     // Tabela sempre à mostra: recolhida por padrão a busca filtrava linhas invisíveis.
     m_shortcutsManager = new ShortcutsManagerWidget(this);
     m_shortcutsManager->setShortcuts(currentSettings.shortcuts);
@@ -67,6 +78,7 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     connect(resetButton, &QPushButton::clicked, this, [this]() {
         m_shortcutsManager->resetToDefaults();
         m_hotkeyField->setKeySequenceString(core::SettingsData().globalHotkey);
+        m_paletteHotkeyField->setKeySequenceString(core::SettingsData().paletteHotkey);
     });
     layout->addWidget(tableCard, 1);
     // Sem wrapPage: a tabela já rola (SettingsDialog adiciona esta aba direto ao QStackedWidget).

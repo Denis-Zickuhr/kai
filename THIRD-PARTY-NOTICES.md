@@ -5,7 +5,7 @@ third-party components; this file reproduces the copyright notices and
 licenses required by those components, and ships with both the source code
 and the distributed packages.
 
-Index: [Qt 6](#qt-6) · [QHotkey](#qhotkey) · [libvterm](#libvterm) · [Lucide](#lucide-icons)
+Index: [Qt 6](#qt-6) · [QHotkey](#qhotkey) · [libvterm](#libvterm) · [Lucide](#lucide-icons) · [Simple Icons](#simple-icons)
 
 ---
 
@@ -159,3 +159,14 @@ SOFTWARE.
 
 The list of icons derived from Feather is in
 `assets/icons/lucide/LICENSE`, which ships with the distribution.
+
+---
+
+## Simple Icons
+
+The language icons (Python, Node.js, PHP, GNU Bash) shown on the command tree chips, in `assets/icons/brands/`.
+
+Project: <https://simpleicons.org>
+
+Released under CC0 1.0 Universal (public domain dedication). The logos themselves are trademarks of their respective
+owners and are used only to identify the corresponding tool; Kai is not affiliated with or endorsed by them.

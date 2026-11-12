@@ -479,7 +479,7 @@ private slots:
         const QSet<QString> rootKeys = {QStringLiteral("project_name"), QStringLiteral("icon"), QStringLiteral("cli_path"),
                                         QStringLiteral("cli_description"), QStringLiteral("env_vars"), QStringLiteral("commands"),
                                         QStringLiteral("collections"), QStringLiteral("folders"),
-                                        QStringLiteral("http_defaults")};
+                                        QStringLiteral("http_defaults"), QStringLiteral("hooks"), QStringLiteral("inherit_hooks")};
         for (const QString &doc : {QStringLiteral("kai-manifesto.md"), QStringLiteral("kip-manifesto.md")}) {
             for (const Fence &fence : fences(readAsset(doc))) {
                 if (fence.info == QStringLiteral("yaml model project")) {
@@ -496,7 +496,8 @@ private slots:
                 if (fence.info == QStringLiteral("yaml model kip_command") || fence.info == QStringLiteral("yaml model folder_meta")) {
                     const QJsonObject item = yamlToJson(fence.body).toArray().first().toObject();
                     const QSet<QString> folderMeta = {QStringLiteral("path"), QStringLiteral("icon"), QStringLiteral("cli_path"),
-                                                      QStringLiteral("cli_description"), QStringLiteral("http_defaults")};
+                                                      QStringLiteral("cli_description"), QStringLiteral("http_defaults"),
+                                                      QStringLiteral("hooks"), QStringLiteral("inherit_hooks")};
                     const QSet<QString> command = keysWrittenBy(QStringLiteral("src/core/models.cpp"), QStringLiteral("QJsonObject Command::toJson() const"));
                     for (auto it = item.constBegin(); it != item.constEnd(); ++it) {
                         const bool known = fence.info.endsWith(QStringLiteral("folder_meta")) ? folderMeta.contains(it.key())

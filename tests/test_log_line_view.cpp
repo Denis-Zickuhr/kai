@@ -274,7 +274,7 @@ private slots:
     void giveUpAccumulatingAfterTooManyLinesFallsBackToRaw()
     {
         LogLineModel model;
-        QString text = QStringLiteral("{ isto nunca fecha\n");
+        QString text = QStringLiteral("{\"isto nunca fecha\n"); // começa como JSON de verdade: acumula até o teto
         for (int i = 0; i < 90; ++i) {
             text += QStringLiteral("linha %1\n").arg(i);
         }
@@ -417,6 +417,10 @@ private slots:
             view.appendText(chunk);
             QCoreApplication::processEvents();
         }
+        // Um lote grande entra em fatias (carga preguiçosa): espera o fim da fila antes de contar.
+        for (int i = 0; i < 400 && !view.isLoaded(); ++i) {
+            QTest::qWait(20);
+        }
         QCOMPARE(view.logModel()->rowCount(), kLines);
         QVERIFY2(timer.elapsed() < 8000, qPrintable(QStringLiteral("%1 ms").arg(timer.elapsed())));
     }
@@ -430,6 +434,107 @@ private slots:
         QCOMPARE(model.rowCount(), 1);
         QCOMPARE(model.entryAt(0).rawGroupTexts.size(), 3);
         QCOMPARE(model.entryAt(0).raw, QStringLiteral("alpha\nbeta\ngamma"));
+    }
+    // "[" de uma sequência ANSI de cor (ESC[32m) não é colchete de JSON: antes, uma linha colorida com "{...}" parecia um
+    // objeto aberto e engolia as linhas seguintes.
+    void ansiColorCodesDoNotStartAJsonAccumulation()
+    {
+        LogLineModel model;
+        model.appendText(QStringLiteral("\x1b[32mok\x1b[0m built {x} \x1b[1m\n"));
+        QCOMPARE(model.rowCount(), 1);
+        model.appendText(QStringLiteral("next line\n"));
+        QCOMPARE(model.rowCount(), 1); // funde no grupo cru: nada ficou retido
+        QCOMPARE(model.entryAt(0).rawGroupTexts.size(), 2);
+    }
+
+    // Um "[" solto com "{...}" balanceado na mesma linha também não acumula.
+    void looseBracketNextToBracesStaysRaw()
+    {
+        LogLineModel model;
+        model.appendText(QStringLiteral("[progress {step 1}\n"));
+        model.appendText(QStringLiteral("done\n"));
+        QCOMPARE(model.rowCount(), 1);
+        QCOMPARE(model.entryAt(0).rawGroupTexts.size(), 2);
+    }
+
+    // Um JSON que parece aberto e o texto para de chegar (fim da execução): sai como linhas cruas em vez de ficar preso.
+    void unfinishedJsonIsReleasedWhenTheTextStops()
+    {
+        LogLineModel model;
+        model.appendText(QStringLiteral("{\"level\":\"info\",\"msg\":\"never closes\n"));
+        QCOMPARE(model.rowCount(), 0); // acumulando
+        QTest::qWait(700);
+        QCOMPARE(model.rowCount(), 1);
+        QVERIFY(!model.entryAt(0).structured);
+    }
+
+    // A última linha sem "\n" (um prompt, o fim da saída) aparece depois de um instante, em vez de esperar para sempre.
+    void aTrailingLineWithoutNewlineIsShownAfterAMoment()
+    {
+        LogLineModel model;
+        model.appendText(QStringLiteral("first\nlast without newline"));
+        QCOMPARE(model.rowCount(), 1);
+        QTest::qWait(700);
+        QCOMPARE(model.entryAt(0).rawGroupTexts.size(), 2);
+    }
+
+    // Um texto muito grande entra em fatias sem congelar, e nada se perde nem sai de ordem.
+    void aHugeTextIsIngestedLazilyAndInOrder()
+    {
+        LogLineModel model;
+        QString text;
+        constexpr int kLines = 6000;
+        for (int i = 0; i < kLines; ++i) {
+            text += QStringLiteral("{\"level\":\"info\",\"msg\":\"line %1\"}\n").arg(i);
+        }
+        model.appendText(text);
+        QVERIFY(model.rowCount() >= 400);       // as primeiras entram na hora
+        for (int i = 0; i < 400 && model.rowCount() < kLines; ++i) {
+            QTest::qWait(10);
+        }
+        QCOMPARE(model.rowCount(), kLines);
+        QCOMPARE(model.entryAt(0).message, QStringLiteral("line 0"));
+        QCOMPARE(model.entryAt(kLines - 1).message, QStringLiteral("line 5999"));
+        // Texto novo no meio do processo também respeita a ordem.
+        LogLineModel other;
+        other.appendText(text);
+        other.appendText(QStringLiteral("{\"level\":\"info\",\"msg\":\"tail\"}\n"));
+        for (int i = 0; i < 400 && other.rowCount() < kLines + 1; ++i) {
+            QTest::qWait(10);
+        }
+        QCOMPARE(other.entryAt(kLines).message, QStringLiteral("tail"));
+    }
+
+    // Limpar descarta o que ainda esperava na fila.
+    void clearingDropsWhatIsStillQueued()
+    {
+        LogLineModel model;
+        QString text;
+        for (int i = 0; i < 6000; ++i) {
+            text += QStringLiteral("{\"level\":\"info\",\"msg\":\"line %1\"}\n").arg(i);
+        }
+        model.appendText(text);
+        model.clearLog();
+        QTest::qWait(150);
+        QCOMPARE(model.rowCount(), 0);
+    }
+    // A vista diz quando terminou de receber um texto grande (a restauração da rolagem espera por isso).
+    void theViewReportsWhenAHugeTextIsFullyLoaded()
+    {
+        LogLineView view;
+        view.resize(640, 400);
+        view.show();
+        QString text;
+        for (int i = 0; i < 4000; ++i) {
+            text += QStringLiteral("{\"level\":\"info\",\"msg\":\"line %1\"}\n").arg(i);
+        }
+        view.appendText(text);
+        for (int i = 0; i < 300 && !view.isLoaded(); ++i) {
+            QTest::qWait(20);
+        }
+        QVERIFY(view.isLoaded());
+        QTest::qWait(120);
+        QCOMPARE(view.logModel()->rowCount(), 4000);
     }
 };
 

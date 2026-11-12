@@ -221,10 +221,12 @@ std::unique_ptr<ProcessRunner> ExecutionPipeline::releaseActiveProcessRunner()
     return releaseRunnerFor(m_activeRunnerCommandId);
 }
 
-void ExecutionPipeline::run(const core::Command &command,
+void ExecutionPipeline::run(const core::Command &requested,
                              const QMap<QString, core::Command> &allCommands,
                              core::EnvironmentManager &envManager)
 {
+    // Daqui em diante vale o comando com os hooks já somados aos das pastas (ver core/hook-resolve.h).
+    const core::Command command = withEffectiveHooks(requested);
     m_cleanupFiredFor.remove(command.id);
 
     m_allCommands = &allCommands;

@@ -1,4 +1,5 @@
 #include "engine/execution-pipeline.h"
+#include "core/hook-resolve.h"
 #include "core/terminal-target.h"
 #include "engine/command-language.h"
 #include "engine/module-files.h"
@@ -128,6 +129,13 @@ bool ExecutionPipeline::abortHttp(const QString &commandId)
     }
     m_activeHttpRunner->abort();
     return true;
+}
+
+core::Command ExecutionPipeline::withEffectiveHooks(const core::Command &command) const
+{
+    core::Command effective = command;
+    effective.hooks = core::effectiveHooks(command, m_folders);
+    return effective;
 }
 
 void ExecutionPipeline::setFolders(const QVector<core::Folder> &folders)

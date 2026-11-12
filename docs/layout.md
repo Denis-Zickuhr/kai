@@ -55,6 +55,18 @@ Drag the Document tab to the center, the bottom or a side and you read the READM
 
 If you close every panel the window shows *No panels* with a **Restore layout** button. Settings → Layout has the same button.
 
+## Extra trees
+
+The **chevron** next to the *Commands* tab (and the *Commands* row of the **View** menu, which opens as a submenu) lists your **extra trees**: other command trees, each with **fixed filters**, shown as panels you can move, float and close like any other. The main tree stays as it is.
+
+**New tree…** asks for a name, an icon and what to show, in any combination:
+
+- **Folders** — only what is inside the ticked folders (a ticked folder becomes the root of the tree; ticked folders show even when nothing inside matches).
+- **Types** — commands, HTTP, pipelines, collections, notes.
+- **Only running**, **Show hidden** and a fixed **Filter** text (the same fuzzy match as the search).
+
+Folders and parent commands that hold a matching item stay as context. An extra tree is a *view* of the same data: running state, marks, the context menu and the inline actions work as in the main tree, and selecting an item there selects it in the main tree (so the Output and the Document follow). **Dragging reorders for real**: the order is the same as in the main tree; what is filtered out keeps its place and the visible items trade the positions they already had. *Edit tree* (chevron menu or the panel's menu) changes the filters of an open tree on the spot, and the dialog has **Delete tree**. The definitions live in `tree-views.json` (personal, never exported) and where each panel sits is saved in `layout.json` like any other panel.
+
 ## Moving panels
 
 1. **View → Rearrange panels** is on by default: every cell shows its tab strip. Turn it off to hide the strip of cells that have a single panel (the choice is remembered).

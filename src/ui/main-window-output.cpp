@@ -97,6 +97,8 @@ void MainWindow::loadConfig()
 {
     m_commandsData = m_configManager.loadCommands();
     m_docUsage = m_configManager.loadDocUsage();
+    m_paletteUsage = m_configManager.loadPaletteUsage();
+    m_treeViews = m_configManager.loadTreeViews();
     m_collections = m_configManager.loadCollections();
     m_notes = m_configManager.loadNotes();
     core::bindPendingCollectionReferences(m_commandsData.commands, m_collections);
@@ -121,23 +123,70 @@ void MainWindow::loadConfig()
 void MainWindow::appendToCommandLog(const QString &commandId, const QString &text)
 {
     QString &log = m_commandLogs[commandId];
+    if (log.isEmpty()) {
+        m_commandLogDroppedLines.remove(commandId); // log novo (a execução limpou o anterior): o aviso de descarte recomeça
+        m_commandLogTotal.remove(commandId);
+        const int generation = ++m_commandLogGeneration[commandId];
+        // A tela deste comando já foi limpa pela execução: o que entrar nela agora é deste log novo.
+        if (m_terminalDrawer && m_terminalDrawer->currentCommandId() == commandId && m_terminalDrawer->shownTotal() == 0) {
+            m_terminalDrawer->markShown(0, generation);
+        }
+    }
     log += text;
+    m_commandLogTotal[commandId] += text.size();
     if (m_terminalDrawer) {
         m_terminalDrawer->outputTabs()->markActivity(commandId);
     }
 
-    // Limita o buffer por comando (configurável em Configurações → Saída): descarta o início, mantém o fim.
+    // Limita o buffer por comando (configurável em Configurações → Saída): descarta o início, mantém o fim. Corta numa
+    // QUEBRA DE LINHA (nada de linha pela metade no começo) e conta as linhas descartadas, para a reexibição avisar; passa
+    // do teto, corta até 90% dele de uma vez (uma linha nova não repetia o corte, e o custo, a cada acréscimo).
     if (log.size() > m_outputMaxLogSizeChars) {
-        log = log.right(m_outputMaxLogSizeChars);
+        qsizetype cut = log.size() - static_cast<qsizetype>(m_outputMaxLogSizeChars * 0.9);
+        const qsizetype lineEnd = log.indexOf(QLatin1Char('\n'), cut);
+        if (lineEnd >= 0) {
+            cut = lineEnd + 1;
+        }
+        int dropped = 0;
+        for (qsizetype i = 0; i < cut; ++i) {
+            if (log.at(i) == QLatin1Char('\n')) {
+                ++dropped;
+            }
+        }
+        m_commandLogDroppedLines[commandId] += dropped;
+        log.remove(0, cut);
     }
 }
 
 void MainWindow::reconnectTerminalToCommand(const QString &commandId)
 {
+    const bool switched = m_terminalDrawer->currentCommandId() != commandId;
     m_connectedTerminalCommandId = commandId;
+    // Troca a SESSÃO de texto da Saída: o texto de cada comando recente fica montado (documento, saída formatada, rolagem), então
+    // voltar a um comando não reimprime o log (parse ANSI, cards, layout), que era o que pesava. Abaixo se vê o que falta.
     m_terminalDrawer->setCurrentCommandId(commandId);
-    // Sempre limpa antes de repopular: reconectar ao mesmo comando reinjetaria o log sobre o que já está na tela.
-    m_terminalDrawer->clear();
+
+    const QString storedLog = m_commandLogs.value(commandId);
+    const qint64 total = m_commandLogTotal.value(commandId);
+    const int generation = m_commandLogGeneration.value(commandId);
+    const qint64 shown = m_terminalDrawer->shownTotal();
+    enum class Fill { Nothing, Delta, Full };
+    Fill fill = Fill::Full;
+    // Em dia (a sessão tem tudo) ou falta só o final (texto que entrou enquanto o comando não estava na tela); refaz por inteiro
+    // se a sessão é nova, se o log foi refeito (outra geração) ou se o que falta já saiu do log guardado pelo teto.
+    if (!storedLog.isEmpty() && shown > 0 && m_terminalDrawer->sessionGeneration() == generation && shown <= total) {
+        const qint64 missing = total - shown;
+        if (missing == 0) {
+            fill = Fill::Nothing;
+        } else if (missing <= storedLog.size()) {
+            fill = Fill::Delta;
+        }
+    }
+    if (fill == Fill::Full) {
+        m_terminalDrawer->clear();
+    }
+    // O painel zera o que não é da sessão (HTTP, JSON...) ao trocar de comando: o que for do novo é reaplicado abaixo.
+    const bool reapply = switched || fill != Fill::Nothing;
     // Prompt "user@<caminho>": diretório de execução do comando, senão o do projeto ativo.
     {
         QString dir;
@@ -170,18 +219,36 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
         it != m_commandsById.constEnd() && it->formattedOutput && !isKip);
 
     m_terminalDrawer->setCommandName(displayName);
-    m_terminalDrawer->appendRawText(m_commandLogs.value(commandId), false);
-    // appendRawText só enfileira (coalescing de 16ms). Sem o flush, uma reconexão imediata (ex.: showEvent()
-    // reselecionando o primeiro item) rodaria clear() antes do timer e apagaria o histórico enfileirado, sem nada
-    // que o repopule (reselecionar o mesmo item não reemite currentItemChanged).
-    m_terminalDrawer->flushPendingOutput();
-    if (isInteractive) {
+    if (fill == Fill::Full) {
+        // O log guardado já obedece ao teto das Configurações → Saída (appendToCommandLog), então é ele inteiro que volta. Se o
+        // teto descartou o começo, um aviso no topo diz quantas linhas.
+        const int droppedLines = m_commandLogDroppedLines.value(commandId);
+        if (droppedLines > 0 && !storedLog.isEmpty()) {
+            m_terminalDrawer->appendNotice(
+                utils::tr(QStringLiteral("output.log_truncated")).arg(droppedLines).arg(m_outputMaxLogSizeChars / 1024)
+                    + QLatin1Char('\n'));
+        }
+        // A sessão começa no total já descartado pelo teto: ao aplicar o log guardado inteiro ela chega ao total do log.
+        m_terminalDrawer->markShown(qMax<qint64>(0, total - storedLog.size()), generation);
+        m_terminalDrawer->appendRawText(storedLog, false);
+        // appendRawText só enfileira (coalescing de 16ms). Sem o flush, uma reconexão imediata (ex.: showEvent()
+        // reselecionando o primeiro item) rodaria clear() antes do timer e apagaria o histórico enfileirado, sem nada
+        // que o repopule (reselecionar o mesmo item não reemite currentItemChanged).
+        m_terminalDrawer->flushPendingOutput();
+        m_terminalDrawer->scrollToEndWhenLoaded(); // um log recarregado mostra o fim
+    } else if (fill == Fill::Delta) {
+        m_terminalDrawer->appendRawText(storedLog.right(total - shown), false);
+        m_terminalDrawer->flushPendingOutput();
+    }
+    if (isInteractive && reapply) {
         m_terminalDrawer->resetInteractiveAndReplay(m_commandLogs.value(commandId));
     }
 
     // "Ver JSON" só para HTTP: em logs de shell a detecção por conteúdo dava falso positivo (a Saída formatada cobre
     // esse caso).
-    if (it != m_commandsById.constEnd() && it->type == core::CommandType::Http) {
+    if (!reapply) {
+        // nada mudou na tela: o JSON, as abas HTTP e o motivo de "pulado" já estão como estavam
+    } else if (it != m_commandsById.constEnd() && it->type == core::CommandType::Http) {
         m_terminalDrawer->setJsonAvailable(m_commandLogs.value(commandId));
     } else {
         m_terminalDrawer->setJsonAvailable(QString());
@@ -189,7 +256,9 @@ void MainWindow::reconnectTerminalToCommand(const QString &commandId)
 
     // Restaura as abas Headers/JSON de um comando HTTP já executado (só eram populadas ao vivo). Uma execução pulada
     // por condição mostra o painel "não executada", mesmo havendo resultado em cache de uma rodada anterior.
-    if (m_skippedReason.contains(commandId)) {
+    if (!reapply) {
+        // idem
+    } else if (m_skippedReason.contains(commandId)) {
         m_terminalDrawer->setSkipped(true, m_skippedReason.value(commandId));
     } else if (m_lastHttpResult.contains(commandId)) {
         m_terminalDrawer->setHttpResult(m_lastHttpResult.value(commandId));
@@ -506,11 +575,10 @@ void MainWindow::showOutputTabMenu(const QString &commandId, const QPoint &globa
     if (chosen == panelAction) {
         openRunPanel(commandId);
     } else if (chosen == clearAction) {
-        m_commandLogs[commandId].clear();
         if (commandId == m_connectedTerminalCommandId) {
             m_terminalDrawer->embeddedPanel()->clearAll();
         }
-        refreshOutputTabs();
+        discardStoredOutput(commandId);
     } else if (chosen == noteAction) {
         saveOutputAsNote(commandId);
     } else if (chosen == copyAction) {
@@ -551,6 +619,23 @@ void MainWindow::showOutputTabMenu(const QString &commandId, const QPoint &globa
             }
         }
     }
+}
+
+void MainWindow::discardStoredOutput(const QString &commandId)
+{
+    if (commandId.isEmpty()) {
+        return;
+    }
+    m_commandLogs[commandId].clear();
+    m_commandLogDroppedLines.remove(commandId);
+    m_commandLogTotal.remove(commandId);
+    ++m_commandLogGeneration[commandId];
+    if (m_terminalDrawer) {
+        m_terminalDrawer->dropSessionFor(commandId); // o texto montado dele (se não é o da tela) deixa de valer
+    }
+    m_lastHttpResult.remove(commandId);
+    m_skippedReason.remove(commandId);
+    refreshOutputTabs();
 }
 
 } // namespace kai::ui

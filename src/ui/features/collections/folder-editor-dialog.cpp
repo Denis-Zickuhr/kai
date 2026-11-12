@@ -7,6 +7,10 @@
 #include "ui/shared/table-utils.h"
 #include "ui/shared/actions-editor-widget.h"
 #include "ui/features/http/http-defaults-editor-widget.h"
+#include "ui/features/command-editor/hooks-editor-widget.h"
+#include "core/hook-resolve.h"
+#include "core/pipeline-model.h"
+#include "core/folder-actions.h"
 #include "ui/shared/key-value-editor-widget.h"
 #include "ui/shared/icon-picker-widget.h"
 #include "ui/shared/collapsible-section-card.h"
@@ -30,6 +34,7 @@
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QRegularExpression>
+#include <QMap>
 #include <QSet>
 
 namespace kai::ui {
@@ -70,6 +75,7 @@ FolderEditorDialog::FolderEditorDialog(const QVector<core::Folder> &allFolders, 
     : QDialog(parent)
     , m_terminalProfiles(terminalProfiles)
     , m_allCommands(allCommands)
+    , m_allFolders(allFolders)
 {
     setWindowTitle(existingFolder ? utils::tr(QStringLiteral("folder.title.edit")) : utils::tr(QStringLiteral("folder.title.new")));
     setSizeGripEnabled(true);
@@ -254,6 +260,69 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     connect(m_httpDefaultsEditor, &HttpDefaultsEditorWidget::changed, this, bindHttpNavItemCount);
     httpLayout->addWidget(m_httpDefaultsEditor);
 
+    // Aba "Hooks": comandos que rodam antes/depois/ao terminar de TODO comando desta pasta e das subpastas (ver
+    // core/hook-resolve.h). Quem não quiser precisa dizer: a pasta filha (interruptor abaixo) ou o comando (aba Hooks dele).
+    auto *hooksLayout = addSidebarTabPage(tabsHost,
+        utils::tr(QStringLiteral("command.tab.hooks")), QStringLiteral("link-2"));
+    const int hooksNavRow = tabsHost.nav->count() - 1;
+    auto *hooksCard = new CollapsibleSectionCard(utils::tr(QStringLiteral("command.group.hooks")), this);
+    hooksCard->setAlwaysShowBody(true);
+    auto *hooksBody = new QWidget(hooksCard);
+    hooksBody->setObjectName(QStringLiteral("folderHooksBody"));
+    hooksBody->setStyleSheet(QStringLiteral("QWidget#folderHooksBody { background: transparent; }"));
+    auto *hooksBodyLayout = new QVBoxLayout(hooksBody);
+    hooksBodyLayout->setContentsMargins(0, 0, 0, 0);
+    hooksBodyLayout->setSpacing(utils::tokens::space(2));
+    m_inheritHooksField = new QCheckBox(utils::tr(QStringLiteral("folder.hooks.inherit")), hooksBody);
+    m_inheritHooksField->setProperty("kaiRole", QStringLiteral("switch"));
+    m_inheritHooksField->setChecked(existingFolder ? existingFolder->inheritHooks : true);
+    hooksBodyLayout->addWidget(m_inheritHooksField);
+    m_inheritedHooksLabel = new QLabel(hooksBody);
+    m_inheritedHooksLabel->setWordWrap(true);
+    m_inheritedHooksLabel->setProperty("kaiRole", QStringLiteral("caption"));
+    m_inheritedHooksLabel->setStyleSheet(QStringLiteral("background: transparent;"));
+    hooksBodyLayout->addWidget(m_inheritedHooksLabel);
+    m_hooksEditor = new HooksEditorWidget(hooksBody);
+    {
+        // Todos os comandos, com a pasta de cada um ao lado do nome (um hook de pasta costuma morar em outra pasta).
+        QVector<core::Command> candidates;
+        for (const core::Command &cmd : std::as_const(m_allCommands)) {
+            if (core::isFolderActionCommandId(cmd.id)) {
+                continue;
+            }
+            core::Command display = cmd;
+            const QString path = core::folderPathOf(cmd.folderId, allFolders);
+            if (!path.isEmpty()) {
+                display.name = utils::tr(QStringLiteral("command_editor.hook_picker.name_format")).arg(cmd.name, path);
+            }
+            candidates << display;
+        }
+        m_hooksEditor->setAvailableCommands(candidates);
+        m_hooksEditor->setAllAvailableCommands(candidates);
+    }
+    if (existingFolder) {
+        m_hooksEditor->setHooks(existingFolder->hooks);
+    }
+    hooksBodyLayout->addWidget(m_hooksEditor);
+    hooksCard->setBody(hooksBody);
+    hooksCard->setCount(m_hooksEditor->totalCount());
+    auto bindHooksNavItemCount = [this, hooksCard, nav = tabsHost.nav, hooksNavRow]() {
+        const int count = m_hooksEditor->totalCount();
+        hooksCard->setCount(count);
+        if (QListWidgetItem *item = nav->item(hooksNavRow)) {
+            const QString baseTitle = utils::tr(QStringLiteral("command.tab.hooks"));
+            item->setText(count > 0 ? QStringLiteral("%1 (%2)").arg(baseTitle).arg(count) : baseTitle);
+        }
+    };
+    bindHooksNavItemCount();
+    connect(m_hooksEditor, &HooksEditorWidget::changed, this, bindHooksNavItemCount);
+    connect(m_inheritHooksField, &QCheckBox::toggled, this, [this]() { refreshInheritedHooks(); });
+    connect(m_parentField, &FolderPickerWidget::selectionChanged, this, [this]() { refreshInheritedHooks(); });
+    hooksCard->setExpanded(true, false);
+    hooksCard->setCollapsible(false);
+    hooksLayout->addWidget(hooksCard);
+    refreshInheritedHooks();
+
     // Aba "Ações": comandos existentes que viram ícones na linha da pasta e rodam com ela como contexto (o diretório de
     // trabalho da ação é o da pasta). Ver core/folder-actions.h. Mesmo padrão da aba de Parâmetros do comando.
     auto *actionsLayout = addSidebarTabPage(tabsHost,
@@ -434,6 +503,30 @@ void FolderEditorDialog::populateProfileCombo(const core::Folder *existingFolder
     m_profileField->setCurrentIndex(qMax(0, idx));
 }
 
+// O que as pastas acima entregam a esta (só leitura), na ordem em que roda; vazio (e escondido) se esta pasta não herda.
+void FolderEditorDialog::refreshInheritedHooks()
+{
+    if (!m_inheritedHooksLabel || !m_inheritHooksField || !m_parentField) {
+        return;
+    }
+    QMap<QString, QString> nameById;
+    for (const core::Command &c : std::as_const(m_allCommands)) {
+        nameById.insert(c.id, c.name);
+    }
+    const QVector<core::InheritedHook> inherited =
+        core::inheritedHooks(m_parentField->selectedFolderId(), m_inheritHooksField->isChecked(), QString(), m_allFolders);
+    QStringList lines;
+    for (const core::InheritedHook &hook : inherited) {
+        const char *phaseKey = hook.phase == core::InheritedHook::Phase::Pre ? "hooks_editor.pre"
+            : hook.phase == core::InheritedHook::Phase::Post ? "hooks_editor.post" : "hooks_editor.cleanup";
+        lines << utils::tr(QStringLiteral("hooks_editor.inherited.line"))
+                     .arg(utils::tr(QString::fromLatin1(phaseKey)), nameById.value(hook.commandId, hook.commandId),
+                          hook.folderName);
+    }
+    m_inheritedHooksLabel->setText(lines.join(QLatin1Char('\n')));
+    m_inheritedHooksLabel->setVisible(!lines.isEmpty());
+}
+
 core::Folder FolderEditorDialog::buildFolder() const
 {
     // Se o usuário editou via JSON (modo avançado), devolve aquele resultado; senão monta a partir do formulário.
@@ -464,6 +557,10 @@ core::Folder FolderEditorDialog::buildFromForm() const
     if (m_httpDefaultsEditor) {
         folder.httpDefaults = m_httpDefaultsEditor->defaults();
     }
+    if (m_hooksEditor) {
+        folder.hooks = m_hooksEditor->hooks();
+    }
+    folder.inheritHooks = !m_inheritHooksField || m_inheritHooksField->isChecked();
     folder.secretEnvKeys = m_envVarsEditor->secretKeys();
     folder.secretEnvKeys.removeIf([&folder](const QString &key) { return !folder.envVars.contains(key); });
     folder.icon = m_iconPicker->selectedIconName();

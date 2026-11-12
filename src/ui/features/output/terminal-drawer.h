@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QColor>
 #include <QVBoxLayout>
+#include <QHash>
 #include <QMap>
 #include <QByteArray>
 #include <QSet>
@@ -66,6 +67,8 @@ public:
 
     // Anexa texto bruto (stdout/stderr), interpretando ANSI incrementalmente.
     void appendRawText(const QString &rawText, bool isError = false);
+    // Um aviso do Kai no meio da saída (ex: "N linhas anteriores descartadas"): aparece como texto, mas não faz parte do log.
+    void appendNotice(const QString &text);
     // Aplica o que está pendente no buffer de saída; o append é coalescido num timer para não saturar o event loop
     // com processos verbosos.
     void flushPendingOutput();
@@ -86,7 +89,9 @@ public:
     // Nome do comando exibido no título do cabeçalho.
     void setCommandName(const QString &name);
     // Qual comando está conectado ao painel embutido; a janela destacada congela esse id no detach.
-    void setCurrentCommandId(const QString &commandId) { m_currentCommandId = commandId; }
+    // Trocar o comando conectado troca a SESSÃO de texto do painel (a do comando novo, montada se já existia); o que estava na
+    // fila de saída era do comando anterior e é descartado (o MainWindow reenvia o que faltar a partir do log guardado).
+    void setCurrentCommandId(const QString &commandId);
     QString currentCommandId() const { return m_currentCommandId; }
     // A barra de guias das saídas (acima do painel).
     OutputTabsBar *outputTabs() const { return m_tabsBar; }
@@ -159,6 +164,17 @@ public:
     void clearKip();
     bool kipMode() const;
     OutputPanel *embeddedPanel() const { return m_panel; }
+    // Reabrir um comando mostra o FIM do log: quando o que foi reinjetado acabar de entrar, rola até o fim (mesmo com o
+    // auto-scroll desligado, que não se aplica a uma tela recém-carregada).
+    void scrollToEndWhenLoaded();
+    // Sessões de texto do painel embutido (ver OutputPanel::activateSession): o texto de cada comando recente fica montado.
+    // `hasSessionFor`: já há uma para o comando; `shownTotal`/`sessionGeneration`: quanto do log dele a sessão ativa já tem; o
+    // MainWindow compara com o log guardado para saber se está em dia, se falta só o final ou se refaz.
+    bool hasSessionFor(const QString &commandId) const { return m_panel->hasSession(commandId); }
+    qint64 shownTotal() const { return m_panel->sessionShownTotal(); }
+    int sessionGeneration() const { return m_panel->sessionGeneration(); }
+    void markShown(qint64 total, int generation) { m_panel->setSessionShown(total, generation); }
+    void dropSessionFor(const QString &commandId) { m_panel->dropSession(commandId); }
     OutputPanel *detachedPanel() const { return m_detachedPanel; }
     bool detachedWindowActive() const;
 
@@ -212,6 +228,7 @@ private slots:
     void detachOutput();
 
 private:
+    void scheduleFlush(); // garante o timer de ~16ms da fila de saída e o dispara
     bool isHorizontalPosition() const { return m_position == DrawerPosition::Left || m_position == DrawerPosition::Right; }
     // Limites de tamanho (min/maxWidth ou min/maxHeight, conforme m_position) para colapsado/expandido; reaplicados
     // por setDrawerPosition() com o painel já colapsado.
@@ -233,8 +250,16 @@ private:
     OutputTabsBar *m_tabsBar = nullptr;
 
     // Buffer coalescido de saída (~16ms) para não saturar o event loop.
-    QVector<QPair<QString, bool>> m_pendingChunks;
+    struct Chunk {
+        QString text;
+        bool isError = false;
+        bool counted = true; // conta como parte do log guardado do comando (avisos do Kai, não)
+    };
+    QVector<Chunk> m_pendingChunks;
     QTimer *m_flushTimer = nullptr;
+    QTimer *m_scrollEndTimer = nullptr;
+    int m_scrollEndTries = 0;
+    bool m_sliceScheduled = false; // há uma próxima fatia da fila de saída agendada (ver flushPendingOutput)
 
     QString m_currentCommandId;   // comando conectado ao painel embutido
     QSet<QString> m_kipPinned;    // comandos KIP fixados num painel próprio do quadro

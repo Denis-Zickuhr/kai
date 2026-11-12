@@ -5,6 +5,7 @@
 #include "utils/translation-manager.h"
 
 #include <QJsonArray>
+#include <QMap>
 #include <QSet>
 #include <algorithm>
 #include <functional>
@@ -51,6 +52,8 @@ ProjectFormatContent convertProjectFormat(const QJsonObject &root, const QString
     // Configuration id-free, core::FolderPathResolver); cada segmento vira uma Folder sob a raiz.
     int subFolderOrder = 0;
     int subFolderCounter = 0;
+    // Hooks por NOME das subpastas declaradas em "folders": resolvidos no fim, quando todos os comandos já existem.
+    QMap<QString, QJsonObject> rawSubFolderHooks;
     core::FolderPathResolver folderResolver(rootFolderId,
         [&rootFolderId, &subFolderCounter]() {
             return QStringLiteral("%1_sf_%2").arg(rootFolderId).arg(subFolderCounter++);
@@ -69,6 +72,11 @@ ProjectFormatContent convertProjectFormat(const QJsonObject &root, const QString
                 sub.cliDescription = folderResolver.explicitMetadataFor(path).value(QStringLiteral("cli_description")).toString();
                 sub.httpDefaults = HttpDefaults::fromJson(
                     folderResolver.explicitMetadataFor(path).value(QStringLiteral("http_defaults")).toObject());
+                const QJsonObject hooksMeta = folderResolver.explicitMetadataFor(path).value(QStringLiteral("hooks")).toObject();
+                if (!hooksMeta.isEmpty()) {
+                    rawSubFolderHooks.insert(id, hooksMeta);
+                }
+                sub.inheritHooks = folderResolver.explicitMetadataFor(path).value(QStringLiteral("inherit_hooks")).toBool(true);
                 sub.parentId = parentId;
                 sub.isProject = false;
                 sub.order = subFolderOrder++;
@@ -181,6 +189,25 @@ ProjectFormatContent convertProjectFormat(const QJsonObject &root, const QString
             param.collectionId = (it != out.collections.constEnd()) ? it->id : QString();
         }
     }
+
+    // Hooks das subpastas ("folders": [{"path": ..., "hooks": {...}}]) e do projeto (topo do arquivo), por nome.
+    auto resolveHooksObject = [&resolveHookNames](const QJsonObject &obj) {
+        core::Hooks hooks;
+        hooks.pre = resolveHookNames(obj.value("pre").toArray());
+        hooks.post = resolveHookNames(obj.value("post").toArray());
+        hooks.cleanup = resolveHookNames(obj.value("cleanup").toArray());
+        return hooks;
+    };
+    for (core::Folder &sub : out.subFolders) {
+        const auto it = rawSubFolderHooks.constFind(sub.id);
+        if (it != rawSubFolderHooks.constEnd()) {
+            sub.hooks = resolveHooksObject(it.value());
+        }
+    }
+    if (root.value(QStringLiteral("hooks")).isObject()) {
+        out.rootHooks = resolveHooksObject(root.value(QStringLiteral("hooks")).toObject());
+    }
+    out.rootInheritHooks = root.value(QStringLiteral("inherit_hooks")).toBool(true);
 
     out.nextSubFolderCounter = subFolderCounter;
     out.nextSubFolderOrder = subFolderOrder;

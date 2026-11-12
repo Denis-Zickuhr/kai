@@ -562,7 +562,8 @@ void MainWindow::handlePipelineFinished(const engine::PipelineResult &result)
         idsToCheck << m_connectedTerminalCommandId;
         const auto mainIt = m_commandsById.constFind(m_connectedTerminalCommandId);
         if (mainIt != m_commandsById.constEnd()) {
-            idsToCheck << mainIt->hooks.pre << mainIt->hooks.post;
+            const core::Hooks effectiveHooks = m_pipeline->withEffectiveHooks(*mainIt).hooks; // com os das pastas
+            idsToCheck << effectiveHooks.pre << effectiveHooks.post;
         }
         static const QRegularExpression urlRe(QStringLiteral("https?://[^\\s\"'<>\\])}]+"));
         QSet<QString> alreadyChecked;

@@ -59,6 +59,44 @@ void CommandTreeWidget::handleItemsReordered()
         visit(tree->topLevelItem(i), rootFolderId);
     }
 
+    // Árvore extra (filtrada): o que ela mostra é só parte da ordem global. Os itens visíveis trocam entre si as posições que
+    // já ocupavam e os de fora ficam onde estão; o MainWindow grava e recarrega, e todas as árvores acompanham.
+    if (m_view) {
+        QVector<core::TreePlacement> visual;
+        visual.reserve(placements.size());
+        for (const TreeNodePlacement &p : placements) {
+            core::TreePlacement v;
+            v.id = p.id;
+            v.kind = p.isCommand ? core::TreePlacement::Kind::Command
+                : p.isNote ? core::TreePlacement::Kind::Note
+                : p.isCollection ? core::TreePlacement::Kind::Collection
+                : core::TreePlacement::Kind::Folder;
+            v.parentId = p.parentId;
+            visual.append(v);
+        }
+        const QVector<core::TreePlacement> merged = core::remapFilteredReorder(m_raw, visual, rootFolderId);
+        if (merged.isEmpty()) {
+            utils::Logger::warning(kLogTag,
+                QStringLiteral("Drop numa árvore filtrada não casa com a raiz '%1' — ignorado.").arg(rootFolderId));
+            applyDataAndRebuild(); // devolve a árvore ao que os dados dizem
+            return;
+        }
+        QVector<TreeNodePlacement> all;
+        all.reserve(merged.size());
+        for (const core::TreePlacement &m : merged) {
+            TreeNodePlacement p;
+            p.id = m.id;
+            p.isCommand = m.kind == core::TreePlacement::Kind::Command;
+            p.isNote = m.kind == core::TreePlacement::Kind::Note;
+            p.isCollection = m.kind == core::TreePlacement::Kind::Collection;
+            p.parentId = m.parentId;
+            p.order = m.order;
+            all.append(p);
+        }
+        emit structureChanged(all);
+        return;
+    }
+
     // Atualiza o estado local antes do round-trip de persistência.
     for (const TreeNodePlacement &p : placements) {
         if (p.isCommand) {

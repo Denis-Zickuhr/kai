@@ -139,6 +139,7 @@ CommandEditorDialog::CommandEditorDialog(const QString &folderId,
     m_hooksEditor->setAllAvailableCommands(allHookCandidates);
     if (existingCommand) {
         m_hooksEditor->setHooks(existingCommand->hooks);
+        m_inheritHooksField->setChecked(existingCommand->inheritFolderHooks);
         m_conditionsEditor->setConditions(existingCommand->executionConditions);
         m_conditionsEditor->setCombinator(existingCommand->conditionCombinator);
         m_conditionsEditor->setSkipBehavior(existingCommand->conditionSkipBehavior);
@@ -340,8 +341,12 @@ void CommandEditorDialog::setupUi(const core::Command *existingCommand)
     }
 
     // Headers/autenticação herdados das pastas acima: recalcula quando a pasta destino muda.
-    connect(m_folderField, &FolderPickerWidget::selectionChanged, this, [this]() { refreshInheritedHttp(); });
+    connect(m_folderField, &FolderPickerWidget::selectionChanged, this, [this]() {
+        refreshInheritedHttp();
+        refreshInheritedHooks();
+    });
     refreshInheritedHttp();
+    refreshInheritedHooks();
 
     m_sideNav->setCurrentRow(0); // aba "Geral" selecionada por padrão
     outerLayout->addWidget(body, 1);
@@ -561,6 +566,7 @@ core::Command CommandEditorDialog::buildCommand() const
     command.cliWorkingDir = m_cliInvocationDirCheck && m_cliInvocationDirCheck->isChecked()
         ? core::CliWorkingDir::Invocation : core::CliWorkingDir::Default;
     command.hooks = m_hooksEditor->hooks();
+    command.inheritFolderHooks = !m_inheritHooksField || m_inheritHooksField->isChecked();
     command.executionConditions = m_conditionsEditor->conditions();
     command.conditionCombinator = m_conditionsEditor->combinator();
     command.conditionSkipBehavior = m_conditionsEditor->skipBehavior();

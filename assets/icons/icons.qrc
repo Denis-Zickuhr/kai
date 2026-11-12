@@ -22,6 +22,10 @@
     <file alias="box.svg">lucide/box.svg</file>
     <file alias="boxes.svg">lucide/boxes.svg</file>
     <file alias="braces.svg">lucide/braces.svg</file>
+    <file alias="brand-bash.svg">brands/bash.svg</file>
+    <file alias="brand-node.svg">brands/node.svg</file>
+    <file alias="brand-php.svg">brands/php.svg</file>
+    <file alias="brand-python.svg">brands/python.svg</file>
     <file alias="bug-off.svg">lucide/bug-off.svg</file>
     <file alias="bug-play.svg">lucide/bug-play.svg</file>
     <file alias="bug.svg">lucide/bug.svg</file>

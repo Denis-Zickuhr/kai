@@ -87,6 +87,11 @@ http_defaults:
   headers:
     - name: "Accept"
       value: "application/json"
+# Hooks that wrap EVERY command of the project, by command name (§9.1): the same shape as a command's `hooks`.
+hooks:
+  pre: ["Login"]
+# false = the project does not inherit the hooks of the folders above it. Default: true.
+inherit_hooks: false
 # The commands (§3).
 commands:
   - name: "Dev server"
@@ -106,6 +111,11 @@ folders:
       headers:
         - name: "X-Service"
           value: "backend"
+    # Same shape as the top-level `hooks` (§9.1): wrap every command of this subfolder and below.
+    hooks:
+      pre: ["Login"]
+    # false = this subfolder does not inherit the hooks of the folders above it. Default: true.
+    inherit_hooks: false
 ```
 
 Smallest useful file:
@@ -141,9 +151,14 @@ only gives an **already used** path an icon and/or CLI metadata:
   cli_path: "api"
   # Description shown by `--help` (default: none).
   cli_description: "API tools"
+  # Hooks that wrap every command of that subfolder and below, by command name (§9.1). Default: none.
+  hooks:
+    pre: ["Login"]
+  # false = do not inherit the hooks of the folders above. Default: true.
+  inherit_hooks: false
 ```
 
-Nothing else can be set on a subfolder from this file (no `env_vars`, `hidden`, `order`, …) besides `http_defaults`. Do
+Nothing else can be set on a subfolder from this file (no `env_vars`, `hidden`, `order`, …) besides `http_defaults`, `hooks` and `inherit_hooks`. Do
 not write `is_project` or `name` there.
 
 ---
@@ -232,6 +247,8 @@ the comment above it. Many combinations are exclusive (a KIP command cannot also
     pre: ["Login"]
     post: ["Notify"]
     cleanup: ["Teardown"]
+  # false = the command ignores the hooks defined on its folders (§9.1). Default: true.
+  inherit_folder_hooks: false
   # Guards that decide whether the command runs at all (§9.2).
   execution_conditions:
     - left: "{{TOKEN}}"
@@ -720,6 +737,13 @@ hooks:
 ```
 
 A name that matches no command in the file is ignored (never breaks the import). A KIP command cannot be a hook.
+
+**Hooks on folders.** The same `hooks:` block can sit at the top of the file (the whole project) and on a `folders:` entry
+(one subfolder): every command below it inherits them. `pre` runs from the outermost folder to the command; `post` and
+`cleanup` unwind from the command back out. To opt out, a subfolder (or the project) sets `inherit_hooks: false` — it
+then ignores the hooks of the folders above it but keeps its own — and a command sets `inherit_folder_hooks: false` to
+ignore all folder hooks. A command is never a hook of itself, so a folder hook that lives in that same folder does not run
+before itself.
 
 ### 9.2 Execution conditions
 

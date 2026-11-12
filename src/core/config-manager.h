@@ -9,6 +9,9 @@
 
 #include "core/ai-profile.h"
 #include "core/interpreter-settings.h"
+#include "core/identification-settings.h"
+#include "core/palette-usage.h"
+#include "core/tree-view.h"
 #include "core/kip-settings.h"
 #include "core/models.h"
 
@@ -108,6 +111,8 @@ struct SettingsData {
     int detachedWindowWidth = 0;
     int detachedWindowHeight = 0;
     QString globalHotkey = QStringLiteral("Ctrl+Shift+B");
+    // Atalho global OPCIONAL que abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela. Vazio = desligado.
+    QString paletteHotkey;
 
     // Iniciar visível: override da decisão de boot, independente do atalho global (cujo registro pode
     // falhar em WSL/WSLg ou por colisão, abrindo visível sem o usuário pedir). Default true; desligar
@@ -231,6 +236,8 @@ struct SettingsData {
 
     // Configurações → KIP (spec 11 §23), objeto "kip".
     KipSettings kip;
+    // Configurações → Identificação: quais chips visuais aparecem na árvore, objeto "identification".
+    IdentificationSettings identification;
     // Apps KIP com painel próprio que abrem com o Kai (ids de comando); entra ao pôr o app num painel,
     // sai pelo menu do painel ("Abrir com o Kai").
     QStringList kipPanelAutoStart;
@@ -254,6 +261,8 @@ public:
     QString notesFilePath() const;
     // Memória do leitor de documentos (posições, rascunhos, recentes) — ui::DocSessionStore.
     QString docUsageFilePath() const;
+    QString paletteUsageFilePath() const;
+    QString treeViewsFilePath() const;
     QString docStateFilePath() const;
     // Layout flexível da janela (zonas, painéis, flutuantes, perspectivas) — ui::layout::LayoutStore.
     // Estado pessoal: fora do settings.json e nunca no YAML do projeto.
@@ -306,6 +315,14 @@ public:
     // (fora de exportação e sync); ordena o menu de documentos por uso.
     QMap<QString, int> loadDocUsage();
     bool saveDocUsage(const QMap<QString, int> &usage);
+
+    // palette-usage.json: o que mais se usa na paleta (Ctrl+K), para subir na lista. Estado LOCAL, como o doc-usage.
+    PaletteUsage loadPaletteUsage();
+    bool savePaletteUsage(const PaletteUsage &usage);
+
+    // tree-views.json: as árvores extras do menu Exibir (core::TreeViewDef). Estado LOCAL e pessoal, como o layout.json.
+    QVector<TreeViewDef> loadTreeViews();
+    bool saveTreeViews(const QVector<TreeViewDef> &views);
 
     // --- Import/Export de configuração ---
     // O JSON exportado tem o cabeçalho {"kai_export": {"scope": ..., "version": 1}} para validação na importação.

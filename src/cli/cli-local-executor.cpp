@@ -27,15 +27,22 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QRegularExpression>
+#include <QSocketNotifier>
 #include <QTextStream>
+#include <QTimer>
 
 #include <algorithm>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
 #include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace kai::cli {
@@ -75,17 +82,48 @@ struct CliRunProfile {
 // Enquanto o comando herda o terminal, o Ctrl+C vai pro grupo de processos inteiro. O kai precisa
 // sobreviver a ele pra devolver o código de saída do comando. Handler no-op, não SIG_IGN: a disposição
 // "ignorada" seria herdada pelo filho, que também não pararia com Ctrl+C.
+// Só repassar o Ctrl+C deixava preso o comando que o ignora ou trava ao encerrar (só fechando o terminal). Por isso
+// escala: o 1º Ctrl+C é do comando; o 2º vira stop() (SIGTERM/SIGKILL na árvore) e o 3º forceStop() (SIGKILL). SIGTERM/
+// SIGHUP (kill de fora, terminal fechado) também escalam em vez de matar só o kai e deixar o comando órfão.
 class InterruptPassthroughGuard {
 public:
-    InterruptPassthroughGuard()
+    // `level`: 1 = parar com graça, 2 = forçar. Chamado na thread principal.
+    using Escalate = std::function<void(int level)>;
+
+    explicit InterruptPassthroughGuard(Escalate escalate)
+        : m_escalate(std::move(escalate))
     {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_target = this;
+        }
 #ifdef Q_OS_WIN
         ::SetConsoleCtrlHandler(&InterruptPassthroughGuard::onConsoleCtrl, TRUE);
 #else
+        if (::pipe(g_pipe) == 0) {
+            for (const int fd : g_pipe) {
+                ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+            }
+            m_notifier = std::make_unique<QSocketNotifier>(g_pipe[0], QSocketNotifier::Read);
+            QObject::connect(m_notifier.get(), &QSocketNotifier::activated, m_notifier.get(), [this]() {
+                char buffer[16];
+                ssize_t n = 0;
+                while ((n = ::read(g_pipe[0], buffer, sizeof(buffer))) > 0) {
+                    for (ssize_t i = 0; i < n; ++i) {
+                        press(buffer[i] == 't');
+                    }
+                }
+            });
+        }
         struct sigaction action {};
-        action.sa_handler = [](int) {};
+        action.sa_handler = [](int sig) {
+            const char byte = sig == SIGINT ? 'i' : 't';
+            [[maybe_unused]] const ssize_t n = ::write(g_pipe[1], &byte, 1);
+        };
         sigemptyset(&action.sa_mask);
-        ::sigaction(SIGINT, &action, &m_previous);
+        ::sigaction(SIGINT, &action, &m_previousInt);
+        ::sigaction(SIGTERM, &action, &m_previousTerm);
+        ::sigaction(SIGHUP, &action, &m_previousHup);
 #endif
     }
     ~InterruptPassthroughGuard()
@@ -93,20 +131,60 @@ public:
 #ifdef Q_OS_WIN
         ::SetConsoleCtrlHandler(&InterruptPassthroughGuard::onConsoleCtrl, FALSE);
 #else
-        ::sigaction(SIGINT, &m_previous, nullptr);
+        ::sigaction(SIGINT, &m_previousInt, nullptr);
+        ::sigaction(SIGTERM, &m_previousTerm, nullptr);
+        ::sigaction(SIGHUP, &m_previousHup, nullptr);
+        m_notifier.reset();
+        for (int &fd : g_pipe) {
+            if (fd >= 0) {
+                ::close(fd);
+                fd = -1;
+            }
+        }
 #endif
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_target = nullptr;
     }
     InterruptPassthroughGuard(const InterruptPassthroughGuard &) = delete;
     InterruptPassthroughGuard &operator=(const InterruptPassthroughGuard &) = delete;
 
 private:
+    // `termination`: SIGTERM/SIGHUP, que já pedem parar (nível 1 na primeira vez).
+    void press(bool termination)
+    {
+        m_presses = termination ? std::max(m_presses + 1, 2) : m_presses + 1;
+        if (m_presses >= 2) {
+            m_escalate(std::min(m_presses - 1, 2));
+        }
+    }
+
+    Escalate m_escalate;
+    int m_presses = 0;
+    inline static std::mutex g_mutex;
+    inline static InterruptPassthroughGuard *g_target = nullptr;
 #ifdef Q_OS_WIN
     static BOOL WINAPI onConsoleCtrl(DWORD type)
     {
-        return type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT;
+        if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT) {
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_target && QCoreApplication::instance()) {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+                std::lock_guard<std::mutex> inner(g_mutex);
+                if (g_target) {
+                    g_target->press(false);
+                }
+            }, Qt::QueuedConnection);
+        }
+        return TRUE;
     }
 #else
-    struct sigaction m_previous {};
+    inline static int g_pipe[2] = {-1, -1};
+    struct sigaction m_previousInt {};
+    struct sigaction m_previousTerm {};
+    struct sigaction m_previousHup {};
+    std::unique_ptr<QSocketNotifier> m_notifier;
 #endif
 };
 
@@ -480,7 +558,27 @@ LocalExecutionOutcome runCliPathAgainst(const QVector<core::Folder> &allFolders,
     {
         std::optional<InterruptPassthroughGuard> interruptGuard;
         if (inheritTerminal) {
-            interruptGuard.emplace();
+            interruptGuard.emplace([&pipeline, &loop, &result](int level) {
+                engine::ProcessRunner *runner = pipeline.activeProcessRunner();
+                err() << utils::tr(level >= 2 ? QStringLiteral("cli.interrupt.killing")
+                                              : QStringLiteral("cli.interrupt.stopping")) << "\n";
+                err().flush();
+                if (runner && runner->isRunning()) {
+                    if (level >= 2) {
+                        runner->forceStop();
+                    } else {
+                        runner->stop();
+                    }
+                }
+                if (level >= 2) {
+                    // Rede de segurança: sai mesmo que o término do comando não chegue (130 = interrompido).
+                    QTimer::singleShot(1500, &loop, [&loop, &result]() {
+                        result.success = false;
+                        result.exitCode = 130;
+                        loop.quit();
+                    });
+                }
+            });
         }
         pipeline.run(*command, allCommandsById, envManager);
         loop.exec();

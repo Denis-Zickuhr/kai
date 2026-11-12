@@ -15,6 +15,16 @@ using namespace kai::ui;
 class TestTerminalDrawerResize : public QObject {
     Q_OBJECT
 
+    // O texto de todas as vistas de texto do painel (o painel tem mais de um QPlainTextEdit: saída, corpo da requisição...).
+    static QString allText(const TerminalDrawer &drawer)
+    {
+        QString text;
+        for (const QPlainTextEdit *edit : drawer.findChildren<QPlainTextEdit *>()) {
+            text += edit->toPlainText();
+        }
+        return text;
+    }
+
 private slots:
     void textEditVerticalPolicyIsExpandingNotFixed()
     {
@@ -25,6 +35,85 @@ private slots:
 
         QCOMPARE(textEdit->sizePolicy().verticalPolicy(), QSizePolicy::Expanding);
         QVERIFY(textEdit->maximumHeight() >= QWIDGETSIZE_MAX - 1);
+    }
+
+    // A sessão de texto sabe quanto do log do comando já tem (o MainWindow compara com o log guardado) e `clear()` zera.
+    void sessionTracksHowMuchOfTheLogItHasAndClearResetsIt()
+    {
+        TerminalDrawer drawer;
+        drawer.setCurrentCommandId(QStringLiteral("cmd"));
+        drawer.markShown(10, 3);
+        QCOMPARE(drawer.shownTotal(), qint64(10));
+        QCOMPARE(drawer.sessionGeneration(), 3);
+        drawer.appendRawText(QStringLiteral("abcde\n")); // texto do log soma ao ser aplicado
+        drawer.flushPendingOutput();
+        QCOMPARE(drawer.shownTotal(), qint64(16));
+        drawer.appendNotice(QStringLiteral("aviso do Kai\n")); // um aviso aparece, mas não é do log
+        drawer.flushPendingOutput();
+        QCOMPARE(drawer.shownTotal(), qint64(16));
+        drawer.clear();
+        QCOMPARE(drawer.shownTotal(), qint64(0));
+    }
+
+    // O texto de cada comando fica montado: trocar não reimprime, e voltar encontra o que era dele.
+    void sessionsKeepEachCommandsTextWhenSwitching()
+    {
+        TerminalDrawer drawer;
+        drawer.setCurrentCommandId(QStringLiteral("a"));
+        drawer.appendRawText(QStringLiteral("AAA\n"));
+        drawer.flushPendingOutput();
+        drawer.setCurrentCommandId(QStringLiteral("b"));
+        QVERIFY(!drawer.hasSessionFor(QStringLiteral("zzz")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("AAA"))); // a tela de b começa sem o texto de a
+        drawer.appendRawText(QStringLiteral("BBB\n"));
+        drawer.flushPendingOutput();
+        QVERIFY(allText(drawer).contains(QStringLiteral("BBB")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("AAA")));
+
+        drawer.setCurrentCommandId(QStringLiteral("a"));
+        QVERIFY(allText(drawer).contains(QStringLiteral("AAA")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("BBB")));
+        QVERIFY(drawer.hasSessionFor(QStringLiteral("b")));
+    }
+
+    // A fila de saída pendente era do comando que saiu: não vaza para o novo.
+    void pendingOutputOfThePreviousCommandIsNotAppliedToTheNewOne()
+    {
+        TerminalDrawer drawer;
+        drawer.setCurrentCommandId(QStringLiteral("a"));
+        drawer.appendRawText(QStringLiteral("DO_A\n")); // ainda na fila (timer de 16 ms)
+        drawer.setCurrentCommandId(QStringLiteral("b"));
+        drawer.flushPendingOutput();
+        QVERIFY(!allText(drawer).contains(QStringLiteral("DO_A")));
+    }
+
+    // Mais de 6 comandos: o mais antigo sai, sem derrubar os recentes.
+    void onlyTheMostRecentSessionsAreKept()
+    {
+        TerminalDrawer drawer;
+        for (int i = 0; i < 9; ++i) {
+            drawer.setCurrentCommandId(QStringLiteral("cmd%1").arg(i));
+        }
+        QVERIFY(!drawer.hasSessionFor(QStringLiteral("cmd0")));
+        QVERIFY(drawer.hasSessionFor(QStringLiteral("cmd8")));
+        QVERIFY(drawer.hasSessionFor(QStringLiteral("cmd3")));
+    }
+
+    // Um texto enorme entra em fatias, na ordem, e a sessão conta tudo o que foi aplicado.
+    void hugeTextIsAppliedInSlicesAndKeepsOrder()
+    {
+        TerminalDrawer drawer;
+        drawer.show();
+        QString text;
+        for (int i = 0; i < 20000; ++i) {
+            text += QStringLiteral("line %1\n").arg(i);
+        }
+        drawer.appendRawText(text);
+        drawer.flushPendingOutput(); // só a primeira fatia: o resto vem nas voltas do laço de eventos
+        QVERIFY(drawer.shownTotal() < qint64(text.size()));
+        QTest::qWait(400);
+        QCOMPARE(drawer.shownTotal(), qint64(text.size()));
+        QVERIFY(allText(drawer).contains(QStringLiteral("line 19999")));
     }
 
     // Regressão: a Saída mudava de tamanho sozinha. MainWindow chama setExpanded(true) a cada execução, mesmo já

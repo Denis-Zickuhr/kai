@@ -14,6 +14,7 @@
 #include <memory>
 
 #include "core/config-manager.h"
+#include "ui/features/output/quick-run-popup.h"
 #include "core/environment-manager.h"
 #include "core/run-history.h"
 #include "core/notification-history.h"
@@ -45,6 +46,7 @@
 
 class QHotkey;
 class QSplitter;
+class QMenu;
 class QShortcut;
 class QStackedWidget;
 class QTimer;
@@ -63,7 +65,6 @@ class ExternalRunSession;
 class AiChatWindow;
 class MainWindowAgentHost;
 class McpBridge;
-class QuickRunPopup;
 class RunMirrorPanel;
 class DocSessionStore;
 class DocumentPanel;
@@ -214,6 +215,8 @@ private slots:
     void exportNote(const QString &noteId, core::NoteFileAction action, const QString &content);
     // A saída guardada de um comando vira uma nota (na pasta dele), sem abrir nada além dela.
     void saveOutputAsNote(const QString &commandId);
+    // Esquece o que a janela guardou da saída de um comando (log, resposta HTTP, motivo de "pulado"): a lixeira da Saída.
+    void discardStoredOutput(const QString &commandId);
     QString plainLogFor(const QString &commandId) const;
     void handleNoteActivated(const QString &noteId);
     void handleNoteSelected(const QString &noteId);
@@ -310,6 +313,19 @@ private:
     void setupLayout();
     void registerPanelViews();
     void registerRunViews();
+    // Árvores extras de comandos (Exibir → Commands ▸): `tree:<id>`, definidas em tree-views.json.
+    void registerTreeViews();
+    QWidget *createTreePanel(const QString &treeId);
+    void wireExtraTree(CommandTreeWidget *tree);
+    void populateTreesMenu(QMenu *menu);
+    void newTreeView();
+    void editTreeView(const QString &treeId);
+    void persistTreeViews();
+    // Os grupos de ações (Execução, Exibição, Item) de uma árvore extra: cópias dos da principal, ligadas aos mesmos
+    // tratadores (a seleção do usuário na extra é espelhada na principal). Devolve a barra, ou nulo se todos estão ocultos.
+    class ActionGroupContainer *buildExtraTreeBars(CommandTreeWidget *tree, QWidget *parent);
+    // Leva a seleção atual (tipo, execução, oculto) aos botões das barras das árvores extras.
+    void syncExtraBars();
     void restoreLayoutFromDisk();
     // Painéis de UM comando: o espelho vivo de uma execução (`run:<id>`) e o comando KIP fixado (`kip:<id>`). Recebem log,
     // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
@@ -459,8 +475,15 @@ private:
     QuickRunPopup *preparedQuickRun();
     QuickRunPopup *m_quickRun = nullptr;
     // Ctrl+K: a mesma janelinha do "+", mas com comandos, pastas, notas, ambientes e ações.
-    void showCommandPalette();
+    void showCommandPalette(bool standalone = false);
+    // Atalho global da paleta (settings.paletteHotkey): abre a paleta mesmo com o Kai oculto, só ela, sem trazer a janela.
+    void showCommandPaletteFromHotkey();
     void runPaletteAction(const QString &actionId);
+    // Ações inline da paleta (editar, duplicar, mostrar na lista) sobre um item.
+    void runPaletteEntryAction(QuickRunPopup::Kind kind, const QString &id, const QString &actionId);
+    // Conta um uso na paleta (sobe o item na lista) e grava palette-usage.json numa thread, sem pressa.
+    void recordPaletteUse(QuickRunPopup::Kind kind, const QString &id);
+    QString paletteUsageKey(QuickRunPopup::Kind kind, const QString &id) const;
     void revealInTree(const QString &itemId, const std::function<void()> &fallback);
     void showCommandInTree(const QString &commandId);
     QString folderPathOf(const QString &folderId) const;
@@ -475,6 +498,17 @@ private:
     QString m_docFolderId;
     QMap<QString, int> m_docUsage; // id da pasta -> vezes que a documentação dela foi aberta (doc-usage.json)
     QTimer *m_docUsageSaveTimer = nullptr;
+    QVector<core::TreeViewDef> m_treeViews; // tree-views.json: as árvores extras
+    struct ExtraTreeBars {
+        QPointer<CommandTreeWidget> tree;
+        QPointer<class ActionSidebar> exec;
+        QPointer<class ExpandCollapseBar> display;
+        QPointer<class ItemActionsBar> item;
+    };
+    QVector<ExtraTreeBars> m_extraBars;
+    core::PaletteUsage m_paletteUsage; // palette-usage.json: o que mais se usa na paleta (Ctrl+K)
+    QTimer *m_paletteUsageSaveTimer = nullptr;
+    bool m_paletteUsageSaving = false;
     bool m_docUsageSaving = false;
     DocumentPanel *m_documentPanel = nullptr;
     // O painel Variáveis (a tela de ambientes embutida) e o aviso de que a gravação veio dele (não recarregar a lista).
@@ -546,6 +580,9 @@ private:
     // Grava e aplica as configurações como o diálogo faz, sem diálogo (ferramentas de configuração da IA).
     bool applySettingsFromAgent(const core::SettingsData &settings, QString &error);
     QString resolveTargetFolderId() const;
+    // Criação pelo menu de contexto: roda `create` com a pasta clicada como destino (em vez de a seleção).
+    void withCreationTarget(const QString &folderId, const std::function<void()> &create);
+    QString m_explicitCreateFolderId;
     // Id único para pasta nova: nomes iguais geram o mesmo slug e ids repetidos colidem nos lookups (árvore, herança
     // de env_vars). Anexa sufixo numérico até achar um livre.
     QString uniqueFolderId(const QString &candidate) const;
@@ -602,6 +639,9 @@ private:
     QSet<QString> m_failedCommandIds;
     QMap<QString, QString> m_backgroundProcessLogs;
     QMap<QString, QString> m_commandLogs;
+    QHash<QString, int> m_commandLogGeneration; // muda quando a execução refaz o log (invalida a sessão de texto montada)
+    QHash<QString, qint64> m_commandLogTotal; // caracteres já acrescentados ao log de cada comando (zera com o log novo)
+    QHash<QString, int> m_commandLogDroppedLines; // linhas do começo que o teto do log guardado já descartou
     // "Abrir último link" em terminal interativo: o processo nunca termina com sucesso, então a URL é checada a cada
     // chunk de saída (handlePipelineLog) e a primeira abre uma vez por execução.
     QSet<QString> m_openedLastLinkForRun;
@@ -709,6 +749,8 @@ private:
 
     QSystemTrayIcon *m_trayIcon = nullptr;
     std::unique_ptr<QHotkey> m_globalHotkey;
+    // Segundo atalho global, opcional (settings.paletteHotkey): abre a paleta Ctrl+K de fora do Kai.
+    std::unique_ptr<QHotkey> m_paletteHotkey;
     ProcessListDialog *m_processListDialog = nullptr;
 
     // Borda da janela frameless sob o cursor (0 = interior); `kResizeMargin` é a largura da faixa sensível.

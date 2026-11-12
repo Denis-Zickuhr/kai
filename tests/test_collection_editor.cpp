@@ -80,7 +80,7 @@ private slots:
         folders << f;
 
         CollectionEditorDialog dialog(col, folders);
-        auto *combo = dialog.findChild<QComboBox *>();
+        auto *combo = dialog.findChild<QComboBox *>(QStringLiteral("collectionEditorFolderCombo"));
         QVERIFY(combo != nullptr);
         QCOMPARE(combo->count(), 2);
         QCOMPARE(combo->currentData().toString(), QStringLiteral("f1"));

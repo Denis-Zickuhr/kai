@@ -208,6 +208,7 @@ void CollectionEditorDialog::buildGeneralTab()
     grid->addWidget(wrapWithLabel(identityCard, utils::tr(QStringLiteral("collection.field.icon")), m_iconPicker), 0, 1);
 
     m_folderCombo = new FolderPickerWidget(identityCard);
+    m_folderCombo->setObjectName(QStringLiteral("collectionEditorFolderCombo")); // estável: os testes não assumem "o primeiro combo"
     capComboBoxWidth(m_folderCombo);
     m_folderCombo->setFolders(foldersInTreeOrder(m_folders));
     m_folderCombo->enableNoneOption(utils::tr(QStringLiteral("collection.folder.root")));

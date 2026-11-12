@@ -15,6 +15,16 @@ using namespace kai::ui;
 class TestTerminalDrawerResize : public QObject {
     Q_OBJECT
 
+    // O texto de todas as vistas de texto do painel (o painel tem mais de um QPlainTextEdit: saída, corpo da requisição...).
+    static QString allText(const TerminalDrawer &drawer)
+    {
+        QString text;
+        for (const QPlainTextEdit *edit : drawer.findChildren<QPlainTextEdit *>()) {
+            text += edit->toPlainText();
+        }
+        return text;
+    }
+
 private slots:
     void textEditVerticalPolicyIsExpandingNotFixed()
     {
@@ -49,22 +59,20 @@ private slots:
     void sessionsKeepEachCommandsTextWhenSwitching()
     {
         TerminalDrawer drawer;
-        auto *edit = drawer.findChild<QPlainTextEdit *>();
-        QVERIFY(edit != nullptr);
         drawer.setCurrentCommandId(QStringLiteral("a"));
         drawer.appendRawText(QStringLiteral("AAA\n"));
         drawer.flushPendingOutput();
         drawer.setCurrentCommandId(QStringLiteral("b"));
         QVERIFY(!drawer.hasSessionFor(QStringLiteral("zzz")));
-        QVERIFY(edit->toPlainText().trimmed().isEmpty()); // a tela de b começa vazia
+        QVERIFY(!allText(drawer).contains(QStringLiteral("AAA"))); // a tela de b começa sem o texto de a
         drawer.appendRawText(QStringLiteral("BBB\n"));
         drawer.flushPendingOutput();
-        QVERIFY(edit->toPlainText().contains(QStringLiteral("BBB")));
-        QVERIFY(!edit->toPlainText().contains(QStringLiteral("AAA")));
+        QVERIFY(allText(drawer).contains(QStringLiteral("BBB")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("AAA")));
 
         drawer.setCurrentCommandId(QStringLiteral("a"));
-        QVERIFY(edit->toPlainText().contains(QStringLiteral("AAA")));
-        QVERIFY(!edit->toPlainText().contains(QStringLiteral("BBB")));
+        QVERIFY(allText(drawer).contains(QStringLiteral("AAA")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("BBB")));
         QVERIFY(drawer.hasSessionFor(QStringLiteral("b")));
     }
 
@@ -72,13 +80,11 @@ private slots:
     void pendingOutputOfThePreviousCommandIsNotAppliedToTheNewOne()
     {
         TerminalDrawer drawer;
-        auto *edit = drawer.findChild<QPlainTextEdit *>();
-        QVERIFY(edit != nullptr);
         drawer.setCurrentCommandId(QStringLiteral("a"));
         drawer.appendRawText(QStringLiteral("DO_A\n")); // ainda na fila (timer de 16 ms)
         drawer.setCurrentCommandId(QStringLiteral("b"));
         drawer.flushPendingOutput();
-        QVERIFY(!edit->toPlainText().contains(QStringLiteral("DO_A")));
+        QVERIFY(!allText(drawer).contains(QStringLiteral("DO_A")));
     }
 
     // Mais de 6 comandos: o mais antigo sai, sem derrubar os recentes.
@@ -107,9 +113,7 @@ private slots:
         QVERIFY(drawer.shownTotal() < qint64(text.size()));
         QTest::qWait(400);
         QCOMPARE(drawer.shownTotal(), qint64(text.size()));
-        auto *edit = drawer.findChild<QPlainTextEdit *>();
-        QVERIFY(edit != nullptr);
-        QVERIFY(edit->toPlainText().contains(QStringLiteral("line 19999")));
+        QVERIFY(allText(drawer).contains(QStringLiteral("line 19999")));
     }
 
     // Regressão: a Saída mudava de tamanho sozinha. MainWindow chama setExpanded(true) a cada execução, mesmo já

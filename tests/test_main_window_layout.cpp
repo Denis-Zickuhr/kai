@@ -169,6 +169,11 @@ private slots:
         QAction *commands = actionTitled(menu, commandsTitle);
         QVERIFY(output != nullptr);
         QVERIFY(commands != nullptr);
+        // A linha de Commands é um submenu (setinha das árvores extras): o primeiro item dele abre/fecha o painel.
+        if (commands->menu()) {
+            QVERIFY(!commands->menu()->actions().isEmpty());
+            commands = commands->menu()->actions().first();
+        }
         QVERIFY(output->isCheckable() && output->isChecked());
         QVERIFY(commands->isChecked());
 

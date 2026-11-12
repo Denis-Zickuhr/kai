@@ -417,6 +417,10 @@ private slots:
             view.appendText(chunk);
             QCoreApplication::processEvents();
         }
+        // Um lote grande entra em fatias (carga preguiçosa): espera o fim da fila antes de contar.
+        for (int i = 0; i < 400 && !view.isLoaded(); ++i) {
+            QTest::qWait(20);
+        }
         QCOMPARE(view.logModel()->rowCount(), kLines);
         QVERIFY2(timer.elapsed() < 8000, qPrintable(QStringLiteral("%1 ms").arg(timer.elapsed())));
     }

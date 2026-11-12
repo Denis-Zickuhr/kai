@@ -52,12 +52,24 @@ private slots:
             }
             return false;
         };
+        // O processo teimoso de verdade: o `exec -a` o deixa com o marcador como argv[0]. O `bash -c '...marcador...'` externo
+        // também tem o marcador no TEXTO da linha de comando, então esperar por "qualquer um" deixava o stop() disparar antes de
+        // o teimoso existir (o snapshot da árvore o perdia e ele escapava): corrida do teste, não do runner.
+        const auto stubbornStarted = [&marker]() {
+            for (const QString &entry : QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                QFile cmd(QStringLiteral("/proc/%1/cmdline").arg(entry));
+                if (cmd.open(QIODevice::ReadOnly) && cmd.readAll().startsWith(marker.toUtf8())) {
+                    return true;
+                }
+            }
+            return false;
+        };
         {
             auto *runner = new ProcessRunner;
             runner->setKillTimeoutMs(600);
             runner->start(QStringLiteral("setsid bash -c 'trap \"\" INT TERM; exec -a %1 sleep 30' & sleep 30").arg(marker),
                           QString(), {});
-            QTRY_VERIFY_WITH_TIMEOUT(alive(), 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(stubbornStarted(), 5000);
             runner->stop();
             delete runner; // os timers do runner morrem aqui; a escalada tem de continuar sozinha
         }

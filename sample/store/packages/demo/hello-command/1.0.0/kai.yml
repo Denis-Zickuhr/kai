@@ -1,0 +1,6 @@
+project_name: "Hello command"
+icon: "terminal"
+commands:
+  - name: "Hello"
+    type: "command"
+    command: "echo hello from the Kai Store"

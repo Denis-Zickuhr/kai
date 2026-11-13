@@ -69,6 +69,7 @@ public:
     // Faz desta instância uma árvore filtrada: só o que a definição deixa passar. Chamar antes de addFollower.
     void setView(const core::TreeViewDef &view);
     bool isFiltered() const { return m_view.has_value(); }
+    const core::TreeViewDef *viewDef() const { return m_view ? &*m_view : nullptr; }
 
     // Id da pasta padrão sintética ("Geral") que hospeda órfãos (folderId vazio ou inexistente);
     // não persistida. Exposta para o MainWindow tratar a exclusão dessa aba.
@@ -192,11 +193,23 @@ public:
     // Ativa a aba que contém o comando `id` e o seleciona (a Saída acompanha a
     // seleção). false se o comando não existe ou está oculto. Usado pelo
     // histórico de notificações ("ir para o comando").
-    bool selectCommand(const QString &id) { return selectItemById(id); }
+    // A árvore ativa é a dona das marcas de foco: a que o usuário usou por último (a principal, por omissão).
+    bool isActiveTree() const { return ownsFocusMarks(); }
+    // `claim` falso: seleciona sem tornar esta a árvore ativa (a seleção encaminhada de uma árvore extra).
+    bool selectCommand(const QString &id, bool claim = true)
+    {
+        const bool selected = selectItemById(id, !claim);
+        if (selected && claim) {
+            claimFocusMarks(); // seleção programática (paleta, "ir para") também passa a ser a visível
+        }
+        return selected;
+    }
     // Pasta RAIZ não é um item da árvore, é uma aba: ativa essa aba e tira a seleção de dentro dela.
     bool showRootTab(const QString &rootFolderId);
 
 signals:
+    // Esta árvore passou a ser (ou deixou de ser) a ativa: as barras de ação só valem para a ativa.
+    void activeTreeChanged();
     void commandActivated(const QString &commandId);
     void editRequested(const QString &itemId, bool isFolder);
     void deleteRequested(const QString &itemId, bool isFolder);
@@ -311,7 +324,11 @@ private:
     // Estado de UI preservado entre reconstruções (rebuildTabs): ids de pastas expandidas e seleção por id.
     QSet<QString> collectExpandedIds() const;
     void restoreExpandedIds(const QSet<QString> &expandedIds);
-    bool selectItemById(const QString &id);
+    // `mirror`: seleção espelhada de uma árvore extra. Não troca a aba visível desta árvore (o usuário não mexeu nela): o item
+    // fica atual na árvore onde ele está, e as consultas de seleção passam a olhar para ela (selectionTree).
+    bool selectItemById(const QString &id, bool mirror = false);
+    QTreeWidget *selectionTree() const;
+    QPointer<QTreeWidget> m_mirrorTree;
     static QString formatCommandLabel(const core::Command &command);
     static QString rootIdForFolder(const core::Folder &folder,
                                    const QMap<QString, core::Folder> &foldersById);
@@ -319,6 +336,13 @@ private:
     QTabWidget *m_tabWidget = nullptr;
     QMap<QString, QTreeWidget *> m_treesByRootId;
     QVector<QPointer<CommandTreeWidget>> m_followers;
+    // Com mais de uma árvore mostrando o mesmo comando, as marcas de foco (saída mostrada, ação em foco) valem só na árvore
+    // em que o usuário agiu por último (ou na principal, se nenhuma foi tocada), não nas duas ao mesmo tempo.
+    static inline QPointer<CommandTreeWidget> s_markOwner;
+    bool ownsFocusMarks() const;
+    // Os botões na linha desta árvore: a escolha dela (ligar/desligar) ou, em "herdar", a configuração global.
+    bool effectiveInlineActions() const;
+    void claimFocusMarks();
     QString m_creationTargetId; // pasta onde o menu de contexto foi aberto; vai com os sinais de criação
     std::optional<core::TreeViewDef> m_view; // árvore extra: o que ela mostra
     core::TreeData m_raw;                    // árvore extra: o conjunto completo (m_folders... guardam o filtrado)

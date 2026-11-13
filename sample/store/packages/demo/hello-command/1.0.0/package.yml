@@ -1,0 +1,15 @@
+package_format: 1
+id: "demo/hello-command"
+kind: "command"
+version: "1.0.0"
+name: "Hello command"
+description:
+  en: "A single command that says hello."
+  pt: "Um comando que diz olá."
+category: "demo"
+tags: ["demo"]
+author: "Kai samples"
+license: "MIT"
+files:
+  - path: "kai.yml"
+    sha256: "90ecfeaf2dcdb321b955714c1786e6cc9833951dc524838ed90ac9e3da8f0e09"

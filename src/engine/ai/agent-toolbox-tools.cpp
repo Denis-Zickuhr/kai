@@ -361,8 +361,9 @@ void AgentToolbox::buildTools()
 
     add(QStringLiteral("read_manifesto"),
         QStringLiteral("Read the Kai reference by section. document: kai (the kai.yml format), kip (interactive protocol), "
-                       "icons (valid icon names) or schema (JSON Schema definitions). Without 'section' it lists the sections."),
-        objectSchema({{QStringLiteral("document"), prop(QStringLiteral("string"), QStringLiteral("kai, kip, icons or schema."))},
+                       "icons (valid icon names), schema (JSON Schema definitions) or store (how to create a Kai Store: layout, "
+                       "package.yml, publishing, signing). Without 'section' it lists the sections."),
+        objectSchema({{QStringLiteral("document"), prop(QStringLiteral("string"), QStringLiteral("kai, kip, icons, schema or store."))},
                       {QStringLiteral("section"), prop(QStringLiteral("string"), QStringLiteral("Section id from the list, e.g. 3.1."))},
                       {QStringLiteral("offset"), prop(QStringLiteral("integer"), QStringLiteral("Character offset for long sections."))}},
                      {QStringLiteral("document")}),

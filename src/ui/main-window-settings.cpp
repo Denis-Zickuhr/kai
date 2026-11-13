@@ -1,6 +1,8 @@
 
 
 #include "ui/main-window.h"
+#include "core/store-local.h"
+#include "ui/features/store/store-window.h"
 
 #include "ui/layout/dock-host.h"
 #include "ui/layout/layout-controller.h"
@@ -224,6 +226,13 @@ void MainWindow::handleSettingsRequested()
         }
         refreshAiAvailability();
     }
+    if (dialog.storeProvidersChanged()) {
+        if (!core::StoreLocalState(m_configManager.configDirPath()).saveProviders(dialog.buildStoreProviders())) {
+            QMessageBox::warning(this, utils::tr(QStringLiteral("mainwindow.settings.title")),
+                utils::tr(QStringLiteral("mainwindow.settings.save_failed")));
+        }
+        refreshStoreAvailability();
+    }
     core::setKipSettings(newSettings.kip);
     const bool identificationChanged = !(newSettings.identification == currentSettings.identification);
     core::setIdentificationSettings(newSettings.identification);
@@ -326,6 +335,36 @@ void MainWindow::applyActiveEnvironment()
     if (m_environmentsPanel && !m_savingEnvironmentsFromPanel) {
         m_environmentsPanel->setData(settings.environments, settings.activeEnvironmentId);
     }
+}
+
+bool MainWindow::anyStoreProviderEnabled() const
+{
+    for (const core::StoreProviderConfig &p : core::StoreLocalState(m_configManager.configDirPath()).loadProviders()) {
+        if (p.enabled) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MainWindow::refreshStoreAvailability()
+{
+    m_storeAvailable = anyStoreProviderEnabled();
+    // Sem provedor o painel da Store deixa de existir.
+    if (m_dock) {
+        m_dock->revalidate();
+    }
+    if (m_storeWindow) {
+        m_storeWindow->setProviders(core::StoreLocalState(m_configManager.configDirPath()).loadProviders());
+    }
+}
+
+void MainWindow::showStore()
+{
+    if (!m_storeAvailable) {
+        return;
+    }
+    m_layoutController->focusView(layout::view_id::kStore);
 }
 
 void MainWindow::refreshAiAvailability()

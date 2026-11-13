@@ -82,6 +82,7 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
         m_expandCollapseBar->setSelectedHidden(hasSelection && isHidden);
     }
     syncExtraBars();
+    syncPrimaryBars();
     // Sem o foco inteligente, navegar só muda o alvo das ações. O mesmo vale para o item que a árvore reconstruída
     // selecionou de novo (ver m_restoredSelectionId).
     if (!m_smartFocus || (hasSelection && itemId == m_restoredSelectionId)) {
@@ -224,6 +225,7 @@ void MainWindow::updateRunningCommandStatus()
         }
     }
     syncExtraBars();
+    syncPrimaryBars();
     refreshCommandActionStrips();
     // O título da janela destacada reflete o comando de origem, mesmo com outro selecionado.
     if (m_terminalDrawer->hasDetachedWindow()) {

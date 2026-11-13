@@ -1,0 +1,39 @@
+package_format: 1
+id: "demo/ship-to-staging"
+kind: "pipeline"
+version: "1.0.0"
+name: "Ship to staging"
+description:
+  en: "Checks, tests, build and deploy as a guided pipeline (fake scripts)."
+  pt: "Checagens, testes, build e deploy como pipeline guiado (scripts de mentira)."
+category: "demo"
+tags: ["deploy", "pipeline"]
+author: "Kai samples"
+license: "MIT"
+kai:
+  requires: ["pipelines"]
+needs: ["git"]
+secrets: ["DEPLOY_TOKEN"]
+files:
+  - path: "kai.yml"
+    sha256: "9d87b15de4f7257d425b24acc394742e0312bfdc04cc385d33cb6e58c4c0f02c"
+  - path: "scripts/announce.sh"
+    sha256: "e31477df591898de90eec6272c4d2e1d64515e92e48d1c2a82feebe991489b38"
+  - path: "scripts/build.sh"
+    sha256: "8304c55c924f14c7e9594bf4f80675a3e68711cb3429854c40e63995437aea53"
+  - path: "scripts/deploy.sh"
+    sha256: "cfcc3e5cf0edeb492b79f43fffdcbee3aa69d87e945071b5ed3e2a94addbf105"
+  - path: "scripts/git-clean.sh"
+    sha256: "e1680c5ff423ce4254b4882c85fd458751c4ea04e3d0ca42510673323d5386af"
+  - path: "scripts/health.sh"
+    sha256: "4c3886497f0fbd7900f2e8ba53143e1bdaa8415b7e23a6fc2ba025224a3f5224"
+  - path: "scripts/is-built.sh"
+    sha256: "f80c55d4c32895ff9fe8ce72769dea85dc4373609d2602a61ebbf9e5e3c62d48"
+  - path: "scripts/reset.sh"
+    sha256: "7f0425797964f5264103ade0c76121747e26055feff6c9c093ce7273c26c44f6"
+  - path: "scripts/rollback.sh"
+    sha256: "c94242c56b431a5d47b8729528a02e93b956fdd907d0357927c0435bcf213859"
+  - path: "scripts/smoke.sh"
+    sha256: "392feafc5860e92991374c03aa56b95c5478a8f8424f29c1c4e3f3f1498d2350"
+  - path: "scripts/tests.sh"
+    sha256: "25cdb6ee62c5d6feced7241cd1e180c3d9c647685d8d6371177021c61f57f2a3"

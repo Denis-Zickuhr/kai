@@ -10,6 +10,7 @@ network requests that you configure or trigger.
 |---|---|---|
 | **HTTP commands** | The URL you wrote (through the proxy you set, or the system one) | When you run the command, or a schedule/hook you set up runs it |
 | **AI assistant** (optional, off until you add a provider) | The provider you configured (Anthropic, OpenAI, Google, OpenRouter, a local Ollama/LM Studio, or any compatible address) | Only inside a conversation or editor request you started, or an agent you connected. **List models** and **Test connection** also call the provider, on click |
+| **Store** (off until you add a provider) | The provider you added (a Git host, a catalog address or an API), plus the Git host for packages that are cloned | Only when you open the Store, click **Refresh** or install from it. A token, if you set one, goes only to that provider's host |
 | **Your own commands** | Whatever they do (`curl`, `git`, a script…) | When you run them |
 | **Links** | Your browser | When you click a link or turn on "open last link" for a command |
 

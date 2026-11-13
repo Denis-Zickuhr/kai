@@ -20,12 +20,25 @@ struct TreeViewDef {
     bool runningOnly = false;
     bool showHidden = false;
     QString query;          // busca fixa (fuzzy), a mesma da árvore principal
+    // AÇÕES desta árvore. "auto" (padrão): só o que serve ao que ela mostra (uma árvore só de notas não ganha Executar);
+    // "all": tudo, como a principal; "custom": os grupos de `actionGroups` ("exec", "display", "item").
+    QString actionsMode = QStringLiteral("auto");
+    QStringList actionGroups;
+    // Botões na própria linha: "inherit" (a configuração global), "on" ou "off"; `inlineKinds` limita quais
+    // ("play", "stop", "reset", "edit", "output", "document"); vazio = todos.
+    QString inlineActions = QStringLiteral("inherit");
+    QStringList inlineKinds;
 
     bool operator==(const TreeViewDef &other) const = default;
 
     QJsonObject toJson() const;
     static TreeViewDef fromJson(const QJsonObject &obj);
     static QStringList allTypes();
+    static QStringList allActionGroups();
+    static QStringList allInlineKinds();
+    // A árvore mostra algo que se executa (comando, HTTP, pipeline)?
+    bool showsRunnables() const;
+    bool showsType(const QString &type) const;
 };
 
 // Os quatro tipos de item que a árvore mostra, de uma vez.

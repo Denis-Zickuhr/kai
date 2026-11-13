@@ -134,6 +134,14 @@ add_library(kai-core ${KAI_LIB_TYPE}
     src/core/models.cpp
     src/core/pipeline-model.h
     src/core/pipeline-model.cpp
+    src/core/store-model.h
+    src/core/store-model.cpp
+    src/core/store-preview.h
+    src/core/store-preview.cpp
+    src/core/store-local.h
+    src/core/store-local.cpp
+    src/core/store-texts.h
+    src/core/store-texts.cpp
     src/core/note-files.h
     src/core/note-files.cpp
     src/core/config-manager.h
@@ -266,6 +274,18 @@ endif()
 add_library(kai-engine ${KAI_LIB_TYPE}
     src/engine/process-runner.h
     src/engine/process-runner.cpp
+    src/engine/store-source.h
+    src/engine/store-source.cpp
+    src/engine/store-git.h
+    src/engine/store-git.cpp
+    src/engine/store-client.h
+    src/engine/store-client.cpp
+    src/engine/store-installer.h
+    src/engine/store-installer.cpp
+    src/engine/store-signature.h
+    src/engine/store-signature.cpp
+    src/engine/store-publisher.h
+    src/engine/store-publisher.cpp
     src/engine/process-manager.h
     src/engine/process-manager.cpp
     src/engine/http-runner.h
@@ -720,6 +740,15 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/main-window-processes.cpp
     src/ui/main-window-pipelines.cpp
     src/ui/main-window-project-import.cpp
+    src/ui/main-window-store.cpp
+    src/ui/features/store/store-provider-dialog.h
+    src/ui/features/store/store-provider-dialog.cpp
+    src/ui/features/store/store-preview-dialog.h
+    src/ui/features/store/store-preview-dialog.cpp
+    src/ui/features/store/store-window.h
+    src/ui/features/store/store-window.cpp
+    src/ui/features/settings/tabs/store-tab.h
+    src/ui/features/settings/tabs/store-tab.cpp
     src/ui/main-window-run.cpp
     src/ui/main-window-selection.cpp
     src/ui/main-window-settings.cpp
@@ -741,6 +770,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/shared/item-actions-bar.cpp
     src/ui/shared/adaptive-button.h
     src/ui/shared/adaptive-button.cpp
+    src/ui/shared/identification-chips.h
+    src/ui/shared/identification-chips.cpp
     src/ui/shared/search-line-edit.h
     src/ui/shared/search-line-edit.cpp
     src/ui/shared/combo-popup-filter.h
@@ -805,6 +836,8 @@ endif()
 # juntos — nenhuma das duas bibliotecas existentes pode depender da outra
 # na direção que isto exigiria.
 add_library(kai-cli ${KAI_LIB_TYPE}
+    src/cli/cli-store.h
+    src/cli/cli-store.cpp
     src/cli/cli-local-executor.h
     src/cli/cli-local-executor.cpp
     src/cli/terminal-mode-filter.h

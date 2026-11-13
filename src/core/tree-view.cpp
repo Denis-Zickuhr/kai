@@ -106,6 +106,10 @@ QJsonObject TreeViewDef::toJson() const
     obj["running_only"] = runningOnly;
     obj["show_hidden"] = showHidden;
     obj["query"] = query;
+    obj["actions_mode"] = actionsMode;
+    obj["action_groups"] = QJsonArray::fromStringList(actionGroups);
+    obj["inline_actions"] = inlineActions;
+    obj["inline_kinds"] = QJsonArray::fromStringList(inlineKinds);
     return obj;
 }
 
@@ -129,7 +133,46 @@ TreeViewDef TreeViewDef::fromJson(const QJsonObject &obj)
     view.runningOnly = obj.value("running_only").toBool(false);
     view.showHidden = obj.value("show_hidden").toBool(false);
     view.query = obj.value("query").toString();
+    const QString mode = obj.value("actions_mode").toString();
+    if (mode == QLatin1String("all") || mode == QLatin1String("custom")) {
+        view.actionsMode = mode;
+    }
+    for (const QJsonValue &v : obj.value("action_groups").toArray()) {
+        if (allActionGroups().contains(v.toString()) && !view.actionGroups.contains(v.toString())) {
+            view.actionGroups << v.toString();
+        }
+    }
+    const QString inl = obj.value("inline_actions").toString();
+    if (inl == QLatin1String("on") || inl == QLatin1String("off")) {
+        view.inlineActions = inl;
+    }
+    for (const QJsonValue &v : obj.value("inline_kinds").toArray()) {
+        if (allInlineKinds().contains(v.toString()) && !view.inlineKinds.contains(v.toString())) {
+            view.inlineKinds << v.toString();
+        }
+    }
     return view;
+}
+
+QStringList TreeViewDef::allActionGroups()
+{
+    return {QStringLiteral("exec"), QStringLiteral("display"), QStringLiteral("item")};
+}
+
+QStringList TreeViewDef::allInlineKinds()
+{
+    return {QStringLiteral("play"), QStringLiteral("stop"), QStringLiteral("reset"), QStringLiteral("edit"),
+            QStringLiteral("output"), QStringLiteral("document")};
+}
+
+bool TreeViewDef::showsType(const QString &type) const
+{
+    return types.isEmpty() || types.contains(type);
+}
+
+bool TreeViewDef::showsRunnables() const
+{
+    return showsType(QStringLiteral("command")) || showsType(QStringLiteral("http")) || showsType(QStringLiteral("pipeline"));
 }
 
 TreeData filterTreeData(const TreeViewDef &view, const TreeData &raw)

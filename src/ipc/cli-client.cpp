@@ -49,6 +49,8 @@ void printUsage()
           << kai::utils::tr(QStringLiteral("cli.usage.ps")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.attach")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.history")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.version")) << "\n"
+          << kai::utils::tr(QStringLiteral("cli.usage.store")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.last")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.kill")) << "\n"
           << kai::utils::tr(QStringLiteral("cli.usage.import")) << "\n"

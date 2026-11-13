@@ -60,6 +60,7 @@ The order below is the order of the in-app **Help** (menu **Help**, which has a 
 | cURL import | [import-curl.md](import-curl.md) |
 | OpenAPI/Swagger import | [import-openapi.md](import-openapi.md) |
 | Export & Import | [export-import.md](export-import.md) |
+| Store (find and install packages from Git repos or catalogs) | [store.md](store.md) |
 
 **Terminal & CLI**
 

@@ -1,0 +1,17 @@
+<h2>Loja</h2>
+<p>A Loja encontra e instala coisas feitas para o Kai: comandos, pastas, pipelines, projetos, ambientes e perfis de execução. Ela não é um servidor nosso: você adiciona <b>provedores</b> (um repositório Git, um arquivo de catálogo ou uma API) em <b>Configurações → Loja</b>. Sem nenhum, não há entrada da Loja e o Kai nunca contata nada.</p>
+<h3>Instalar</h3>
+<p><b>Exibir → Loja</b> (o painel com o carrinho) lista os pacotes de um provedor. <b>Instalar</b> baixa os arquivos, confere cada hash e mostra uma <b>prévia</b> antes de gravar qualquer coisa: o código de cada comando, os programas que ele exige e as URLs que chama.</p>
+<ul>
+<li><b>Hooks</b> de um pacote nunca são instalados.</li>
+<li><b>Agendamentos</b> e <b>executar ao iniciar o Kai</b> são perguntados por comando e começam desligados.</li>
+<li><b>Segredos</b> viram variáveis vazias para você preencher.</li>
+</ul>
+<div class='tip'><b>Pacotes são código.</b> Leia a prévia e adicione só provedores em que você confia.</div>
+<h3>Atualizar e desinstalar</h3>
+<p>Atualizações são buscadas só com a Loja aberta ou ao clicar em <b>Atualizar</b>. Se você editou um pacote instalado, <b>Instalar como cópia</b> mantém a sua versão. <b>Desinstalar</b> remove só o que a instalação criou.</p>
+<h3>Terminal</h3>
+<pre>kai store list
+kai store search deploy
+kai store install acme/ship-to-staging</pre>
+<p>Publicar o seu é só colocar arquivos num repositório Git; veja <code>docs/store.md</code>.</p>

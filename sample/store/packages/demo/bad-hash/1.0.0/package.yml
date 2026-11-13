@@ -1,0 +1,15 @@
+package_format: 1
+id: "demo/bad-hash"
+kind: "command"
+version: "1.0.0"
+name: "Bad hash"
+description:
+  en: "The kai.yml was changed after hashing: installation is blocked."
+  pt: "O kai.yml mudou depois do hash: a instalação é bloqueada."
+category: "demo"
+tags: ["demo"]
+author: "Kai samples"
+license: "MIT"
+files:
+  - path: "kai.yml"
+    sha256: "761999d5c7e1f09dd1cc128c94942efcb9a9992cb23fe388dd9abf8a7857bc6e"

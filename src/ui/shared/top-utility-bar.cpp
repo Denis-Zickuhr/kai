@@ -126,6 +126,7 @@ void TopUtilityBar::setupUi()
     layout->addWidget(m_menuBar);
     layout->addStretch();
 
+
     layout->addSpacing(10);
 
     layout->addWidget(m_minimizeButton, 0, Qt::AlignVCenter);

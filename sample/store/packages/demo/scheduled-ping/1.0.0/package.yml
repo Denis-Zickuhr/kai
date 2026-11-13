@@ -1,0 +1,15 @@
+package_format: 1
+id: "demo/scheduled-ping"
+kind: "command"
+version: "1.0.0"
+name: "Scheduled ping"
+description:
+  en: "Has a schedule, an auto-run and a hook: nothing is enabled until you say so."
+  pt: "Tem agendamento, auto-run e hook: nada liga sem você aceitar."
+category: "demo"
+tags: ["cron"]
+author: "Kai samples"
+license: "MIT"
+files:
+  - path: "kai.yml"
+    sha256: "c70cbf3d6e75e04c7c4b30e66cc7a3157836e20189d7ea83d422bf971d54739b"

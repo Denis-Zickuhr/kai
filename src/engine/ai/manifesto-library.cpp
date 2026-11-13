@@ -17,7 +17,8 @@ ManifestoLibrary::ManifestoLibrary(const QString &directory)
 
 QStringList ManifestoLibrary::documents()
 {
-    return {QStringLiteral("kai"), QStringLiteral("kip"), QStringLiteral("icons"), QStringLiteral("schema")};
+    return {QStringLiteral("kai"), QStringLiteral("kip"), QStringLiteral("icons"), QStringLiteral("schema"),
+            QStringLiteral("store")};
 }
 
 QString ManifestoLibrary::readFile(const QString &name) const
@@ -95,6 +96,8 @@ const QVector<ManifestoLibrary::Section> &ManifestoLibrary::sections(const QStri
         result = parseMarkdown(readFile(QStringLiteral("kai-manifesto.md")));
     } else if (document == QLatin1String("kip")) {
         result = parseMarkdown(readFile(QStringLiteral("kip-manifesto.md")));
+    } else if (document == QLatin1String("store")) {
+        result = parseMarkdown(readFile(QStringLiteral("store-manifesto.md")));
     } else if (document == QLatin1String("icons")) {
         result = parseMarkdown(readFile(QStringLiteral("kai-icons.md")));
     } else if (document == QLatin1String("schema")) {

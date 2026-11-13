@@ -61,6 +61,8 @@ signals:
     void importRequested(const QString &path, const QStringList &only, bool &ok, QString &message);
     // `kai import --recursive <pasta>`: todos os projetos abaixo da pasta.
     void importTreeRequested(const QString &path, bool &ok, QString &message);
+    // Kai Store: um pacote JÁ baixado e verificado pelo CLI (StoreInstallRequest em JSON).
+    void storeInstallRequested(const QJsonObject &request, bool &ok, QString &message);
     // `kai raise`: notificação (level = info|warning|error; título opcional).
     void raiseRequested(const QString &level, const QString &title, const QString &message,
                         bool &ok, QString &reply);

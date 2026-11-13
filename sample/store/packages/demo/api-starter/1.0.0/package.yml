@@ -1,0 +1,18 @@
+package_format: 1
+id: "demo/api-starter"
+kind: "folder"
+version: "1.0.0"
+name: "API starter"
+description:
+  en: "A folder of HTTP commands sharing headers and a token."
+  pt: "Uma pasta de comandos HTTP com headers e token compartilhados."
+category: "demo"
+tags: ["http"]
+author: "Kai samples"
+license: "MIT"
+kai:
+  requires: ["http"]
+needs: []
+files:
+  - path: "kai.yml"
+    sha256: "1a503392b2e17202dc74a71c65f1fdf4be5e6f73235aa3b663fbd707c43d42c4"

@@ -1,0 +1,180 @@
+{
+  "store_format": 1,
+  "name": "Kai sample store (signed)",
+  "categories": [
+    {
+      "id": "demo",
+      "name": {
+        "en": "Demo",
+        "pt": "Demonstracao"
+      },
+      "icon": "package"
+    }
+  ],
+  "signing": {
+    "algorithm": "ed25519",
+    "key": "+MHlsBLIoOveYorGlYoR1zrThYrtyPCwSK3eW22A2XI="
+  },
+  "packages": [
+    {
+      "id": "demo/api-starter",
+      "kind": "folder",
+      "name": "API starter",
+      "summary": {
+        "en": "A folder of HTTP commands sharing headers and a token.",
+        "pt": "Uma pasta de comandos HTTP com headers e token compartilhados."
+      },
+      "category": "demo",
+      "tags": [
+        "http"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/api-starter/1.0.0/package.yml",
+          "sha256": "45fe4392026f343239750cf836e3fc2a37d9817c22b69bfefd97a135c1181a4e",
+          "requires": [
+            "http"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "demo/app-by-reference",
+      "kind": "project",
+      "name": "App by reference",
+      "summary": {
+        "en": "A project cloned from a Git repo at install time (run tools/make-clone-fixture.sh first).",
+        "pt": "Um projeto clonado de um repo Git na instalação (rode tools/make-clone-fixture.sh antes)."
+      },
+      "category": "demo",
+      "tags": [
+        "project"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/app-by-reference/1.0.0/package.yml",
+          "sha256": "4422563217bb12e1b3f7ed44d6ca48020ee950eab8b2dc986c50e28d38a5698e"
+        }
+      ]
+    },
+    {
+      "id": "demo/bad-hash",
+      "kind": "command",
+      "name": "Bad hash",
+      "summary": {
+        "en": "The kai.yml was changed after hashing: installation is blocked.",
+        "pt": "O kai.yml mudou depois do hash: a instalação é bloqueada."
+      },
+      "category": "demo",
+      "tags": [
+        "demo"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/bad-hash/1.0.0/package.yml",
+          "sha256": "8c80779c974759c3374b150b2311a7bdb6ab2ac51b6e627fc9b3e27159a786ad"
+        }
+      ]
+    },
+    {
+      "id": "demo/hello-command",
+      "kind": "command",
+      "name": "Hello command",
+      "summary": {
+        "en": "A single command that says hello.",
+        "pt": "Um comando que diz olá."
+      },
+      "category": "demo",
+      "tags": [
+        "demo"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/hello-command/1.0.0/package.yml",
+          "sha256": "ab8bd2496d2b6f22c31bcd4eba11a582ea41d45ea5ccce9e30786876779a76d9"
+        }
+      ]
+    },
+    {
+      "id": "demo/needs-the-future",
+      "kind": "command",
+      "name": "Needs the future",
+      "summary": {
+        "en": "Requires a capability this Kai does not have (shown greyed out).",
+        "pt": "Exige um recurso que este Kai não tem (aparece cinza)."
+      },
+      "category": "demo",
+      "tags": [
+        "demo"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/needs-the-future/1.0.0/package.yml",
+          "sha256": "585a00edbd9054f08cecbfd931c8a4c76b1fbecaec90f599f036309505d511b8",
+          "kai_min": "9.0.0",
+          "requires": [
+            "teleport"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "demo/scheduled-ping",
+      "kind": "command",
+      "name": "Scheduled ping",
+      "summary": {
+        "en": "Has a schedule, an auto-run and a hook: nothing is enabled until you say so.",
+        "pt": "Tem agendamento, auto-run e hook: nada liga sem você aceitar."
+      },
+      "category": "demo",
+      "tags": [
+        "cron"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/scheduled-ping/1.0.0/package.yml",
+          "sha256": "73d16a7695204bfb08028bb63c5816766f26e448b07e6f5e5cad328723053e69"
+        }
+      ]
+    },
+    {
+      "id": "demo/ship-to-staging",
+      "kind": "pipeline",
+      "name": "Ship to staging",
+      "summary": {
+        "en": "Checks, tests, build and deploy as a guided pipeline (fake scripts).",
+        "pt": "Checagens, testes, build e deploy como pipeline guiado (scripts de mentira)."
+      },
+      "category": "demo",
+      "tags": [
+        "deploy",
+        "pipeline"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/demo/ship-to-staging/1.0.0/package.yml",
+          "sha256": "07031bcd73b1e320dec44f8190bf12889fe25fdc93c4caeffca3ec3bacf55822",
+          "requires": [
+            "pipelines"
+          ]
+        }
+      ]
+    }
+  ],
+  "generated": "2026-11-12T00:00:00Z",
+  "signature": "KyFptS+Cq9d9Lj4zCN70NqjjrseP1szMfh9iZrevsMw1Io6TuXQrshCOSZtxgQ3IMYf7onLeScujjoioFOaIDw=="
+}

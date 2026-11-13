@@ -1,0 +1,17 @@
+package_format: 1
+id: "corp/deploy-kit"
+kind: "pipeline"
+version: "1.0.0"
+name: "Deploy kit"
+description:
+  en: "A tiny deploy pipeline with a confirmation gate."
+  pt: "Um pipeline de deploy enxuto com confirmação."
+category: "ops"
+tags: ["deploy"]
+author: "Kai demos"
+license: "MIT"
+kai:
+  requires: ["pipelines"]
+files:
+  - path: "kai.yml"
+    sha256: "20269d59f9a3d0fcbaf711ad028acd1262e92ff59376020eed69ab45a9582d0a"

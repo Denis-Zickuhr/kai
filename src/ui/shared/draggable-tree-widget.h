@@ -44,6 +44,14 @@ public:
         viewport()->update();
     }
 
+    // Com várias árvores à vista só uma desenha a linha selecionada (a de quem tem o foco/marcas); as outras guardam o item
+    // atual sem destacá-lo. Sem predicado, a seleção sempre aparece.
+    void setSelectionVisiblePredicate(std::function<bool()> predicate)
+    {
+        m_selectionVisible = std::move(predicate);
+        viewport()->update();
+    }
+
     void setCanAcceptChildrenPredicate(std::function<bool(QTreeWidgetItem *)> predicate)
     {
         m_canAcceptChildren = std::move(predicate);
@@ -140,7 +148,7 @@ protected:
         if (m_baseRowColor.isValid() || m_stripeRowColor.isValid()
             || m_hoverRowColor.isValid() || m_selectedRowColor.isValid()) {
             QPainter bg(viewport());
-            QTreeWidgetItem *current = currentItem();
+            QTreeWidgetItem *current = (!m_selectionVisible || m_selectionVisible()) ? currentItem() : nullptr;
             int visibleRow = 0;
             std::function<void(QTreeWidgetItem *)> paintRow = [&](QTreeWidgetItem *item) {
                 if (item->isHidden()) {
@@ -353,6 +361,7 @@ private:
     QColor m_stripeRowColor;
     QColor m_hoverRowColor;
     QColor m_selectedRowColor;
+    std::function<bool()> m_selectionVisible;
     ConnectorStyle m_connectorStyle = ConnectorStyle::Native;
     QColor m_connectorLineColor{139, 233, 253};
     bool m_hasIndicator = false;

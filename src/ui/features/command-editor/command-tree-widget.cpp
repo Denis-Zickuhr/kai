@@ -60,6 +60,7 @@ void CommandTreeWidget::setupUi()
     new TabStripBackground(m_tabWidget, m_tabWidget->tabBar());
     // Ao trocar de aba o foco vai p/ a árvore e seleciona o primeiro item, p/ ↑/↓ navegarem sem clique.
     connect(m_tabWidget, &QTabWidget::currentChanged, this, [this](int) {
+        m_mirrorTree = nullptr; // trocar de aba é escolha de quem usa esta árvore
         // Reconstruir a árvore (ex.: comando editado pelo agente de IA) troca de aba sozinho: o
         // teclado só vai p/ a árvore se já era dela (rebuildTabs devolve o foco no fim).
         if (!m_rebuilding) {
@@ -144,6 +145,7 @@ void CommandTreeWidget::setView(const core::TreeViewDef &view)
     setShowHidden(view.showHidden);
     setShowRunningOnly(view.runningOnly);
     setFilterQuery(view.query);
+    setInlineActionsEnabled(m_inlineActions); // reaplica o liga/desliga próprio desta árvore
     // Refiltra o conjunto completo que já tinha (trocar os filtros de uma árvore aberta); sem dados ainda, só limpa.
     storeData(m_raw.folders, m_raw.commands, m_raw.collections, m_raw.notes);
 }

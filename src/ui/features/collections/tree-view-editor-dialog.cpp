@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFrame>
 #include <QGridLayout>
@@ -132,6 +133,9 @@ void TreeViewEditorDialog::setupUi(bool isNew)
 
     m_folderList = new QListWidget(what);
     m_folderList->setMinimumHeight(150);
+    m_folderList->setStyleSheet(QStringLiteral("QListWidget { border: 1px solid %1; border-radius: %2px; padding: 4px; }"
+                                               "QListWidget::item { border-radius: %3px; }")
+                                    .arg(utils::tokens::borderColor()).arg(utils::tokens::radiusMd()).arg(utils::tokens::radiusSm()));
     const QSet<QString> chosen(m_view.folderIds.cbegin(), m_view.folderIds.cend());
     for (const core::Folder &folder : std::as_const(m_folders)) {
         auto *item = new QListWidgetItem(QStringLiteral("    ").repeated(folderDepth(folder, m_folders)) + folder.name,
@@ -177,6 +181,77 @@ void TreeViewEditorDialog::setupUi(bool isNew)
     m_showHidden->setChecked(m_view.showHidden);
     filtersLayout->addWidget(m_showHidden);
     page->addWidget(filters);
+
+    // Ações desta árvore: automáticas (só o que serve), todas, ou as escolhidas; e os botões na linha.
+    auto *actions = makeSurfaceCard(content);
+    auto *actionsLayout = new QVBoxLayout(actions);
+    actionsLayout->setContentsMargins(pad, pad, pad, pad);
+    actionsLayout->setSpacing(utils::tokens::space(3));
+    m_actionsMode = new QComboBox(actions);
+    m_actionsMode->addItem(utils::tr(QStringLiteral("tree_view.actions.mode.auto")), QStringLiteral("auto"));
+    m_actionsMode->addItem(utils::tr(QStringLiteral("tree_view.actions.mode.all")), QStringLiteral("all"));
+    m_actionsMode->addItem(utils::tr(QStringLiteral("tree_view.actions.mode.custom")), QStringLiteral("custom"));
+    m_actionsMode->setCurrentIndex(qMax(0, m_actionsMode->findData(m_view.actionsMode)));
+    actionsLayout->addWidget(wrapWithLabel(actions, utils::tr(QStringLiteral("tree_view.actions.mode")), m_actionsMode));
+
+    auto *groupsHost = new QWidget(actions);
+    groupsHost->setObjectName(QStringLiteral("treeViewGroups"));
+    groupsHost->setStyleSheet(QStringLiteral("QWidget#treeViewGroups { background: transparent; }"));
+    auto *groupsLayout = new QHBoxLayout(groupsHost);
+    groupsLayout->setContentsMargins(0, 0, 0, 0);
+    groupsLayout->setSpacing(utils::tokens::space(4));
+    const QStringList groupNames = {utils::tr(QStringLiteral("tree_view.actions.group.exec")),
+                                    utils::tr(QStringLiteral("tree_view.actions.group.display")),
+                                    utils::tr(QStringLiteral("tree_view.actions.group.item"))};
+    const QStringList groups = core::TreeViewDef::allActionGroups();
+    for (int i = 0; i < groups.size(); ++i) {
+        auto *box = new QCheckBox(groupNames.at(i), groupsHost);
+        box->setProperty("kaiRole", QStringLiteral("switch"));
+        box->setChecked(m_view.actionGroups.contains(groups.at(i)));
+        m_groupBoxes.append(box);
+        groupsLayout->addWidget(box);
+    }
+    groupsLayout->addStretch(1);
+    actionsLayout->addWidget(groupsHost);
+
+    m_inline = new QComboBox(actions);
+    m_inline->addItem(utils::tr(QStringLiteral("tree_view.actions.inline.inherit")), QStringLiteral("inherit"));
+    m_inline->addItem(utils::tr(QStringLiteral("tree_view.actions.inline.on")), QStringLiteral("on"));
+    m_inline->addItem(utils::tr(QStringLiteral("tree_view.actions.inline.off")), QStringLiteral("off"));
+    m_inline->setCurrentIndex(qMax(0, m_inline->findData(m_view.inlineActions)));
+    actionsLayout->addWidget(wrapWithLabel(actions, utils::tr(QStringLiteral("tree_view.actions.inline")), m_inline));
+
+    auto *kindsHost = new QWidget(actions);
+    kindsHost->setObjectName(QStringLiteral("treeViewKinds"));
+    kindsHost->setStyleSheet(QStringLiteral("QWidget#treeViewKinds { background: transparent; }"));
+    auto *kindsLayout = new QGridLayout(kindsHost);
+    kindsLayout->setContentsMargins(0, 0, 0, 0);
+    kindsLayout->setHorizontalSpacing(utils::tokens::space(4));
+    const QStringList kindNames = {utils::tr(QStringLiteral("tree_view.actions.kind.play")),
+                                   utils::tr(QStringLiteral("tree_view.actions.kind.stop")),
+                                   utils::tr(QStringLiteral("tree_view.actions.kind.reset")),
+                                   utils::tr(QStringLiteral("tree_view.actions.kind.edit")),
+                                   utils::tr(QStringLiteral("tree_view.actions.kind.output")),
+                                   utils::tr(QStringLiteral("tree_view.actions.kind.document"))};
+    const QStringList kinds = core::TreeViewDef::allInlineKinds();
+    const bool allKinds = m_view.inlineKinds.isEmpty(); // vazio = todos
+    for (int i = 0; i < kinds.size(); ++i) {
+        auto *box = new QCheckBox(kindNames.at(i), kindsHost);
+        box->setProperty("kaiRole", QStringLiteral("switch"));
+        box->setChecked(allKinds || m_view.inlineKinds.contains(kinds.at(i)));
+        m_kindBoxes.append(box);
+        kindsLayout->addWidget(box, i / 3, i % 3);
+    }
+    actionsLayout->addWidget(wrapWithLabel(actions, utils::tr(QStringLiteral("tree_view.actions.kinds")), kindsHost));
+    // Os grupos só valem em "Personalizado"; os botões da linha só se não estiverem desligados.
+    const auto syncEnabled = [this, groupsHost, kindsHost]() {
+        groupsHost->setEnabled(m_actionsMode->currentData().toString() == QLatin1String("custom"));
+        kindsHost->setEnabled(m_inline->currentData().toString() != QLatin1String("off"));
+    };
+    connect(m_actionsMode, &QComboBox::currentIndexChanged, this, syncEnabled);
+    connect(m_inline, &QComboBox::currentIndexChanged, this, syncEnabled);
+    syncEnabled();
+    page->addWidget(actions);
     page->addStretch(1);
 
     auto *scroll = new QScrollArea(this);
@@ -251,6 +326,20 @@ core::TreeViewDef TreeViewEditorDialog::result() const
     out.runningOnly = m_runningOnly->isChecked();
     out.showHidden = m_showHidden->isChecked();
     out.query = m_query->text().trimmed();
+    out.actionsMode = m_actionsMode->currentData().toString();
+    out.actionGroups.clear();
+    const QStringList groups = core::TreeViewDef::allActionGroups();
+    for (int i = 0; i < m_groupBoxes.size() && i < groups.size(); ++i) {
+        if (m_groupBoxes.at(i)->isChecked()) out.actionGroups << groups.at(i);
+    }
+    out.inlineActions = m_inline->currentData().toString();
+    out.inlineKinds.clear();
+    const QStringList kinds = core::TreeViewDef::allInlineKinds();
+    for (int i = 0; i < m_kindBoxes.size() && i < kinds.size(); ++i) {
+        if (m_kindBoxes.at(i)->isChecked()) out.inlineKinds << kinds.at(i);
+    }
+    // Todos os botões marcados = sem limite.
+    if (out.inlineKinds.size() == kinds.size()) out.inlineKinds.clear();
     return out;
 }
 

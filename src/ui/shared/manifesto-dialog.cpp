@@ -51,6 +51,7 @@ QString tabKeyFor(const QString &id)
 {
     if (id == QLatin1String("kip")) return QStringLiteral("manifesto.tab.kip");
     if (id == QLatin1String("pipeline")) return QStringLiteral("manifesto.tab.pipeline");
+    if (id == QLatin1String("store")) return QStringLiteral("manifesto.tab.store");
     return QStringLiteral("manifesto.tab.kai");
 }
 
@@ -58,6 +59,7 @@ QString descKeyFor(const QString &id)
 {
     if (id == QLatin1String("kip")) return QStringLiteral("manifesto.kip.desc");
     if (id == QLatin1String("pipeline")) return QStringLiteral("manifesto.pipeline.desc");
+    if (id == QLatin1String("store")) return QStringLiteral("manifesto.store.desc");
     return QStringLiteral("manifesto.kai.desc");
 }
 
@@ -74,6 +76,7 @@ const QVector<ManifestoDialog::Source> &ManifestoDialog::sources()
         {QStringLiteral("kai"), {QStringLiteral("kai-manifesto.md"), QStringLiteral("kai-icons.md")}},
         {QStringLiteral("kip"), {QStringLiteral("kip-manifesto.md")}},
         {QStringLiteral("pipeline"), {QStringLiteral("pipeline-manifesto.md")}},
+        {QStringLiteral("store"), {QStringLiteral("store-manifesto.md")}},
     };
     return list;
 }

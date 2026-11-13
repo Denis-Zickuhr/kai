@@ -14,6 +14,7 @@
 #include <memory>
 
 #include "core/config-manager.h"
+#include "core/store-preview.h"
 #include "ui/features/output/quick-run-popup.h"
 #include "core/environment-manager.h"
 #include "core/run-history.h"
@@ -89,6 +90,11 @@ public:
     // `kai import [arquivo|pasta]`: importa o kai.yml sem diálogo (pasta-pai = raiz). `only` vazio = tudo;
     // ver cliImportSelection. `message` = resumo ou erro.
     bool importProjectFromCli(const QString &path, const QStringList &only, QString &message);
+    // Kai Store (specs/14-store.md §5, passos 5-6): importa um pacote JÁ baixado e verificado, aplicando as regras de
+    // instalação (hooks nunca, cron/auto_run só se aceitos, segredos vazios) e registrando a procedência. Sem rede, sem diálogo.
+    bool installStorePackage(const core::StoreInstallRequest &request, QString &message);
+    // Remove só o que a instalação criou (a pasta registrada e o clone que o Kai fez). false se nada foi removido.
+    bool uninstallStorePackage(const QString &folderId, QString &message);
     // `kai import --recursive <pasta>`: importa cada projeto (kai.yml) abaixo da pasta, a própria inclusa.
     // `parentFolderId` vazio = raiz (ou a pasta do Kai que já contém o diretório).
     bool importProjectTreeFromCli(const QString &rootDirectory, QString &message, const QString &parentFolderId = QString());
@@ -248,6 +254,10 @@ private slots:
     // IA (roadmap A10): abre o chat; sem provedor configurado o painel do chat não existe.
     void showAiChat();
     void refreshAiAvailability();
+    // Kai Store: o painel só existe com ao menos um provedor habilitado (como o chat de IA).
+    void refreshStoreAvailability();
+    void showStore();
+    bool anyStoreProviderEnabled() const;
     void handleConfigRecovered(const QString &filePath, const QString &backupPath);
     void handleEnvironmentSelected(const QString &environmentId);
     void handleManageEnvironmentsRequested();
@@ -317,6 +327,7 @@ private:
     void registerTreeViews();
     QWidget *createTreePanel(const QString &treeId);
     void wireExtraTree(CommandTreeWidget *tree);
+    void rebuildExtraTreeBars(CommandTreeWidget *tree);
     void populateTreesMenu(QMenu *menu);
     void newTreeView();
     void editTreeView(const QString &treeId);
@@ -326,6 +337,8 @@ private:
     class ActionGroupContainer *buildExtraTreeBars(CommandTreeWidget *tree, QWidget *parent);
     // Leva a seleção atual (tipo, execução, oculto) aos botões das barras das árvores extras.
     void syncExtraBars();
+    void syncPrimaryBars();
+    void syncActionContexts();
     void restoreLayoutFromDisk();
     // Painéis de UM comando: o espelho vivo de uma execução (`run:<id>`) e o comando KIP fixado (`kip:<id>`). Recebem log,
     // resposta HTTP, estado e sessão KIP do comando de origem, sem seguir a seleção da lista.
@@ -604,6 +617,7 @@ private:
     McpBridge *m_mcpBridge = nullptr;
     QPointer<AiChatWindow> m_aiChat;
     bool m_aiConfigured = false;
+    bool m_storeAvailable = false;
     QVector<core::GlobalAction> m_globalActions;
     std::map<QString, std::shared_ptr<ActionRun>> m_actionRuns; // execuções de ação em andamento
     QSet<QString> m_actionsRan; // ações que já rodaram nesta sessão (têm saída guardada pra carregar)
@@ -697,6 +711,7 @@ private:
     utils::ThemeManager *m_themeManager = nullptr;
 
     TopUtilityBar *m_topBar = nullptr;
+    QPointer<class StoreWindow> m_storeWindow;
     // Os 3 grupos de ações (Item/Exibição/Execução) são widgets soltos até applyActionGroupPlacement()
     // reparentá-los num dos containers abaixo (ou em nenhum, se "não exibir").
     ItemActionsBar *m_itemActionsBar{nullptr};

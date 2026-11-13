@@ -2,6 +2,7 @@
 
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include <QSignalSpy>
 
 #include "ui/features/output/quick-run-popup.h"
@@ -41,6 +42,26 @@ private slots:
         QTest::keyClicks(popup.searchField(), QStringLiteral("e"));
         QTest::qWait(200);
         popup.grab().save(QString::fromLocal8Bit(dir) + QStringLiteral("/quick-run.png"));
+    }
+
+    void filterChipsAreExclusiveAndAllClearsTheFilter()
+    {
+        QuickRunPopup popup;
+        popup.setEntries(mixedEntries());
+        const QStringList everything = popup.visibleIds();
+        const auto chips = popup.findChildren<QPushButton *>(QStringLiteral("quickRunFilterChip"));
+        QVERIFY(chips.size() > 2);
+        QVERIFY(chips.first()->isChecked()); // "Todos" começa ligado
+        chips.at(1)->click();
+        chips.at(2)->click();
+        int on = 0;
+        for (QPushButton *chip : chips) on += chip->isChecked() ? 1 : 0;
+        QCOMPARE(on, 1);
+        QVERIFY(chips.at(2)->isChecked());
+        QVERIFY(popup.visibleIds().size() < everything.size());
+        chips.first()->click();
+        QVERIFY(chips.first()->isChecked());
+        QCOMPARE(popup.visibleIds(), everything);
     }
 
     void emptyQueryListsEverythingByName()
@@ -246,10 +267,10 @@ private slots:
         QSignalSpy action(&popup, &QuickRunPopup::entryActionRequested);
         QTest::keyClicks(popup.searchField(), QStringLiteral("subir"));
         QTest::keyClick(popup.searchField(), Qt::Key_Tab);
-        QTest::keyClick(popup.searchField(), Qt::Key_Tab); // 2ª ação: duplicar
+        QTest::keyClick(popup.searchField(), Qt::Key_Tab); // 2ª ação: mostrar na lista
         QTest::keyClick(popup.searchField(), Qt::Key_Return);
         QCOMPARE(action.size(), 1);
-        QCOMPARE(action.first().at(2).toString(), QStringLiteral("duplicate"));
+        QCOMPARE(action.first().at(2).toString(), QStringLiteral("reveal"));
     }
 
     void tabCyclesBackToTheDefaultActionAndEnterStillChooses()

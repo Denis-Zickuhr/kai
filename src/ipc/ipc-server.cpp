@@ -202,6 +202,12 @@ void IpcServer::dispatchRequest(QLocalSocket *conn, const QByteArray &line)
                 emit importTreeRequested(req.value(QStringLiteral("path")).toString(), ok, message);
                 reply["ok"] = ok;
                 reply["message"] = message;
+            } else if (cmd == QStringLiteral("store-install")) {
+                bool ok = false;
+                QString message;
+                emit storeInstallRequested(req.value(QStringLiteral("request")).toObject(), ok, message);
+                reply["ok"] = ok;
+                reply["message"] = message;
             } else if (cmd == QStringLiteral("import")) {
                 bool ok = false;
                 QString message;

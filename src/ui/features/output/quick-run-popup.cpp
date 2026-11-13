@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QScrollBar>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -32,10 +33,10 @@ constexpr int kRowHeight = 36;
 constexpr int kListPad = 6;       // respiro ao redor das linhas (padding da lista)
 constexpr int kChipSide = 14;     // margem lateral da barra de chips (alinha com o texto da busca)
 constexpr int kChipH = 26;
+constexpr int kChipIconSize = 14;
 constexpr int kChipGapX = 6;
 constexpr int kChipGapY = 6;
 constexpr int kChipBarPadY = 10;
-constexpr int kChipIconSize = 14;
 constexpr int kActionBox = 24;     // caixa de cada ação inline
 constexpr int kActionGap = 2;
 constexpr int kActionIconSize = 14;
@@ -45,6 +46,9 @@ constexpr int kPathRole = Qt::UserRole + 1;
 constexpr int kIdRole = Qt::UserRole;
 constexpr int kKindRole = Qt::UserRole + 2;
 constexpr int kIconRole = Qt::UserRole + 3;
+constexpr int kChipTextRole = Qt::UserRole + 4;
+constexpr int kChipColorRole = Qt::UserRole + 5;
+constexpr int kChipIconRole = Qt::UserRole + 6;
 constexpr int kIconSize = 16;
 
 QString iconFor(QuickRunPopup::Kind kind)
@@ -93,7 +97,6 @@ QVector<ActionDef> actionsFor(QuickRunPopup::Kind kind)
 {
     using K = QuickRunPopup::Kind;
     static const ActionDef edit{"edit", "pencil", "palette.action.edit"};
-    static const ActionDef duplicate{"duplicate", "copy", "palette.action.duplicate"};
     static const ActionDef reveal{"reveal", "folder-search", "palette.action.reveal"};
     switch (kind) {
     case K::Command:
@@ -101,7 +104,7 @@ QVector<ActionDef> actionsFor(QuickRunPopup::Kind kind)
     case K::Folder:
     case K::Collection:
     case K::Note:
-        return {edit, duplicate, reveal};
+        return {edit, reveal};
     case K::Environment:
         return {edit};
     case K::Action:
@@ -161,6 +164,39 @@ public:
             LucideIcons::icon(iconFor(entryKind), QColor(selected ? tk::accent() : tk::mutedFg()), kIconSize)
                 .paint(painter, iconRect);
             left = iconRect.right() + 1 + 10;
+        }
+        const QString chipText = index.data(kChipTextRole).toString();
+        const QString chipIconName = index.data(kChipIconRole).toString();
+        if (!chipText.isEmpty() || !chipIconName.isEmpty()) {
+            // Mesmo chip da árvore: pílula tingida com o texto em maiúsculas, ou só o logo da linguagem.
+            QColor chipColor = index.data(kChipColorRole).value<QColor>();
+            if (!chipColor.isValid()) {
+                chipColor = QColor(tk::mutedFg());
+            }
+            QFont chipFont = option.font;
+            chipFont.setPointSizeF(std::max(6.0, option.font.pointSizeF() - 1.0));
+            chipFont.setBold(true);
+            const QFontMetrics chipMetrics(chipFont);
+            const bool iconChip = !chipIconName.isEmpty();
+            const QString text = chipText.toUpper();
+            const int chipW = (iconChip ? 14 : chipMetrics.horizontalAdvance(text)) + 12;
+            const int chipH = chipMetrics.height() + 2;
+            const QRect chipRect(left, row.top() + (row.height() - chipH) / 2, chipW, chipH);
+            QColor fill = chipColor;
+            fill.setAlpha(42);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(fill);
+            painter->drawRoundedRect(chipRect, tk::radiusSm(), tk::radiusSm());
+            if (iconChip) {
+                LucideIcons::icon(chipIconName, chipColor, 14)
+                    .paint(painter, QRect(chipRect.left() + (chipW - 14) / 2, chipRect.top() + (chipH - 14) / 2, 14, 14));
+            } else {
+                painter->setFont(chipFont);
+                painter->setPen(chipColor);
+                painter->drawText(chipRect, Qt::AlignCenter, text);
+                painter->setFont(option.font);
+            }
+            left = chipRect.right() + 1 + 8;
         }
         const auto kind = static_cast<QuickRunPopup::Kind>(index.data(kKindRole).toInt());
         int right = row.right() - kPadX;
@@ -249,6 +285,10 @@ QuickRunPopup::QuickRunPopup(QWidget *parent)
     m_list->setFocusPolicy(Qt::NoFocus);
     m_list->viewport()->setMouseTracking(true);
     m_list->viewport()->installEventFilter(this);
+    // O contêiner da barra é um QWidget comum e o QSS global o pinta de "bg": virava uma faixa escura sobre o popup.
+    if (QWidget *barHost = m_list->verticalScrollBar()->parentWidget(); barHost && barHost != m_list) {
+        barHost->setObjectName(QStringLiteral("quickRunScrollHost"));
+    }
     layout->addWidget(m_list);
 
     m_empty = new QLabel(utils::tr(QStringLiteral("quick_run.empty")), this);
@@ -270,18 +310,30 @@ void QuickRunPopup::refreshStyle()
 {
     // %1 borda · %2 texto · %3 raio · %4 apagado · %5 destaque · %6 destaque translúcido · %7 hover · %8..%10 tamanhos
     setStyleSheet(QStringLiteral(
-        "#quickRunSearch { background: transparent; color: %2; border: none; border-bottom: 1px solid %1;"
-        " border-radius: 0; padding: 14px 16px; font-size: %8pt; }"
+        "#quickRunSearch { background-color: %18; color: %2; border: none; border-bottom: 1px solid %1;"
+        " border-radius: 0; border-top-left-radius: %17px; border-top-right-radius: %17px; padding: 14px 16px; font-size: %8pt; }"
         "#quickRunFilterBar { background: transparent; border: none; border-bottom: 1px solid %1; }"
         "#quickRunList { background: transparent; border: none; outline: none; padding: %9px; }"
-        "#quickRunFilterChip { background: transparent; color: %4; border: 1px solid %1; border-radius: %3px;"
+        "#quickRunFilterChip { background-color: %18; color: %4; border: 1px solid %1; border-radius: %3px;"
         " padding: 0 10px; font-size: %10pt; }"
         "#quickRunFilterChip:hover { background-color: %7; color: %2; }"
         "#quickRunFilterChip:checked { background-color: %6; color: %2; border: 1px solid %5; }"
+        // Barra igual à do resto do app (alça em pílula pelo raio da preferência), recuada do arco dos cantos do popup.
+        "#quickRunScrollHost { background: transparent; }"
+        "#quickRunList QScrollBar:vertical { background: transparent; width: %12px; margin: %11px 4px %11px 6px; }"
+        "#quickRunList QScrollBar::handle:vertical { background: %13; border-radius: %14px; min-height: %15px; }"
+        "#quickRunList QScrollBar::handle:vertical:hover { background: %16; }"
+        "#quickRunList QScrollBar::add-line:vertical, #quickRunList QScrollBar::sub-line:vertical { height: 0; width: 0; }"
+        "#quickRunList QScrollBar::add-page:vertical, #quickRunList QScrollBar::sub-page:vertical { background: transparent; }"
         "QLabel { color: %4; background: transparent; }")
         .arg(tk::borderColor(), tk::fg()).arg(tk::radiusSm())
         .arg(tk::mutedFg(), tk::accent(), rgba(tk::accent(), 40), tk::hoverBg())
-        .arg(tk::fontSizePt() + 1).arg(kListPad).arg(std::max(7, tk::fontSizePt() - 1)));
+        .arg(tk::fontSizePt() + 1).arg(kListPad).arg(std::max(7, tk::fontSizePt() - 1))
+        .arg(std::max(3, tk::radiusLg() / 2 + 1)) // a barra fica dentro do arco dos cantos do popup
+        .arg(tk::space(3) + 10) // alça de space(3) + 6px de respiro à esquerda e 4px à direita (margens do QSS comem a largura)
+        .arg(rgba(tk::mutedFg(), 110)).arg(tk::space(3) / 2).arg(tk::space(6))
+        .arg(rgba(tk::mutedFg(), 190))
+        .arg(std::max(0, tk::radiusLg() - 1)).arg(tk::surface()));
     update();
 }
 
@@ -348,27 +400,39 @@ void QuickRunPopup::rebuildFilterChips()
         return;
     }
 
+    // Um chip por vez, como na tela de armazenamento: "Todos" (sem filtro) vem primeiro e vale quando nenhum tipo está ligado.
+    constexpr int kAllChip = -1;
+    QVector<int> kinds{kAllChip};
     for (Kind kind : std::as_const(m_availableKinds)) {
-        auto *chip = new QPushButton(labelFor(kind), m_filterBar);
+        kinds.append(static_cast<int>(kind));
+    }
+    for (int kindInt : std::as_const(kinds)) {
+        const QString label = kindInt == kAllChip ? utils::tr(QStringLiteral("palette.filter.all")) : labelFor(static_cast<Kind>(kindInt));
+        auto *chip = new QPushButton(label, m_filterBar);
         chip->setObjectName(QStringLiteral("quickRunFilterChip"));
         chip->setCheckable(true);
         chip->setCursor(Qt::PointingHandCursor);
         chip->setFocusPolicy(Qt::NoFocus);
-        chip->setIconSize(QSize(kChipIconSize, kChipIconSize));
-        // O ícone acompanha o estado: cor de destaque quando ligado, apagado quando desligado.
-        const QString iconName = iconFor(kind);
-        auto paintIcon = [chip, iconName](bool on) {
-            chip->setIcon(LucideIcons::icon(iconName, QColor(on ? tk::accent() : tk::mutedFg()), kChipIconSize));
-        };
-        chip->setChecked(m_activeKinds.contains(static_cast<int>(kind)));
-        paintIcon(chip->isChecked());
-        connect(chip, &QPushButton::toggled, chip, paintIcon);
-        const int kindInt = static_cast<int>(kind);
-        connect(chip, &QPushButton::toggled, this, [this, kindInt](bool on) {
-            if (on) {
+        chip->setProperty("kind", kindInt);
+        chip->setChecked(kindInt == kAllChip ? m_activeKinds.isEmpty() : m_activeKinds.contains(kindInt));
+        if (kindInt != kAllChip) {
+            chip->setIconSize(QSize(kChipIconSize, kChipIconSize));
+            // O ícone acompanha o estado: cor de destaque quando ligado, apagado quando desligado.
+            const QString iconName = iconFor(static_cast<Kind>(kindInt));
+            auto paintIcon = [chip, iconName](bool on) {
+                chip->setIcon(LucideIcons::icon(iconName, QColor(on ? tk::accent() : tk::mutedFg()), kChipIconSize));
+            };
+            paintIcon(chip->isChecked());
+            connect(chip, &QPushButton::toggled, chip, paintIcon);
+        }
+        connect(chip, &QPushButton::clicked, this, [this, kindInt]() {
+            m_activeKinds.clear();
+            if (kindInt != kAllChip) {
                 m_activeKinds.insert(kindInt);
-            } else {
-                m_activeKinds.remove(kindInt);
+            }
+            for (QPushButton *other : std::as_const(m_chips)) {
+                const int otherKind = other->property("kind").toInt();
+                other->setChecked(otherKind == kAllChip ? m_activeKinds.isEmpty() : m_activeKinds.contains(otherKind));
             }
             filterMemory()[filterMemoryKey()] = m_activeKinds;
             applyFilter();
@@ -398,7 +462,8 @@ void QuickRunPopup::layoutChips()
     int y = kChipBarPadY;
     int rows = 1;
     for (QPushButton *chip : std::as_const(m_chips)) {
-        const int w = 2 + 20 + kChipIconSize + 6 + metrics.horizontalAdvance(chip->text()) + 8; // +8: folga contra corte do texto
+        const bool hasIcon = !chip->icon().isNull();
+        const int w = 2 + 20 + (hasIcon ? kChipIconSize + 6 : 0) + metrics.horizontalAdvance(chip->text()) + 8; // +8: folga contra corte do texto
         chip->setFixedSize(w, kChipH);
         if (x > kChipSide && x - kChipSide + w > inner) {
             x = kChipSide;
@@ -464,6 +529,9 @@ void QuickRunPopup::applyFilter()
         item->setData(kPathRole, entry.path);
         item->setData(kKindRole, static_cast<int>(entry.kind));
         item->setData(kIconRole, m_mixed);
+        item->setData(kChipTextRole, entry.chipText);
+        item->setData(kChipColorRole, entry.chipColor);
+        item->setData(kChipIconRole, entry.chipIcon);
         item->setToolTip(entry.path.isEmpty() ? entry.name : entry.path + QStringLiteral(" / ") + entry.name);
     }
     if (m_list->count() > 0) {

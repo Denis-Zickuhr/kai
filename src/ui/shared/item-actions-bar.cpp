@@ -18,6 +18,14 @@ ItemActionsBar::ItemActionsBar(QWidget *parent)
     setupUi();
 }
 
+void ItemActionsBar::setCreateKinds(bool command, bool pipeline, bool collection, bool note)
+{
+    m_btnNewCommand->setVisible(command);
+    m_btnNewPipeline->setVisible(pipeline);
+    m_btnNewCollection->setVisible(collection);
+    m_btnNewNote->setVisible(note);
+}
+
 void ItemActionsBar::setupUi()
 {
     m_layout = new QBoxLayout(QBoxLayout::LeftToRight, this);

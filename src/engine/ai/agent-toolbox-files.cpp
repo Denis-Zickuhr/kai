@@ -5,8 +5,11 @@
 #include "engine/ai/agent-toolbox-internal.h"
 #include "engine/ai/agent-toolbox.h"
 
+#include "core/store-texts.h"
+#include "engine/store-publisher.h"
 #include "utils/translation-manager.h"
 
+#include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QPointer>
@@ -32,6 +35,19 @@ QJsonObject projectIdProp()
 {
     return {{QStringLiteral("project_id"),
              prop(QStringLiteral("string"), QStringLiteral("Project folder id (is_project in list_folders). Optional with one project or an absolute path."))}};
+}
+
+// Resultado das ferramentas de publicação da Store, para o agente ler (código estável + texto).
+QJsonObject storeReportJson(const StorePublishReport &r)
+{
+    QJsonArray issues;
+    for (const StorePublishIssue &i : r.issues) {
+        issues.append(QJsonObject{{QStringLiteral("severity"), i.error ? QStringLiteral("error") : QStringLiteral("warning")},
+                                  {QStringLiteral("path"), i.path},
+                                  {QStringLiteral("code"), i.code},
+                                  {QStringLiteral("message"), i.text.isEmpty() ? core::storeIssueText(i.code) : i.text}});
+    }
+    return {{QStringLiteral("ok"), r.ok}, {QStringLiteral("issues"), issues}, {QStringLiteral("written"), QJsonArray::fromStringList(r.written)}};
 }
 
 QJsonObject merge(QJsonObject a, const QJsonObject &b)
@@ -158,6 +174,90 @@ void AgentToolbox::buildFileTools()
                     return okValue(QJsonObject{{QStringLiteral("path"), r.relative},
                                                {QStringLiteral("created"), r.created},
                                                {QStringLiteral("bytes_written"), static_cast<double>(r.bytes)}});
+                },
+                std::move(done));
+        });
+
+    // --- Kai Store: publicar (offline). Validar lê; empacotar e indexar escrevem (aprovação). Chaves de assinatura não passam por aqui.
+    const QString storeDirDescription = QStringLiteral("Folder inside a Kai project: a package folder (with package.yml) or a store repo folder (with store.yml).");
+    add(QStringLiteral("store_validate"),
+        QStringLiteral("Validate a Kai Store package folder (package.yml + payload files + sha256 + kai.yml). Read the 'store' reference with "
+                       "read_manifesto first. Returns errors and warnings; fix them and run store_pack if hashes are stale."),
+        objectSchema(merge(projectIdProp(), {{QStringLiteral("path"), prop(QStringLiteral("string"), storeDirDescription)}}), {QStringLiteral("path")}),
+        ToolRisk::Read,
+        [this](const QJsonObject &a) {
+            const auto check = fs::checkLexical(projectRoots(m_host), strArg(a, QStringLiteral("project_id")), strArg(a, QStringLiteral("path")));
+            if (!check.ok) return invalid(check.error);
+            ToolPlan p;
+            p.title = utils::tr(QStringLiteral("ai.plan.list_files")).arg(check.relative);
+            return p;
+        },
+        [this, inBackground](const QJsonObject &a, std::function<void(const ToolOutcome &)> done) {
+            const auto roots = projectRoots(m_host);
+            const QString project = strArg(a, QStringLiteral("project_id"));
+            const QString path = strArg(a, QStringLiteral("path"));
+            inBackground(
+                [roots, project, path]() {
+                    const auto r = fs::resolveOnDisk(roots, project, path, false);
+                    if (!r.ok) return fail(r.error);
+                    return okValue(storeReportJson(validateStorePackageDir(r.path)));
+                },
+                std::move(done));
+        });
+
+    add(QStringLiteral("store_pack"),
+        QStringLiteral("Fill files[] with the sha256 of every payload file of a Kai Store package folder (rewrites package.yml; comments are not kept). "
+                       "Run it after every change to the payload. The user approves it."),
+        objectSchema(merge(projectIdProp(), {{QStringLiteral("path"), prop(QStringLiteral("string"), storeDirDescription)}}), {QStringLiteral("path")}),
+        ToolRisk::Write,
+        [this](const QJsonObject &a) {
+            const auto check = fs::checkLexical(projectRoots(m_host), strArg(a, QStringLiteral("project_id")), strArg(a, QStringLiteral("path")));
+            if (!check.ok) return invalid(check.error);
+            ToolPlan p;
+            p.title = utils::tr(QStringLiteral("ai.plan.store_pack")).arg(check.relative);
+            return p;
+        },
+        [this, inBackground](const QJsonObject &a, std::function<void(const ToolOutcome &)> done) {
+            const auto roots = projectRoots(m_host);
+            const QString project = strArg(a, QStringLiteral("project_id"));
+            const QString path = strArg(a, QStringLiteral("path"));
+            inBackground(
+                [roots, project, path]() {
+                    const auto r = fs::resolveOnDisk(roots, project, path, true);
+                    if (!r.ok) return fail(r.error);
+                    return okValue(storeReportJson(packStorePackageDir(r.path)));
+                },
+                std::move(done));
+        });
+
+    add(QStringLiteral("store_index"),
+        QStringLiteral("Build the index of a Kai Store repo folder (it needs store.yml at its root and packages/<publisher>/<slug>/<version>/). "
+                       "Writes index.json, or one catalog file when 'catalog' is given (relative to that folder). Packages with errors block it. "
+                       "Signing is not available here. The user approves it."),
+        objectSchema(merge(projectIdProp(), {{QStringLiteral("path"), prop(QStringLiteral("string"), storeDirDescription)},
+                                              {QStringLiteral("catalog"), prop(QStringLiteral("string"), QStringLiteral("Optional single-file catalog name, e.g. catalog.yml."))}}),
+                     {QStringLiteral("path")}),
+        ToolRisk::Write,
+        [this](const QJsonObject &a) {
+            const auto check = fs::checkLexical(projectRoots(m_host), strArg(a, QStringLiteral("project_id")), strArg(a, QStringLiteral("path")));
+            if (!check.ok) return invalid(check.error);
+            const QString catalog = strArg(a, QStringLiteral("catalog"));
+            if (catalog.contains(QLatin1String("..")) || catalog.startsWith(QLatin1Char('/'))) return invalid(QStringLiteral("Give 'catalog' as a plain file name."));
+            ToolPlan p;
+            p.title = utils::tr(QStringLiteral("ai.plan.store_index")).arg(check.relative);
+            return p;
+        },
+        [this, inBackground](const QJsonObject &a, std::function<void(const ToolOutcome &)> done) {
+            const auto roots = projectRoots(m_host);
+            const QString project = strArg(a, QStringLiteral("project_id"));
+            const QString path = strArg(a, QStringLiteral("path"));
+            const QString catalog = strArg(a, QStringLiteral("catalog"));
+            inBackground(
+                [roots, project, path, catalog]() {
+                    const auto r = fs::resolveOnDisk(roots, project, path, true);
+                    if (!r.ok) return fail(r.error);
+                    const QString catalogPath = catalog.isEmpty() ? QString() : QDir(r.path).filePath(catalog);
+                    return okValue(storeReportJson(buildStoreIndex(r.path, catalogPath)));
                 },
                 std::move(done));
         });

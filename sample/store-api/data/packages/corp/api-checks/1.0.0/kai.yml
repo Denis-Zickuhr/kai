@@ -1,0 +1,17 @@
+project_name: "API checks"
+icon: "globe"
+env_vars:
+  API_BASE: "https://httpbin.org"
+http_defaults:
+  auth:
+    type: "bearer"
+    token: "{{API_TOKEN}}"
+commands:
+  - name: "Who am I"
+    type: "http"
+    http_config:
+      url: "{{API_BASE}}/bearer"
+  - name: "Health"
+    type: "http"
+    http_config:
+      url: "{{API_BASE}}/status/200"

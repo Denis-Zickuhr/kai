@@ -1,0 +1,5 @@
+project_name: "Bad hash"
+commands:
+  - name: "Tampered"
+    type: "command"
+    command: "echo tampered"

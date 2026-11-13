@@ -6,6 +6,8 @@
 #include "ui/features/settings/tabs/terminals-tab.h"
 #include "ui/features/settings/tabs/actions-tab.h"
 #include "ui/features/settings/tabs/kip-tab.h"
+#include "ui/features/settings/tabs/store-tab.h"
+#include "core/store-local.h"
 #include "ui/features/settings/tabs/identification-tab.h"
 #include "ui/features/settings/tabs/ai-tab.h"
 #include "core/ai-conversation.h"
@@ -103,6 +105,8 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     m_notificationsTab = new NotificationsTab(currentSettings);
     m_kipTab = new KipTab(currentSettings.kip);
     m_identificationTab = new IdentificationTab(currentSettings.identification);
+    m_originalStoreProviders = core::StoreLocalState(core::ConfigManager().configDirPath()).loadProviders();
+    m_storeTab = new StoreTab(m_originalStoreProviders);
     m_actionsTab = new ActionsTab(currentSettings.globalActions, commandsData.commands, commandsData.folders);
     {
         core::ConfigManager config;
@@ -158,6 +162,8 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
          wrapPage(m_kipTab)},
         {utils::tr(QStringLiteral("settings.group.ai")), QStringLiteral("sparkles"),
          wrapPage(m_aiTab)},
+        {utils::tr(QStringLiteral("settings.group.store")), QStringLiteral("package"),
+         wrapPage(m_storeTab)},
     };
 
     for (const PageDef &d : defs) {
@@ -306,6 +312,25 @@ core::AiSettings SettingsDialog::buildAiSettings() const
 bool SettingsDialog::aiSettingsChanged() const
 {
     return m_aiTab->settings().toJson(true) != m_originalAi.toJson(true);
+}
+
+QVector<core::StoreProviderConfig> SettingsDialog::buildStoreProviders() const
+{
+    return m_storeTab->providers();
+}
+
+bool SettingsDialog::storeProvidersChanged() const
+{
+    const QVector<core::StoreProviderConfig> now = m_storeTab->providers();
+    if (now.size() != m_originalStoreProviders.size()) {
+        return true;
+    }
+    for (int i = 0; i < now.size(); ++i) {
+        if (now[i].toJson() != m_originalStoreProviders[i].toJson()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void SettingsDialog::accept()

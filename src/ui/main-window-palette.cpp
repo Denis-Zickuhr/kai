@@ -24,9 +24,21 @@
 
 #include "ui/features/output/quick-run-popup.h"
 
+#include "ui/shared/identification-chips.h"
 #include "utils/translation-manager.h"
 
 namespace kai::ui {
+
+namespace {
+
+void applyChip(QuickRunPopup::Entry &entry, const IdentificationChip &chip)
+{
+    entry.chipText = chip.text;
+    entry.chipColor = chip.color;
+    entry.chipIcon = chip.icon;
+}
+
+} // namespace
 
 QString MainWindow::folderPathOf(const QString &folderId) const
 {
@@ -189,15 +201,20 @@ void MainWindow::showCommandPalette(bool standalone)
     const core::SettingsData settings = m_configManager.loadSettings();
     using Kind = QuickRunPopup::Kind;
     QVector<QuickRunPopup::Entry> entries;
+    const QSet<QString> httpFolders = httpCollectionFolderIds(m_commandsData.commands, m_commandsData.folders);
     for (const core::Command &command : m_commandsData.commands) {
         if (!command.hidden) {
             const Kind kind = command.type == core::CommandType::Http ? Kind::Http : Kind::Command;
-            entries.append({command.id, command.name, folderPathOf(command.folderId), kind});
+            QuickRunPopup::Entry entry{command.id, command.name, folderPathOf(command.folderId), kind};
+            applyChip(entry, commandChip(command));
+            entries.append(entry);
         }
     }
     for (const core::Folder &folder : m_commandsData.folders) {
         if (!folder.hidden) {
-            entries.append({folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder});
+            QuickRunPopup::Entry entry{folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder};
+            applyChip(entry, folderChip(folder, httpFolders.contains(folder.id)));
+            entries.append(entry);
         }
     }
     for (const core::Collection &collection : m_collections) {
@@ -207,7 +224,9 @@ void MainWindow::showCommandPalette(bool standalone)
     }
     for (const core::Note &note : m_notes) {
         if (!note.hidden) {
-            entries.append({note.id, note.name, folderPathOf(note.folderId), Kind::Note});
+            QuickRunPopup::Entry entry{note.id, note.name, folderPathOf(note.folderId), Kind::Note};
+            applyChip(entry, noteChip());
+            entries.append(entry);
         }
     }
     for (const core::Environment &environment : settings.environments) {
@@ -253,6 +272,9 @@ void MainWindow::showCommandPalette(bool standalone)
                                      .toString(QKeySequence::NativeText);
         entries.append({QStringLiteral("view_ai_chat"), utils::tr(QStringLiteral("layout.view.ai_chat")), shortcut, Kind::Action});
     }
+    if (m_storeAvailable) {
+        entries.append({QStringLiteral("view_store"), utils::tr(QStringLiteral("layout.view.store")), QString(), Kind::Action});
+    }
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     for (QuickRunPopup::Entry &entry : entries) {
         entry.score = m_paletteUsage.score(paletteUsageKey(entry.kind, entry.id), nowMs);
@@ -291,15 +313,20 @@ void MainWindow::showFindPalette()
     }
     using Kind = QuickRunPopup::Kind;
     QVector<QuickRunPopup::Entry> entries;
+    const QSet<QString> httpFolders = httpCollectionFolderIds(m_commandsData.commands, m_commandsData.folders);
     for (const core::Command &command : m_commandsData.commands) {
         if (!command.hidden) {
             const Kind kind = command.type == core::CommandType::Http ? Kind::Http : Kind::Command;
-            entries.append({command.id, command.name, folderPathOf(command.folderId), kind});
+            QuickRunPopup::Entry entry{command.id, command.name, folderPathOf(command.folderId), kind};
+            applyChip(entry, commandChip(command));
+            entries.append(entry);
         }
     }
     for (const core::Folder &folder : m_commandsData.folders) {
         if (!folder.hidden) {
-            entries.append({folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder});
+            QuickRunPopup::Entry entry{folder.id, folder.name, folder.parentId ? folderPathOf(*folder.parentId) : QString(), Kind::Folder};
+            applyChip(entry, folderChip(folder, httpFolders.contains(folder.id)));
+            entries.append(entry);
         }
     }
     for (const core::Collection &collection : m_collections) {
@@ -309,7 +336,9 @@ void MainWindow::showFindPalette()
     }
     for (const core::Note &note : m_notes) {
         if (!note.hidden) {
-            entries.append({note.id, note.name, folderPathOf(note.folderId), Kind::Note});
+            QuickRunPopup::Entry entry{note.id, note.name, folderPathOf(note.folderId), Kind::Note};
+            applyChip(entry, noteChip());
+            entries.append(entry);
         }
     }
     m_findPalette->refreshStyle();
@@ -384,16 +413,6 @@ void MainWindow::runPaletteEntryAction(QuickRunPopup::Kind kind, const QString &
         case Kind::Environment: handleManageEnvironmentsRequested(); break;
         case Kind::Action: break;
         }
-    } else if (actionId == QLatin1String("duplicate")) {
-        switch (kind) {
-        case Kind::Command:
-        case Kind::Http: handleDuplicateRequested(id, false); break;
-        case Kind::Folder: handleDuplicateRequested(id, true); break;
-        case Kind::Collection: handleCollectionDuplicateRequested(id); break;
-        case Kind::Note: handleNoteDuplicateRequested(id); break;
-        case Kind::Environment:
-        case Kind::Action: break;
-        }
     } else if (actionId == QLatin1String("reveal")) {
         switch (kind) {
         case Kind::Command:
@@ -432,6 +451,7 @@ void MainWindow::runPaletteAction(const QString &actionId)
         {QStringLiteral("view_variables"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kVariables); }},
         {QStringLiteral("view_logs"), [](MainWindow *w) { w->m_layoutController->focusView(layout::view_id::kLogs); }},
         {QStringLiteral("view_ai_chat"), [](MainWindow *w) { w->showAiChat(); }},
+        {QStringLiteral("view_store"), [](MainWindow *w) { w->showStore(); }},
         {QStringLiteral("maximize_panel"), [](MainWindow *w) { w->m_layoutController->toggleMaximizeFocused(); }},
         {QStringLiteral("rearrange_panels"), [](MainWindow *w) { w->m_dock->setEditMode(!w->m_dock->editMode()); }},
         {QStringLiteral("restore_layout"), [](MainWindow *w) { w->restoreDefaultLayout(); }},

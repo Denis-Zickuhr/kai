@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Denis-Zickuhr/kai/assets/manifesto/store-package.schema.json",
+  "title": "Kai Store package.yml",
+  "description": "Manifest of one Kai Store package version (docs/store.md). Written next to the package payload; `kai store pack` fills `files`.",
+  "type": "object",
+  "required": ["package_format", "id", "kind", "version", "name"],
+  "additionalProperties": true,
+  "$defs": {
+    "localized": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "additionalProperties": { "type": "string" } }
+      ]
+    }
+  },
+  "properties": {
+    "package_format": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$", "description": "publisher/slug, lowercase, stable" },
+    "kind": { "enum": ["command", "folder", "pipeline", "project", "environment", "profile"] },
+    "version": { "type": "string", "description": "semver; a prerelease is allowed" },
+    "name": { "type": "string" },
+    "description": { "$ref": "#/$defs/localized", "description": "Markdown without HTML" },
+    "category": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "homepage": { "type": "string" },
+    "kai": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "string" },
+        "requires": {
+          "type": "array",
+          "items": { "enum": ["http", "pipelines", "kip", "folder_actions", "hooks", "cron", "collections", "notes", "responders"] }
+        }
+      }
+    },
+    "needs": { "type": "array", "items": { "type": "string" }, "description": "programs the content uses; shown in the preview" },
+    "platforms": { "type": "array", "items": { "enum": ["linux", "macos", "windows"] } },
+    "secrets": { "type": "array", "items": { "type": "string" }, "description": "names only; created as empty secret variables" },
+    "media": {
+      "type": "object",
+      "properties": {
+        "icon": { "type": "string" },
+        "screenshots": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string", "description": "relative, no .. and no absolute path" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "kind project by reference; exactly one of `files` and `source.clone`",
+      "properties": {
+        "clone": {
+          "type": "object",
+          "required": ["url", "ref"],
+          "properties": {
+            "url": { "type": "string" },
+            "ref": { "type": "string", "description": "a tag or commit; a branch is flagged as moving" },
+            "path": { "type": "string", "default": "kai.yml" }
+          }
+        }
+      }
+    },
+    "changelog": { "type": "string" }
+  }
+}

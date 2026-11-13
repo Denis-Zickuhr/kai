@@ -1,0 +1,14 @@
+project_name: "Scheduled ping"
+icon: "clock"
+commands:
+  - name: "Ping"
+    type: "command"
+    command: "echo ping"
+    cron_expression: "*/5 * * * *"
+    auto_run: true
+    hooks:
+      post:
+        - "Notify"
+  - name: "Notify"
+    type: "command"
+    command: "echo done"

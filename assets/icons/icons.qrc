@@ -260,6 +260,7 @@
     <file alias="shield-check.svg">lucide/shield-check.svg</file>
     <file alias="shield-x.svg">lucide/shield-x.svg</file>
     <file alias="shield.svg">lucide/shield.svg</file>
+    <file alias="shopping-cart.svg">lucide/shopping-cart.svg</file>
     <file alias="shrink.svg">lucide/shrink.svg</file>
     <file alias="shuffle.svg">lucide/shuffle.svg</file>
     <file alias="signal.svg">lucide/signal.svg</file>

@@ -1,5 +1,6 @@
 #include "ui/app-stylesheet.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ui/shared/table-utils.h"
@@ -248,7 +249,7 @@ QString buildModernStylesheet()
         "QScrollBar::handle:hover { background: %5; }\n"
         "QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }\n"
         "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }\n")
-        .arg(tk::space(3)).arg(withAlpha(110)).arg(tk::space(1)).arg(tk::space(6)).arg(withAlpha(190));
+        .arg(tk::space(3)).arg(withAlpha(110)).arg(std::min(tk::radiusMd(), tk::space(3) / 2)).arg(tk::space(6)).arg(withAlpha(190));
 
     qss += QStringLiteral(
         "QMenu { background-color: %1; border: 1px solid %2; border-radius: %3px;"
@@ -371,6 +372,15 @@ QString buildModernStylesheet()
         .arg(surface2).arg(fg).arg(border).arg(rMd).arg(tk::space(1))
         .arg(tk::space(1)).arg(padX).arg(rSm).arg(tk::controlHeight() - tk::space(2))
         .arg(sel).arg(hover);
+    // A barra de rolagem da lista do popup fica dentro do arco dos cantos (margem de ~metade do raio), com a trilha transparente:
+    // sem isto a trilha quadrada vazava pelos cantos arredondados.
+    {
+        const int arc = std::max(2, rMd / 2 + 1);
+        qss += QStringLiteral(
+            "QComboBox QAbstractItemView QScrollBar:vertical { background: transparent; margin: %1px 2px %1px 0; }\n"
+            "QComboBox QAbstractItemView QScrollBar:horizontal { background: transparent; margin: 0 %1px 2px %1px; }\n")
+            .arg(arc);
+    }
     // Moldura do popup transparente: quem desenha fundo/borda/raio é a lista
     // acima (a janela é translúcida, ver ComboPopupFilter).
     qss += QStringLiteral("QComboBoxPrivateContainer { background: transparent; border: none; }\n");
@@ -508,6 +518,11 @@ QString buildModernStylesheet()
         "QDialog[kaiEmbedded=\"true\"] { background: transparent; border: none; border-radius: 0px; }\n")
         .arg(border).arg(rMd);
 
+    // Moldura de um painel DENTRO de outro painel (Store): mesma borda e raio, mas com outro nome para a faixa de abas da zona
+    // (view-zone.cpp) não "colar" também estes cartões, o que apagava a borda de cima deles.
+    qss += QStringLiteral("QWidget#nestedPanelCard { background: transparent; border: 1px solid %1; border-radius: %2px; }\n")
+               .arg(border).arg(rMd);
+
     // Cantos da JANELA: o contêiner raiz segue radiusMd (o mesmo da máscara em MainWindow::updateWindowShape); maximizada/tela cheia fica reto.
     qss += QStringLiteral(
         "QWidget#rootContainer { border-radius: %1px; }\n"
@@ -543,13 +558,17 @@ QString buildModernStylesheet()
         .arg(border, accent);
 
     // Divisores entre painéis com moldura própria ("outerSplitter", "actionsSplitter") não desenham nada (viravam borda dupla), mas continuam arrastáveis.
-    for (const QString &name : {QStringLiteral("outerSplitter"), QStringLiteral("actionsSplitter")}) {
+    for (const QString &name : {QStringLiteral("outerSplitter"), QStringLiteral("actionsSplitter"), QStringLiteral("storeSplitter")}) {
         qss += QStringLiteral(
             "QSplitter#%1::handle, QSplitter#%1::handle:hover,"
             " QSplitter#%1::handle:horizontal, QSplitter#%1::handle:vertical,"
             " QSplitter#%1::handle:horizontal:hover, QSplitter#%1::handle:vertical:hover {"
             " background: transparent; border: none; }\n").arg(name);
     }
+
+    // O próprio QSplitter é um QWidget comum e o QSS global o pinta de "bg": entre os dois painéis da Store sobrava um quadrado
+    // escuro chapado sobre o fundo (gradiente) da janela.
+    qss += QStringLiteral("QSplitter#storeSplitter, QStackedWidget#storePages { background: transparent; border: none; }\n");
 
     // Gradientes de tema em 3 bases reutilizáveis; cada área usa uma base e o tema decide com um par start/end:
     //   - "primary": chrome do app (janela, diálogos, header, árvore de comandos) e superfícies da Saída;

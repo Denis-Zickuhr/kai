@@ -17,6 +17,42 @@ void CommandTreeWidget::setGlobalActions(const QVector<core::GlobalAction> &acti
     refreshActionViews();
 }
 
+bool CommandTreeWidget::ownsFocusMarks() const
+{
+    if (s_markOwner) {
+        return s_markOwner == this;
+    }
+    return !isFiltered();
+}
+
+bool CommandTreeWidget::effectiveInlineActions() const
+{
+    if (m_view && m_view->inlineActions == QLatin1String("on")) return true;
+    if (m_view && m_view->inlineActions == QLatin1String("off")) return false;
+    return m_inlineActions;
+}
+
+void CommandTreeWidget::claimFocusMarks()
+{
+    if (s_markOwner == this) {
+        return;
+    }
+    const QPointer<CommandTreeWidget> previous = s_markOwner;
+    s_markOwner = this;
+    refreshActionViews();
+    if (previous) {
+        previous->refreshActionViews();
+    }
+    emit activeTreeChanged();
+    if (previous) {
+        emit previous->activeTreeChanged();
+    }
+    // A principal (dona por omissão) também precisa se redesenhar.
+    for (CommandTreeWidget *other : window()->findChildren<CommandTreeWidget *>()) {
+        if (other != this && other != previous.data()) other->refreshActionViews();
+    }
+}
+
 void CommandTreeWidget::setFocusedAction(const QString &virtualId)
 {
     forFollowers([&](CommandTreeWidget *f) { f->setFocusedAction(virtualId); });
@@ -60,7 +96,7 @@ void CommandTreeWidget::setInlineActionsEnabled(bool enabled)
     m_inlineActions = enabled;
     for (QTreeWidget *tree : std::as_const(m_treesByRootId)) {
         for (auto *delegate : tree->findChildren<InlineRowActions *>(QString(), Qt::FindDirectChildrenOnly)) {
-            delegate->setEnabled(enabled);
+            delegate->setEnabled(effectiveInlineActions());
         }
     }
 }

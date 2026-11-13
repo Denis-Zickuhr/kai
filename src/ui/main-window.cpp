@@ -381,6 +381,7 @@ void MainWindow::setupUi()
             m_configManager.saveCommands(m_commandsData); // sem reloadCommandTree
         }
     });
+    connect(m_commandTree, &CommandTreeWidget::activeTreeChanged, this, &MainWindow::syncActionContexts);
     connect(m_commandTree, &CommandTreeWidget::selectionChanged, this,
         [this](const QString &itemId, bool isFolder) {
             if (isNoteId(itemId)) {

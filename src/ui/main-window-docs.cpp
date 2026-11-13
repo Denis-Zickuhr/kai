@@ -221,7 +221,7 @@ void MainWindow::updateFocusActions()
     if (!m_actionSidebar || !m_commandTree) {
         return;
     }
-    const QString id = m_commandTree->currentSelectionId();
+    const QString id = m_commandTree->isActiveTree() ? m_commandTree->currentSelectionId() : QString();
     m_actionSidebar->setFocusActions(!m_smartFocus, canShowOutput(id), !documentTargetFor(id).isEmpty());
     syncExtraBars();
 }

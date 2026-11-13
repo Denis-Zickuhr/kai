@@ -1,0 +1,77 @@
+{
+  "store_format": 1,
+  "generated": "2026-11-13T00:00:00Z",
+  "packages": [
+    {
+      "id": "corp/api-checks",
+      "kind": "folder",
+      "name": "API checks",
+      "summary": {
+        "en": "Health and auth checks that use a bearer token.",
+        "pt": "Checagens de saúde e autenticação com bearer token."
+      },
+      "category": "ops",
+      "tags": [
+        "http"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/corp/api-checks/1.0.0/package.yml",
+          "sha256": "7b0e188d8f44161da31683306698ba74e31aa0244368a60744f0af7d311b9700",
+          "requires": [
+            "http"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "corp/deploy-kit",
+      "kind": "pipeline",
+      "name": "Deploy kit",
+      "summary": {
+        "en": "A tiny deploy pipeline with a confirmation gate.",
+        "pt": "Um pipeline de deploy enxuto com confirmação."
+      },
+      "category": "ops",
+      "tags": [
+        "deploy"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/corp/deploy-kit/1.0.0/package.yml",
+          "sha256": "2b5843ad8834bfdd2a9865818e7a93a9e5a6f188f2184423b6622aaf6deb89ec",
+          "requires": [
+            "pipelines"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "corp/needs-newer-kai",
+      "kind": "command",
+      "name": "Needs a newer Kai",
+      "summary": {
+        "en": "Requires Kai 9: shown greyed out.",
+        "pt": "Exige o Kai 9: aparece cinza."
+      },
+      "category": "ops",
+      "tags": [
+        "ops"
+      ],
+      "latest": "1.0.0",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "packages/corp/needs-newer-kai/1.0.0/package.yml",
+          "sha256": "b58db8dc94a26bb851a07b5f09e782c8aacc397d9e191bd00dd730b29745934d",
+          "kai_min": "9.0.0"
+        }
+      ]
+    }
+  ],
+  "signature": "Ys1k9ubLRs/gaNB2E3kkz7qP1DwQiusRZquuMhKBBYmZgI4CrOfXYxY7U5bBoCLemXTL+jgFi1G7CQslKKxwDQ=="
+}

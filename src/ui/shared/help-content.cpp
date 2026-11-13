@@ -100,7 +100,7 @@ const QVector<HelpTopicGroup> &helpTopicGroups()
          {QStringLiteral("processes"), QStringLiteral("runs"), QStringLiteral("notifications")}},
         {QStringLiteral("projects"),
          {QStringLiteral("kai_json"), QStringLiteral("import_curl"), QStringLiteral("import_openapi"),
-          QStringLiteral("export_import")}},
+          QStringLiteral("export_import"), QStringLiteral("store")}},
         {QStringLiteral("terminal"), {QStringLiteral("cli"), QStringLiteral("terminal_targets")}},
         {QStringLiteral("customize"),
          {QStringLiteral("settings"), QStringLiteral("ai"), QStringLiteral("shortcuts"), QStringLiteral("themes")}},

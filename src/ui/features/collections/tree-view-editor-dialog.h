@@ -7,6 +7,7 @@
 #include "core/tree-view.h"
 
 class QCheckBox;
+class QComboBox;
 class QLineEdit;
 class QListWidget;
 
@@ -41,6 +42,10 @@ private:
     QCheckBox *m_runningOnly = nullptr;
     QCheckBox *m_showHidden = nullptr;
     QLineEdit *m_query = nullptr;
+    QComboBox *m_actionsMode = nullptr;
+    QVector<QCheckBox *> m_groupBoxes; // na ordem de TreeViewDef::allActionGroups()
+    QComboBox *m_inline = nullptr;
+    QVector<QCheckBox *> m_kindBoxes;  // na ordem de TreeViewDef::allInlineKinds()
     bool m_deleteRequested = false;
 };
 

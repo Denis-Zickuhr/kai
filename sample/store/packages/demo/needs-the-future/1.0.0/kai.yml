@@ -1,0 +1,5 @@
+project_name: "Future"
+commands:
+  - name: "Future"
+    type: "command"
+    command: "echo future"

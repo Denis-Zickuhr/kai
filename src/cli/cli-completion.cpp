@@ -44,7 +44,8 @@ const QStringList &topLevelVerbs()
         QStringLiteral("validate"), QStringLiteral("ps"), QStringLiteral("attach"),
         QStringLiteral("kill"), QStringLiteral("raise"), QStringLiteral("completion"),
         QStringLiteral("history"), QStringLiteral("last"), QStringLiteral("init"),
-        QStringLiteral("kip"),
+        QStringLiteral("kip"),     QStringLiteral("version"),
+        QStringLiteral("store"),
     };
     return verbs;
 }

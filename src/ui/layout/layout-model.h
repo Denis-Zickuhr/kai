@@ -52,6 +52,7 @@ inline const QString kCommands = QStringLiteral("commands");
 inline const QString kOutput = QStringLiteral("output");
 inline const QString kDocument = QStringLiteral("document");
 inline const QString kAiChat = QStringLiteral("ai_chat");
+inline const QString kStore = QStringLiteral("store");
 inline const QString kProcesses = QStringLiteral("processes");
 inline const QString kHistory = QStringLiteral("history");
 inline const QString kNotifications = QStringLiteral("notifications");

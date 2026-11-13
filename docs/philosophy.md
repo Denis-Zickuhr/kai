@@ -111,6 +111,10 @@ tests, skipped steps and untested paths are stated, not smoothed over.
   online collaboration product no.
 - **Not a CI system either (firm).** A [pipeline](pipelines.md) is a guided, attended sequence on this machine: one step at
   a time, branching only forward, no parallel steps, matrices, triggers or artifacts, and it never starts by itself.
+- **Not a package manager either (firm).** The [Store](store.md) finds and installs things made for Kai, but there is no dependency
+  resolution, no lockfile and no silent update: a package is self-contained, installing is an import that runs nothing, hooks are
+  never installed, schedules and auto-run are asked per command, and the network is only touched when you open the Store, refresh
+  it or install. No provider comes by default, and with none Kai has no Store entry at all.
 - **Not an automation service or daemon (firm).** It is a desktop app that
   runs while the user's session runs. It schedules and auto-runs things, but it
   is not a server, a CI system or a job queue.

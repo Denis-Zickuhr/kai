@@ -1,0 +1,18 @@
+package_format: 1
+id: "corp/api-checks"
+kind: "folder"
+version: "1.0.0"
+name: "API checks"
+description:
+  en: "Health and auth checks that use a bearer token."
+  pt: "Checagens de saúde e autenticação com bearer token."
+category: "ops"
+tags: ["http"]
+author: "Kai demos"
+license: "MIT"
+kai:
+  requires: ["http"]
+secrets: ["API_TOKEN"]
+files:
+  - path: "kai.yml"
+    sha256: "91ed259baaf892b0265dd86dfd4b05c2da074e01d9edd00d30b148bec2467c3c"

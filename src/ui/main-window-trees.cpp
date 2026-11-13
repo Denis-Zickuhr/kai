@@ -101,7 +101,19 @@ ActionGroupContainer *MainWindow::buildExtraTreeBars(CommandTreeWidget *tree, QW
     bars.tree = tree;
     QVector<QWidget *> groups;
     // Mesmas regras da principal: "oculto" some, e com as ações inline o grupo de execução seria redundante.
-    const bool showExec = !settings.inlineActions && settings.executionActionsPlacement != QLatin1String("hidden");
+    // Cada árvore pode ter a própria configuração de ações (ver core::TreeViewDef): "auto" (só o que serve ao que ela mostra),
+    // "all" (tudo, como a principal) ou "custom" (os grupos escolhidos).
+    const core::TreeViewDef *def = tree->viewDef();
+    const QString mode = def ? def->actionsMode : QStringLiteral("all");
+    const bool inlineOn = def && def->inlineActions == QLatin1String("on") ? true
+        : (def && def->inlineActions == QLatin1String("off") ? false : settings.inlineActions);
+    const bool custom = mode == QLatin1String("custom");
+    const auto allowed = [&](const QString &group, const QString &placement) {
+        if (custom) return def->actionGroups.contains(group);
+        return placement != QLatin1String("hidden");
+    };
+    const bool showExec = allowed(QStringLiteral("exec"), settings.executionActionsPlacement)
+        && (custom || (!inlineOn && (mode != QLatin1String("auto") || def->showsRunnables())));
     if (showExec) {
         auto *exec = new ActionSidebar(parent);
         bars.exec = exec;
@@ -120,7 +132,7 @@ ActionGroupContainer *MainWindow::buildExtraTreeBars(CommandTreeWidget *tree, QW
         connect(exec, &ActionSidebar::showDocumentSelectedRequested, this,
                 [this]() { showDocumentFor(m_commandTree->currentSelectionId()); });
     }
-    if (settings.displayActionsPlacement != QLatin1String("hidden")) {
+    if (allowed(QStringLiteral("display"), settings.displayActionsPlacement)) {
         auto *display = new ExpandCollapseBar(parent);
         bars.display = display;
         groups << display;
@@ -142,9 +154,14 @@ ActionGroupContainer *MainWindow::buildExtraTreeBars(CommandTreeWidget *tree, QW
         display->setShowingHidden(tree->showHidden());
         display->setShowingRunningOnly(tree->showRunningOnly());
     }
-    if (settings.itemActionsPlacement != QLatin1String("hidden")) {
+    if (allowed(QStringLiteral("item"), settings.itemActionsPlacement)) {
         auto *item = new ItemActionsBar(parent);
         bars.item = item;
+        if (def && mode == QLatin1String("auto")) {
+            item->setCreateKinds(def->showsType(QStringLiteral("command")) || def->showsType(QStringLiteral("http")),
+                                 def->showsType(QStringLiteral("pipeline")), def->showsType(QStringLiteral("collection")),
+                                 def->showsType(QStringLiteral("note")));
+        }
         groups << item;
         // Criar: dentro do item selecionado na árvore extra; sem seleção, na pasta raiz da aba dela.
         auto createHere = [this, tree](const std::function<void()> &create) {
@@ -187,6 +204,24 @@ ActionGroupContainer *MainWindow::buildExtraTreeBars(CommandTreeWidget *tree, QW
     return container;
 }
 
+// A configuração de ações da árvore mudou: refaz os grupos de cima do painel (ficam no começo do layout do corpo).
+void MainWindow::rebuildExtraTreeBars(CommandTreeWidget *tree)
+{
+    QWidget *body = tree->parentWidget();
+    auto *layout = body ? qobject_cast<QVBoxLayout *>(body->layout()) : nullptr;
+    if (!layout) {
+        return;
+    }
+    m_extraBars.removeIf([tree](const ExtraTreeBars &b) { return !b.tree || b.tree == tree; });
+    for (ActionGroupContainer *old : body->findChildren<ActionGroupContainer *>(QString(), Qt::FindDirectChildrenOnly)) {
+        layout->removeWidget(old);
+        old->deleteLater();
+    }
+    if (ActionGroupContainer *bars = buildExtraTreeBars(tree, body)) {
+        layout->insertWidget(0, bars);
+    }
+}
+
 void MainWindow::syncExtraBars()
 {
     m_extraBars.removeIf([](const ExtraTreeBars &b) { return !b.tree; });
@@ -216,16 +251,52 @@ void MainWindow::syncExtraBars()
         }
     }
     for (const ExtraTreeBars &bars : std::as_const(m_extraBars)) {
+        // Uma árvore não age sobre a seleção da outra: só as barras da árvore ativa ficam habilitadas.
+        const bool mine = bars.tree && bars.tree->isActiveTree();
         if (bars.exec) {
-            bars.exec->setRowContext(hasSelection, isCommand, isRunning, hasFailed, isHttp);
-            bars.exec->setFocusActions(!m_smartFocus, canShowOutput(id), !documentTargetFor(id).isEmpty());
+            bars.exec->setRowContext(mine && hasSelection, mine && isCommand, mine && isRunning, mine && hasFailed, mine && isHttp);
+            bars.exec->setFocusActions(!m_smartFocus, mine && canShowOutput(id), mine && !documentTargetFor(id).isEmpty());
         }
         if (bars.item) {
-            bars.item->setRowContext(hasSelection);
+            bars.item->setRowContext(mine && hasSelection);
         }
         if (bars.display) {
-            bars.display->setSelectedHidden(hasSelection && isHidden);
+            bars.display->setSelectedHidden(mine && hasSelection && isHidden);
         }
+    }
+}
+
+void MainWindow::syncActionContexts()
+{
+    syncPrimaryBars();
+    syncExtraBars();
+}
+
+// Mesmo critério das extras: com outra árvore ativa, as barras da principal ficam sem alvo.
+void MainWindow::syncPrimaryBars()
+{
+    if (!m_actionSidebar || !m_commandTree) {
+        return;
+    }
+    const bool active = m_commandTree->isActiveTree();
+    const QString selId = active ? m_commandTree->currentSelectionId() : QString();
+    const bool hasSelection = !selId.isEmpty();
+    const bool isCommand = hasSelection && !m_commandTree->currentSelectionIsFolder();
+    bool isHttp = false;
+    if (isCommand) {
+        const auto it = m_commandsById.constFind(selId);
+        isHttp = it != m_commandsById.constEnd() && it->type == core::CommandType::Http;
+    } else if (hasSelection) {
+        isHttp = core::folderHasHttpCommand(selId, m_commandsData.folders, m_commandsData.commands);
+    }
+    m_actionSidebar->setRowContext(hasSelection, isCommand, isCommand && isCommandRunning(selId),
+                                   isCommand && m_failedCommandIds.contains(selId), isHttp);
+    m_actionSidebar->setFocusActions(!m_smartFocus, canShowOutput(selId), !documentTargetFor(selId).isEmpty());
+    if (m_itemActionsBar) {
+        m_itemActionsBar->setRowContext(hasSelection);
+    }
+    if (m_expandCollapseBar && !active) {
+        m_expandCollapseBar->setSelectedHidden(false);
     }
 }
 
@@ -292,8 +363,9 @@ void MainWindow::wireExtraTree(CommandTreeWidget *tree)
         if (itemId.isEmpty() || !tree->isAncestorOf(QApplication::focusWidget())) {
             return;
         }
-        m_commandTree->selectCommand(itemId);
+        m_commandTree->selectCommand(itemId, false); // a extra segue a ativa: a principal só espelha a seleção
     });
+    connect(tree, &T::activeTreeChanged, this, &MainWindow::syncActionContexts);
 }
 
 // O conteúdo da setinha de Commands (e de cada árvore extra): as árvores existentes (abrir/fechar), Nova árvore… e Editar.
@@ -386,6 +458,7 @@ void MainWindow::editTreeView(const QString &treeId)
     if (QWidget *card = m_viewRegistry->existingWidget(viewId)) {
         if (auto *tree = card->findChild<CommandTreeWidget *>()) {
             tree->setView(*it);
+            rebuildExtraTreeBars(tree);
         }
     }
     m_dock->refreshTabs();

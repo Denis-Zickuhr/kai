@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 #endif
+#include <cstdio>
 #include <QApplication>
 #include "ui/shared/dialog-frame.h"
 #include <QMap>
@@ -32,7 +33,9 @@
 #include "utils/crash-reporter.h"
 #include "utils/logger.h"
 #include "utils/translation-manager.h"
+#include "cli/cli-store.h"
 #include "core/config-manager.h"
+#include "core/store-preview.h"
 
 namespace {
 
@@ -97,6 +100,11 @@ int main(int argc, char *argv[])
     for (int i = 0; i < argc; ++i) {
         rawArgs << QString::fromLocal8Bit(argv[i]);
     }
+    // `kai version` / `kai --version`: só imprime a versão; não toca em configuração nem sobe o app.
+    if (rawArgs.size() == 2 && (rawArgs.at(1) == QStringLiteral("version") || rawArgs.at(1) == QStringLiteral("--version"))) {
+        std::fputs("kai " KAI_VERSION_STRING "\n", stdout);
+        return 0;
+    }
     // Autocomplete (Tab): `kai __complete <palavras...>` roda a cada Tab e `kai completion <shell>` imprime o script.
     // Antes de tudo: nenhum dos dois pode cair em modo local/global/GUI.
     if (rawArgs.size() >= 2 && rawArgs.at(1) == QStringLiteral("__complete")) {
@@ -137,6 +145,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("history"), &kai::cli::runHistoryVerb},
         {QStringLiteral("last"), &kai::cli::runLastVerb},
         {QStringLiteral("init"), &kai::cli::runInitVerb},
+        {QStringLiteral("store"), &kai::cli::runStoreVerb},
     };
     if (rawArgs.size() >= 2 && cliVerbs.contains(rawArgs.at(1))) {
         QCoreApplication verbApp(argc, argv);
@@ -322,6 +331,10 @@ int main(int argc, char *argv[])
     QObject::connect(ipc, &ipc::IpcServer::importRequested, &window,
         [&window](const QString &path, const QStringList &only, bool &ok, QString &message) {
             ok = window.importProjectFromCli(path, only, message);
+        });
+    QObject::connect(ipc, &ipc::IpcServer::storeInstallRequested, &window,
+        [&window](const QJsonObject &request, bool &ok, QString &message) {
+            ok = window.installStorePackage(core::StoreInstallRequest::fromJson(request), message);
         });
     QObject::connect(ipc, &ipc::IpcServer::importTreeRequested, &window,
         [&window](const QString &path, bool &ok, QString &message) {

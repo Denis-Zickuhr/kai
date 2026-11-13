@@ -2,6 +2,8 @@
 #include <QSet>
 #include <QTabWidget>
 #include <QTest>
+
+#include <QJsonObject>
 #include <QTreeWidget>
 
 #include "core/tree-view.h"
@@ -66,6 +68,39 @@ class TestTreeView : public QObject {
     }
 
 private slots:
+    // Ações por árvore: o modo, os grupos, os botões na linha e quais ("só ícones de executar") sobrevivem ao JSON.
+    void actionSettingsRoundTripAndFallBackToTheDefaults()
+    {
+        TreeViewDef view;
+        view.id = "t";
+        view.actionsMode = "custom";
+        view.actionGroups = {"exec", "item"};
+        view.inlineActions = "on";
+        view.inlineKinds = {"play"};
+        const TreeViewDef back = TreeViewDef::fromJson(view.toJson());
+        QCOMPARE(back.actionsMode, QStringLiteral("custom"));
+        QCOMPARE(back.actionGroups, (QStringList{"exec", "item"}));
+        QCOMPARE(back.inlineActions, QStringLiteral("on"));
+        QCOMPARE(back.inlineKinds, (QStringList{"play"}));
+        QVERIFY(back == view);
+
+        // Arquivo antigo (sem as chaves) e valores inválidos: o padrão.
+        const TreeViewDef old = TreeViewDef::fromJson(QJsonObject{{"id", "x"}, {"actions_mode", "bogus"}, {"inline_actions", "maybe"}});
+        QCOMPARE(old.actionsMode, QStringLiteral("auto"));
+        QCOMPARE(old.inlineActions, QStringLiteral("inherit"));
+        QVERIFY(old.actionGroups.isEmpty());
+    }
+
+    void aNotesOnlyTreeDoesNotShowRunnables()
+    {
+        TreeViewDef notes;
+        notes.types = {"note"};
+        QVERIFY(!notes.showsRunnables());
+        QVERIFY(notes.showsType("note"));
+        QVERIFY(!notes.showsType("pipeline"));
+        QVERIFY(TreeViewDef{}.showsRunnables()); // sem filtro de tipo mostra tudo
+    }
+
     void emptyViewShowsEverything()
     {
         const TreeData out = filterTreeData(TreeViewDef{}, sample());
@@ -189,6 +224,26 @@ private slots:
         QCOMPARE(tree->topLevelItemCount(), 3); // a novidade da principal chegou
         QVERIFY(follower.isFiltered());
         QVERIFY(!main.isFiltered());
+    }
+
+    // Selecionar numa árvore extra espelha a seleção na principal sem trocar a aba que o usuário deixou à vista nela.
+    void mirroredSelectionDoesNotSwitchTheVisibleTab()
+    {
+        CommandTreeWidget main;
+        TreeData d;
+        d.folders = {folder("R1", QString(), 0), folder("R2", QString(), 1)};
+        d.commands = {command("c1", "R1"), command("c2", "R2")};
+        main.setData(d.folders, d.commands, {}, {});
+        auto *tabs = main.findChild<QTabWidget *>();
+        QVERIFY(tabs && tabs->count() == 2);
+        tabs->setCurrentIndex(0);
+
+        QVERIFY(main.selectCommand("c2", false));
+        QCOMPARE(tabs->currentIndex(), 0); // a aba da principal não mudou
+        QCOMPARE(main.currentSelectionId(), QStringLiteral("c2")); // mas a seleção da principal é a espelhada
+
+        QVERIFY(main.selectCommand("c2")); // seleção explícita (paleta, "ir para") mostra o item
+        QCOMPARE(tabs->currentIndex(), 1);
     }
 };
 

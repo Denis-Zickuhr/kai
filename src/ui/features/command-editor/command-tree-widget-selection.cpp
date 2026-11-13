@@ -2,6 +2,8 @@
 
 #include "ui/features/command-editor/command-tree-widget-internal.h"
 
+#include <QApplication>
+
 namespace kai::ui {
 
 using namespace cmdtree;
@@ -14,6 +16,11 @@ void CommandTreeWidget::handleTreeCurrentItemChanged(QTreeWidgetItem *current,
     if (!m_rebuilding && !m_focusedActionId.isEmpty()) {
         setFocusedAction(QString());
     }
+    // Quem escolheu o item com o foco nesta árvore passa a ser a dona das marcas de foco.
+    if (!m_rebuilding && current && isAncestorOf(QApplication::focusWidget())) {
+        m_mirrorTree = nullptr;
+        claimFocusMarks();
+    }
     if (!current) {
         emit selectionChanged(QString(), false);
         return;
@@ -24,9 +31,17 @@ void CommandTreeWidget::handleTreeCurrentItemChanged(QTreeWidgetItem *current,
     emit selectionChanged(itemId, !isCommand);
 }
 
+QTreeWidget *CommandTreeWidget::selectionTree() const
+{
+    if (m_mirrorTree && m_mirrorTree->currentItem()) {
+        return m_mirrorTree;
+    }
+    return qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+}
+
 QString CommandTreeWidget::currentSelectionId() const
 {
-    auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+    auto *tree = selectionTree();
     if (!tree || !tree->currentItem()) {
         return QString();
     }
@@ -71,7 +86,7 @@ void CommandTreeWidget::collapseAll()
 
 bool CommandTreeWidget::currentSelectionIsFolder() const
 {
-    auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+    auto *tree = selectionTree();
     if (!tree || !tree->currentItem()) {
         return false;
     }
@@ -84,7 +99,7 @@ bool CommandTreeWidget::currentSelectionIsFolder() const
 
 bool CommandTreeWidget::currentSelectionIsCollection() const
 {
-    auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+    auto *tree = selectionTree();
     if (!tree || !tree->currentItem()) {
         return false;
     }
@@ -94,7 +109,7 @@ bool CommandTreeWidget::currentSelectionIsCollection() const
 
 bool CommandTreeWidget::currentSelectionIsNote() const
 {
-    auto *tree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+    auto *tree = selectionTree();
     if (!tree || !tree->currentItem()) {
         return false;
     }
@@ -212,13 +227,23 @@ void CommandTreeWidget::restoreExpandedIds(const QSet<QString> &expandedIds)
     }
 }
 
-bool CommandTreeWidget::selectItemById(const QString &id)
+bool CommandTreeWidget::selectItemById(const QString &id, bool mirror)
 {
     if (id.isEmpty()) {
         return false;
     }
-    for (auto it = m_treesByRootId.constBegin(); it != m_treesByRootId.constEnd(); ++it) {
-        QTreeWidget *tree = it.value();
+    // Espelhando, a aba que já está à vista tem prioridade (nada muda para quem olha); as outras só se o item não estiver nela.
+    QVector<QTreeWidget *> candidates;
+    auto *visibleTree = qobject_cast<QTreeWidget *>(m_tabWidget->currentWidget());
+    if (mirror && visibleTree) {
+        candidates.append(visibleTree);
+    }
+    for (QTreeWidget *tree : std::as_const(m_treesByRootId)) {
+        if (tree != visibleTree || !mirror) {
+            candidates.append(tree);
+        }
+    }
+    for (QTreeWidget *tree : std::as_const(candidates)) {
         std::function<QTreeWidgetItem *(QTreeWidgetItem *)> find =
             [&](QTreeWidgetItem *item) -> QTreeWidgetItem * {
                 if (item->data(0, kCommandIdRole).toString() == id) {
@@ -233,7 +258,12 @@ bool CommandTreeWidget::selectItemById(const QString &id)
             };
         for (int i = 0; i < tree->topLevelItemCount(); ++i) {
             if (QTreeWidgetItem *found = find(tree->topLevelItem(i)); found && !found->isHidden()) {
-                m_tabWidget->setCurrentWidget(tree);
+                if (mirror) {
+                    m_mirrorTree = tree == visibleTree ? nullptr : tree;
+                } else {
+                    m_mirrorTree = nullptr;
+                    m_tabWidget->setCurrentWidget(tree);
+                }
                 tree->setCurrentItem(found);
                 tree->clearSelection();
                 found->setSelected(true);

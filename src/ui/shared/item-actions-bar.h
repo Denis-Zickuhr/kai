@@ -24,6 +24,8 @@ public:
 
     // Habilita as ações que dependem do item selecionado (editar/excluir); as de criação ficam sempre habilitadas.
     void setRowContext(bool hasSelection);
+    // Árvore filtrada: só os botões "novo" que servem ao que ela mostra (a pasta sempre fica).
+    void setCreateKinds(bool command, bool pipeline, bool collection, bool note);
 
 signals:
     void editCurrentFolderRequested();

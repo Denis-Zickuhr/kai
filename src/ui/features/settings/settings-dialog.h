@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "core/config-manager.h"
+#include "core/store-model.h"
 
 class QListWidget;
 class QStackedWidget;
@@ -23,6 +24,7 @@ class KipTab;
 class IdentificationTab;
 class ActionsTab;
 class AiTab;
+class StoreTab;
 
 // Diálogo de Configurações Globais. Persistência explícita pelo chamador via ConfigManager::saveSettings, usando
 // buildSettings(). Cada aba é uma classe própria em features/settings/tabs/; este diálogo só monta a navegação
@@ -50,6 +52,9 @@ public:
     core::AiSettings buildAiSettings() const;
     // O usuário mexeu em algo da aba "IA"?
     bool aiSettingsChanged() const;
+    // Provedores da Kai Store (ficam no store-providers.json, nunca no settings.json) e se mudaram.
+    QVector<core::StoreProviderConfig> buildStoreProviders() const;
+    bool storeProvidersChanged() const;
 
     // Copia `sourcePath` para themesDirPath(), refaz o combo e seleciona o tema importado. Devolve o nome do tema
     // (basename sem extensão) ou vazio se falhar (arquivo inexistente, cópia falhou, colisão sem `overwriteExisting`).
@@ -99,6 +104,8 @@ private:
     ActionsTab *m_actionsTab = nullptr;
     AiTab *m_aiTab = nullptr;
     core::AiSettings m_originalAi;
+    StoreTab *m_storeTab = nullptr;
+    QVector<core::StoreProviderConfig> m_originalStoreProviders;
 
     // Preserva os campos que o diálogo não edita (environments, activeEnvironmentId, globalEnvVars legado,
     // terminalCollapsed) para buildSettings não os zerar.

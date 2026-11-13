@@ -15,6 +15,7 @@
 
 #include "ui/features/command-editor/command-tree-chip-delegate.h"
 #include "core/identification-settings.h"
+#include "ui/shared/identification-chips.h"
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
 #include <QColor>
@@ -22,53 +23,6 @@
 namespace kai::ui {
 
 using namespace cmdtree;
-
-namespace {
-
-// Cor do chip de verbo HTTP: verde (leitura), azul (criação), âmbar (atualização), vermelho (remoção).
-QColor httpVerbChipColor(const QString &verb)
-{
-    const QString v = verb.toUpper();
-    if (v == QLatin1String("GET") || v == QLatin1String("HEAD") || v == QLatin1String("OPTIONS")
-        || v == QLatin1String("QUERY")) {
-        return QColor(utils::tokens::successFg());
-    }
-    if (v == QLatin1String("POST")) {
-        return QColor(utils::tokens::infoFg());
-    }
-    if (v == QLatin1String("PUT") || v == QLatin1String("PATCH")) {
-        return QColor(utils::tokens::warningFg());
-    }
-    if (v == QLatin1String("DELETE")) {
-        return QColor(utils::tokens::errorFg());
-    }
-    return QColor(utils::tokens::mutedFg());
-}
-
-// Cor (do logo) e ícone do chip de linguagem do script: cores de marca, não tokens, para o logo ser reconhecível.
-QColor scriptLangChipColor(core::CommandLanguage language)
-{
-    switch (language) {
-    case core::CommandLanguage::Python: return QColor(0x4B, 0x8B, 0xBE);
-    case core::CommandLanguage::Node:   return QColor(0x5F, 0xA0, 0x4E);
-    case core::CommandLanguage::Php:    return QColor(0x89, 0x93, 0xBE);
-    case core::CommandLanguage::Native: break;
-    }
-    return QColor(0x4E, 0xAA, 0x25);
-}
-
-QString scriptLangChipIcon(core::CommandLanguage language)
-{
-    switch (language) {
-    case core::CommandLanguage::Python: return QStringLiteral("brand-python");
-    case core::CommandLanguage::Node:   return QStringLiteral("brand-node");
-    case core::CommandLanguage::Php:    return QStringLiteral("brand-php");
-    case core::CommandLanguage::Native: break;
-    }
-    return QStringLiteral("brand-bash");
-}
-
-} // namespace
 
 QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder)
 {
@@ -98,6 +52,10 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
     // (DraggableTreeWidget::setRowColors); o QSS deixa o item transparente em todo estado.
     tree->setRowColors(QColor(utils::tokens::bg()), QColor(utils::tokens::treeStripeBg()),
                         QColor(utils::tokens::hoverBg()), QColor(utils::tokens::selBg()));
+    // Só a árvore dona das marcas de foco destaca a linha selecionada (senão duas árvores mostram "foco" ao mesmo tempo).
+    tree->setSelectionVisiblePredicate([this]() { return ownsFocusMarks(); });
+    // Clicar no item que já era o atual não muda a seleção, mas a árvore clicada passa a ser a destacada.
+    connect(tree, &QTreeWidget::itemPressed, this, [this]() { claimFocusMarks(); });
 
     // Chips de identificação (Configurações → Identificação): um delegate na coluna 0 desenha
     // ícone + chip + nome quando o item tem kChipTextRole. Sem chips ligados, o delegate delega ao
@@ -149,7 +107,7 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
         provider.iconsFor = [this](const QString &folderId) { return folderActionIcons(folderId); };
         provider.isRunning = [this](const QString &virtualId) { return m_runningCommandIds.contains(virtualId); };
         provider.hasOutput = [this](const QString &virtualId) { return m_actionsWithOutput.contains(virtualId); };
-        provider.focusedId = [this]() { return m_focusedActionId; };
+        provider.focusedId = [this]() { return ownsFocusMarks() ? m_focusedActionId : QString(); };
         provider.outputMarkOf = [this](const QTreeWidgetItem *item) {
             using Mark = FolderActionsView::OutputMark;
             if (!m_outputMarks || !item->data(0, kIsCommandRole).toBool() || !m_commandHasOutput) {
@@ -159,7 +117,7 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
             if (!m_commandHasOutput(id)) {
                 return Mark::None;
             }
-            return id == m_shownCommandId ? Mark::Shown : Mark::Available;
+            return (id == m_shownCommandId && ownsFocusMarks()) ? Mark::Shown : Mark::Available;
         };
         auto *actionsView = new FolderActionsView(tree, std::move(provider));
         connect(actionsView, &FolderActionsView::activated, this, &CommandTreeWidget::folderActionActivated);
@@ -200,9 +158,24 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
             if (!item->data(0, kIsCollectionRole).toBool() && m_itemHasDocument && m_itemHasDocument(id)) {
                 kinds.append(Kind::Document);
             }
+            // Árvore com seleção própria de botões: só os escolhidos.
+            if (m_view && !m_view->inlineKinds.isEmpty()) {
+                const auto name = [](Kind k) {
+                    switch (k) {
+                    case Kind::Play: return QStringLiteral("play");
+                    case Kind::Stop: return QStringLiteral("stop");
+                    case Kind::Reset: return QStringLiteral("reset");
+                    case Kind::EditBody: return QStringLiteral("edit");
+                    case Kind::Output: return QStringLiteral("output");
+                    case Kind::Document: return QStringLiteral("document");
+                    }
+                    return QString();
+                };
+                kinds.removeIf([&](Kind k) { return !m_view->inlineKinds.contains(name(k)); });
+            }
             return kinds;
         });
-        inlineActions->setEnabled(m_inlineActions);
+        inlineActions->setEnabled(effectiveInlineActions());
         connect(inlineActions, &InlineRowActions::activated, this, [this](const QTreeWidgetItem *item, Kind kind) {
             const QString id = item->data(0, kCommandIdRole).toString();
             switch (kind) {

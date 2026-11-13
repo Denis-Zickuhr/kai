@@ -1,0 +1,17 @@
+package_format: 1
+id: "corp/needs-newer-kai"
+kind: "command"
+version: "1.0.0"
+name: "Needs a newer Kai"
+description:
+  en: "Requires Kai 9: shown greyed out."
+  pt: "Exige o Kai 9: aparece cinza."
+category: "ops"
+tags: ["ops"]
+author: "Kai demos"
+license: "MIT"
+kai:
+  min: "9.0.0"
+files:
+  - path: "kai.yml"
+    sha256: "56f08e5fa9936bbfb42638b81385b5d62ca9fc3782a4f094aa7feefc1e77afbb"

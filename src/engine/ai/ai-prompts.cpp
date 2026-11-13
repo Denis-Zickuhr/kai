@@ -28,6 +28,8 @@ QString buildAgentSystemPrompt(const AiPromptContext &c)
         "instead of guessing. Use validate_kai_yml for whole files.\n"
         "   Before writing a new command or a whole kai.yml, look for a similar working example with read_samples (http, shell, kip, logs, "
         "languages...) and adapt it; the samples are the best guide to idiomatic Kai.\n"
+        "   To create a Kai Store (a catalog of installable packages, e.g. in a Git repo) read read_manifesto document 'store' first, write the "
+        "files with write_project_file, then run store_pack, store_validate and store_index (never type a sha256 by hand).\n"
         "7. Be brief. Answer in the user's language. Use plain text; short lists when they help. Do not paste long outputs back; summarize.\n"
         "8. Use ask_user only for a decision that is really the user's. Stop calling tools once the request is done.\n");
     p += QStringLiteral("\nFACTS: today is %1. The Kai interface language is '%2'.").arg(c.today, c.uiLanguage);

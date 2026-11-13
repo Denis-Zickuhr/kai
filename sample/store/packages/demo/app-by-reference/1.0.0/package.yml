@@ -1,0 +1,17 @@
+package_format: 1
+id: "demo/app-by-reference"
+kind: "project"
+version: "1.0.0"
+name: "App by reference"
+description:
+  en: "A project cloned from a Git repo at install time (run tools/make-clone-fixture.sh first)."
+  pt: "Um projeto clonado de um repo Git na instalação (rode tools/make-clone-fixture.sh antes)."
+category: "demo"
+tags: ["project"]
+author: "Kai samples"
+license: "MIT"
+source:
+  clone:
+    url: "/tmp/kai-store-sample/app.git"
+    ref: "v1.0.0"
+    path: "kai.yml"

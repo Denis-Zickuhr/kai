@@ -1,0 +1,21 @@
+project_name: "Deploy kit"
+icon: "rocket"
+commands:
+  - name: "Build"
+    type: "command"
+    folder: "steps"
+    command: "echo building"
+  - name: "Release"
+    type: "command"
+    folder: "steps"
+    command: "echo releasing"
+  - name: "Ship"
+    type: "pipeline"
+    steps:
+      - id: build
+        label: "Build"
+        run: "steps/Build"
+      - id: release
+        label: "Release"
+        run: "steps/Release"
+        confirm: "Release now?"

@@ -1,0 +1,18 @@
+package_format: 1
+id: "demo/needs-the-future"
+kind: "command"
+version: "1.0.0"
+name: "Needs the future"
+description:
+  en: "Requires a capability this Kai does not have (shown greyed out)."
+  pt: "Exige um recurso que este Kai não tem (aparece cinza)."
+category: "demo"
+tags: ["demo"]
+author: "Kai samples"
+license: "MIT"
+kai:
+  min: "9.0.0"
+  requires: ["teleport"]
+files:
+  - path: "kai.yml"
+    sha256: "debdf663f313802cb96d8dcf4da1dac7cd8f4a9a4f3ae2d207562676a9285fd1"

@@ -6,6 +6,8 @@
 #include "ui/main-window.h"
 
 #include "ui/layout/dock-host.h"
+#include "core/store-local.h"
+#include "ui/features/store/store-window.h"
 #include "ui/layout/layout-controller.h"
 #include "ui/layout/panel-card.h"
 #include "ui/layout/layout-store.h"
@@ -585,6 +587,26 @@ void MainWindow::registerPanelViews()
         return wrapInPanelCard(m_aiChat, QSize(kAiChatMinWidth, 300));
     };
     m_viewRegistry->registerView(aiChat);
+
+    // Sem provedor habilitado: nenhum botão, nenhum painel, nenhuma rede.
+    constexpr int kStoreMinWidth = 340;
+    m_storeAvailable = anyStoreProviderEnabled();
+    ViewSpec store = base(view_id::kStore, "layout.view.store", "shopping-cart", Home::Secondary);
+    store.minWidth = kStoreMinWidth;
+    store.available = [this]() { return m_storeAvailable; };
+    store.factory = [this]() -> QWidget * {
+        StoreWindow::Host host;
+        host.configDir = m_configManager.configDirPath();
+        host.install = [this](const core::StoreInstallRequest &request, QString &message) {
+            return installStorePackage(request, message);
+        };
+        host.uninstall = [this](const QString &folderId, QString &message) { return uninstallStorePackage(folderId, message); };
+        host.commands = [this]() { return m_commandsData; };
+        m_storeWindow = new StoreWindow(core::StoreLocalState(m_configManager.configDirPath()).loadProviders(), host);
+        m_storeWindow->setEmbedded(true);
+        return wrapInPanelCard(m_storeWindow, QSize(kStoreMinWidth, 360));
+    };
+    m_viewRegistry->registerView(store);
 }
 
 // `run:<id>` é o espelho de uma execução (a guia da Saída puxada para uma zona); `kip:<id>` é um comando KIP fixado como

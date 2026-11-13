@@ -1,0 +1,14 @@
+store_format: 1
+name: "Corp private store"
+description:
+  en: "Private API store. Needs the token demo-token; the index is signed."
+  pt: "Loja privada via API. Exige o token demo-token; o índice é assinado."
+categories:
+  - id: ops
+    name:
+      en: "Operations"
+      pt: "Operações"
+    icon: "wrench"
+signing:
+  algorithm: ed25519
+  key: "ngxvy+cenaECZ2yxHxESv87qkGHPv4Av3Zt3+LxelEw="

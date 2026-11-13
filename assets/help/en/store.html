@@ -1,0 +1,17 @@
+<h2>Store</h2>
+<p>The Store finds and installs things made for Kai: commands, folders, pipelines, projects, environments and execution profiles. It is not a server of ours: you add <b>providers</b> (a Git repository, a catalog file or an API) in <b>Settings → Store</b>. With none, there is no Store entry and Kai never contacts anything.</p>
+<h3>Install</h3>
+<p><b>View → Store</b> (the shopping-cart panel) lists the packages of a provider. <b>Install</b> downloads the files, checks every hash and shows a <b>preview</b> before anything is written: each command's code, the programs it needs and the URLs it calls.</p>
+<ul>
+<li><b>Hooks</b> in a package are never installed.</li>
+<li><b>Schedules</b> and <b>run when Kai starts</b> are asked per command and start off.</li>
+<li><b>Secrets</b> become empty variables for you to fill in.</li>
+</ul>
+<div class='tip'><b>Packages are code.</b> Read the preview, and add only providers you trust.</div>
+<h3>Update and uninstall</h3>
+<p>Updates are looked up only when the Store is open or when you click <b>Refresh</b>. If you edited an installed package, <b>Install as a copy</b> keeps your version. <b>Uninstall</b> removes only what the install created.</p>
+<h3>Terminal</h3>
+<pre>kai store list
+kai store search deploy
+kai store install acme/ship-to-staging</pre>
+<p>Publishing your own is just files in a Git repository; see <code>docs/store.md</code>.</p>

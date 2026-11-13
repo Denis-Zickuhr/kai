@@ -2,6 +2,7 @@
 
 #include <QFrame>
 #include <QSet>
+#include <QColor>
 #include <QString>
 #include <QVector>
 
@@ -37,6 +38,9 @@ public:
         QString path; // pastas que levam ao item (ou o atalho, nas ações): só contexto e busca
         Kind kind = Kind::Command;
         double score = 0; // quanto o item é usado (core::PaletteUsage): maior sobe na lista
+        QString chipText = QString();  // chip de identificação (Configurações → Identificação), antes do nome; vazio = sem chip
+        QColor chipColor = QColor();
+        QString chipIcon = QString();  // chip só de ícone (linguagem do script)
     };
 
     explicit QuickRunPopup(QWidget *parent = nullptr);

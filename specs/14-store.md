@@ -1,6 +1,9 @@
 # Spec 14: Kai Store
 
-> **Status:** design, targeted at `1.0.0-beta.3`. Nothing implemented yet.
+> **Status:** implemented for `1.0.0-beta.4` (see `docs/store.md`). Deviations from the text below: provider list and tokens
+> live together in `store-providers.json` (0600) instead of settings; the `api` provider reads only the first index page;
+> `kai store pack` writes no `.zip`; the official provider is not offered yet (no hosting); the index signature covers each
+> `package.yml` hash, so `package.yml` carries no signature of its own; the window shows the icon but no screenshots.
 
 # Part A — Contract
 
@@ -222,8 +225,9 @@ packages/<publisher>/<slug>/<version>/kai.yml, scripts/…, icon.png
 - **Settings → Store:** provider list as a table (name, kind chip, trust chip;
   pencil/trash) with `+ Add`; the add/edit dialog follows `ParameterRowDialog`
   (name, location, kind, token, trust) with **Test connection**. Section appears
-  always; the Store window is reachable only when ≥ 1 enabled provider exists.
-- **File → Store…** opens a window (not a grid panel): provider selector,
+  always; the Store panel exists only when ≥ 1 enabled provider exists.
+- **View → Store** (shopping-cart icon) is a dockable panel, like the AI chat: it appears only when ≥ 1 provider is
+  enabled, and also as a palette action. It has a provider selector,
   category rail, search, grid of cards (icon, name, summary, kind chip,
   version, trust badge), detail view, preview/install dialog. Short texts per
   AGENTS §10; explanations live in docs and Help.

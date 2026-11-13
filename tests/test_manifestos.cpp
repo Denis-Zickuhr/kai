@@ -876,10 +876,10 @@ private slots:
         QSignalSpy loaded(&dialog, &ui::ManifestoDialog::loaded);
         QSignalSpy copied(&dialog, &ui::ManifestoDialog::copyFinished);
         dialog.show();
-        QCOMPARE(dialog.tabs()->count(), 3);
+        QCOMPARE(dialog.tabs()->count(), 4);
         // O texto só chega quando a leitura em segundo plano termina: antes disso o botão está desabilitado.
         QVERIFY(!dialog.copyButton(QStringLiteral("kai"))->isEnabled());
-        QTRY_COMPARE_WITH_TIMEOUT(loaded.count(), 3, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(loaded.count(), 4, 5000);
         for (const QVariantList &args : std::as_const(loaded)) QVERIFY(args.at(1).toBool());
 
         QApplication::clipboard()->setText(QStringLiteral("untouched"));

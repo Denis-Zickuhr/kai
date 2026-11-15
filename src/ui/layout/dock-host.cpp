@@ -21,6 +21,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSplitter>
+#include <QPointer>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -292,8 +293,36 @@ QSplitter *DockHost::stackSplitter(int index) const
     return index >= 0 && index < m_stackWidgets.size() ? m_stackWidgets.at(index).splitter : nullptr;
 }
 
+namespace {
+// Reorganizar/trocar painéis reparenta ou esconde widgets e o Qt manda o foco para o primeiro que aceita (a área de rolagem
+// do quadro, o painel Documento). Quem estava com o foco (a árvore, durante a navegação por teclado) o recupera.
+class FocusKeeper {
+public:
+    FocusKeeper() : m_widget(QApplication::focusWidget()) {}
+    ~FocusKeeper()
+    {
+        if (!m_widget) {
+            return;
+        }
+        QPointer<QWidget> widget = m_widget;
+        const auto restore = [widget]() {
+            if (widget && widget->isVisible() && QApplication::focusWidget() != widget
+                && widget->window() == QApplication::activeWindow()) {
+                widget->setFocus(Qt::OtherFocusReason);
+            }
+        };
+        restore();
+        QTimer::singleShot(0, qApp, restore);
+    }
+
+private:
+    QPointer<QWidget> m_widget;
+};
+} // namespace
+
 void DockHost::rebuild()
 {
+    FocusKeeper focusKeeper;
     m_rebuilding = true;
 
     // 1. Estaciona os painéis fora das zonas antigas, que vão ser descartadas.
@@ -567,6 +596,7 @@ void DockHost::updateBoardMinimum()
 
 void DockHost::lightUpdate()
 {
+    FocusKeeper focusKeeper;
     for (auto it = m_zones.constBegin(); it != m_zones.constEnd(); ++it) {
         const ZoneState &state = m_model.zone(it.key());
         const QString maximized = m_model.maximized();
@@ -882,13 +912,7 @@ void DockHost::buildFitBoard(const std::optional<Zone> &only, const QString &max
     m_fit->setItems(items);
     m_boardLayout->addWidget(m_fit, 1);
     // Sem o modo reordenar (e maximizado, onde a célula já é a grade toda) não há alça.
-    if (only || !m_model.tabsAlways()) {
-        for (const FitBoard::Item &item : std::as_const(items)) {
-            if (QWidget *grip = m_fit->gripOf(item.cell.zone)) {
-                grip->hide();
-            }
-        }
-    }
+    m_fit->setHandlesVisible(!only && m_model.tabsAlways());
 }
 
 bool DockHost::setZoneSpan(Zone zone, int colSpan, int rowSpan)

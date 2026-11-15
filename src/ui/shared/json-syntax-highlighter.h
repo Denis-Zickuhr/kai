@@ -7,7 +7,7 @@
 
 namespace kai::ui {
 
-// Realce de sintaxe JSON (chaves, strings, números, booleanos/null, pontuação) com paleta Dracula-like, independente do QSS.
+// Realce de sintaxe JSON (chaves, strings, números, booleanos/null, pontuação) com paleta Dracula-like ajustada ao contraste do fundo de código do tema (legível em temas claros).
 class JsonSyntaxHighlighter : public QSyntaxHighlighter {
     Q_OBJECT
 
@@ -18,9 +18,10 @@ protected:
     void highlightBlock(const QString &text) override;
 
 private:
+    enum class Kind { Key, String, Number, Keyword, Punctuation };
     struct Rule {
         QRegularExpression pattern;
-        QTextCharFormat format;
+        Kind kind;
     };
     QVector<Rule> m_rules;
 };

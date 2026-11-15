@@ -433,8 +433,8 @@ void PtyTerminalWidget::applyThemeColors()
         QColor(92, 92, 255), QColor(255, 0, 255), QColor(0, 255, 255), QColor(255, 255, 255),
     };
     for (int i = 0; i < 8; ++i) {
-        m_palette[i] = normalColors[i];
-        m_palette[i + 8] = brightColors[i];
+        m_palette[i] = tk::ensureContrast(normalColors[i], m_defaultBg, 3.0);
+        m_palette[i + 8] = tk::ensureContrast(brightColors[i], m_defaultBg, 3.0);
     }
 
     m_font = QFont();

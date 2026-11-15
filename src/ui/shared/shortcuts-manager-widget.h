@@ -35,6 +35,8 @@ protected:
 
 private:
     void rebuildTable();
+    void ensureBuilt();
+    void fillMissingDefaults();
     void styleCell(QWidget *cell);
     // A descrição quebra em até duas linhas: a altura da linha vem da célula, não de uma conta com a fonte padrão.
     void adjustRowHeights();
@@ -48,6 +50,7 @@ private:
     QTableWidget *m_table = nullptr;
     QMap<QString, QStringList> m_shortcuts;
     QMap<QString, int> m_rowForActionId;
+    bool m_built = false;
 };
 
 } // namespace kai::ui

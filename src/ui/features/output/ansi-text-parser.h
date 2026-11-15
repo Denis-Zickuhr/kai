@@ -29,8 +29,9 @@ public:
     // Volta ao formato padrão (equivale a \x1b[0m).
     void resetFormat();
 
-private:
     static QColor ansiColorFor(int code, bool bright);
+
+private:
 
     QTextCharFormat m_currentFormat;
     QTextCharFormat m_defaultFormat;

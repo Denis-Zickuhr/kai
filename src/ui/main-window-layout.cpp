@@ -433,6 +433,7 @@ QWidget *MainWindow::createDocumentPanel()
 {
     m_documentPanel = new DocumentPanel;
     m_documentPanel->setSessionStore(m_docStore);
+    m_documentPanel->setAutoLoadRemoteImages(m_configManager.loadSettings().autoLoadRemoteImages);
     connect(m_documentPanel, &DocumentPanel::documentKaiLinkActivated, this, &MainWindow::handleDocKaiLink);
     connect(m_documentPanel, &DocumentPanel::documentDirectoryFixAutomatically, this,
             [this](const QString &dir, const QString &suggestion) { fixDocDirectory(true, dir, suggestion); });

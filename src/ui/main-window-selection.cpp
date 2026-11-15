@@ -4,6 +4,7 @@
 #include "ui/main-window.h"
 #include "utils/translation-manager.h"
 
+#include "ui/features/http/quick-http-edit-dialog.h"
 #include "ui/layout/dock-host.h"
 
 #include "utils/path-format.h"
@@ -14,11 +15,14 @@
 #endif
 
 #include <QApplication>
+#include <QPointer>
+#include <QTimer>
 
 #include "ui/features/environments/environment-manager-dialog.h"
 
 #include "ui/features/output/run-mirror-panel.h"
 
+#include "ui/features/docs/document-panel.h"
 #include "ui/shared/welcome-screen.h"
 
 namespace kai::ui {
@@ -48,6 +52,29 @@ void MainWindow::handleCommandSelectionChanged(const QString &itemId, bool isFol
     const auto syncTabs = qScopeGuard([this]() { refreshOutputTabs(); });
     // Uma seleção nova cancela o "documento acompanha o comando" que ainda estiver sendo conferido em segundo plano.
     ++m_docFollowToken;
+
+    // Navegar pela árvore não tira o foco dela: o painel Documento, ao mostrar ou montar o texto, pegava o foco para o
+    // próprio scroll e as setas passavam a rolar o documento. Devolve o foco se ele foi parar lá (a montagem é assíncrona).
+    QPointer<QWidget> keptFocus = QApplication::focusWidget();
+    if (keptFocus && !m_commandTree->isAncestorOf(keptFocus) && keptFocus != m_commandTree) {
+        keptFocus.clear();
+    }
+    const auto restoreFocus = qScopeGuard([this, keptFocus]() {
+        if (!keptFocus) {
+            return;
+        }
+        const quint64 token = m_docFollowToken;
+        const auto restore = [this, keptFocus, token]() {
+            QWidget *now = QApplication::focusWidget();
+            if (keptFocus && token == m_docFollowToken && now != keptFocus && keptFocus->isVisible()
+                && keptFocus->window() == QApplication::activeWindow()) {
+                keptFocus->setFocus(Qt::OtherFocusReason);
+            }
+        };
+        restore();
+        QTimer::singleShot(0, this, restore);
+        QTimer::singleShot(250, this, restore);
+    });
 
     const bool hasSelection = !itemId.isEmpty();
     const bool isCommand = hasSelection && !isFolder;
@@ -376,6 +403,27 @@ void MainWindow::handleCommandActivated(const QString &commandId)
         } else {
             reconnectTerminalToCommand(commandId);
         }
+        return;
+    }
+
+    // "Perguntar antes": só em execução manual; agendada/segundo plano segue direto.
+    if (command.type == core::CommandType::Http && command.httpConfig && command.httpConfig->askFirst
+        && !m_quietRun && !m_scheduledRun) {
+        QuickHttpEditDialog dialog(command.name, *command.httpConfig, dialogParent());
+        dialog.setAcceptText(utils::tr(QStringLiteral("http.ask_first.send")));
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        core::Command edited = command;
+        edited.httpConfig = dialog.config();
+        for (core::Command &c : m_commandsData.commands) {
+            if (c.id == commandId) {
+                c.httpConfig = edited.httpConfig;
+                persistCommands();
+                break;
+            }
+        }
+        promptParamsAndRun(edited);
         return;
     }
 

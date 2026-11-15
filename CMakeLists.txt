@@ -412,6 +412,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/docs/doc-viewer-internal.h
     src/ui/features/docs/doc-viewer-helpers.cpp
     src/ui/features/docs/doc-viewer-render.cpp
+    src/ui/features/docs/doc-viewer-remote.cpp
     src/ui/features/docs/doc-viewer-search.cpp
     src/ui/features/docs/doc-viewer-navigation.cpp
     src/ui/features/docs/doc-viewer-edit.cpp
@@ -778,6 +779,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/shared/combo-popup-filter.cpp
     src/ui/shared/key-trace-filter.h
     src/ui/shared/key-trace-filter.cpp
+    src/ui/shared/open-time-filter.h
+    src/ui/shared/open-time-filter.cpp
     src/ui/shared/status-line.h
     src/ui/shared/status-line.cpp
     src/ui/shared/action-group-container.h

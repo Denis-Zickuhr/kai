@@ -28,6 +28,7 @@ public:
     QComboBox *densityField() const { return m_densityField; }
     QComboBox *cornerStyleField() const { return m_cornerStyleField; }
     QComboBox *treeConnectorStyleField() const { return m_treeConnectorStyleField; }
+    QComboBox *treeLookField() const { return m_treeLookField; }
     QLineEdit *commandsBgImageField() const { return m_commandsBgImageField; }
     QSlider *commandsBgOpacityField() const { return m_commandsBgOpacityField; }
     QComboBox *itemActionsPlacementField() const { return m_itemActionsPlacementField; }
@@ -57,6 +58,7 @@ private:
     QComboBox *m_densityField = nullptr;
     QComboBox *m_cornerStyleField = nullptr;
     QComboBox *m_treeConnectorStyleField = nullptr;
+    QComboBox *m_treeLookField = nullptr;
     QLineEdit *m_commandsBgImageField = nullptr;
     QSlider *m_commandsBgOpacityField = nullptr;
     QComboBox *m_itemActionsPlacementField = nullptr;

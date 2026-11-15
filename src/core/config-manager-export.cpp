@@ -269,6 +269,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["ui_density"] = settings.uiDensity;
     settingsObj["ui_corner_style"] = settings.uiCornerStyle;
     settingsObj["tree_connector_style"] = settings.treeConnectorStyle;
+    settingsObj["tree_look"] = settings.treeLook;
     settingsObj["commands_background_image"] = settings.commandsBackgroundImage;
     settingsObj["commands_background_opacity"] = settings.commandsBackgroundOpacity;
     settingsObj["item_actions_placement"] = settings.itemActionsPlacement;
@@ -300,11 +301,6 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
         settingsObj["shortcuts_v2"] = v2;
     }
     settingsObj["show_hidden_commands"] = settings.showHiddenCommands;
-    settingsObj["fx_shadows"] = settings.fxShadows;
-    settingsObj["fx_translucency"] = settings.fxTranslucency;
-    settingsObj["fx_blur"] = settings.fxBlur;
-    settingsObj["fx_animations"] = settings.fxAnimations;
-    settingsObj["gradients_enabled"] = settings.gradientsEnabled;
     settingsObj["auto_hide_on_focus_loss"] = settings.autoHideOnFocusLoss;
     settingsObj["window_mode"] = settings.windowMode;
     settingsObj["window_width"] = settings.windowWidth;
@@ -329,6 +325,7 @@ QString ConfigManager::exportGlobal(const SettingsData &settings, const Commands
     settingsObj["autostart"] = settings.autostart;
     settingsObj["smart_focus"] = settings.smartFocus;
     settingsObj["inline_actions"] = settings.inlineActions;
+    settingsObj["auto_load_remote_images"] = settings.autoLoadRemoteImages;
     QJsonArray targetsArr;
     for (const TerminalProfile &t : settings.terminalProfiles) {
         QJsonObject obj;

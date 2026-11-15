@@ -11,6 +11,7 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
@@ -38,49 +39,34 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     searchRow->addWidget(resetButton);
     layout->addLayout(searchRow);
 
-    // Atalho GLOBAL do SO (mostra/esconde o Kai): usa QHotkey, uma máquina diferente dos
-    // QShortcut da tabela, então fica numa linha à parte.
-    auto *globalRow = new QHBoxLayout();
-    globalRow->setSpacing(utils::tokens::space(2));
-    auto *globalLabel = new QLabel(utils::tr(QStringLiteral("settings.shortcut.global")), this);
-    globalLabel->setToolTip(utils::tr(QStringLiteral("settings.shortcut.global.hint")));
-    m_hotkeyField = new ShortcutCaptureField(currentSettings.globalHotkey, this);
-    m_hotkeyField->setToolTip(utils::tr(QStringLiteral("settings.shortcut.global.hint")));
-    globalRow->addWidget(globalLabel);
-    globalRow->addWidget(m_hotkeyField, 1);
-    layout->addLayout(globalRow);
+    namespace sf = settings_form;
+    QGridLayout *grid = nullptr;
 
-    // Segundo atalho GLOBAL: abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela.
-    auto *paletteRow = new QHBoxLayout();
-    paletteRow->setSpacing(utils::tokens::space(2));
-    auto *paletteLabel = new QLabel(utils::tr(QStringLiteral("settings.shortcut.palette")), this);
-    paletteLabel->setToolTip(utils::tr(QStringLiteral("settings.shortcut.palette.hint")));
-    m_paletteHotkeyField = new ShortcutCaptureField(currentSettings.paletteHotkey, this);
-    m_paletteHotkeyField->setToolTip(utils::tr(QStringLiteral("settings.shortcut.palette.hint")));
-    paletteRow->addWidget(paletteLabel);
-    paletteRow->addWidget(m_paletteHotkeyField, 1);
-    layout->addLayout(paletteRow);
+    // Atalhos GLOBAIS do SO: usam QHotkey, uma máquina diferente dos QShortcut da tabela, então ficam num grupo próprio.
+    // O primeiro mostra/esconde o Kai; o segundo abre só a paleta (Ctrl+K) de fora do Kai, sem trazer a janela.
+    auto *globalGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.shortcuts.section.global")), &grid);
+    m_hotkeyField = new ShortcutCaptureField(currentSettings.globalHotkey, globalGroup);
+    sf::addField(grid, globalGroup, utils::tr(QStringLiteral("settings.shortcut.global")), m_hotkeyField,
+                 utils::tr(QStringLiteral("settings.shortcut.global.hint")));
+    m_paletteHotkeyField = new ShortcutCaptureField(currentSettings.paletteHotkey, globalGroup);
+    sf::addField(grid, globalGroup, utils::tr(QStringLiteral("settings.shortcut.palette")), m_paletteHotkeyField,
+                 utils::tr(QStringLiteral("settings.shortcut.palette.hint")));
+    layout->addWidget(globalGroup);
 
     // Tabela sempre à mostra: recolhida por padrão a busca filtrava linhas invisíveis.
     m_shortcutsManager = new ShortcutsManagerWidget(this);
     m_shortcutsManager->setShortcuts(currentSettings.shortcuts);
-    auto *tableCard = new QFrame(this);
-    tableCard->setObjectName(QStringLiteral("shortcutsCard"));
-    bindTokenStyle(tableCard, []() {
-        return QStringLiteral(
-            "QFrame#shortcutsCard { background-color: %1; border: 1px solid %2; border-radius: %3px; }")
-            .arg(utils::tokens::surface2(), utils::tokens::borderColor()).arg(utils::tokens::radiusLg());
-    });
-    auto *cardLayout = new QVBoxLayout(tableCard);
-    cardLayout->setContentsMargins(4, 4, 4, 4);
-    cardLayout->addWidget(m_shortcutsManager);
+    QGridLayout *appGrid = nullptr;
+    auto *appGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.shortcuts.section.app")), &appGrid);
+    appGrid->addWidget(m_shortcutsManager, 0, 0, 1, 2);
+    appGrid->setRowStretch(0, 1);
     connect(searchField, &FuzzySearchBar::queryChanged, m_shortcutsManager, &ShortcutsManagerWidget::setFilterText);
     connect(resetButton, &QPushButton::clicked, this, [this]() {
         m_shortcutsManager->resetToDefaults();
         m_hotkeyField->setKeySequenceString(core::SettingsData().globalHotkey);
         m_paletteHotkeyField->setKeySequenceString(core::SettingsData().paletteHotkey);
     });
-    layout->addWidget(tableCard, 1);
+    layout->addWidget(appGroup, 1);
     // Sem wrapPage: a tabela já rola (SettingsDialog adiciona esta aba direto ao QStackedWidget).
 }
 

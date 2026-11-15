@@ -192,11 +192,8 @@ QVector<Spec> buildSpecs(const AgentToolHost *host)
                            qs({"sharp", "soft", "rounded"}), [](SettingsData &d) -> int & { return d.uiCornerStyle; });
     out << indexedEnumSpec(q("appearance.tree_connectors"), q("Connector lines of the command tree."),
                            qs({"native", "none", "continuous"}), [](SettingsData &d) -> int & { return d.treeConnectorStyle; });
-    out << boolSpec(q("appearance.shadows"), q("Shadow elevation."), [](SettingsData &d) -> bool & { return d.fxShadows; });
-    out << boolSpec(q("appearance.translucency"), q("Translucent window background."), [](SettingsData &d) -> bool & { return d.fxTranslucency; });
-    out << boolSpec(q("appearance.blur"), q("Blur behind the window (Windows 11)."), [](SettingsData &d) -> bool & { return d.fxBlur; });
-    out << boolSpec(q("appearance.animations"), q("Fade/slide animations."), [](SettingsData &d) -> bool & { return d.fxAnimations; });
-    out << boolSpec(q("appearance.gradients"), q("Theme gradients."), [](SettingsData &d) -> bool & { return d.gradientsEnabled; });
+    out << enumSpec(q("appearance.tree_look"), q("Look of the command trees (main and extra): classic or folder-explorer style."),
+                    qs({"classic", "explorer"}), [](SettingsData &d) -> QString & { return d.treeLook; });
     out << stringSpec(q("appearance.commands_background_image"), q("Absolute path of the image behind the command tree; empty = none."), true,
                       [](SettingsData &d) -> QString & { return d.commandsBackgroundImage; });
     out << intSpec(q("appearance.commands_background_opacity"), q("Opacity of the tree rows over the background image (100 = solid)."), 0, 100,
@@ -249,6 +246,8 @@ QVector<Spec> buildSpecs(const AgentToolHost *host)
                     [](SettingsData &d) -> bool & { return d.smartFocus; });
     out << boolSpec(q("behavior.inline_actions"), q("Show the item's actions on its tree row, right after the name."),
                     [](SettingsData &d) -> bool & { return d.inlineActions; });
+    out << boolSpec(q("behavior.auto_load_remote_images"), q("Load the remote images of documents automatically."),
+                    [](SettingsData &d) -> bool & { return d.autoLoadRemoteImages; });
     out << boolSpec(q("behavior.show_hidden_commands"), q("Show commands marked hidden."), [](SettingsData &d) -> bool & { return d.showHiddenCommands; });
     out << enumSpec(q("behavior.command_creation_mode"), q("Editor used to create commands."), modes,
                     [](SettingsData &d) -> QString & { return d.commandCreationMode; });

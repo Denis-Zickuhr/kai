@@ -393,6 +393,17 @@ void MainWindow::createCommandFlow(bool asPipeline)
         hasDraft = true;
         advanced = false;
     }
+    {
+        // Nome padrão (i18n), com sufixo numérico se já existir na pasta.
+        const QString base = asPipeline ? utils::tr(QStringLiteral("pipeline.default_name"))
+                                           : utils::tr(QStringLiteral("command.default_name"));
+        QString name = base;
+        for (int n = 2; hasDuplicateCommandName(targetFolderId, name, QString()); ++n) {
+            name = QStringLiteral("%1 %2").arg(base).arg(n);
+        }
+        draft.name = name;
+        hasDraft = true;
+    }
     bool committed = false;     // usuário confirmou (OK), não só trocou de modo
 
     while (true) {

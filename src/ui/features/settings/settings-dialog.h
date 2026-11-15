@@ -98,6 +98,7 @@ private:
     ShortcutsTab *m_shortcutsTab = nullptr;
     TerminalsTab *m_terminalsTab = nullptr;
     StorageManagerWidget *m_storageManager = nullptr;
+    std::function<void()> m_buildStoragePage; // monta a aba Armazenamento na 1ª visita
     NotificationsTab *m_notificationsTab = nullptr;
     KipTab *m_kipTab = nullptr;
     IdentificationTab *m_identificationTab = nullptr;

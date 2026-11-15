@@ -75,6 +75,8 @@ struct SettingsData {
     // Linhas de conexão da árvore: 0 = nativa do Qt (some assim que um QSS de app é aplicado), 1 =
     // nenhuma (só o indicador de expandir), 2 = contínua (uma linha vertical por nível, padrão).
     int treeConnectorStyle = 2;
+    // Visual da árvore de comandos (principal e extras): "classic" ou "explorer" (estilo explorador de pastas).
+    QString treeLook = QStringLiteral("classic");
 
     // Imagem de fundo da árvore de comandos (caminho absoluto; vazio = sem fundo).
     QString commandsBackgroundImage;
@@ -92,13 +94,6 @@ struct SettingsData {
     // QSplitter::sizes() do splitter externo (árvore+ações vs. Saída); vazio = defaults de
     // MainWindow::applyOutputPosition().
     QList<int> outputSplitterSizes;
-    // Efeitos opcionais, desligados por padrão (sem compositor, ex: WSLg, e por performance).
-    bool fxShadows = false;        // elevação com sombra
-    bool fxTranslucency = false;   // fundo translúcido
-    bool fxBlur = false;           // "material líquido": Mica/Acrylic no Win11
-    bool fxAnimations = false;     // fade/slide em painéis e diálogos
-    // Gradientes de tema (janela/header/sidebar/badges); ligado por padrão pois o TEMA já declara os pares de cor.
-    bool gradientsEnabled = true;
 
     // --- Janela ---
     // Auto-ocultar ao perder o foco (launcher): sem isto o atalho global exige DUAS pressões.
@@ -204,6 +199,9 @@ struct SettingsData {
     // Ações inline: as ações do item (executar, parar, reiniciar, body, saída, documento) aparecem na própria linha da
     // árvore, logo depois do nome, conforme o estado dele. Desligado (padrão): só pelo grupo Execução e pelo menu.
     bool inlineActions = false;
+
+    // Imagens http(s) dos documentos são baixadas sozinhas ao abrir o documento (padrão). Desligado: só pelo botão do leitor.
+    bool autoLoadRemoteImages = true;
 
     // Código do idioma da interface ("en" padrão, "pt"); resolve para assets/i18n/<code>.json via
     // TranslationManager. Sem tradução cai no inglês, depois na própria chave.

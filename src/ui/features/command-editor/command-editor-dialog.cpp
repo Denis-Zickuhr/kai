@@ -690,6 +690,7 @@ void CommandEditorDialog::applyHttpConfig(const core::HttpConfig &cfg)
     populateEnvExtractorsEditor(cfg.envExtractors);
     m_assertionsEditor->setConditions(cfg.assertions);
     m_responseFileField->setText(cfg.responseFile);
+    m_askFirstField->setChecked(cfg.askFirst);
 
     refreshInheritedHttp();
 }
@@ -720,6 +721,7 @@ core::HttpConfig CommandEditorDialog::readHttpConfig() const
     config.envExtractors = readEnvExtractors();
     config.assertions = m_assertionsEditor->conditions();
     config.responseFile = m_responseFileField->text().trimmed();
+    config.askFirst = m_askFirstField->isChecked();
     return config;
 }
 

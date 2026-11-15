@@ -383,20 +383,12 @@ private slots:
         s.activeTheme = QStringLiteral("kai-liquid");
         s.uiDensity = QStringLiteral("compact");
         s.uiCornerStyle = 2;
-        s.fxShadows = true;
-        s.fxTranslucency = true;
-        s.fxBlur = true;
-        s.fxAnimations = true;
         QVERIFY(manager.saveSettings(s));
 
         const SettingsData loaded = manager.loadSettings();
         QCOMPARE(loaded.activeTheme, QStringLiteral("kai-liquid"));
         QCOMPARE(loaded.uiDensity, QStringLiteral("compact"));
         QCOMPARE(loaded.uiCornerStyle, 2);
-        QVERIFY(loaded.fxShadows);
-        QVERIFY(loaded.fxTranslucency);
-        QVERIFY(loaded.fxBlur);
-        QVERIFY(loaded.fxAnimations);
     }
 
     // Os filtros de coleções (incluindo exibir favoritos) ficam em arquivo separado (collection-filters.json), id -> config,

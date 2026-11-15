@@ -63,6 +63,10 @@ QString gradientQss(const QString &property = QStringLiteral("background-color")
 void setGradientsEnabled(bool enabled);
 bool gradientsEnabled();
 
+// Aproxima `fg` do preto ou do branco (o que mais contrasta com `bg`) até a razão de contraste mínima (WCAG). Cores já
+// legíveis voltam intactas: serve às paletas fixas (JSON, ANSI) que não conhecem o tema.
+QColor ensureContrast(const QColor &fg, const QColor &bg, double minRatio = 4.0);
+
 QString successFg();
 QString errorFg();
 QString warningFg();

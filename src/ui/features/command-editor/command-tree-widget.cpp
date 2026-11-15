@@ -14,6 +14,8 @@
 #include "ui/shared/tab-strip-background.h"
 
 #include "utils/translation-manager.h"
+#include "utils/design-tokens.h"
+#include "utils/scoped-timer.h"
 #include "ui/features/command-editor/command-tree-widget-internal.h"
 
 namespace kai::ui {
@@ -161,6 +163,7 @@ void CommandTreeWidget::addFollower(CommandTreeWidget *follower)
         follower->setTabBarHeight(m_tabBarHeight);
     }
     follower->setTreeConnectorStyle(m_treeConnectorStyle, m_treeConnectorLineColor);
+    follower->setExplorerLook(m_explorerLook);
     follower->setGlobalActions(m_globalActions);
     follower->setInlineActionsEnabled(m_inlineActions);
     follower->setOutputMarksEnabled(m_outputMarks);
@@ -313,6 +316,7 @@ void CommandTreeWidget::updateElapsedLabels()
                 if (startIt != m_runStartedAt.constEnd()) {
                     const qint64 secs = startIt.value().secsTo(now);
                     item->setText(kStatusColumn, formatElapsed(secs));
+                    item->setForeground(kStatusColumn, QColor(utils::tokens::accent()));
                 }
             }
             for (int i = 0; i < item->childCount(); ++i) {
@@ -334,6 +338,7 @@ void CommandTreeWidget::setFailedCommandIds(const QSet<QString> &failedCommandId
 
 void CommandTreeWidget::rebuildTabs()
 {
+    const utils::ScopedTimer timer("CommandTree", QStringLiteral("reconstrução das abas"));
     struct RebuildGuard {
         bool &flag;
         explicit RebuildGuard(bool &f) : flag(f) { flag = true; }
@@ -361,8 +366,16 @@ void CommandTreeWidget::rebuildTabs()
         }
     }
 
+    // QTabWidget::clear() só remove as abas: sem apagar as árvores antigas, cada rebuild deixava uma cópia
+    // inteira (com os widgets de ação) viva e escondida.
+    const auto oldTrees = m_treesByRootId;
     m_tabWidget->clear();
     m_treesByRootId.clear();
+    for (QTreeWidget *oldTree : oldTrees) {
+        if (oldTree) {
+            oldTree->deleteLater();
+        }
+    }
 
     QMap<QString, core::Folder> foldersById;
     for (const core::Folder &folder : m_folders) {

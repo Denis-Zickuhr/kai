@@ -45,6 +45,7 @@ QTreeWidget *CommandTreeWidget::createTreeForRoot(const core::Folder &rootFolder
     tree->setFrameShape(QFrame::NoFrame);
     tree->setRootIsDecorated(true);
     tree->setConnectorStyle(static_cast<DraggableTreeWidget::ConnectorStyle>(m_treeConnectorStyle));
+    tree->setExplorerLook(m_explorerLook);
     if (m_treeConnectorLineColor.isValid()) {
         tree->setConnectorLineColor(m_treeConnectorLineColor);
     }

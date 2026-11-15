@@ -185,6 +185,7 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
         currentSettings.uiDensity = result.settings.uiDensity;
         currentSettings.uiCornerStyle = result.settings.uiCornerStyle;
         currentSettings.treeConnectorStyle = result.settings.treeConnectorStyle;
+        currentSettings.treeLook = result.settings.treeLook;
         currentSettings.commandsBackgroundImage = result.settings.commandsBackgroundImage;
         currentSettings.commandsBackgroundOpacity = result.settings.commandsBackgroundOpacity;
         currentSettings.itemActionsPlacement = result.settings.itemActionsPlacement;
@@ -201,11 +202,6 @@ bool ConfigManager::mergeImportResult(const ImportResult &result)
             currentSettings.shortcuts = result.settings.shortcuts;
         }
         currentSettings.showHiddenCommands = result.settings.showHiddenCommands;
-        currentSettings.fxShadows = result.settings.fxShadows;
-        currentSettings.fxTranslucency = result.settings.fxTranslucency;
-        currentSettings.fxBlur = result.settings.fxBlur;
-        currentSettings.fxAnimations = result.settings.fxAnimations;
-        currentSettings.gradientsEnabled = result.settings.gradientsEnabled;
         currentSettings.autoHideOnFocusLoss = result.settings.autoHideOnFocusLoss;
         currentSettings.windowMode = result.settings.windowMode;
         currentSettings.windowWidth = result.settings.windowWidth;

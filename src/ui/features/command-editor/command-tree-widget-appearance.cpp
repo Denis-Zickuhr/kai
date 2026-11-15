@@ -66,6 +66,17 @@ void CommandTreeWidget::setTreeConnectorStyle(int style, const QColor &lineColor
     }
 }
 
+void CommandTreeWidget::setExplorerLook(bool on)
+{
+    forFollowers([&](CommandTreeWidget *f) { f->setExplorerLook(on); });
+    m_explorerLook = on;
+    for (QTreeWidget *tree : m_treesByRootId) {
+        if (auto *draggable = qobject_cast<DraggableTreeWidget *>(tree)) {
+            draggable->setExplorerLook(on);
+        }
+    }
+}
+
 void CommandTreeWidget::refreshTreeConnectorColor(const QColor &lineColor)
 {
     setTreeConnectorStyle(m_treeConnectorStyle, lineColor);

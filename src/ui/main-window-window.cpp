@@ -287,18 +287,10 @@ void MainWindow::applyAppearanceSettings()
         : utils::tokens::Density::Comfortable);
 
     utils::tokens::Effects fx;
-    fx.shadows = st.fxShadows;
-    fx.translucency = st.fxTranslucency;
-    // Blur implica translucidez.
-    fx.blur = st.fxBlur;
-    if (fx.blur) {
-        fx.translucency = true;
-    }
-    fx.animations = st.fxAnimations;
     fx.cornerStyle = st.uiCornerStyle;
     utils::tokens::setEffects(fx);
     // Desligado, hasGradient() de qualquer slot retorna false mesmo que o tema declare as variáveis (ver design-tokens.h).
-    utils::tokens::setGradientsEnabled(st.gradientsEnabled);
+    utils::tokens::setGradientsEnabled(false);
 
     if (m_themeManager && m_themeManager->hasTheme()) {
         setStyleSheet(themeStyleSheet(m_themeManager->currentTheme().qss));
@@ -343,6 +335,7 @@ void MainWindow::applyAppearanceSettings()
 
     if (m_commandTree) {
         m_commandTree->setTreeConnectorStyle(st.treeConnectorStyle, QColor(utils::tokens::accent()));
+        m_commandTree->setExplorerLook(st.treeLook == QLatin1String("explorer"));
     }
 
     applyFrameInsets();

@@ -2,6 +2,7 @@
 
 #include "ui/main-window.h"
 #include "core/store-local.h"
+#include "ui/features/docs/document-panel.h"
 #include "ui/features/store/store-window.h"
 
 #include "ui/layout/dock-host.h"
@@ -34,6 +35,9 @@
 
 #include "utils/translation-manager.h"
 #include "utils/autostart-manager.h"
+#include "utils/scoped-timer.h"
+
+#include <optional>
 
 namespace kai::ui {
 
@@ -132,6 +136,9 @@ bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, Q
     }
     m_inlineActions = newSettings.inlineActions;
     m_commandTree->setInlineActionsEnabled(m_inlineActions);
+    if (m_documentPanel) {
+        m_documentPanel->setAutoLoadRemoteImages(newSettings.autoLoadRemoteImages);
+    }
     core::setKipSettings(newSettings.kip);
     if (!(newSettings.identification == old.identification)) {
         core::setIdentificationSettings(newSettings.identification);
@@ -143,10 +150,7 @@ bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, Q
         utils::Logger::warning(kLogTag, QStringLiteral("Tema '%1' não pôde ser carregado (pedido da IA).").arg(newSettings.activeTheme));
     }
     if (newSettings.uiDensity != old.uiDensity || newSettings.uiCornerStyle != old.uiCornerStyle
-        || newSettings.treeConnectorStyle != old.treeConnectorStyle || newSettings.fxShadows != old.fxShadows
-        || newSettings.fxTranslucency != old.fxTranslucency || newSettings.fxBlur != old.fxBlur
-        || newSettings.fxAnimations != old.fxAnimations || newSettings.autoHideOnFocusLoss != old.autoHideOnFocusLoss
-        || newSettings.gradientsEnabled != old.gradientsEnabled) {
+        || newSettings.treeConnectorStyle != old.treeConnectorStyle || newSettings.treeLook != old.treeLook || newSettings.autoHideOnFocusLoss != old.autoHideOnFocusLoss) {
         applyAppearanceSettings();
     }
     if (newSettings.commandsBackgroundImage != old.commandsBackgroundImage
@@ -186,6 +190,7 @@ bool MainWindow::applySettingsFromAgent(const core::SettingsData &newSettings, Q
 void MainWindow::handleSettingsRequested()
 {
     const core::SettingsData currentSettings = m_configManager.loadSettings();
+    std::optional<utils::ScopedTimer> buildTimer(std::in_place, kLogTag, QStringLiteral("Configurações (construção)"));
     SettingsDialog dialog(currentSettings, availableThemeNames(), m_themeManager->themesDirPath(),
         m_commandsData, m_collections,
         [this]() { persistCommands(); }, [this]() { persistCollections(); },
@@ -201,6 +206,7 @@ void MainWindow::handleSettingsRequested()
                 [this](int row, int col, int colSpan, int rowSpan) { m_dock->setZoneSpan(layout::Zone{row, col}, colSpan, rowSpan); });
     }
 
+    buildTimer.reset();
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -217,6 +223,9 @@ void MainWindow::handleSettingsRequested()
     m_commandTree->setOutputMarksEnabled(!m_smartFocus);
     m_inlineActions = newSettings.inlineActions;
     m_commandTree->setInlineActionsEnabled(m_inlineActions);
+    if (m_documentPanel) {
+        m_documentPanel->setAutoLoadRemoteImages(newSettings.autoLoadRemoteImages);
+    }
     m_commandTree->refreshRowMarks();
     // Perfis de IA ficam no ai.json (chaves de API), nunca no settings.json.
     if (dialog.aiSettingsChanged()) {
@@ -256,12 +265,8 @@ void MainWindow::handleSettingsRequested()
     if (newSettings.uiDensity != currentSettings.uiDensity
         || newSettings.uiCornerStyle != currentSettings.uiCornerStyle
         || newSettings.treeConnectorStyle != currentSettings.treeConnectorStyle
-        || newSettings.fxShadows != currentSettings.fxShadows
-        || newSettings.fxTranslucency != currentSettings.fxTranslucency
-        || newSettings.fxBlur != currentSettings.fxBlur
-        || newSettings.fxAnimations != currentSettings.fxAnimations
-        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss
-        || newSettings.gradientsEnabled != currentSettings.gradientsEnabled) {
+        || newSettings.treeLook != currentSettings.treeLook
+        || newSettings.autoHideOnFocusLoss != currentSettings.autoHideOnFocusLoss) {
         applyAppearanceSettings();
     }
 

@@ -191,6 +191,10 @@ void FolderEditorDialog::setupUi(const QVector<core::Folder> &allFolders, const 
     m_orderField->setValue(m_existingOrder);
     populateParentCombo(allFolders, m_existingId);
 
+    if (!existingFolder) {
+        m_nameField->setText(utils::tr(QStringLiteral("folder.default_name")));
+        m_nameField->selectAll();
+    }
     if (existingFolder) {
         m_nameField->setText(existingFolder->name);
         m_iconPicker->setSelectedIconName(existingFolder->icon);

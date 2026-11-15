@@ -236,6 +236,7 @@ private:
     HttpEntriesEditorWidget *m_queryEditor = nullptr;
     HttpAuthEditorWidget *m_authEditor = nullptr;
     HttpOptionsEditorWidget *m_optionsEditor = nullptr;
+    QCheckBox *m_askFirstField = nullptr;
     CollapsibleSectionCard *m_inheritedHeadersCard = nullptr;
     QTableWidget *m_inheritedHeadersTable = nullptr;
     QVector<core::InheritedHttpHeader> m_inheritedHeaders;

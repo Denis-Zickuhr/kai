@@ -130,21 +130,6 @@ AppearanceTab::AppearanceTab(const core::SettingsData &currentSettings, const QS
         currentSettings.startVisible, utils::tr(QStringLiteral("settings.window.start_visible.tip")));
     layout->addWidget(windowGroup);
 
-    auto *fxGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.fx")), &grid);
-    fxGroup->setToolTip(utils::tr(QStringLiteral("settings.fx.hint")));
-    m_fxShadowsField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.shadows")),
-                                     currentSettings.fxShadows);
-    m_fxTranslucencyField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.translucency")),
-                                          currentSettings.fxTranslucency);
-    m_fxBlurField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.blur")),
-                                  currentSettings.fxBlur, utils::tr(QStringLiteral("settings.fx.blur.hint")));
-    m_fxAnimationsField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.animations")),
-                                        currentSettings.fxAnimations);
-    // Interruptor mestre dos gradientes de tema, para quem prefere um visual mais chapado.
-    m_gradientsEnabledField = sf::addSwitch(grid, fxGroup, utils::tr(QStringLiteral("settings.fx.gradients")),
-                                            currentSettings.gradientsEnabled,
-                                            utils::tr(QStringLiteral("settings.fx.gradients.hint")));
-    layout->addWidget(fxGroup);
     layout->addStretch();
 }
 

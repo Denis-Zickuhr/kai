@@ -24,6 +24,7 @@
 
 #include <QApplication>
 
+#include "ui/features/docs/document-panel.h"
 #include "ui/features/output/output-tabs-bar.h"
 
 #include "ui/shared/token-style.h"
@@ -56,6 +57,11 @@ void MainWindow::handleThemeReloaded(const utils::ResolvedTheme &theme)
     refreshTokenStyles();
     if (m_dock) {
         m_dock->refreshFloatingStyle();
+    }
+    // O leitor de docs monta paleta e QSS na construção/refreshStyle(); sem isto a bandeja, a IA e o live reload o
+    // deixavam com as cores do tema anterior (ex.: fundo escuro do kai-material sob o xmas-light).
+    if (m_documentPanel) {
+        m_documentPanel->refreshStyle();
     }
     m_terminalDrawer->applyThemeVariables(theme.variables);
     if (m_processListDialog) {

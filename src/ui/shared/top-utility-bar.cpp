@@ -37,6 +37,9 @@ QPixmap loadLogoPixmap()
     return QPixmap();
 }
 
+constexpr int kTopMargin = 2;
+constexpr int kMaximizedExtraTop = 6;
+
 // Derivada do tema: um cinza claro fixo sumia nos temas claros.
 QColor topBarIconColor()
 {
@@ -55,7 +58,8 @@ TopUtilityBar::TopUtilityBar(QWidget *parent)
 void TopUtilityBar::setupUi()
 {
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(6, 2, 6, 0);
+    m_layout = layout;
+    layout->setContentsMargins(6, kTopMargin, 6, 0);
     layout->setSpacing(6);
 
     auto *logoLabel = new QLabel(this);
@@ -142,6 +146,10 @@ void TopUtilityBar::refreshStyle()
 void TopUtilityBar::setMaximized(bool maximized)
 {
     m_maximized = maximized;
+    // Maximizada, a barra encosta na borda do monitor e os botões ficavam cortados; o respiro a mais empurra o conteúdo.
+    if (m_layout) {
+        m_layout->setContentsMargins(6, kTopMargin + (maximized ? kMaximizedExtraTop : 0), 6, 0);
+    }
     refreshWindowControlIcon(m_maximizeButton, WindowControl::Maximize, maximized);
 }
 

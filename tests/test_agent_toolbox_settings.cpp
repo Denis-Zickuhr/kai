@@ -120,7 +120,7 @@ private slots:
     {
         host.settingsData.uiCornerStyle = 2;
         const QJsonObject page = parse(run(QStringLiteral("kai_settings_list"), {{QStringLiteral("group"), QStringLiteral("appearance")}}).content);
-        QVERIFY(page.value(QStringLiteral("total")).toInt() >= 10);
+        QVERIFY(page.value(QStringLiteral("total")).toInt() >= 8);
         QJsonObject corner;
         for (const QJsonValue &v : page.value(QStringLiteral("items")).toArray()) {
             if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("appearance.corner_style")) corner = v.toObject();

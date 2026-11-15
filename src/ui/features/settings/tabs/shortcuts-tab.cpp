@@ -58,6 +58,7 @@ ShortcutsTab::ShortcutsTab(const core::SettingsData &currentSettings, QWidget *p
     m_shortcutsManager->setShortcuts(currentSettings.shortcuts);
     QGridLayout *appGrid = nullptr;
     auto *appGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.shortcuts.section.app")), &appGrid);
+    appGroup->setObjectName(QStringLiteral("shortcutsCard"));
     appGrid->addWidget(m_shortcutsManager, 0, 0, 1, 2);
     appGrid->setRowStretch(0, 1);
     connect(searchField, &FuzzySearchBar::queryChanged, m_shortcutsManager, &ShortcutsManagerWidget::setFilterText);

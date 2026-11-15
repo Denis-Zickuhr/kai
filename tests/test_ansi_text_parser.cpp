@@ -1,8 +1,18 @@
 #include <QTest>
 
 #include "ui/features/output/ansi-text-parser.h"
+#include "utils/design-tokens.h"
 
 using namespace kai::ui;
+
+namespace {
+// O parser ajusta a cor ANSI por contraste com o fundo da Saída do tema ativo (3.5:1), então o esperado sai da mesma regra.
+QColor readable(int code, bool bright = false)
+{
+    return kai::utils::tokens::ensureContrast(AnsiTextParser::ansiColorFor(code, bright),
+                                              QColor(kai::utils::tokens::terminalBg()), 3.5);
+}
+} // namespace
 
 class TestAnsiTextParser : public QObject {
     Q_OBJECT
@@ -36,7 +46,7 @@ private slots:
         QVERIFY(!visibleText.contains(QStringLiteral("[1A")));
         bool hasRed = false;
         for (const AnsiSegment &seg : segments) {
-            if (seg.format.foreground().color() == QColor(205, 0, 0)) {
+            if (seg.format.foreground().color() == readable(1)) {
                 hasRed = true;
             }
         }
@@ -100,7 +110,7 @@ private slots:
 
         QCOMPARE(segments.size(), 2);
         QCOMPARE(segments.at(0).text, QStringLiteral("ERROR"));
-        QCOMPARE(segments.at(0).format.foreground().color(), QColor(205, 0, 0));
+        QCOMPARE(segments.at(0).format.foreground().color(), readable(1));
         QCOMPARE(segments.at(1).text, QStringLiteral(" normal"));
     }
 
@@ -112,7 +122,7 @@ private slots:
         QCOMPARE(segments.size(), 1);
         QCOMPARE(segments.at(0).text, QStringLiteral("BOLD_RED"));
         QCOMPARE(segments.at(0).format.fontWeight(), static_cast<int>(QFont::Bold));
-        QCOMPARE(segments.at(0).format.foreground().color(), QColor(205, 0, 0));
+        QCOMPARE(segments.at(0).format.foreground().color(), readable(1));
     }
 
     // Formato persiste entre chunks (ANSI num chunk, texto colorido no seguinte).
@@ -123,7 +133,7 @@ private slots:
         const QVector<AnsiSegment> segments = parser.parse(QStringLiteral("green text"));
 
         QCOMPARE(segments.size(), 1);
-        QCOMPARE(segments.at(0).format.foreground().color(), QColor(0, 205, 0));
+        QCOMPARE(segments.at(0).format.foreground().color(), readable(2));
     }
 
     void brightColorCodesAreDistinctFromNormal()
@@ -132,7 +142,7 @@ private slots:
         const QVector<AnsiSegment> segments = parser.parse(QStringLiteral("\x1b[91mbright red\x1b[0m"));
 
         QCOMPARE(segments.size(), 1);
-        QCOMPARE(segments.at(0).format.foreground().color(), QColor(255, 0, 0));
+        QCOMPARE(segments.at(0).format.foreground().color(), readable(1, true));
     }
 
     void resetCodeRestoresDefaultFormat()
@@ -142,7 +152,7 @@ private slots:
         parser.resetFormat();
         const QVector<AnsiSegment> segments = parser.parse(QStringLiteral("plain"));
 
-        QCOMPARE(segments.at(0).format.foreground().color(), QColor(Qt::white));
+        QCOMPARE(segments.at(0).format.foreground().color(), QColor(kai::utils::tokens::terminalFg()));
     }
 
     void emptyInputProducesNoSegments()
@@ -202,6 +212,21 @@ private slots:
             QVERIFY(!segment.isLink);
         }
     }
+    void ansiWhiteStaysReadableOnALightTheme()
+    {
+        const QMap<QString, QString> light{{QStringLiteral("bg"), QStringLiteral("#f5f5f7")},
+                                           {QStringLiteral("fg"), QStringLiteral("#1c1c1e")}};
+        kai::utils::tokens::publishTheme(light);
+        AnsiTextParser parser;
+        const QVector<AnsiSegment> segments = parser.parse(QStringLiteral("\x1b[37mwhite\x1b[0m"));
+        kai::utils::tokens::publishTheme({});
+
+        QCOMPARE(segments.size(), 1);
+        const QColor shown = segments.at(0).format.foreground().color();
+        // O "branco" cru (229) some num fundo claro; o ajuste escurece até o mínimo de contraste.
+        QVERIFY2(shown.lightnessF() < 0.7, qPrintable(shown.name()));
+    }
+
 };
 
 QTEST_MAIN(TestAnsiTextParser)

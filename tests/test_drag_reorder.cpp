@@ -528,6 +528,37 @@ private slots:
         QCOMPARE(namesInOrder(), (QStringList{"charlie", "echo", "bravo", "delta", "alpha"}));
         verifyNoPhantomRows();
     }
+    void continuousConnectorsAreSolidLinesNotDots()
+    {
+        DraggableTreeWidget tree;
+        tree.setHeaderHidden(true);
+        tree.setIndentation(20);
+        tree.setConnectorStyle(DraggableTreeWidget::ConnectorStyle::Continuous);
+        auto *parent = new QTreeWidgetItem(&tree, {QStringLiteral("parent")});
+        auto *first = new QTreeWidgetItem(parent, {QStringLiteral("first")});
+        auto *second = new QTreeWidgetItem(parent, {QStringLiteral("second")});
+        new QTreeWidgetItem(first, {QStringLiteral("nested")});
+        tree.expandAll();
+        tree.resize(300, 200);
+        tree.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tree));
+
+        const QImage image = tree.viewport()->grab().toImage();
+        const QRect firstRect = tree.visualItemRect(first);
+        const QRect secondRect = tree.visualItemRect(second);
+        // A vertical dos filhos do pai (no meio da primeira coluna de recuo) tem de estar pintada em todas as linhas entre
+        // o primeiro e o segundo filho: com pontos de 2px a cada 5px sobravam frestas.
+        const int x = 10;
+        const QColor background = image.pixelColor(image.width() - 5, firstRect.center().y());
+        int gaps = 0;
+        for (int y = firstRect.top() + 1; y < secondRect.center().y() - 6; ++y) {
+            if (image.pixelColor(x, y) == background) {
+                ++gaps;
+            }
+        }
+        QCOMPARE(gaps, 0);
+    }
+
 };
 
 QTEST_MAIN(TestDragReorder)

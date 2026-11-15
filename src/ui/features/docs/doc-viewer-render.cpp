@@ -2,6 +2,9 @@
 
 #include "ui/features/docs/doc-browser.h"
 
+#include <QPainter>
+#include <QSvgRenderer>
+
 #include <memory>
 
 namespace kai::ui {
@@ -32,6 +35,8 @@ void DocViewer::render(const QString &anchor, std::function<void()> done)
     leaveCodeView();
     if (!m_markdown || heavy) {
         invalidateRender();
+        m_remoteUrls.clear();
+        updateRemoteImagesButton();
         m_browser->images.clear();
         m_browser->clearDecorations();
         m_browser->setCurrentFont(theme.codeFont);
@@ -116,7 +121,25 @@ void DocViewer::render(const QString &anchor, std::function<void()> done)
                 }
                 QImageReader reader(url.toLocalFile());
                 reader.setAutoTransform(true);
-                const QImage image = reader.read();
+                QImage image = url.toLocalFile().endsWith(QLatin1String(".svg"), Qt::CaseInsensitive)
+                    ? QImage() : reader.read();
+                if (image.isNull()) {
+                    // SVG direto pelo QSvgRenderer: não depende do plugin de imagem do Qt estar instalado.
+                    QSvgRenderer svg(url.toLocalFile());
+                    if (svg.isValid()) {
+                        QSize size = svg.defaultSize();
+                        if (size.isEmpty()) {
+                            size = QSize(256, 256);
+                        }
+                        if (size.width() > 1200 || size.height() > 1200) {
+                            size.scale(QSize(1200, 1200), Qt::KeepAspectRatio);
+                        }
+                        image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+                        image.fill(Qt::transparent);
+                        QPainter painter(&image);
+                        svg.render(&painter);
+                    }
+                }
                 if (!image.isNull()) {
                     localImages.insert(key, image);
                 }
@@ -177,6 +200,7 @@ void DocViewer::applyRendered(int token, QTextDocument *built, const QHash<QStri
         m_browser->verticalScrollBar()->setValue(0);
     }
     runSearch(false); // a busca aberta segue valendo no documento novo (e no zoom/tema novos), sem mexer na rolagem
+    scanRemoteImages();
     if (done) {
         done();
     }

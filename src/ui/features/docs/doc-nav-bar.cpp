@@ -59,14 +59,6 @@ void DocNavBar::setTreeActive(bool active)
     update();
 }
 
-void DocNavBar::setHasDrafts(bool hasDrafts)
-{
-    if (m_hasDrafts != hasDrafts) {
-        m_hasDrafts = hasDrafts;
-        update();
-    }
-}
-
 void DocNavBar::setZoomPercent(int percent)
 {
     m_zoom = percent;
@@ -80,23 +72,11 @@ void DocNavBar::setCrumbs(const QVector<DocCrumb> &crumbs)
     update();
 }
 
-void DocNavBar::setFoldersVisible(bool visible)
-{
-    if (m_foldersVisible == visible) {
-        return;
-    }
-    m_foldersVisible = visible;
-    layoutItems();
-    update();
-}
-
 QRect DocNavBar::rectOf(Item item) const
 {
     switch (item) {
-    case Item::Folders: return m_folders;
     case Item::Back: return m_back;
     case Item::Forward: return m_forward;
-    case Item::Recent: return m_recent;
     case Item::Tree: return m_tree;
     case Item::ZoomOut: return m_zoomOut;
     case Item::ZoomLabel: return m_zoomLabel;
@@ -115,19 +95,13 @@ void DocNavBar::layoutItems()
 {
     const int top = (m_barHeight - 1 - kButton) / 2;
     int x = kMargin;
-    m_folders = QRect();
-    if (m_foldersVisible) {
-        m_folders = QRect(x, top, kButton, kButton);
-        x += kButton + kGap;
-    }
     m_tree = QRect(x, top, kButton, kButton);
     x += kButton + kMargin;
     m_back = QRect(x, top, kButton, kButton);
     x += kButton + kGap;
     m_forward = QRect(x, top, kButton, kButton);
     x += kButton + kGap;
-    m_recent = QRect(x, top, kButton, kButton);
-    x += kButton + kMargin;
+    x += kMargin - kGap;
     const int crumbsLeft = x;
 
     // Grupo da direita: [-] [100%] [+].
@@ -198,7 +172,7 @@ bool DocNavBar::isEnabled(Item item) const
 
 DocNavBar::Hit DocNavBar::hitAt(const QPoint &pos) const
 {
-    const std::pair<Item, QRect> items[] = {{Item::Folders, m_folders}, {Item::Tree, m_tree}, {Item::Back, m_back},       {Item::Forward, m_forward}, {Item::Recent, m_recent},
+    const std::pair<Item, QRect> items[] = {{Item::Tree, m_tree}, {Item::Back, m_back},       {Item::Forward, m_forward},
                                             {Item::ZoomOut, m_zoomOut}, {Item::ZoomLabel, m_zoomLabel}, {Item::ZoomIn, m_zoomIn}};
     for (const auto &entry : items) {
         if (entry.second.contains(pos)) {
@@ -244,16 +218,7 @@ void DocNavBar::paintEvent(QPaintEvent *)
     };
     drawButton(Item::Back, m_back, QStringLiteral("arrow-left"));
     drawButton(Item::Forward, m_forward, QStringLiteral("arrow-right"));
-    drawButton(Item::Recent, m_recent, QStringLiteral("clock"));
-    if (m_hasDrafts) { // selo de "há alterações não salvas" no canto do relógio
-        painter.setPen(QPen(QColor(tk::bg()), 1.2));
-        painter.setBrush(QColor(tk::warningFg()));
-        painter.drawEllipse(QPointF(m_recent.right() - 6.5, m_recent.top() + 7.5), 3.5, 3.5);
-    }
-    if (m_foldersVisible) {
-        drawButton(Item::Folders, m_folders, QStringLiteral("folder-open"));
-    }
-    drawButton(Item::Tree, m_tree, QStringLiteral("list-tree"), m_treeActive);
+    drawButton(Item::Tree, m_tree, QStringLiteral("folder"), m_treeActive);
     drawButton(Item::ZoomOut, m_zoomOut, QStringLiteral("minus"));
     drawButton(Item::ZoomIn, m_zoomIn, QStringLiteral("plus"));
     // O percentual: clicar volta a 100%.
@@ -313,9 +278,7 @@ void DocNavBar::mouseReleaseEvent(QMouseEvent *event)
     switch (hit.item) {
     case Item::Back: emit backRequested(); break;
     case Item::Forward: emit forwardRequested(); break;
-    case Item::Recent: emit recentRequested(event->globalPosition().toPoint()); break;
     case Item::Tree: emit treeToggleRequested(); break;
-    case Item::Folders: emit foldersRequested(event->globalPosition().toPoint()); break;
     case Item::ZoomIn: emit zoomInRequested(); break;
     case Item::ZoomOut: emit zoomOutRequested(); break;
     case Item::ZoomLabel: emit zoomResetRequested(); break;
@@ -349,9 +312,7 @@ QString DocNavBar::tooltipFor(const Hit &hit) const
     switch (hit.item) {
     case Item::Back: return utils::tr(QStringLiteral("doc.nav.back"));
     case Item::Forward: return utils::tr(QStringLiteral("doc.nav.forward"));
-    case Item::Recent: return utils::tr(QStringLiteral("doc.nav.recent"));
     case Item::Tree: return utils::tr(QStringLiteral("doc.nav.tree"));
-    case Item::Folders: return utils::tr(QStringLiteral("doc.nav.folders"));
     case Item::ZoomOut: return utils::tr(QStringLiteral("doc.nav.zoom_out"));
     case Item::ZoomIn: return utils::tr(QStringLiteral("doc.nav.zoom_in"));
     case Item::ZoomLabel: return utils::tr(QStringLiteral("doc.nav.zoom_reset"));

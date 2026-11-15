@@ -14,7 +14,7 @@ class DocNavBar : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Item { None, Back, Forward, Recent, Tree, Folders, ZoomOut, ZoomLabel, ZoomIn, Crumb };
+    enum class Item { None, Back, Forward, Tree, ZoomOut, ZoomLabel, ZoomIn, Crumb };
 
     explicit DocNavBar(QWidget *parent = nullptr);
 
@@ -23,11 +23,7 @@ public:
     void setCrumbs(const QVector<DocCrumb> &crumbs);
     void setZoomPercent(int percent);
     void setTreeActive(bool active);
-    // Há documentos com alterações não salvas: o botão de recentes ganha um selo.
-    void setHasDrafts(bool hasDrafts);
     void setBarHeight(int height);
-    // O botão no começo da barra que abre o menu das pastas com documentação. Desligado por padrão (a Ajuda não o tem).
-    void setFoldersVisible(bool visible);
 
     // Retângulo de cada controle (coordenadas do widget), para os testes e o hit-testing.
     QRect rectOf(Item item) const;
@@ -37,11 +33,7 @@ public:
 signals:
     void backRequested();
     void forwardRequested();
-    // O botão de recentes (relógio): quem escuta abre o menu na posição global dada.
-    void recentRequested(const QPoint &globalPosition);
     void treeToggleRequested();
-    // O botão das pastas: quem escuta abre o menu na posição global dada.
-    void foldersRequested(const QPoint &globalPosition);
     void zoomInRequested();
     void zoomOutRequested();
     void zoomResetRequested();
@@ -74,12 +66,10 @@ private:
 
     QVector<DocCrumb> m_crumbs;
     QVector<VisibleCrumb> m_visibleCrumbs;
-    QRect m_back, m_forward, m_recent, m_tree, m_folders, m_zoomOut, m_zoomLabel, m_zoomIn;
-    bool m_foldersVisible = false;
+    QRect m_back, m_forward, m_tree, m_zoomOut, m_zoomLabel, m_zoomIn;
     bool m_canBack = false;
     bool m_canForward = false;
     bool m_treeActive = false;
-    bool m_hasDrafts = false;
     int m_zoom = 100;
     int m_barHeight = 36;
     Hit m_hover;

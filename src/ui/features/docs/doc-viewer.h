@@ -19,6 +19,7 @@
 #include <functional>
 
 class QLabel;
+class QNetworkAccessManager;
 class QPushButton;
 class QSplitter;
 class QTextDocument;
@@ -64,6 +65,8 @@ public:
     void clear();
 
     QString currentFile() const { return m_currentFile; }
+    // Baixa as imagens remotas sozinho (padrão); desligado, só pelo botão. Ligar agora já baixa as do documento aberto.
+    void setAutoLoadRemoteImages(bool on);
     // O documento está sendo montado em segundo plano (o carregamento aparece); `currentFile` já vale.
     bool isRendering() const { return m_renderPending; }
     QString rootDirectory() const { return m_rootDir; }
@@ -114,10 +117,6 @@ public:
     void openKey(const QString &key);
     // O que o menu de recentes lista, na ordem: rascunhos primeiro, depois os recentes (sem repetir o aberto).
     QStringList recentEntries() const;
-    // Abre o menu de recentes (o relógio da barra de cima).
-    void showRecentsMenu(const QPoint &globalPosition);
-    // O botão das pastas com documentação (no começo da barra): desligado por padrão; só o painel Documento do app o liga.
-    void setFoldersButtonVisible(bool visible);
 
     // O que fazer com alterações não salvas ao sair do arquivo (ou descartar).
     enum class UnsavedDecision { Save, Discard, Cancel };
@@ -175,8 +174,6 @@ public:
     QVector<DocCrumb> breadcrumbs() const { return m_crumbs; }
 
 signals:
-    // O botão das pastas foi clicado: quem escuta abre o menu na posição global dada.
-    void foldersRequested(const QPoint &globalPosition);
     // Um documento foi mostrado (ou o erro de abri-lo, quando o arquivo foi pedido explicitamente).
     void loaded(const QString &file);
     // Nada a mostrar: a pasta não existe (ou o arquivo achado não abriu) (openFolderReadme). `suggestion` = um caminho
@@ -332,6 +329,19 @@ private:
     int m_renderToken = 0;
     bool m_renderPending = false;
     LoadingOverlay *m_loading = nullptr;
+    // Imagens http(s) do documento: só baixam com o aval do usuário (botão); ficam em memória enquanto o leitor vive.
+    void createRemoteImagesButton();
+    void scanRemoteImages();
+    void loadRemoteImages();
+    void updateRemoteImagesButton();
+    QPushButton *m_remoteButton = nullptr;
+    QNetworkAccessManager *m_net = nullptr;
+    QStringList m_remoteUrls;
+    QSet<QString> m_remoteRequested;
+    QHash<QString, QImage> m_remoteCache;
+    bool m_remoteAllowed = false;
+    bool m_autoLoadRemote = true;
+    int m_remotePending = 0;
     int m_scanToken = 0;
     bool m_automaticProbe = false;
 

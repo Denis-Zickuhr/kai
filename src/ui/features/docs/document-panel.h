@@ -48,6 +48,7 @@ public:
     // A memória do leitor (posições, rascunhos, recentes): o mesmo store para todo o app. `scope` = a pasta do Kai a que o
     // documento mostrado pertence (chamar antes de showFolderReadme/showNote/showDocument).
     void setSessionStore(DocSessionStore *store);
+    void setAutoLoadRemoteImages(bool on);
     void setScope(const QString &scope);
     // Monta o leitor antes de ser preciso (a primeira abertura custava dezenas de ms de montagem de widgets).
     void prepareViewer();
@@ -93,6 +94,7 @@ private:
     QLabel *m_emptyTitle = nullptr;
     QPushButton *m_emptyBrowse = nullptr;
     DocViewer *m_viewer = nullptr;
+    bool m_autoLoadRemote = true;
     DocSessionStore *m_store = nullptr;
     QString m_scope;
     std::function<bool(const QString &, const QString &)> m_noteSaver;

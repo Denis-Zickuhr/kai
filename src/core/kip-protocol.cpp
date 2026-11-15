@@ -31,6 +31,11 @@ KipFieldType kipFieldTypeFromString(const QString &value, bool *known)
         KipFieldType::Date, KipFieldType::Select, KipFieldType::List, KipFieldType::Table,
         KipFieldType::Filepick, KipFieldType::Folderpick, KipFieldType::Flags, KipFieldType::Tree,
         KipFieldType::Diff};
+    // "time" é um tipo próprio na escrita; internamente é um Date no modo hora (quem chama ajusta o modo).
+    if (value == QLatin1String("time")) {
+        if (known) *known = true;
+        return KipFieldType::Date;
+    }
     for (KipFieldType t : all) {
         if (value == kipFieldTypeToString(t)) {
             if (known) *known = true;

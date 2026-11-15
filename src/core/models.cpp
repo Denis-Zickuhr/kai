@@ -89,14 +89,15 @@ GridColumn GridColumn::fromJson(const QJsonObject &obj)
     GridColumn c;
     c.name = obj.value("name").toString();
     c.label = obj.value("label").toString();
-    c.type = parameterTypeFromString(obj.value("type").toString());
+    const bool isTimeType = (obj.value("type").toString() == QStringLiteral("time"));
+    c.type = isTimeType ? ParameterType::Date : parameterTypeFromString(obj.value("type").toString());
     const QJsonValue defaultVal = obj.value("default");
     c.defaultValue = defaultVal.isBool() ? (defaultVal.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
                                           : defaultVal.toString();
     for (const QJsonValue &v : obj.value("options").toArray()) {
         c.options << v.toString();
     }
-    c.dateMode = obj.value("date_mode").toString(QStringLiteral("date"));
+    c.dateMode = isTimeType ? QStringLiteral("time") : obj.value("date_mode").toString(QStringLiteral("date"));
     return c;
 }
 
@@ -105,7 +106,9 @@ QJsonObject Parameter::toJson() const
     QJsonObject obj;
     obj["name"] = name;
     if (!label.isEmpty()) obj["label"] = label;
-    obj["type"] = parameterTypeToString(type);
+    // "time" é um tipo próprio no arquivo; internamente é um Date no modo hora.
+    const bool isTime = (type == ParameterType::Date && dateMode == QStringLiteral("time"));
+    obj["type"] = isTime ? QStringLiteral("time") : parameterTypeToString(type);
     if (!defaultValue.isEmpty()) obj["default"] = defaultValue;
     if (!options.isEmpty()) {
         obj["options"] = QJsonArray::fromStringList(options);
@@ -139,7 +142,7 @@ QJsonObject Parameter::toJson() const
     if (required) {
         obj["required"] = true;
     }
-    if (dateMode != QStringLiteral("date")) {
+    if (dateMode != QStringLiteral("date") && !(type == ParameterType::Date && dateMode == QStringLiteral("time"))) {
         obj["date_mode"] = dateMode;
     }
     if (dateRange) {
@@ -175,7 +178,8 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     Parameter p;
     p.name = obj.value("name").toString();
     p.label = obj.value("label").toString();
-    p.type = parameterTypeFromString(obj.value("type").toString());
+    const bool isTimeType = (obj.value("type").toString() == QStringLiteral("time"));
+    p.type = isTimeType ? ParameterType::Date : parameterTypeFromString(obj.value("type").toString());
     const QJsonValue defaultVal = obj.value("default");
     p.defaultValue = defaultVal.isBool() ? (defaultVal.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
                                           : defaultVal.toString();
@@ -199,9 +203,9 @@ Parameter Parameter::fromJson(const QJsonObject &obj)
     }
     p.optional = obj.value("optional").toBool(false);
     p.required = obj.value("required").toBool(false);
-    p.dateMode = obj.value("date_mode").toString(QStringLiteral("date"));
+    p.dateMode = isTimeType ? QStringLiteral("time") : obj.value("date_mode").toString(QStringLiteral("date"));
     p.dateRange = obj.value("date_range").toBool(false);
-    p.dateFormat = obj.value("date_format").toString(QStringLiteral("iso_date"));
+    p.dateFormat = obj.value("date_format").toString(isTimeType ? QStringLiteral("time_24h_short") : QStringLiteral("iso_date"));
     p.dateFormatCustom = obj.value("date_format_custom").toString();
     p.group = obj.value("group").toString();
     p.step = obj.value("step").toString();
@@ -345,6 +349,7 @@ QJsonObject HttpConfig::toJson() const
     if (!bodyFile.isEmpty()) obj["body_file"] = bodyFile;
     if (!options.isEmpty()) obj["options"] = options.toJson();
     if (!responseFile.isEmpty()) obj["response_file"] = responseFile;
+    if (askFirst) obj["ask_first"] = true;
 
     if (!envExtractors.isEmpty()) {
         QJsonArray extractorsArr;
@@ -379,6 +384,7 @@ HttpConfig HttpConfig::fromJson(const QJsonObject &obj)
     cfg.bodyFile = obj.value("body_file").toString();
     cfg.options = HttpOptions::fromJson(obj.value("options").toObject());
     cfg.responseFile = obj.value("response_file").toString();
+    cfg.askFirst = obj.value("ask_first").toBool(false);
 
     for (const QJsonValue &v : obj.value("env_extractors").toArray()) {
         cfg.envExtractors << EnvExtractor::fromJson(v.toObject());

@@ -88,7 +88,7 @@ QStringList kipCandidates(const QStringList &wordsAfterKip)
     };
     if (wordsAfterKip.size() >= 2 && wordsAfterKip.at(wordsAfterKip.size() - 1) == QStringLiteral("--field")) {
         return {QStringLiteral("text"), QStringLiteral("secret"), QStringLiteral("textarea"), QStringLiteral("number"),
-                QStringLiteral("date"), QStringLiteral("select"), QStringLiteral("list"), QStringLiteral("table"),
+                QStringLiteral("date"), QStringLiteral("time"), QStringLiteral("select"), QStringLiteral("list"), QStringLiteral("table"),
                 QStringLiteral("filepick"), QStringLiteral("folderpick"), QStringLiteral("flags"), QStringLiteral("tree"),
                 QStringLiteral("diff")};
     }

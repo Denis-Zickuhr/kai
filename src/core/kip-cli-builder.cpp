@@ -131,6 +131,9 @@ bool readFieldHeader(Args &a, KipField *field)
     const QString typeText = a.take();
     bool known = false;
     field->type = kipFieldTypeFromString(typeText, &known);
+    if (typeText == QLatin1String("time")) {
+        field->dateMode = QStringLiteral("time");
+    }
     if (!known || typeText.isEmpty()) {
         QStringList names;
         for (KipFieldType t : {KipFieldType::Text, KipFieldType::Secret, KipFieldType::Textarea, KipFieldType::Number,
@@ -139,6 +142,7 @@ bool readFieldHeader(Args &a, KipField *field)
                                KipFieldType::Tree, KipFieldType::Diff}) {
             names << kipFieldTypeToString(t);
         }
+        names << QStringLiteral("time");
         a.error = tr("kip.cli.err.bad_field_type").arg(typeText, names.join(QStringLiteral(", ")));
         return false;
     }

@@ -288,8 +288,9 @@ ParameterRowDialog::ParameterRowDialog(const core::Parameter &param, const QVect
         m_type->setObjectName(QStringLiteral("paramTypeCombo"));
         m_type->addItems({QStringLiteral("text"), QStringLiteral("select"), QStringLiteral("bool"),
                           QStringLiteral("file"), QStringLiteral("number"), QStringLiteral("textarea"),
-                          QStringLiteral("json"), QStringLiteral("date"), QStringLiteral("grid")});
-        m_type->setCurrentText(core::parameterTypeToString(param.type));
+                          QStringLiteral("json"), QStringLiteral("date"), QStringLiteral("time"), QStringLiteral("grid")});
+        m_type->setCurrentText(param.type == core::ParameterType::Date && param.dateMode == QStringLiteral("time")
+                                   ? QStringLiteral("time") : core::parameterTypeToString(param.type));
         grid->addWidget(makeFieldBlock(this, utils::tr(QStringLiteral("field.label.type")), m_type), 0, 0);
 
         // O padrão pode referenciar uma variável do ambiente ativo (ex.: "{{API_URL}}/health").
@@ -739,7 +740,13 @@ void ParameterRowDialog::applyVisibility()
     const QString type = m_type->currentText();
     const bool isSelect = (type == QStringLiteral("select"));
     const bool isFile = (type == QStringLiteral("file"));
-    const bool isDate = (type == QStringLiteral("date"));
+    const bool isTime = (type == QStringLiteral("time"));
+    const bool isDate = (type == QStringLiteral("date")) || isTime;
+    if (isTime) {
+        const int timeIdx = m_dateMode->findData(QStringLiteral("time"));
+        if (timeIdx >= 0) m_dateMode->setCurrentIndex(timeIdx);
+    }
+    m_dateMode->setEnabled(!isTime);
     const bool isGrid = (type == QStringLiteral("grid"));
     const QString source = currentSource();
 
@@ -815,7 +822,7 @@ void ParameterRowDialog::validate()
     report(m_collectionError, QStringLiteral("collection"),
            needsCollection ? utils::tr(QStringLiteral("params.error.collection_required")) : QString(), true);
 
-    const bool needsDateFormat = type == QStringLiteral("date")
+    const bool needsDateFormat = (type == QStringLiteral("date") || type == QStringLiteral("time"))
         && m_dateFormat->currentData().toString() == QStringLiteral("custom")
         && m_dateFormatCustom->text().trimmed().isEmpty();
     report(m_dateFormatError, QStringLiteral("date"),
@@ -855,7 +862,8 @@ core::Parameter ParameterRowDialog::result() const
     core::Parameter p;
     p.name = m_name->text().trimmed();
     p.label = m_label->text();
-    p.type = core::parameterTypeFromString(m_type->currentText());
+    p.type = m_type->currentText() == QStringLiteral("time") ? core::ParameterType::Date
+                                                              : core::parameterTypeFromString(m_type->currentText());
     p.defaultValue = m_default->text();
 
     // Só a fonte escolhida é gravada; as outras ficam vazias para não voltarem a valer ao trocar de fonte.

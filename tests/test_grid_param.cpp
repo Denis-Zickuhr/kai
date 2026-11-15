@@ -164,6 +164,28 @@ private slots:
         const CliParamBindingResult r = bindCliParams({products()}, {QStringLiteral("nope")});
         QVERIFY(!r.issues.isEmpty());
     }
+
+    void aTimeParameterIsADateInTimeMode()
+    {
+        QJsonObject obj;
+        obj["name"] = QStringLiteral("at");
+        obj["type"] = QStringLiteral("time");
+        const Parameter p = Parameter::fromJson(obj);
+        QCOMPARE(p.type, ParameterType::Date);
+        QCOMPARE(p.dateMode, QStringLiteral("time"));
+        QCOMPARE(p.dateFormat, QStringLiteral("time_24h_short"));
+        const QJsonObject back = p.toJson();
+        QCOMPARE(back.value("type").toString(), QStringLiteral("time"));
+        QVERIFY(!back.contains("date_mode"));
+    }
+
+    void askFirstSurvivesTheHttpJsonRoundTrip()
+    {
+        HttpConfig cfg;
+        cfg.askFirst = true;
+        QVERIFY(HttpConfig::fromJson(cfg.toJson()).askFirst);
+        QVERIFY(!HttpConfig().toJson().contains("ask_first"));
+    }
 };
 
 QTEST_APPLESS_MAIN(TestGridParam)

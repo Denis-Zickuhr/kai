@@ -14,6 +14,7 @@
 | **file** | a file or folder picker (see below) |
 | **json** | a snippet editor with syntax highlighting, handy for bodies |
 | **date** | a date picker for a date, a time or both, optionally a range |
+| **time** | a time-of-day picker (`HH:mm`); pasted as `HH:mm:ss` unless you pick another format |
 | **grid** | a table of rows with one typed field per column (see below) |
 
 ## Common options

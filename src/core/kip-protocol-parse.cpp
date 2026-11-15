@@ -352,7 +352,8 @@ std::optional<KipField> parseField(const QJsonValue &v, const Ctx &ctx)
         }
         break;
     case KipFieldType::Date: {
-        const QString mode = str(o, "mode", ctx);
+        const bool isTimeType = (str(o, "type", ctx) == QLatin1String("time"));
+        const QString mode = isTimeType ? QStringLiteral("time") : str(o, "mode", ctx);
         if (mode.isEmpty() || mode == QLatin1String("date") || mode == QLatin1String("time")
             || mode == QLatin1String("datetime")) {
             f.dateMode = mode.isEmpty() ? QStringLiteral("date") : mode;

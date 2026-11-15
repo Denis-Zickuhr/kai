@@ -103,6 +103,7 @@ QuickHttpEditDialog::QuickHttpEditDialog(const QString &commandName, const core:
     layout->addWidget(body, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    m_buttons = buttons;
     stripDialogButtonIcons(buttons);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -133,6 +134,13 @@ core::HttpConfig QuickHttpEditDialog::config() const
     config.auth = m_auth->auth();
     m_body->applyTo(config);
     return config;
+}
+
+void QuickHttpEditDialog::setAcceptText(const QString &text)
+{
+    if (m_buttons) {
+        m_buttons->button(QDialogButtonBox::Ok)->setText(text);
+    }
 }
 
 } // namespace kai::ui

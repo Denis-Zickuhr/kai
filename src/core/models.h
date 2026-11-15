@@ -248,6 +248,8 @@ struct HttpConfig {
     HttpOptions options;
     // Grava a resposta neste arquivo (caminho com {{VAR}}) conforme chega, em vez de em memória (downloads grandes).
     QString responseFile;
+    // Ao rodar pela interface, abre a edição rápida antes de enviar (o usuário confirma ou cancela).
+    bool askFirst = false;
     QVector<EnvExtractor> envExtractors;
     // Verificações sobre a resposta (formato das condições de execução). A resposta fica disponível como
     // RESPONSE_STATUS, RESPONSE_TIME_MS, RESPONSE_SIZE, RESPONSE_CONTENT_TYPE, RESPONSE_BODY e RESPONSE_HEADER_<NOME>.

@@ -1324,6 +1324,23 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         QVERIFY(!window.dockHost()->isVisible());
     }
+    void theTopBarGetsExtraPaddingWhenMaximized()
+    {
+        TopUtilityBar bar;
+        bar.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&bar));
+        const int normalTop = bar.layout()->contentsMargins().top();
+        const int normalHeight = bar.sizeHint().height();
+
+        bar.setMaximized(true);
+        QVERIFY(bar.layout()->contentsMargins().top() > normalTop);
+        QVERIFY(bar.sizeHint().height() > normalHeight);
+
+        bar.setMaximized(false);
+        QCOMPARE(bar.layout()->contentsMargins().top(), normalTop);
+        QCOMPARE(bar.sizeHint().height(), normalHeight);
+    }
+
 };
 
 QTEST_MAIN(TestMainWindowLayout)

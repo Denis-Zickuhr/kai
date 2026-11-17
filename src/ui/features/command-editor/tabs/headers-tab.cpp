@@ -103,6 +103,10 @@ void CommandEditorDialog::buildConnectionTab()
     card->setExpanded(true, false);
     card->setCollapsible(false);
     layout->addWidget(card);
+
+    m_askFirstField = new QCheckBox(utils::tr(QStringLiteral("http.ask_first")), this);
+    m_askFirstField->setProperty("kaiRole", QStringLiteral("switch"));
+    layout->addWidget(m_askFirstField);
     layout->addStretch(1);
 }
 

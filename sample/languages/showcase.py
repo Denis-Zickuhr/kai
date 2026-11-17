@@ -230,6 +230,7 @@ def ask_details(a):
         {"name": "license", "type": "select", "label": "License", "group": "Metadata",
          "options": ["MIT", "Apache-2.0", "GPL-3.0", "Proprietary"], "default": a.get("license", "MIT")},
         {"name": "due", "type": "date", "label": "First release", "mode": "date", "group": "Planning"},
+        {"name": "standup", "type": "time", "label": "Daily stand-up", "group": "Planning"},
         {"name": "budget", "type": "number", "label": "Budget (hours)", "min": 0, "max": 500, "step": 0.5,
          "decimals": 1, "default": a.get("budget", 40), "group": "Planning"},
         {"name": "token", "type": "secret", "label": "Registry token (optional)", "group": "Planning",

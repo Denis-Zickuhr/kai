@@ -201,7 +201,7 @@ void validateParameter(ValidationResult &result, const QJsonValue &value, const 
     requireEnum(result, obj, path, QStringLiteral("type"),
         {QStringLiteral("text"), QStringLiteral("number"), QStringLiteral("bool"),
          QStringLiteral("select"), QStringLiteral("file"), QStringLiteral("textarea"),
-         QStringLiteral("json"), QStringLiteral("date"), QStringLiteral("grid")});
+         QStringLiteral("json"), QStringLiteral("date"), QStringLiteral("time"), QStringLiteral("grid")});
     requireEnum(result, obj, path, QStringLiteral("pick_mode"),
         {QStringLiteral("file"), QStringLiteral("folder"), QStringLiteral("both")});
     requireEnum(result, obj, path, QStringLiteral("file_path_format"),
@@ -254,7 +254,7 @@ void validateParameter(ValidationResult &result, const QJsonValue &value, const 
             requireString(result, columnObj, columnPath, QStringLiteral("name"), true);
             requireEnum(result, columnObj, columnPath, QStringLiteral("type"),
                 {QStringLiteral("text"), QStringLiteral("number"), QStringLiteral("bool"),
-                 QStringLiteral("select"), QStringLiteral("date")});
+                 QStringLiteral("select"), QStringLiteral("date"), QStringLiteral("time")});
             requireEnum(result, columnObj, columnPath, QStringLiteral("date_mode"),
                 {QStringLiteral("date"), QStringLiteral("time"), QStringLiteral("datetime")});
         }
@@ -542,6 +542,7 @@ void validateHttpConfig(ValidationResult &result, const QJsonObject &httpObj, co
         QStringLiteral("auth"), QStringLiteral("body_type"), QStringLiteral("body"), QStringLiteral("graphql_variables"),
         QStringLiteral("form_fields"), QStringLiteral("body_file"), QStringLiteral("options"),
         QStringLiteral("response_file"), QStringLiteral("env_extractors"), QStringLiteral("assertions"),
+        QStringLiteral("ask_first"),
     };
     warnUnknownKeys(result, httpObj, httpPath, known);
     requireString(result, httpObj, httpPath, QStringLiteral("url"), true);

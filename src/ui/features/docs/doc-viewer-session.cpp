@@ -136,53 +136,15 @@ void DocViewer::openKey(const QString &key)
     }
 }
 
-void DocViewer::showRecentsMenu(const QPoint &globalPosition)
-{
-    if (!m_store) {
-        return;
-    }
-    captureState(); // o documento aberto também aparece com o rascunho de agora
-    const QColor accent(tk::accent());
-    QMenu menu(this);
-    const QStringList entries = recentEntries();
-    bool anyDraft = false;
-    bool firstRecent = true;
-    for (const QString &key : entries) {
-        const bool draft = m_store->hasDraft(key);
-        if (!draft && firstRecent) {
-            if (anyDraft) {
-                menu.addSeparator();
-            }
-            firstRecent = false;
-        }
-        anyDraft = anyDraft || draft;
-        const bool isNote = key.startsWith(QLatin1String("note:"));
-        QAction *action = menu.addAction(
-            LucideIcons::icon(isNote ? QStringLiteral("notebook") : QStringLiteral("file-text"),
-                              draft ? QColor(tk::warningFg()) : accent, 16),
-            (draft ? QStringLiteral("● ") : QString()) + displayNameFor(key));
-        action->setToolTip(draft ? utils::tr(QStringLiteral("doc.draft.tooltip")) : key);
-        connect(action, &QAction::triggered, this, [this, key]() { openKey(key); });
-    }
-    if (entries.isEmpty()) {
-        QAction *none = menu.addAction(utils::tr(QStringLiteral("doc.recent.none")));
-        none->setEnabled(false);
-    }
-    menu.exec(globalPosition);
-}
-
 void DocViewer::refreshDraftMarks()
 {
     QSet<QString> keys;
-    bool inScope = false;
     if (m_store) {
         for (const QString &key : m_store->draftKeys()) {
             keys.insert(key);
-            inScope = inScope || m_store->state(key).scope == m_scope;
         }
     }
     m_sidebar->setDraftKeys(keys);
-    m_nav->setHasDrafts(inScope);
 }
 
 } // namespace kai::ui

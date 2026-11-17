@@ -24,11 +24,6 @@ public:
     QComboBox *windowModeField() const { return m_windowModeField; }
     QSpinBox *windowWidthField() const { return m_windowWidthField; }
     QSpinBox *windowHeightField() const { return m_windowHeightField; }
-    QCheckBox *fxShadowsField() const { return m_fxShadowsField; }
-    QCheckBox *fxTranslucencyField() const { return m_fxTranslucencyField; }
-    QCheckBox *fxBlurField() const { return m_fxBlurField; }
-    QCheckBox *fxAnimationsField() const { return m_fxAnimationsField; }
-    QCheckBox *gradientsEnabledField() const { return m_gradientsEnabledField; }
     QCheckBox *autoHideField() const { return m_autoHideField; }
     QCheckBox *startVisibleField() const { return m_startVisibleField; }
 
@@ -42,11 +37,6 @@ private:
     QComboBox *m_windowPresetField = nullptr;
     QSpinBox *m_windowWidthField = nullptr;
     QSpinBox *m_windowHeightField = nullptr;
-    QCheckBox *m_fxShadowsField = nullptr;
-    QCheckBox *m_fxTranslucencyField = nullptr;
-    QCheckBox *m_fxBlurField = nullptr;
-    QCheckBox *m_fxAnimationsField = nullptr;
-    QCheckBox *m_gradientsEnabledField = nullptr;
     QCheckBox *m_autoHideField = nullptr;
     QCheckBox *m_startVisibleField = nullptr;
 };

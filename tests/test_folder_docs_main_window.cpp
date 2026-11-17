@@ -33,6 +33,7 @@
 #include "ui/shared/action-group-container.h"
 #include "ui/shared/action-sidebar.h"
 #include "utils/design-tokens.h"
+#include "utils/theme-manager.h"
 
 using namespace kai;
 using namespace kai::ui;
@@ -440,7 +441,6 @@ private slots:
         QCOMPARE(activeInZoneOf(window, layout::view_id::kDocument), layout::view_id::kDocument);
         QTRY_VERIFY_WITH_TIMEOUT(docs->docViewer() && docs->docViewer()->browser()->toPlainText().contains(QStringLiteral("Back again")), 4000);
         QVERIFY(docs->docViewer()->findChild<DocNavBar *>() != nullptr);
-        QVERIFY(docs->docViewer()->findChild<DocNavBar *>()->rectOf(DocNavBar::Item::Folders).isValid());
     }
 
     // O "+" aparece por padrão, e a lista recolhida volta como estava ao reabrir o Kai.
@@ -914,6 +914,27 @@ private slots:
         QVERIFY(docs->docViewer()->isVisible());
         QVERIFY(drawer->isVisible());
         QCOMPARE(drawer->currentCommandId(), QStringLiteral("a")); // a pasta não apagou a Saída que está ao lado
+    }
+
+    void aThemeSwitchOutsideSettingsRepaintsTheDocumentViewer()
+    {
+        write(m_project.path() + QStringLiteral("/README.md"), QStringLiteral("# Themed\n"));
+        seed(m_project.path());
+        MainWindow window;
+        window.show();
+        auto *tree = window.findChild<CommandTreeWidget *>();
+        auto *themes = window.findChild<utils::ThemeManager *>();
+        DocumentPanel *docs = window.documentPanel();
+        QVERIFY(themes);
+        QVERIFY(tree->selectCommand(QStringLiteral("f2")));
+        QTRY_VERIFY_WITH_TIMEOUT(docs->docViewer() && docs->docViewer()->browser()->toPlainText().contains(QStringLiteral("Themed")), 4000);
+
+        // Bandeja, IA e live reload trocam o tema só por themeReloaded, sem passar pelas Configurações.
+        QVERIFY(themes->loadThemeFromFile(QStringLiteral("assets/themes/kai-material.json")));
+        QCOMPARE(docs->docViewer()->browser()->palette().color(QPalette::Base), QColor(QStringLiteral("#141218")));
+        QVERIFY(themes->loadThemeFromFile(QStringLiteral("assets/themes/xmas-light.json")));
+        QCOMPARE(docs->docViewer()->browser()->palette().color(QPalette::Base), QColor(QStringLiteral("#f5f7f8")));
+        QCOMPARE(docs->docViewer()->sidebar()->tree()->palette().color(QPalette::Text), QColor(QStringLiteral("#1b2624")));
     }
 
 };

@@ -154,6 +154,9 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.uiDensity = s.value("ui_density").toString(result.settings.uiDensity);
         result.settings.uiCornerStyle = s.value("ui_corner_style").toInt(result.settings.uiCornerStyle);
         result.settings.treeConnectorStyle = s.value("tree_connector_style").toInt(result.settings.treeConnectorStyle);
+        if (s.value("tree_look").toString() == QLatin1String("explorer")) {
+            result.settings.treeLook = QStringLiteral("explorer");
+        }
         result.settings.commandsBackgroundImage = s.value("commands_background_image").toString(result.settings.commandsBackgroundImage);
         result.settings.commandsBackgroundOpacity = s.value("commands_background_opacity").toInt(result.settings.commandsBackgroundOpacity);
         result.settings.itemActionsPlacement = s.value("item_actions_placement").toString(result.settings.itemActionsPlacement);
@@ -183,11 +186,6 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
             }
         }
         result.settings.showHiddenCommands = s.value("show_hidden_commands").toBool(result.settings.showHiddenCommands);
-        result.settings.fxShadows = s.value("fx_shadows").toBool(result.settings.fxShadows);
-        result.settings.fxTranslucency = s.value("fx_translucency").toBool(result.settings.fxTranslucency);
-        result.settings.fxBlur = s.value("fx_blur").toBool(result.settings.fxBlur);
-        result.settings.fxAnimations = s.value("fx_animations").toBool(result.settings.fxAnimations);
-        result.settings.gradientsEnabled = s.value("gradients_enabled").toBool(result.settings.gradientsEnabled);
         result.settings.autoHideOnFocusLoss = s.value("auto_hide_on_focus_loss").toBool(result.settings.autoHideOnFocusLoss);
         result.settings.windowMode = s.value("window_mode").toString(result.settings.windowMode);
         result.settings.windowWidth = s.value("window_width").toInt(result.settings.windowWidth);
@@ -227,6 +225,7 @@ ConfigManager::ImportResult ConfigManager::importFromJson(const QString &jsonTex
         result.settings.autostart = s.value("autostart").toBool(result.settings.autostart);
         result.settings.smartFocus = s.value("smart_focus").toBool(result.settings.smartFocus);
         result.settings.inlineActions = s.value("inline_actions").toBool(result.settings.inlineActions);
+        result.settings.autoLoadRemoteImages = s.value("auto_load_remote_images").toBool(result.settings.autoLoadRemoteImages);
 
         for (const QJsonValue &v : s.value("environments").toArray()) {
             const QJsonObject o = v.toObject();

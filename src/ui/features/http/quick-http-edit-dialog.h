@@ -5,6 +5,7 @@
 #include "core/models.h"
 
 class QComboBox;
+class QDialogButtonBox;
 class QLineEdit;
 class QListWidget;
 
@@ -24,11 +25,13 @@ public:
 
     // A configuração original com os campos editados aplicados.
     core::HttpConfig config() const;
+    void setAcceptText(const QString &text);
 
 private:
     void updateNavTitles();
 
     core::HttpConfig m_original;
+    QDialogButtonBox *m_buttons = nullptr;
     QComboBox *m_method = nullptr;
     QLineEdit *m_url = nullptr;
     QListWidget *m_nav = nullptr;

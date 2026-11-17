@@ -72,6 +72,9 @@ GeneralTab::GeneralTab(const core::SettingsData &currentSettings, QWidget *paren
     m_inlineActionsField = sf::addSwitch(grid, treeGroup, utils::tr(QStringLiteral("settings.inline_actions.label")),
         currentSettings.inlineActions, utils::tr(QStringLiteral("settings.inline_actions.hint")));
     m_inlineActionsField->setObjectName(QStringLiteral("inlineActionsField"));
+    m_remoteImagesField = sf::addSwitch(grid, treeGroup, utils::tr(QStringLiteral("settings.remote_images.label")),
+        currentSettings.autoLoadRemoteImages, utils::tr(QStringLiteral("settings.remote_images.hint")));
+    m_remoteImagesField->setObjectName(QStringLiteral("remoteImagesField"));
     layout->addWidget(treeGroup);
 
     auto *languagesGroup = sf::makeGroup(this, utils::tr(QStringLiteral("settings.group.languages")), &grid);

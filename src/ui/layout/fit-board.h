@@ -14,7 +14,7 @@ namespace kai::ui::layout {
 class ViewZone;
 
 // O quadro do modo Fit: uma grade de casas iguais onde cada célula ocupa um retângulo de casas. Cada célula tem uma alça no
-// canto de baixo à direita; arrastá-la na direção desejada estica (ou encolhe) a célula por mais colunas/linhas.
+// canto de baixo à direita (e as bordas da direita e de baixo esticam só um eixo); arrastá-la na direção desejada estica (ou encolhe) a célula por mais colunas/linhas.
 class FitBoard : public QWidget {
 public:
     struct Item {
@@ -35,11 +35,16 @@ public:
     QRect cellRect(int row, int col, int rowSpan, int colSpan) const;
     // A alça de uma célula (para os testes).
     QWidget *gripOf(Zone zone) const;
+    // Mostra/esconde todas as alças (canto e bordas).
+    void setHandlesVisible(bool visible);
     // Durante o arrasto: o retângulo do pedido em casas (x=coluna, y=linha, w/h=vãos), ou vazio.
     QRect dragPreview() const { return m_previewCells; }
 
+    // Qual lado a alça estica: o canto (colunas e linhas), a borda da direita (só colunas) ou a de baixo (só linhas).
+    enum class Edge { Corner, Right, Bottom };
+
     // O arrasto da alça (a alça chama; público para os testes simularem sem mouse).
-    void dragMoved(Zone zone, const QPoint &boardPos);
+    void dragMoved(Zone zone, const QPoint &boardPos, Edge edge = Edge::Corner);
     void dragEnded(Zone zone);
 
 protected:
@@ -52,6 +57,8 @@ private:
     int m_rows;
     QList<Item> m_items;
     QList<QWidget *> m_grips;
+    QList<QWidget *> m_edgeGrips; // por célula: a borda da direita e a de baixo, nessa ordem
+    bool m_handlesVisible = true;
     QWidget *m_preview = nullptr;
     SpanLimiter m_limiter;
     SpanCommit m_commit;

@@ -91,6 +91,7 @@ DocViewer::DocViewer(QWidget *parent)
     m_search = new DocSearchBar(m_content);
     m_editBar = new DocEditBar(m_content);
     m_editBar->setEditable(false);
+    createRemoteImagesButton();
     connect(m_search, &DocSearchBar::queryChanged, this, [this]() { runSearch(true); });
     connect(m_search, &DocSearchBar::nextRequested, this, [this]() { stepMatch(1); });
     connect(m_search, &DocSearchBar::previousRequested, this, [this]() { stepMatch(-1); });
@@ -142,8 +143,6 @@ DocViewer::DocViewer(QWidget *parent)
     connect(m_pane->editor()->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() { scheduleStateCapture(); });
     connect(m_pane->editor(), &QPlainTextEdit::cursorPositionChanged, this, [this]() { scheduleStateCapture(); });
     connect(m_pane->editor(), &QPlainTextEdit::textChanged, this, [this]() { scheduleStateCapture(); });
-    connect(m_nav, &DocNavBar::recentRequested, this, &DocViewer::showRecentsMenu);
-    connect(m_nav, &DocNavBar::foldersRequested, this, &DocViewer::foldersRequested);
     auto *saveShortcut = new QShortcut(QKeySequence::Save, this);
     saveShortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(saveShortcut, &QShortcut::activated, this, [this]() {
@@ -463,11 +462,6 @@ void DocViewer::leaveEmptyState()
     if (m_stack->currentWidget() == m_emptyPage) {
         m_stack->setCurrentWidget(m_browser);
     }
-}
-
-void DocViewer::setFoldersButtonVisible(bool visible)
-{
-    m_nav->setFoldersVisible(visible);
 }
 
 void DocViewer::clear()

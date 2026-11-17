@@ -452,6 +452,9 @@ http_config:
     use_cookies: true
   # Write a successful (2xx) response to this file as it arrives, instead of keeping it in memory. Default: none.
   response_file: "{{HOME}}/Downloads/report.pdf"
+  # Running it from the interface opens the Quick edit first (Send / Cancel). Scheduled and background runs are not
+  # interrupted. Default: false.
+  ask_first: true
   # Pull fields of the JSON response into dynamic variables for the next commands/hooks.
   env_extractors:
     - json_path: "token"

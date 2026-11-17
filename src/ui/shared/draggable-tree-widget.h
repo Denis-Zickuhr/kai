@@ -4,12 +4,16 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
+#include <algorithm>
+#include <QScrollBar>
 #include <QRect>
 #include <QApplication>
 #include <QStyle>
 #include <QStyleOptionViewItem>
 #include <functional>
 
+#include "utils/design-tokens.h"
 #include "utils/logger.h"
 
 namespace kai::ui {
@@ -26,6 +30,19 @@ public:
     }
 
     void setIndicatorColor(const QColor &color) { m_indicatorColor = color; update(); }
+
+    // Visual de explorador de pastas: sem linhas de conexão nem zebra, só o chevron, recuo maior e destaque
+    // (hover/seleção) como cápsula recuada com o raio do design system.
+    void setExplorerLook(bool on)
+    {
+        if (m_explorerLook == on) {
+            return;
+        }
+        m_explorerLook = on;
+        setIndentation(on ? 18 : 20);
+        viewport()->update();
+    }
+    bool explorerLook() const { return m_explorerLook; }
 
     void setConnectorStyle(ConnectorStyle style) { m_connectorStyle = style; viewport()->update(); }
     void setConnectorLineColor(const QColor &color) { m_connectorLineColor = color; viewport()->update(); }
@@ -162,10 +179,24 @@ protected:
                     } else if (item == m_hoveredItem) {
                         color = m_hoverRowColor;
                     } else {
-                        color = (visibleRow % 2 == 1) ? m_stripeRowColor : m_baseRowColor;
+                        color = (!m_explorerLook && visibleRow % 2 == 1) ? m_stripeRowColor : m_baseRowColor;
                     }
                     if (color.isValid()) {
-                        bg.fillRect(QRect(0, r.top(), viewport()->width(), r.height()), color);
+                        if (m_explorerLook) {
+                            const bool highlighted = item == current || item == m_hoveredItem;
+                            bg.fillRect(QRect(0, r.top(), viewport()->width(), r.height()), m_baseRowColor);
+                            if (highlighted) {
+                                bg.setRenderHint(QPainter::Antialiasing, true);
+                                bg.setPen(Qt::NoPen);
+                                bg.setBrush(color);
+                                const int radius = utils::tokens::radiusSm();
+                                bg.drawRoundedRect(QRectF(3, r.top() + 1, viewport()->width() - 6, r.height() - 2),
+                                                   radius, radius);
+                                bg.setRenderHint(QPainter::Antialiasing, false);
+                            }
+                        } else {
+                            bg.fillRect(QRect(0, r.top(), viewport()->width(), r.height()), color);
+                        }
                     }
                 }
                 ++visibleRow;
@@ -204,7 +235,7 @@ protected:
 protected:
     void drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const override
     {
-        if (m_connectorStyle == ConnectorStyle::Native) {
+        if (m_connectorStyle == ConnectorStyle::Native && !m_explorerLook) {
             QTreeWidget::drawBranches(painter, rect, index);
             return;
         }
@@ -214,57 +245,87 @@ protected:
             ++depth;
         }
 
-        if (m_connectorStyle == ConnectorStyle::Continuous && model()) {
+        if (m_connectorStyle == ConnectorStyle::Continuous && !m_explorerLook && model()) {
             painter->save();
-            painter->setRenderHint(QPainter::Antialiasing, false);
-            painter->setPen(QPen(m_connectorLineColor, 1));
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            QColor lineColor = palette().color(QPalette::Text);
+            lineColor.setAlpha(70);
+            QPen pen(lineColor, 1.0, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin);
+            painter->setPen(pen);
+            painter->setBrush(Qt::NoBrush);
 
             const int indent = indentation();
-            const int rowMidY = rect.top() + rect.height() / 2;
+            // Centro de pixel da linha, o mesmo que o conteúdo do item usa: com height/2 a horizontal ficava 1px abaixo
+            // do ícone e do texto.
+            const int rowMidY = rect.top() + (rect.height() - 1) / 2;
+            // +0.5: traço de 1px centrado no pixel, nítido mesmo com antialiasing. O fim da linha vai um pixel além do
+            // retângulo da linha para os trechos verticais de linhas vizinhas se emendarem sem fresta.
+            const qreal top = rect.top();
+            const qreal bottom = rect.bottom() + 1;
 
+            // Níveis acima: uma vertical contínua enquanto o ancestral ainda tem irmãos abaixo.
             QModelIndex node = index.parent();
             for (int col = depth - 2; col >= 0 && node.isValid(); --col) {
                 if (node.row() < model()->rowCount(node.parent()) - 1) {
-                    const int x = rect.left() + col * indent + indent / 2;
-                    painter->drawLine(x, rect.top(), x, rect.bottom());
+                    const qreal x = rect.left() + col * indent + indent / 2 + 0.5;
+                    painter->drawLine(QPointF(x, top), QPointF(x, bottom));
                 }
                 node = node.parent();
             }
 
             if (depth > 0) {
                 const bool isLastChild = index.row() == model()->rowCount(index.parent()) - 1;
-                const int x = rect.left() + (depth - 1) * indent + indent / 2;
-                const int vBottom = isLastChild ? rowMidY : rect.bottom();
-                painter->drawLine(x, rect.top(), x, vBottom);
+                const qreal x = rect.left() + (depth - 1) * indent + indent / 2 + 0.5;
+                const qreal y = rowMidY + 0.5;
 
-                const bool hasChildren = model()->hasChildren(index);
-                int lineEndX = rect.left() + depth * indent;
-
-                if (hasChildren) {
-                    // Para pastas: o traço vai até o meio da coluna do chevron (espaço do próprio nível)
-                    lineEndX = x + indent / 2;
-                } else {
-                    // Para comandos: o traço vai até o início do texto/conteúdo visual
-                    if (auto *item = itemFromIndex(index)) {
-                        lineEndX = visualItemRect(item).left();
-                    }
+                qreal lineEndX = rect.left() + depth * indent;
+                if (model()->hasChildren(index)) {
+                    // Pastas: o traço para antes do chevron, que ocupa a coluna do próprio nível.
+                    lineEndX = x + indent / 2.0 - 4;
+                } else if (auto *item = itemFromIndex(index)) {
+                    lineEndX = visualItemRect(item).left() - 2;
                 }
+                lineEndX = qMax(lineEndX, x);
 
-                painter->drawLine(x, rowMidY, lineEndX, rowMidY);
+                // Último filho: a vertical faz uma curva suave para dentro e segue na horizontal (um "L" arredondado).
+                // Os demais: a vertical segue reta até a próxima linha e a ramificação sai num "T" reto; uma curva
+                // colada numa vertical que continua só parecia um gancho torto.
+                if (isLastChild) {
+                    const qreal radius = std::min<qreal>({5.0, y - top, lineEndX - x});
+                    QPainterPath path;
+                    path.moveTo(x, top);
+                    path.lineTo(x, y - radius);
+                    path.quadTo(QPointF(x, y), QPointF(x + radius, y));
+                    path.lineTo(lineEndX, y);
+                    painter->drawPath(path);
+                } else {
+                    painter->drawLine(QPointF(x, top), QPointF(x, bottom));
+                    painter->drawLine(QPointF(x, y), QPointF(lineEndX, y));
+                }
             }
 
             painter->restore();
         }
 
         if (model() && model()->hasChildren(index)) {
-            QStyleOptionViewItem opt;
-            opt.initFrom(this);
-            opt.rect = QRect(rect.left() + depth * indentation(), rect.top(), indentation(), rect.height());
-            opt.state = QStyle::State_Children;
+            const int indent = indentation();
+            const QPointF c(rect.left() + depth * indent + indent / 2.0, rect.top() + rect.height() / 2.0);
+            const qreal h = 3.5;
+            QPolygonF chevron;
             if (isExpanded(index)) {
-                opt.state |= QStyle::State_Open;
+                chevron << QPointF(c.x() - h, c.y() - h / 2) << QPointF(c.x(), c.y() + h / 2)
+                        << QPointF(c.x() + h, c.y() - h / 2);
+            } else {
+                chevron << QPointF(c.x() - h / 2, c.y() - h) << QPointF(c.x() + h / 2, c.y())
+                        << QPointF(c.x() - h / 2, c.y() + h);
             }
-            style()->drawPrimitive(QStyle::PE_IndicatorBranch, &opt, painter, this);
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            QPen pen(palette().color(QPalette::Text), 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            painter->setPen(pen);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawPolyline(chevron);
+            painter->restore();
         }
     }
 
@@ -363,6 +424,7 @@ private:
     QColor m_selectedRowColor;
     std::function<bool()> m_selectionVisible;
     ConnectorStyle m_connectorStyle = ConnectorStyle::Native;
+    bool m_explorerLook = false;
     QColor m_connectorLineColor{139, 233, 253};
     bool m_hasIndicator = false;
     QRect m_dropRow;

@@ -7,6 +7,7 @@
 #include <QVector>
 
 class QAction;
+class QHBoxLayout;
 class QLabel;
 class QMenu;
 class QMenuBar;
@@ -76,6 +77,7 @@ private:
     QToolButton *m_maximizeButton = nullptr;
     QToolButton *m_closeButton = nullptr;
     bool m_maximized = false;
+    QHBoxLayout *m_layout = nullptr;
 };
 
 } // namespace kai::ui

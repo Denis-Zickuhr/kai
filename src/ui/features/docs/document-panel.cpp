@@ -65,6 +65,14 @@ void DocumentPanel::refreshStyle()
     }
 }
 
+void DocumentPanel::setAutoLoadRemoteImages(bool on)
+{
+    m_autoLoadRemote = on;
+    if (m_viewer) {
+        m_viewer->setAutoLoadRemoteImages(on);
+    }
+}
+
 DocViewer *DocumentPanel::ensureViewer()
 {
     if (m_viewer) {
@@ -78,8 +86,7 @@ DocViewer *DocumentPanel::ensureViewer()
     connect(m_viewer, &DocViewer::newNoteRequested, this, &DocumentPanel::documentNewNoteRequested);
     connect(m_viewer, &DocViewer::noteDeleteRequested, this, &DocumentPanel::documentNoteDeleteRequested);
     connect(m_viewer, &DocViewer::noteFileActionRequested, this, &DocumentPanel::documentNoteFileActionRequested);
-    connect(m_viewer, &DocViewer::foldersRequested, this, &DocumentPanel::documentFoldersRequested);
-    m_viewer->setFoldersButtonVisible(true);
+    m_viewer->setAutoLoadRemoteImages(m_autoLoadRemote);
     m_viewer->setNoteSaver(m_noteSaver);
     m_viewer->setNameProvider(m_nameProvider);
     m_viewer->setSessionStore(m_store);

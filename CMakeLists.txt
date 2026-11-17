@@ -4,7 +4,7 @@ project(kai VERSION 1.0.0 LANGUAGES CXX C)
 # Fonte única da versão: project(VERSION X.Y.Z) + KAI_VERSION_PRERELEASE (ex.: "beta.1"; vazio no estável, que é o
 # default). O CI passa o sufixo a partir da tag (-DKAI_VERSION_PRERELEASE=beta.1). KAI_VERSION_STRING é a versão
 # exibida (Sobre, Ajuda, MCP, nome dos artefatos); o VERSIONINFO numérico do Windows usa só X.Y.Z.0.
-set(KAI_VERSION_PRERELEASE "beta.2" CACHE STRING "Sufixo de pré-release (ex.: beta.1). Vazio = versão estável.")
+set(KAI_VERSION_PRERELEASE "beta.5" CACHE STRING "Sufixo de pré-release (ex.: beta.1). Vazio = versão estável.")
 if(KAI_VERSION_PRERELEASE)
     set(KAI_VERSION_STRING "${PROJECT_VERSION}-${KAI_VERSION_PRERELEASE}")
 else()
@@ -412,6 +412,7 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/features/docs/doc-viewer-internal.h
     src/ui/features/docs/doc-viewer-helpers.cpp
     src/ui/features/docs/doc-viewer-render.cpp
+    src/ui/features/docs/doc-viewer-remote.cpp
     src/ui/features/docs/doc-viewer-search.cpp
     src/ui/features/docs/doc-viewer-navigation.cpp
     src/ui/features/docs/doc-viewer-edit.cpp
@@ -778,6 +779,8 @@ add_library(kai-ui ${KAI_LIB_TYPE}
     src/ui/shared/combo-popup-filter.cpp
     src/ui/shared/key-trace-filter.h
     src/ui/shared/key-trace-filter.cpp
+    src/ui/shared/open-time-filter.h
+    src/ui/shared/open-time-filter.cpp
     src/ui/shared/status-line.h
     src/ui/shared/status-line.cpp
     src/ui/shared/action-group-container.h

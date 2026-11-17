@@ -385,6 +385,9 @@ private slots:
         fill(f);
         for (Command &c : f.commands) c.icon = QStringLiteral("square");
         f.widget.setData(f.folders, f.commands, {});
+        // O rebuild apaga (deleteLater) as árvores antigas: quem guardou o ponteiro antes do setData fica com um pendente.
+        f.tree = qobject_cast<QTreeWidget *>(f.widget.findChild<QTabWidget *>()->currentWidget());
+        QVERIFY(f.tree);
         f.tree->setStyleSheet(QStringLiteral("QTreeView::item { height: 30px; }"));
         QTest::qWait(50);
         QTest::mouseMove(f.tree->viewport(), QPoint(5, 5));

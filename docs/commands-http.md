@@ -99,6 +99,10 @@ The **Stop** button cancels a request in flight. A response of type `text/event-
 
 If the server never answers (timeout, refused connection, DNS), the **Request** tab opens with the reason highlighted, the status shows **No response** / **Timed out** instead of a code, and the **Response** tab does not appear. **Headers sent** and **Body sent** each have a **Copy** button; the body can be shown formatted (JSON, in the original key order) or exactly as sent.
 
+## Ask before sending
+
+Turn on **Ask before sending** (Connection tab) and running the request from the interface opens the Quick edit first: **Send** saves your changes and runs it, **Cancel** sends nothing. Scheduled and background runs are not interrupted.
+
 ## Quick edit
 
 The **Quick edit** button (side bar, or its shortcut) opens the method, URL, body, query, headers and authentication of the selected request without opening the full editor. New HTTP commands start with `Content-Type` and `Accept: application/json` and a JSON body; `Host` is sent automatically from the URL.

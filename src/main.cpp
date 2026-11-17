@@ -16,6 +16,7 @@
 #include "ui/main-window.h"
 #include "ui/shared/combo-popup-filter.h"
 #include "ui/shared/key-trace-filter.h"
+#include "ui/shared/open-time-filter.h"
 #include "ui/shared/no-scroll-combo-filter.h"
 #include "utils/qt-builtin-translator.h"
 #include "ipc/cli-client.h"
@@ -230,6 +231,7 @@ int main(int argc, char *argv[])
     const bool traceKeys = qEnvironmentVariableIntValue("KAI_TRACE_KEYS") != 0;
     auto *keyTrace = new kai::ui::KeyTraceFilter(traceKeys, &app);
     app.installEventFilter(keyTrace);
+    app.installEventFilter(new kai::ui::OpenTimeFilter(&app)); // tempo de abertura de cada diálogo no log
     QObject::connect(keyTrace, &kai::ui::KeyTraceFilter::traced, &app,
                      [](const QString &line) { utils::Logger::info("KeyTrace", line); });
     if (traceKeys) {

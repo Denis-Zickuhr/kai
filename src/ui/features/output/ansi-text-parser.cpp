@@ -1,5 +1,7 @@
 #include "ui/features/output/ansi-text-parser.h"
 
+#include "utils/design-tokens.h"
+
 #include <QRegularExpression>
 
 namespace kai::ui {
@@ -71,7 +73,7 @@ void appendTextWithLinkDetection(QVector<AnsiSegment> &segments, const QString &
         }
 
         QTextCharFormat linkFormat = baseFormat;
-        linkFormat.setForeground(QColor(86, 156, 214)); // azul claro, destaque de link
+        linkFormat.setForeground(utils::tokens::ensureContrast(QColor(86, 156, 214), QColor(utils::tokens::terminalBg()), 3.5)); // azul claro, destaque de link
         linkFormat.setFontUnderline(true);
         linkFormat.setAnchor(true);
         linkFormat.setAnchorHref(match.captured(0));
@@ -86,9 +88,15 @@ void appendTextWithLinkDetection(QVector<AnsiSegment> &segments, const QString &
 }
 }
 
+// Cor de texto ANSI legível sobre o fundo da Saída do tema ativo (o "branco" some em tema claro, o "preto" em escuro).
+static QColor readableAnsi(int code, bool bright)
+{
+    return utils::tokens::ensureContrast(AnsiTextParser::ansiColorFor(code, bright), QColor(utils::tokens::terminalBg()), 3.5);
+}
+
 AnsiTextParser::AnsiTextParser()
 {
-    m_defaultFormat.setForeground(QColor(Qt::white));
+    m_defaultFormat.setForeground(QColor(utils::tokens::terminalFg()));
     m_currentFormat = m_defaultFormat;
 }
 
@@ -124,6 +132,8 @@ QColor AnsiTextParser::ansiColorFor(int code, bool bright)
 
 void AnsiTextParser::resetFormat()
 {
+    // O tema pode ter mudado desde a criação do parser.
+    m_defaultFormat.setForeground(QColor(utils::tokens::terminalFg()));
     m_currentFormat = m_defaultFormat;
 }
 
@@ -185,9 +195,9 @@ QVector<AnsiSegment> AnsiTextParser::parse(const QString &rawInput)
                 } else if (code == 22) {
                     m_currentFormat.setFontWeight(QFont::Normal);
                 } else if (code >= 30 && code <= 37) {
-                    m_currentFormat.setForeground(ansiColorFor(code - 30, false));
+                    m_currentFormat.setForeground(readableAnsi(code - 30, false));
                 } else if (code >= 90 && code <= 97) {
-                    m_currentFormat.setForeground(ansiColorFor(code - 90, true));
+                    m_currentFormat.setForeground(readableAnsi(code - 90, true));
                 } else if (code >= 40 && code <= 47) {
                     m_currentFormat.setBackground(ansiColorFor(code - 40, false));
                 } else if (code >= 100 && code <= 107) {

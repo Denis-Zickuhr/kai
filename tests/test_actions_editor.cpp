@@ -1,4 +1,5 @@
 #include <QTest>
+#include <QGroupBox>
 
 #include <QApplication>
 #include <QCheckBox>
@@ -416,7 +417,7 @@ private slots:
         CommandsData data;
         QVector<Collection> collections;
         SettingsDialog dialog(SettingsData(), {QStringLiteral("dracula")}, themes.path(), data, collections, []() {}, []() {});
-        auto *shortcutsCard = dialog.findChild<QFrame *>(QStringLiteral("shortcutsCard"));
+        auto *shortcutsCard = dialog.findChild<QGroupBox *>(QStringLiteral("shortcutsCard"));
         QVERIFY(shortcutsCard);
         QVERIFY(!shortcutsCard->findChild<QLabel *>(QStringLiteral("sectionCountBadge")));
     }

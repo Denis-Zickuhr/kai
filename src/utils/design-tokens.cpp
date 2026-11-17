@@ -2,6 +2,9 @@
 
 #include <qmath.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace kai::utils::tokens {
 namespace {
 
@@ -97,6 +100,38 @@ QString buttonFg()
     if (!f.isEmpty()) return f;
     return QColor(buttonColor()).lightnessF() > 0.6
         ? QStringLiteral("#101014") : QStringLiteral("#ffffff");
+}
+
+namespace {
+double relativeLuminance(const QColor &c)
+{
+    const auto channel = [](double v) { return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * channel(c.redF()) + 0.7152 * channel(c.greenF()) + 0.0722 * channel(c.blueF());
+}
+double contrastRatio(const QColor &a, const QColor &b)
+{
+    const double la = relativeLuminance(a);
+    const double lb = relativeLuminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+} // namespace
+
+QColor ensureContrast(const QColor &fg, const QColor &bg, double minRatio)
+{
+    if (!fg.isValid() || !bg.isValid() || contrastRatio(fg, bg) >= minRatio) {
+        return fg;
+    }
+    const QColor target = relativeLuminance(bg) > 0.4 ? QColor(Qt::black) : QColor(Qt::white);
+    for (int step = 1; step <= 20; ++step) {
+        const double t = step / 20.0;
+        const QColor mixed = QColor::fromRgbF(fg.redF() + (target.redF() - fg.redF()) * t,
+                                              fg.greenF() + (target.greenF() - fg.greenF()) * t,
+                                              fg.blueF() + (target.blueF() - fg.blueF()) * t);
+        if (contrastRatio(mixed, bg) >= minRatio) {
+            return mixed;
+        }
+    }
+    return target;
 }
 
 QString mutedFg()
@@ -212,7 +247,7 @@ QString dangerBg()
 }
 
 namespace {
-bool g_gradientsEnabled = true;
+bool g_gradientsEnabled = false;
 
 // "primary" -> "gradient_primary_start"; "" (só chamadas legadas em teste) -> "gradient_start".
 QString gradientKey(const QString &slot, const QString &suffix)

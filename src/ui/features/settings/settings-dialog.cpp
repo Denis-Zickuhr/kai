@@ -18,6 +18,7 @@
 #include "ui/shared/storage-manager-widget.h"
 #include "ui/features/output/terminal-profiles-editor-widget.h"
 #include "utils/translation-manager.h"
+#include "utils/scoped-timer.h"
 
 #include <QListWidget>
 #include <QStackedWidget>
@@ -56,10 +57,11 @@ SettingsDialog::SettingsDialog(const core::SettingsData &currentSettings,
     : QDialog(parent)
     , m_themesDirPath(themesDirPath)
 {
+    const utils::ScopedTimer timer("SettingsDialog", QStringLiteral("montagem das abas"));
     setWindowTitle(utils::tr(QStringLiteral("settings.title")));
     setSizeGripEnabled(true);
 
-    resize(920, 750);
+    resize(920, 540);
     setMinimumSize(480, 400);
     m_originalSettings = currentSettings;
     setupUi(currentSettings, availableThemeNames, commandsData, collections,
@@ -138,6 +140,7 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
     const QColor navIconColor(utils::tokens::mutedFg());
     struct PageDef { QString title; QString icon; QWidget *page; };
 
+    QWidget *storageHost = nullptr;
     const QVector<PageDef> defs = {
         {utils::tr(QStringLiteral("settings.group.general")), QStringLiteral("settings"),
          wrapPage(m_generalTab)},
@@ -154,8 +157,8 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
         {utils::tr(QStringLiteral("settings.group.actions")), QStringLiteral("zap"),
          wrapPage(m_actionsTab)},
         {utils::tr(QStringLiteral("settings.group.storage")), QStringLiteral("database"),
-         buildStoragePage(commandsData, collections, std::move(persistCommands), std::move(persistCollections),
-                          notes, std::move(persistNotes))},
+         (storageHost = buildStoragePage(commandsData, collections, std::move(persistCommands),
+                                         std::move(persistCollections), notes, std::move(persistNotes)))},
         {utils::tr(QStringLiteral("settings.group.notifications")), QStringLiteral("bell"),
          wrapPage(m_notificationsTab)},
         {utils::tr(QStringLiteral("settings.group.kip")), QStringLiteral("wand-sparkles"),
@@ -172,6 +175,14 @@ void SettingsDialog::setupUi(const core::SettingsData &currentSettings, const QS
         m_pages->addWidget(d.page);
     }
     connect(m_navList, &QListWidget::currentRowChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    connect(m_navList, &QListWidget::currentRowChanged, this, [this, storageHost](int row) {
+        if (m_buildStoragePage && m_pages->widget(row) == storageHost) {
+            const utils::ScopedTimer timer("SettingsDialog", QStringLiteral("aba Armazenamento (1ª visita)"));
+            auto build = std::move(m_buildStoragePage);
+            m_buildStoragePage = nullptr;
+            build();
+        }
+    });
     m_navList->setCurrentRow(0);
 
     outerLayout->addWidget(body, 1);
@@ -298,10 +309,20 @@ QWidget *SettingsDialog::buildStoragePage(core::CommandsData &commandsData, QVec
                                           QVector<core::Note> *notes,
                                           std::function<void()> persistNotes)
 {
-    // Sem wrapPage: a lista do StorageManagerWidget já rola sozinha (como a aba Atalhos).
-    m_storageManager = new StorageManagerWidget(commandsData, collections,
-        std::move(persistCommands), std::move(persistCollections), notes, std::move(persistNotes), nullptr);
-    return m_storageManager;
+    // Sem wrapPage: a lista do StorageManagerWidget já rola sozinha (como a aba Atalhos). Ela cria 3 widgets por item,
+    // então só é montada na primeira vez que a página é aberta.
+    auto *host = new QWidget();
+    auto *hostLayout = new QVBoxLayout(host);
+    hostLayout->setContentsMargins(0, 0, 0, 0);
+    m_buildStoragePage = [this, host, hostLayout, &commandsData, &collections, notes,
+                          persistCommands = std::move(persistCommands),
+                          persistCollections = std::move(persistCollections),
+                          persistNotes = std::move(persistNotes)]() {
+        m_storageManager = new StorageManagerWidget(commandsData, collections, persistCommands, persistCollections,
+                                                    notes, persistNotes, host);
+        hostLayout->addWidget(m_storageManager);
+    };
+    return host;
 }
 
 core::AiSettings SettingsDialog::buildAiSettings() const
@@ -353,6 +374,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.uiDensity = m_layoutTab->densityField()->currentData().toString();
     settings.uiCornerStyle = m_layoutTab->cornerStyleField()->currentData().toInt();
     settings.treeConnectorStyle = m_layoutTab->treeConnectorStyleField()->currentData().toInt();
+    settings.treeLook = m_layoutTab->treeLookField()->currentData().toString();
     if (m_layoutTab->commandsBgImageField()) {
         settings.commandsBackgroundImage = m_layoutTab->commandsBgImageField()->text().trimmed();
     }
@@ -385,11 +407,6 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.windowMode = m_appearanceTab->windowModeField()->currentData().toString();
     settings.windowWidth = m_appearanceTab->windowWidthField()->value();
     settings.windowHeight = m_appearanceTab->windowHeightField()->value();
-    settings.fxShadows = m_appearanceTab->fxShadowsField()->isChecked();
-    settings.fxTranslucency = m_appearanceTab->fxTranslucencyField()->isChecked();
-    settings.fxBlur = m_appearanceTab->fxBlurField()->isChecked();
-    settings.fxAnimations = m_appearanceTab->fxAnimationsField()->isChecked();
-    settings.gradientsEnabled = m_appearanceTab->gradientsEnabledField()->isChecked();
     // Seção removida da UI: preserva os valores existentes.
     settings.commandCreationMode = m_originalSettings.commandCreationMode;
     settings.commandEditMode = m_originalSettings.commandEditMode;
@@ -397,6 +414,7 @@ core::SettingsData SettingsDialog::buildSettings() const
     settings.autostart = m_generalTab->autostartField()->isChecked();
     settings.smartFocus = m_generalTab->smartFocusField()->isChecked();
     settings.inlineActions = m_generalTab->inlineActionsField()->isChecked();
+    settings.autoLoadRemoteImages = m_generalTab->remoteImagesField()->isChecked();
     settings.gracefulStopTimeoutSec = m_generalTab->gracefulStopTimeoutField()->value();
     // Campos não editados neste diálogo são preservados do estado original.
     settings.globalEnvVars = m_originalSettings.globalEnvVars;

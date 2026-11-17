@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QDir>
 #include <QStandardPaths>
+#include <QSet>
 
 #include "utils/theme-manager.h"
 
@@ -174,6 +175,32 @@ private:
     }
 
     std::unique_ptr<QTemporaryDir> m_tempDir;
+    void everyBundledThemeDeclaresTheFullVariableSet()
+    {
+        const QDir themes(QStringLiteral("assets/themes"));
+        const QStringList files = themes.entryList({QStringLiteral("*.json")}, QDir::Files);
+        QVERIFY(files.contains(QStringLiteral("kai-light.json")));
+
+        QSet<QString> reference;
+        QMap<QString, QSet<QString>> perTheme;
+        for (const QString &file : files) {
+            ThemeManager manager;
+            QVERIFY2(manager.loadThemeFromFile(themes.filePath(file)), qPrintable(file));
+            QSet<QString> keys;
+            for (auto it = manager.currentTheme().variables.cbegin(); it != manager.currentTheme().variables.cend(); ++it) {
+                keys.insert(it.key());
+            }
+            perTheme.insert(file, keys);
+            reference.unite(keys);
+        }
+        for (auto it = perTheme.cbegin(); it != perTheme.cend(); ++it) {
+            QSet<QString> missing = reference;
+            missing.subtract(it.value());
+            QVERIFY2(missing.isEmpty(), qPrintable(it.key() + QStringLiteral(" sem: ")
+                                                   + QStringList(missing.cbegin(), missing.cend()).join(QLatin1Char(','))));
+        }
+    }
+
 };
 
 QTEST_MAIN(TestThemeManager)

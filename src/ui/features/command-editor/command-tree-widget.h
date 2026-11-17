@@ -177,6 +177,8 @@ public:
     void setTreeConnectorStyle(int style, const QColor &lineColor = QColor());
     // Só recolore (live reload do tema muda a cor do accent, não a preferência de estilo).
     void refreshTreeConnectorColor(const QColor &lineColor);
+    // Visual de explorador de pastas (Configurações → Layout); repassado às árvores extras.
+    void setExplorerLook(bool on);
 
     void selectNextTab();
     void selectPreviousTab();
@@ -349,6 +351,7 @@ private:
     int m_tabBarHeight = 0;
     // Guardados para aplicar também às árvores criadas depois (createTreeForRoot).
     int m_treeConnectorStyle = 0;
+    bool m_explorerLook = false;
     QColor m_treeConnectorLineColor;
     QVector<core::Folder> m_folders;
     QVector<core::Command> m_commands;

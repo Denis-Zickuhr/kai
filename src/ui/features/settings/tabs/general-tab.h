@@ -26,6 +26,7 @@ public:
     QSpinBox *outputMaxLogSizeField() const { return m_outputMaxLogSizeField; }
     QCheckBox *smartFocusField() const { return m_smartFocusField; }
     QCheckBox *inlineActionsField() const { return m_inlineActionsField; }
+    QCheckBox *remoteImagesField() const { return m_remoteImagesField; }
     QLineEdit *pythonField() const { return m_python; }
     QLineEdit *nodeField() const { return m_node; }
     QLineEdit *phpField() const { return m_php; }
@@ -39,6 +40,7 @@ private:
     QSpinBox *m_outputMaxLogSizeField = nullptr;
     QCheckBox *m_smartFocusField = nullptr;
     QCheckBox *m_inlineActionsField = nullptr;
+    QCheckBox *m_remoteImagesField = nullptr;
     QLineEdit *m_python = nullptr;
     QLineEdit *m_node = nullptr;
     QLineEdit *m_php = nullptr;

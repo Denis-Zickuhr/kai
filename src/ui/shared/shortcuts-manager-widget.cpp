@@ -6,6 +6,7 @@
 #include "utils/action-shortcuts.h"
 #include "utils/translation-manager.h"
 #include "utils/design-tokens.h"
+#include "utils/scoped-timer.h"
 
 #include <QTableWidget>
 #include <QFrame>
@@ -52,32 +53,30 @@ ShortcutsManagerWidget::ShortcutsManagerWidget(QWidget *parent)
     m_table->setSelectionMode(QAbstractItemView::NoSelection);
     m_table->setShowGrid(false);
     m_table->setAlternatingRowColors(false);
-    // Fundo transparente para mostrar o surface2 do card; o objectName restringe a regra à viewport da tabela.
     m_table->setObjectName(QStringLiteral("shortcutsTable"));
     m_table->setFrameShape(QFrame::NoFrame);
-    // O cabeçalho acompanha o arco do card: sem isto as pontas ficavam quadradas por cima do canto arredondado.
+    m_table->horizontalHeader()->setVisible(false);
+    // Fundo transparente para mostrar o card do grupo; o objectName restringe a regra à viewport da tabela.
     bindTokenStyle(m_table, []() {
-        const int radius = tk::radiusMd();
         return QStringLiteral(
-            "QTableWidget#shortcutsTable, QTableWidget#shortcutsTable::viewport { background: transparent; }"
-            "QTableWidget#shortcutsTable QHeaderView { background: transparent; }"
-            "QTableWidget#shortcutsTable QHeaderView::section:first { border-top-left-radius: %1px; }"
-            "QTableWidget#shortcutsTable QHeaderView::section:last { border-top-right-radius: %1px; }")
-            .arg(radius);
+            "QTableWidget#shortcutsTable, QTableWidget#shortcutsTable::viewport { background: transparent; }");
     });
     {
         const QFontMetrics fm(font());
         const int lineH = fm.height();
-        const int rowHeight = lineH + 2 * lineH + 18; // nome + até 2 linhas de descrição + margens
+        const int rowHeight = lineH + 2 * lineH + 36; // nome + até 2 linhas de descrição + respiro
         m_table->verticalHeader()->setDefaultSectionSize(rowHeight);
     }
     layout->addWidget(m_table, 1);
     m_table->setMinimumHeight(200);
+    // A largura das colunas só se define depois do resize do pai: as alturas das linhas seguem a largura real.
+    connect(m_table->horizontalHeader(), &QHeaderView::sectionResized, this, [this]() { adjustRowHeights(); });
 }
 
 void ShortcutsManagerWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    ensureBuilt();
     adjustRowHeights();
 }
 
@@ -89,18 +88,26 @@ void ShortcutsManagerWidget::resizeEvent(QResizeEvent *event)
 
 void ShortcutsManagerWidget::adjustRowHeights()
 {
-    const int width = m_table->columnWidth(kActionColumn) - 16;
+    const int width = m_table->columnWidth(kActionColumn);
     if (width <= 0) {
         return;
     }
     const int minimum = m_table->verticalHeader()->defaultSectionSize();
+    constexpr int kHMargins = 20 + 16; // margens laterais do layout da célula de ação
+    constexpr int kVMargins = 16 + 16;
     for (auto it = m_rowForActionId.constBegin(); it != m_rowForActionId.constEnd(); ++it) {
-        const QWidget *cell = m_table->cellWidget(it.value(), kActionColumn);
-        const QLayout *cellLayout = cell ? cell->layout() : nullptr;
         int height = minimum;
-        if (cellLayout) {
-            height = qMax(height, (cellLayout->hasHeightForWidth() ? cellLayout->totalHeightForWidth(width)
-                                                                   : cellLayout->sizeHint().height()) + 8);
+        if (const QWidget *cell = m_table->cellWidget(it.value(), kActionColumn)) {
+            // Mede os rótulos já com o estilo aplicado (a fonte "caption" vem do QSS) e na largura real do texto.
+            const auto labels = cell->findChildren<QLabel *>();
+            int content = 0;
+            for (QLabel *label : labels) {
+                label->ensurePolished();
+                const int labelWidth = qMax(1, width - kHMargins);
+                content += label->hasHeightForWidth() ? label->heightForWidth(labelWidth) : label->sizeHint().height();
+            }
+            content += qMax(0, int(labels.size()) - 1) * 6; // espaçamento entre rótulos
+            height = qMax(height, content + kVMargins + 12);
         }
         if (m_table->rowHeight(it.value()) != height) {
             m_table->setRowHeight(it.value(), height);
@@ -111,11 +118,35 @@ void ShortcutsManagerWidget::adjustRowHeights()
 void ShortcutsManagerWidget::setShortcuts(const QMap<QString, QStringList> &shortcuts)
 {
     m_shortcuts = shortcuts;
+    fillMissingDefaults();
+    // As ~70 linhas (2 células com widgets e QSS cada) só são montadas quando a aba aparece.
+    if (m_built) {
+        rebuildTable();
+    }
+}
+
+void ShortcutsManagerWidget::ensureBuilt()
+{
+    if (m_built) {
+        return;
+    }
+    m_built = true;
+    const utils::ScopedTimer timer("Shortcuts", QStringLiteral("montagem da tabela de atalhos"));
     rebuildTable();
+}
+
+void ShortcutsManagerWidget::fillMissingDefaults()
+{
+    for (const auto &spec : utils::actionShortcutSpecs()) {
+        if (!m_shortcuts.contains(spec.id)) {
+            m_shortcuts.insert(spec.id, spec.defaultSequences);
+        }
+    }
 }
 
 void ShortcutsManagerWidget::rebuildTable()
 {
+    fillMissingDefaults();
     const auto &specs = utils::actionShortcutSpecs();
     m_table->setRowCount(0);
     m_rowForActionId.clear();
@@ -128,8 +159,8 @@ void ShortcutsManagerWidget::rebuildTable()
         auto *actionCell = new QWidget(m_table);
         styleCell(actionCell);
         auto *actionLayout = new QVBoxLayout(actionCell);
-        actionLayout->setContentsMargins(8, 6, 8, 6);
-        actionLayout->setSpacing(2);
+        actionLayout->setContentsMargins(20, 16, 16, 16);
+        actionLayout->setSpacing(6);
         auto *nameLabel = new QLabel(utils::tr(spec.labelKey), actionCell);
         QFont nameFont = nameLabel->font();
         nameFont.setBold(true);
@@ -141,26 +172,22 @@ void ShortcutsManagerWidget::rebuildTable()
         actionLayout->addWidget(descLabel);
         m_table->setCellWidget(row, kActionColumn, actionCell);
 
-        if (!m_shortcuts.contains(spec.id)) {
-            m_shortcuts.insert(spec.id, spec.defaultSequences);
-        }
         rebuildBindingsCell(row, spec.id);
     }
 }
 
-// Célula da tabela como um bloco arredondado pela preferência de cantos (o QWidget cru pintava um retângulo reto).
+// Célula da tabela: fundo transparente e só uma divisória sutil embaixo (blocos soltos por célula ficavam tortos).
 void ShortcutsManagerWidget::styleCell(QWidget *cell)
 {
     cell->setObjectName(QStringLiteral("shortcutCell"));
-    QPointer<QTableWidget> table(m_table);
-    bindTokenStyle(cell, [table]() {
-        const int height = table ? table->verticalHeader()->defaultSectionSize() : 0;
+    cell->setAttribute(Qt::WA_StyledBackground, true);
+    bindTokenStyle(cell, []() {
         return QStringLiteral(
-            "QWidget#shortcutCell { background: %1; border-radius: %2px; }"
+            "QWidget#shortcutCell { background: transparent; border: none; border-bottom: 1px solid %1; }"
             "QWidget#shortcutCell QLabel { background: transparent; }"
-            "QWidget#shortcutCell QToolButton { background: transparent; border: none; border-radius: %3px; }"
-            "QWidget#shortcutCell QToolButton:hover { background: %4; }")
-            .arg(tk::bg()).arg(tk::radiusMdForHeight(height)).arg(tk::radiusSm()).arg(tk::hoverBg());
+            "QWidget#shortcutCell QToolButton { background: transparent; border: none; border-radius: %2px; }"
+            "QWidget#shortcutCell QToolButton:hover { background: %3; }")
+            .arg(tk::borderColor()).arg(tk::radiusSm()).arg(tk::hoverBg());
     });
 }
 
@@ -169,8 +196,9 @@ void ShortcutsManagerWidget::rebuildBindingsCell(int row, const QString &actionI
     auto *cell = new QWidget(m_table);
     styleCell(cell);
     auto *cellLayout = new QHBoxLayout(cell);
-    cellLayout->setContentsMargins(8, 4, 8, 4);
-    cellLayout->setSpacing(6);
+    cellLayout->setContentsMargins(12, 8, 12, 8);
+    cellLayout->setSpacing(8);
+    cellLayout->setAlignment(Qt::AlignVCenter);
 
     const QColor mutedColor(tk::mutedFg());
     for (const QString &seq : m_shortcuts.value(actionId)) {
@@ -180,10 +208,12 @@ void ShortcutsManagerWidget::rebuildBindingsCell(int row, const QString &actionI
         auto *chip = new QWidget(cell);
         chip->setObjectName(QStringLiteral("shortcutChip"));
         auto *chipLayout = new QHBoxLayout(chip);
-        chipLayout->setContentsMargins(8, 3, 4, 3);
-        chipLayout->setSpacing(4);
+        chipLayout->setContentsMargins(12, 4, 6, 4);
+        chipLayout->setSpacing(6);
+        chipLayout->setAlignment(Qt::AlignVCenter);
+        chip->setAttribute(Qt::WA_StyledBackground, true);
         auto *chipLabel = new QLabel(QKeySequence(seq).toString(QKeySequence::NativeText), chip);
-        chipLayout->addWidget(chipLabel);
+        chipLayout->addWidget(chipLabel, 0, Qt::AlignVCenter);
         auto *removeButton = new QToolButton(chip);
         removeButton->setIcon(LucideIcons::icon(QStringLiteral("x"), mutedColor, 12));
         removeButton->setAutoRaise(true);
@@ -192,7 +222,7 @@ void ShortcutsManagerWidget::rebuildBindingsCell(int row, const QString &actionI
         connect(removeButton, &QToolButton::clicked, this, [this, actionId, seq]() {
             removeBinding(actionId, seq);
         });
-        chipLayout->addWidget(removeButton);
+        chipLayout->addWidget(removeButton, 0, Qt::AlignVCenter);
         bindTokenStyle(chip, [chip]() {
             const int radius = tk::radiusMdForHeight(chip->sizeHint().height());
             return QStringLiteral(
@@ -208,11 +238,12 @@ void ShortcutsManagerWidget::rebuildBindingsCell(int row, const QString &actionI
     auto *addButton = new QToolButton(cell);
     addButton->setIcon(LucideIcons::icon(QStringLiteral("plus"), mutedColor, 14));
     addButton->setAutoRaise(true);
+    addButton->setFixedSize(28, 28);
     addButton->setToolTip(utils::tr(QStringLiteral("settings.shortcuts.add_binding_tooltip")));
     connect(addButton, &QToolButton::clicked, this, [this, row, actionId]() {
         beginCapture(row, actionId);
     });
-    cellLayout->addWidget(addButton);
+    cellLayout->addWidget(addButton, 0, Qt::AlignVCenter);
     cellLayout->addStretch();
 
     m_table->setCellWidget(row, kBindingsColumn, cell);
@@ -253,11 +284,14 @@ void ShortcutsManagerWidget::resetToDefaults()
     for (const auto &spec : utils::actionShortcutSpecs()) {
         m_shortcuts.insert(spec.id, spec.defaultSequences);
     }
-    rebuildTable();
+    if (m_built) {
+        rebuildTable();
+    }
 }
 
 void ShortcutsManagerWidget::setFilterText(const QString &query)
 {
+    ensureBuilt();
     const QString trimmed = query.trimmed();
     const auto &specs = utils::actionShortcutSpecs();
     for (const auto &spec : specs) {

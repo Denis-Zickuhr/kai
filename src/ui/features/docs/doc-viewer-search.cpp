@@ -34,6 +34,11 @@ void DocViewer::positionSearchBar()
     m_editBar->move(std::max(margin, m_search->x() - m_editBar->width() - tk::space(2)), margin);
     m_editBar->raise();
     m_search->raise();
+    if (m_remoteButton && m_remoteButton->isVisible()) {
+        m_remoteButton->move(std::max(margin, rightEdge - m_remoteButton->width() - margin),
+                             std::max(margin, m_content->height() - m_remoteButton->height() - margin));
+        m_remoteButton->raise();
+    }
 }
 
 QTextDocument *DocViewer::activeDocument() const

@@ -152,6 +152,7 @@ private slots:
         settings.uiDensity = QStringLiteral("compact");
         settings.uiCornerStyle = 2;
         settings.treeConnectorStyle = 2;
+        settings.treeLook = QStringLiteral("explorer");
         settings.itemActionsPlacement = QStringLiteral("side");
         settings.outputMaxLogSizeKb = 2048;
         CommandsData commands;
@@ -181,6 +182,9 @@ private slots:
         QVERIFY(!general->inlineActionsField()->isChecked()); // Ações inline: desligadas por padrão
         general->inlineActionsField()->setChecked(true);
         QVERIFY(dialog.buildSettings().inlineActions);
+        QVERIFY(general->remoteImagesField()->isChecked()); // Imagens remotas: ligadas por padrão
+        general->remoteImagesField()->setChecked(false);
+        QVERIFY(!dialog.buildSettings().autoLoadRemoteImages);
         if (const QByteArray shots = qgetenv("KAI_TEST_SCREENSHOT_DIR"); !shots.isEmpty()) {
             dialog.setStyleSheet(kai::ui::buildModernStylesheet());
             dialog.resize(900, 700);
@@ -194,6 +198,7 @@ private slots:
         QCOMPARE(built.uiDensity, QStringLiteral("compact"));
         QCOMPARE(built.uiCornerStyle, 2);
         QCOMPARE(built.treeConnectorStyle, 2);
+        QCOMPARE(built.treeLook, QStringLiteral("explorer"));
         QCOMPARE(built.itemActionsPlacement, QStringLiteral("side"));
         QCOMPARE(built.outputMaxLogSizeKb, 2048);
     }

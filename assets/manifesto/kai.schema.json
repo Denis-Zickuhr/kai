@@ -243,6 +243,7 @@
         "body_file": { "type": "string" },
         "options": { "$ref": "#/$defs/httpOptions" },
         "response_file": { "type": "string" },
+        "ask_first": { "type": "boolean" },
         "env_extractors": {
           "type": "array",
           "items": { "$ref": "#/$defs/envExtractor" }

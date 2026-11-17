@@ -138,6 +138,7 @@ Common attributes: `name` (required, unique), `label`, `description`,
 | `textarea` | `max_length` (a "41 / 72" counter; over the limit, Submit stays off) | string |
 | `number` | `min`, `max`, `step`, `decimals` | number or `null` |
 | `date` | `mode` (`date` `time` `datetime`), `range` | ISO string; with `range`: `{start, end}` |
+| `time` | `range` | Time of day (`HH:mm`); same as `date` with `mode: time` |
 | `select` | `options[]`, `style` (`cards` \| `segmented`; default: a dropdown) | string |
 | `list` | `options[]`, `multiple`, `searchable`, `page_size` | string, or array with `multiple` |
 | `table` | `columns[]`, `rows[]`, `row_key` (default `id`), `multiple`, `searchable`, `page_size`, `row_actions` (§5.2) | the row key, or array |

@@ -322,6 +322,15 @@ LayoutTab::LayoutTab(const core::SettingsData &currentSettings, QWidget *parent)
     }
     addFieldToGrid(5, 0, QStringLiteral("settings.tree_lines"), m_treeConnectorStyleField, 2);
 
+    m_treeLookField = new QComboBox(layoutGroup);
+    m_treeLookField->addItem(utils::tr(QStringLiteral("settings.tree_look.classic")), QStringLiteral("classic"));
+    m_treeLookField->addItem(utils::tr(QStringLiteral("settings.tree_look.explorer")), QStringLiteral("explorer"));
+    {
+        const int idx = m_treeLookField->findData(currentSettings.treeLook);
+        m_treeLookField->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    addFieldToGrid(6, 0, QStringLiteral("settings.tree_look"), m_treeLookField, 2);
+
     layout->addWidget(layoutGroup);
 
     // --- Grupo: Grade de painéis (colunas × linhas e o modo de expansão das células vazias)

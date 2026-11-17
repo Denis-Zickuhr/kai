@@ -43,23 +43,12 @@ SettingsData ConfigManager::loadSettings()
     if (root.contains("tree_connector_style")) {
         data.treeConnectorStyle = root.value("tree_connector_style").toInt(data.treeConnectorStyle);
     }
+    if (root.contains("tree_look")) {
+        const QString look = root.value("tree_look").toString();
+        data.treeLook = look == QLatin1String("explorer") ? look : QStringLiteral("classic");
+    }
     data.commandsBackgroundImage = root.value("commands_background_image").toString(data.commandsBackgroundImage);
     data.commandsBackgroundOpacity = root.value("commands_background_opacity").toInt(data.commandsBackgroundOpacity);
-    if (root.contains("fx_shadows")) {
-        data.fxShadows = root.value("fx_shadows").toBool();
-    }
-    if (root.contains("fx_translucency")) {
-        data.fxTranslucency = root.value("fx_translucency").toBool();
-    }
-    if (root.contains("fx_blur")) {
-        data.fxBlur = root.value("fx_blur").toBool();
-    }
-    if (root.contains("fx_animations")) {
-        data.fxAnimations = root.value("fx_animations").toBool();
-    }
-    if (root.contains("gradients_enabled")) {
-        data.gradientsEnabled = root.value("gradients_enabled").toBool();
-    }
     if (root.contains("auto_hide_on_focus_loss")) {
         data.autoHideOnFocusLoss = root.value("auto_hide_on_focus_loss").toBool();
     }
@@ -235,6 +224,7 @@ SettingsData ConfigManager::loadSettings()
     }
     data.smartFocus = root.value("smart_focus").toBool(data.smartFocus);
     data.inlineActions = root.value("inline_actions").toBool(data.inlineActions);
+    data.autoLoadRemoteImages = root.value("auto_load_remote_images").toBool(data.autoLoadRemoteImages);
     if (root.contains("language")) {
         data.language = root.value("language").toString();
     }
@@ -410,13 +400,9 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["ui_density"] = data.uiDensity;
     root["ui_corner_style"] = data.uiCornerStyle;
     root["tree_connector_style"] = data.treeConnectorStyle;
+    root["tree_look"] = data.treeLook;
     root["commands_background_image"] = data.commandsBackgroundImage;
     root["commands_background_opacity"] = data.commandsBackgroundOpacity;
-    root["fx_shadows"] = data.fxShadows;
-    root["fx_translucency"] = data.fxTranslucency;
-    root["fx_blur"] = data.fxBlur;
-    root["fx_animations"] = data.fxAnimations;
-    root["gradients_enabled"] = data.gradientsEnabled;
     root["auto_hide_on_focus_loss"] = data.autoHideOnFocusLoss;
     root["window_mode"] = data.windowMode;
     root["window_width"] = data.windowWidth;
@@ -484,6 +470,7 @@ bool ConfigManager::saveSettings(const SettingsData &data)
     root["autostart"] = data.autostart;
     root["smart_focus"] = data.smartFocus;
     root["inline_actions"] = data.inlineActions;
+    root["auto_load_remote_images"] = data.autoLoadRemoteImages;
     root["language"] = data.language;
     root["global_env_vars"] = envObj;
 
